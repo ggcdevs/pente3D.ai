@@ -131,20 +131,26 @@ export class Game {
         // Update the raycaster
         this.raycaster.setFromCamera(this.mouse, this.camera);
         
-        // Find intersections with the board's intersection points
-        const intersects = this.raycaster.intersectObjects(this.board.intersectionPoints);
-        
         // Reset previous hover state
         this.board.resetHoverState();
+        this.hoveredPoint = null;
         
-        // If we have an intersection, highlight it
-        if (intersects.length > 0 && !this.board.isOccupied(intersects[0].object.position)) {
-            const point = intersects[0].object;
+        // Check for intersection with grid lines first
+        const lineIntersects = this.raycaster.intersectObjects(this.board.gridLines);
+        if (lineIntersects.length > 0) {
+            // Highlight the grid line that was directly hovered
+            const line = lineIntersects[0].object;
+            this.board.highlightGridLine(line);
+            return; // Exit early, we found a grid line
+        }
+        
+        // If no grid line was intersected, check for intersection points
+        const pointIntersects = this.raycaster.intersectObjects(this.board.intersectionPoints);
+        if (pointIntersects.length > 0 && !this.board.isOccupied(pointIntersects[0].object.position)) {
+            const point = pointIntersects[0].object;
             point.material.color.set(this.currentPlayer.color);
-            point.material.opacity = 0.5;
+            point.material.opacity = 0.8; // Increased opacity for better visibility
             this.hoveredPoint = point;
-        } else {
-            this.hoveredPoint = null;
         }
     }
     

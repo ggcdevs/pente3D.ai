@@ -5,6 +5,7 @@ export class Board {
         this.size = size;
         this.board = this.createEmptyBoard();
         this.intersectionPoints = [];
+        this.gridLines = []; // Store all grid lines for highlighting
     }
     
     createEmptyBoard() {
@@ -19,43 +20,79 @@ export class Board {
         return board;
     }
     
+    // Helper method to create a cylinder representing a line
+    createCylinderLine(start, end, color) {
+        // Calculate the direction vector
+        const direction = new THREE.Vector3().subVectors(end, start);
+        const length = direction.length();
+        
+        // Create a cylinder geometry
+        // Use a very thin cylinder (radius 0.02) for the line
+        const geometry = new THREE.CylinderGeometry(0.02, 0.02, length, 8, 1);
+        
+        // Position and rotate the cylinder
+        geometry.translate(0, length / 2, 0); // Move up so the bottom face is at the origin
+        
+        const material = new THREE.MeshBasicMaterial({ 
+            color: color,
+            transparent: true,
+            opacity: 0.5
+        });
+        
+        const cylinder = new THREE.Mesh(geometry, material);
+        
+        // Position at the start point
+        cylinder.position.copy(start);
+        
+        // Orient the cylinder to point from start to end
+        if (direction.y > 0.99) {
+            // Special case: vertical line (already aligned with Y-axis)
+            // No rotation needed
+        } else if (direction.y < -0.99) {
+            // Special case: vertical line pointing down
+            cylinder.rotateX(Math.PI); // Rotate 180 degrees around X axis
+        } else {
+            // General case: use lookAt
+            cylinder.lookAt(end);
+            cylinder.rotateX(Math.PI / 2); // Adjust to match THREE.js cylinder orientation
+        }
+        
+        return cylinder;
+    }
+    
     createBoardMesh() {
         const boardGroup = new THREE.Group();
         const offset = (this.size - 1) / 2;
         
-        // Create grid lines
+        // Create grid lines using cylinders for better hover detection
         for (let i = 0; i < this.size; i++) {
             for (let j = 0; j < this.size; j++) {
-                // X-axis lines
-                const xLineGeometry = new THREE.BufferGeometry().setFromPoints([
-                    new THREE.Vector3(-offset, i - offset, j - offset),
-                    new THREE.Vector3(offset, i - offset, j - offset)
-                ]);
+                // Define line endpoints
+                const xStart = new THREE.Vector3(-offset, i - offset, j - offset);
+                const xEnd = new THREE.Vector3(offset, i - offset, j - offset);
                 
-                // Y-axis lines
-                const yLineGeometry = new THREE.BufferGeometry().setFromPoints([
-                    new THREE.Vector3(i - offset, -offset, j - offset),
-                    new THREE.Vector3(i - offset, offset, j - offset)
-                ]);
+                const yStart = new THREE.Vector3(i - offset, -offset, j - offset);
+                const yEnd = new THREE.Vector3(i - offset, offset, j - offset);
                 
-                // Z-axis lines
-                const zLineGeometry = new THREE.BufferGeometry().setFromPoints([
-                    new THREE.Vector3(i - offset, j - offset, -offset),
-                    new THREE.Vector3(i - offset, j - offset, offset)
-                ]);
+                const zStart = new THREE.Vector3(i - offset, j - offset, -offset);
+                const zEnd = new THREE.Vector3(i - offset, j - offset, offset);
                 
-                const lineMaterial = new THREE.LineBasicMaterial({ 
-                    color: 0x444444,
-                    transparent: true,
-                    opacity: 0.5
-                });
-                
-                const xLine = new THREE.Line(xLineGeometry, lineMaterial);
-                const yLine = new THREE.Line(yLineGeometry, lineMaterial);
-                const zLine = new THREE.Line(zLineGeometry, lineMaterial);
-                
+                // Create X-axis line
+                const xLine = this.createCylinderLine(xStart, xEnd, 0x444444);
+                xLine.userData = { type: 'line', axis: 'x', i, j };
+                this.gridLines.push(xLine);
                 boardGroup.add(xLine);
+                
+                // Create Y-axis line
+                const yLine = this.createCylinderLine(yStart, yEnd, 0x444444);
+                yLine.userData = { type: 'line', axis: 'y', i, j };
+                this.gridLines.push(yLine);
                 boardGroup.add(yLine);
+                
+                // Create Z-axis line
+                const zLine = this.createCylinderLine(zStart, zEnd, 0x444444);
+                zLine.userData = { type: 'line', axis: 'z', i, j };
+                this.gridLines.push(zLine);
                 boardGroup.add(zLine);
             }
         }
@@ -120,9 +157,24 @@ export class Board {
     }
     
     resetHoverState() {
+        // Reset intersection points
         for (const point of this.intersectionPoints) {
             point.material.color.set(0x888888);
             point.material.opacity = 0.5;
+        }
+        
+        // Reset grid lines
+        for (const line of this.gridLines) {
+            line.material.color.set(0x444444);
+            line.material.opacity = 0.5;
+        }
+    }
+    
+    // Method to highlight a single grid line
+    highlightGridLine(line) {
+        if (line && line.userData && line.userData.type === 'line') {
+            line.material.color.set(0x00ff00); // Bright green
+            line.material.opacity = 0.8;
         }
     }
     
