@@ -1,3 +1,5 @@
+import * as THREE from 'three';
+
 export class Board {
     constructor(size) {
         this.size = size;
@@ -157,10 +159,6 @@ export class Board {
                 
                 // Capture these two opponent pieces
                 capturedPositions.push(pos1, pos2);
-                
-                // Remove them from the board
-                this.board[pos1.x][pos1.y][pos1.z] = null;
-                this.board[pos2.x][pos2.y][pos2.z] = null;
             }
         }
         

@@ -1,5 +1,7 @@
+import * as THREE from 'three';
 import { Board } from './board.js';
 import { Player } from './player.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 export class Game {
     constructor(container) {
@@ -50,7 +52,7 @@ export class Game {
     }
     
     setupCamera() {
-        const aspect = this.container.clientWidth / this.container.clientHeight;
+        const aspect = window.innerWidth / window.innerHeight;
         this.camera = new THREE.PerspectiveCamera(75, aspect, 0.1, 1000);
         this.camera.position.set(15, 15, 15);
         this.camera.lookAt(0, 0, 0);
@@ -58,14 +60,14 @@ export class Game {
     
     setupRenderer() {
         this.renderer = new THREE.WebGLRenderer({ antialias: true });
-        this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
+        this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.container.appendChild(this.renderer.domElement);
         
         // Handle window resize
         window.addEventListener('resize', () => {
-            this.camera.aspect = this.container.clientWidth / this.container.clientHeight;
+            this.camera.aspect = window.innerWidth / window.innerHeight;
             this.camera.updateProjectionMatrix();
-            this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
+            this.renderer.setSize(window.innerWidth, window.innerHeight);
         });
     }
     
@@ -85,7 +87,7 @@ export class Game {
     }
     
     setupControls() {
-        this.controls = new THREE.OrbitControls(this.camera, this.renderer.domElement);
+        this.controls = new OrbitControls(this.camera, this.renderer.domElement);
         this.controls.enableDamping = true;
         this.controls.dampingFactor = 0.05;
     }
@@ -157,9 +159,15 @@ export class Game {
         // Place the piece on the board data structure
         if (this.board.placePiece(x, y, z, this.currentPlayer.color)) {
             // Create a visual representation of the piece
-            const piece = this.currentPlayer.createPiece();
-            piece.position.copy(position);
-            this.scene.add(piece);
+            const pieceMesh = this.currentPlayer.createPiece();
+            pieceMesh.position.copy(position);
+            this.scene.add(pieceMesh);
+            
+            // Store reference to the mesh in the board data structure
+            const boardPiece = this.board.getPieceAt(x, y, z);
+            if (boardPiece) {
+                boardPiece.mesh = pieceMesh;
+            }
             
             // Check for captures
             const captures = this.board.checkCaptures(x, y, z, this.currentPlayer.color);
@@ -168,11 +176,16 @@ export class Game {
                 // Remove captured pieces
                 for (const capturedPos of captures) {
                     const capturedPiece = this.board.getPieceAt(capturedPos.x, capturedPos.y, capturedPos.z);
-                    if (capturedPiece) {
+                    if (capturedPiece && capturedPiece.mesh) {
+                        // Remove the piece visually from the scene
                         this.scene.remove(capturedPiece.mesh);
+                        // Remove the piece from the board data structure
+                        this.board.board[capturedPos.x][capturedPos.y][capturedPos.z] = null;
                     }
-                    this.currentPlayer.captures += 1;
                 }
+                
+                // Increment capture count - one per capture event, not per piece
+                this.currentPlayer.captures += 1;
                 
                 // Update the capture counts
                 this.updateCaptureDisplay();
