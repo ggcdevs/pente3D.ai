@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pente3D</title>
+    <link rel="stylesheet" href="src/css/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/three@0.150.1/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.150.1/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+    <div class="game-container">
+        <div id="game-info">
+            <div id="current-player">Current Player: <span id="player-indicator">Black</span></div>
+            <div id="black-captures">Black Captures: <span id="black-capture-count">0</span></div>
+            <div id="white-captures">White Captures: <span id="white-capture-count">0</span></div>
+            <button id="reset-game">Reset Game</button>
+        </div>
+        <div id="game-board"></div>
+        <div id="game-message" class="hidden"></div>
+    </div>
+    <script type="module" src="src/js/main.js"></script>
+</body>
+</html>
