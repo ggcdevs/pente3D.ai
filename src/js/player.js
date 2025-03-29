@@ -14,7 +14,7 @@ export class Player {
             shininess: 100,
             specular: 0x444444,
             transparent: true,
-            opacity: 0.9  // 10% translucency (90% opacity)
+            opacity: 0.85  // 15% translucency (85% opacity)
         });
         
         const mesh = new THREE.Mesh(geometry, material);
