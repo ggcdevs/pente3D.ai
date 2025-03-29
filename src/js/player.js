@@ -12,7 +12,9 @@ export class Player {
         const material = new THREE.MeshPhongMaterial({
             color: this.color === 'black' ? 0x111111 : 0xffffff,
             shininess: 100,
-            specular: 0x444444
+            specular: 0x444444,
+            transparent: true,
+            opacity: 0.9  // 10% translucency (90% opacity)
         });
         
         const mesh = new THREE.Mesh(geometry, material);
