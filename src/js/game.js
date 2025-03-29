@@ -45,6 +45,10 @@ export class Game {
         this.blackCaptureCount = document.getElementById('black-capture-count');
         this.whiteCaptureCount = document.getElementById('white-capture-count');
         this.gameMessage = document.getElementById('game-message');
+        this.undoButton = document.getElementById('undo-move');
+        
+        // Game history for undo functionality
+        this.moveHistory = [];
         
         // Scene setup
         this.scene = null;
@@ -70,7 +74,16 @@ export class Game {
         this.setupControls();
         this.createBoard();
         this.setupEventListeners();
+        this.setupGameControls();
         this.animate();
+    }
+    
+    setupGameControls() {
+        // Set initial state of undo button
+        this.undoButton.disabled = true;
+        
+        // Setup undo button click handler
+        this.undoButton.addEventListener('click', () => this.undoLastMove());
     }
     
     setupScene() {
@@ -138,13 +151,12 @@ export class Game {
         this.controls.rotateSpeed = 0.8; // Adjust rotation speed
         this.controls.screenSpacePanning = true; // Pan parallel to the screen
         
-        // Configure keys to mimic Fusion 360
-        this.controls.keys = {
-            LEFT: 'KeyA',   // A
-            UP: 'KeyW',     // W
-            RIGHT: 'KeyD',  // D
-            BOTTOM: 'KeyS'  // S
-        };
+        // Enable keyboard control
+        this.controls.enableKeys = true;
+        
+        // Note: KeyboardEvent.code values are used by THREE.js internally
+        // When using enableKeys, OrbitControls automatically handles WASD
+        // No need to configure keys explicitly for OrbitControls v126+
         
         // Disable left-click rotation by requiring the shift key
         // This mimics Fusion 360's behavior where left-click by itself selects
@@ -310,6 +322,17 @@ export class Game {
         
         // Place the piece on the board data structure
         if (this.board.placePiece(x, y, z, this.currentPlayer.color)) {
+            // Create move data for undo history
+            const moveData = {
+                x, y, z,
+                playerColor: this.currentPlayer.color,
+                playerCaptures: this.currentPlayer.captures,
+                opponentCaptures: this.currentPlayer === this.playerBlack 
+                    ? this.playerWhite.captures 
+                    : this.playerBlack.captures,
+                captures: []
+            };
+            
             // Create a visual representation of the piece
             const pieceMesh = this.currentPlayer.createPiece();
             // Use the exact position of the hovered node for visual accuracy
@@ -330,6 +353,15 @@ export class Game {
                 for (const capturedPos of captures) {
                     const capturedPiece = this.board.getPieceAt(capturedPos.x, capturedPos.y, capturedPos.z);
                     if (capturedPiece && capturedPiece.mesh) {
+                        // Store capture data for undo history
+                        moveData.captures.push({
+                            x: capturedPos.x,
+                            y: capturedPos.y,
+                            z: capturedPos.z,
+                            color: capturedPiece.color,
+                            mesh: capturedPiece.mesh
+                        });
+                        
                         // Remove the piece visually from the scene
                         this.scene.remove(capturedPiece.mesh);
                         // Remove the piece from the board data structure
@@ -337,14 +369,18 @@ export class Game {
                     }
                 }
                 
-                // Increment capture count - one per capture event, not per piece
-                this.currentPlayer.captures += 1;
+                // Increment capture count based on how many pieces were captured
+                this.currentPlayer.captures += captures.length;
                 
                 // Update the capture counts
                 this.updateCaptureDisplay();
                 
                 // Check for win by capture
                 if (this.currentPlayer.captures >= 5) {
+                    // Still record the move in history
+                    this.moveHistory.push(moveData);
+                    this.undoButton.disabled = false;
+                    
                     this.endGame(`${this.currentPlayer.color.charAt(0).toUpperCase() + this.currentPlayer.color.slice(1)} wins by capture!`);
                     return;
                 }
@@ -353,14 +389,74 @@ export class Game {
             // Check for win by five in a row
             const winningLine = this.board.checkWin(x, y, z, this.currentPlayer.color);
             if (winningLine.length >= 5) {
+                // Still record the move in history
+                this.moveHistory.push(moveData);
+                this.undoButton.disabled = false;
+                
                 this.winningLine = winningLine;
                 this.highlightWinningLine();
                 this.endGame(`${this.currentPlayer.color.charAt(0).toUpperCase() + this.currentPlayer.color.slice(1)} wins with 5 in a row!`);
                 return;
             }
             
+            // Add the move to history
+            this.moveHistory.push(moveData);
+            
+            // Enable the undo button
+            this.undoButton.disabled = false;
+            
             // Switch players
             this.switchPlayer();
+        }
+    }
+    
+    undoLastMove() {
+        if (this.moveHistory.length === 0 || this.isGameOver) return;
+        
+        // Get the last move from history
+        const lastMove = this.moveHistory.pop();
+        
+        // If this is the last move, disable the undo button
+        if (this.moveHistory.length === 0) {
+            this.undoButton.disabled = true;
+        }
+        
+        // Switch back to the player who made the move
+        this.currentPlayer = lastMove.playerColor === 'black' ? this.playerBlack : this.playerWhite;
+        this.playerIndicator.textContent = this.currentPlayer.color.charAt(0).toUpperCase() + this.currentPlayer.color.slice(1);
+        
+        // Remove the piece from the board
+        const piece = this.board.getPieceAt(lastMove.x, lastMove.y, lastMove.z);
+        if (piece && piece.mesh) {
+            this.scene.remove(piece.mesh);
+            this.board.board[lastMove.x][lastMove.y][lastMove.z] = null;
+        }
+        
+        // Restore captured pieces
+        for (const capture of lastMove.captures) {
+            // Create a piece object
+            const restoredPiece = {
+                color: capture.color,
+                mesh: capture.mesh
+            };
+            
+            // Add it back to the board data structure
+            this.board.board[capture.x][capture.y][capture.z] = restoredPiece;
+            
+            // Add it back to the scene
+            this.scene.add(capture.mesh);
+        }
+        
+        // Restore capture counts
+        this.playerBlack.captures = lastMove.playerColor === 'black' ? lastMove.playerCaptures : lastMove.opponentCaptures;
+        this.playerWhite.captures = lastMove.playerColor === 'white' ? lastMove.playerCaptures : lastMove.opponentCaptures;
+        this.updateCaptureDisplay();
+        
+        // If the game was over, reactivate it
+        if (this.isGameOver) {
+            this.isGameOver = false;
+            this.gameMessage.classList.add('hidden');
+            this.winningLine = null;
         }
     }
     
@@ -457,6 +553,10 @@ export class Game {
         // Reset game state
         this.isGameOver = false;
         this.winningLine = null;
+        
+        // Clear move history and disable undo button
+        this.moveHistory = [];
+        this.undoButton.disabled = true;
     }
     
     animate() {

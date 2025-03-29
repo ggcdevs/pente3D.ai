@@ -57,8 +57,13 @@ body {
     display: none;
 }
 
-button {
+.game-buttons {
+    display: flex;
+    gap: 10px;
     margin-top: 10px;
+}
+
+button {
     padding: 5px 10px;
     background-color: #4CAF50;
     color: white;
@@ -69,6 +74,19 @@ button {
 
 button:hover {
     background-color: #45a049;
+}
+
+#undo-move {
+    background-color: #2196F3;
+}
+
+#undo-move:hover {
+    background-color: #0b7dda;
+}
+
+#undo-move:disabled {
+    background-color: #aaaaaa;
+    cursor: not-allowed;
 }
 
 /* Settings Button */

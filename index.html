@@ -21,10 +21,110 @@
             <div id="current-player">Current Player: <span id="player-indicator">Black</span></div>
             <div id="black-captures">Black Captures: <span id="black-capture-count">0</span></div>
             <div id="white-captures">White Captures: <span id="white-capture-count">0</span></div>
-            <button id="reset-game">Reset Game</button>
+            <div class="game-buttons">
+                <button id="undo-move">Undo Move</button>
+                <button id="reset-game">Reset Game</button>
+            </div>
         </div>
+        <div id="settings-button">⚙️ Settings</div>
         <div id="game-board"></div>
         <div id="game-message" class="hidden"></div>
+        
+        <!-- Settings Panel (slides in from right) -->
+        <div id="settings-panel" class="settings-panel">
+            <div class="settings-header">
+                <h2>Game Settings</h2>
+                <span class="close-button">&times;</span>
+            </div>
+            <div class="settings-body">
+                <div class="settings-section">
+                    <h3>Game Board</h3>
+                    <div class="setting-item">
+                        <label for="background-color">Background Color:</label>
+                        <input type="color" id="background-color" value="#222222">
+                    </div>
+                    <div class="setting-item">
+                        <label for="node-spacing">Node Spacing:</label>
+                        <input type="range" id="node-spacing" min="0.5" max="2.0" step="0.1" value="1.0">
+                        <span class="setting-value">1.0</span>
+                    </div>
+                </div>
+                
+                <div class="settings-section">
+                    <h3>Pieces</h3>
+                    <div class="setting-item">
+                        <label for="black-color">Black Piece Color:</label>
+                        <input type="color" id="black-color" value="#111111">
+                    </div>
+                    <div class="setting-item">
+                        <label for="white-color">White Piece Color:</label>
+                        <input type="color" id="white-color" value="#ffffff">
+                    </div>
+                    <div class="setting-item">
+                        <label for="piece-translucency">Piece Translucency:</label>
+                        <input type="range" id="piece-translucency" min="0" max="50" value="15">
+                        <span class="setting-value">15%</span>
+                    </div>
+                </div>
+                
+                <div class="settings-section">
+                    <h3>Nodes</h3>
+                    <div class="setting-item">
+                        <label for="node-color">Node Color:</label>
+                        <input type="color" id="node-color" value="#888888">
+                    </div>
+                    <div class="setting-item">
+                        <label for="node-translucency">Node Translucency:</label>
+                        <input type="range" id="node-translucency" min="0" max="100" value="50">
+                        <span class="setting-value">50%</span>
+                    </div>
+                    <div class="setting-item">
+                        <label for="hover-node-color">Hover Node Color:</label>
+                        <input type="color" id="hover-node-color" value="#ffcc00">
+                    </div>
+                    <div class="setting-item">
+                        <label for="hover-node-translucency">Hover Node Translucency:</label>
+                        <input type="range" id="hover-node-translucency" min="0" max="100" value="20">
+                        <span class="setting-value">20%</span>
+                    </div>
+                </div>
+                
+                <div class="settings-section">
+                    <h3>Grid Lines</h3>
+                    <div class="setting-item">
+                        <label for="gridline-color">Grid Line Color:</label>
+                        <input type="color" id="gridline-color" value="#444444">
+                    </div>
+                    <div class="setting-item">
+                        <label for="gridline-diameter">Grid Line Diameter:</label>
+                        <input type="range" id="gridline-diameter" min="0.01" max="0.05" step="0.005" value="0.02">
+                        <span class="setting-value">0.020</span>
+                    </div>
+                    <div class="setting-item">
+                        <label for="gridline-translucency">Grid Line Translucency:</label>
+                        <input type="range" id="gridline-translucency" min="0" max="100" value="50">
+                        <span class="setting-value">50%</span>
+                    </div>
+                </div>
+                
+                <div class="settings-section">
+                    <h3>Hover Effect</h3>
+                    <div class="setting-item">
+                        <label for="hover-gridline-color">Hover Grid Line Color:</label>
+                        <input type="color" id="hover-gridline-color" value="#00ff00">
+                    </div>
+                    <div class="setting-item">
+                        <label for="hover-gridline-translucency">Hover Grid Line Translucency:</label>
+                        <input type="range" id="hover-gridline-translucency" min="0" max="100" value="20">
+                        <span class="setting-value">20%</span>
+                    </div>
+                </div>
+            </div>
+            <div class="settings-footer">
+                <button id="reset-settings">Reset to Defaults</button>
+                <button id="save-settings">Save Settings</button>
+            </div>
+        </div>
     </div>
     <script type="module" src="src/js/main.js"></script>
 </body>
