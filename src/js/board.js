@@ -173,8 +173,12 @@ export class Board {
     // Method to highlight a single grid line
     highlightGridLine(line) {
         if (line && line.userData && line.userData.type === 'line') {
-            line.material.color.set(0x00ff00); // Bright green
-            line.material.opacity = 0.8;
+            // Use settings if available, otherwise fallback to default
+            const color = this.game?.gridlineHoverSettings?.color || '#00ff00';
+            const opacity = this.game?.gridlineHoverSettings?.opacity || 0.8;
+            
+            line.material.color.set(color);
+            line.material.opacity = opacity;
         }
     }
     

@@ -1,4 +1,5 @@
 import { Game } from './game.js';
+import { Settings } from './settings.js';
 
 // Initialize the game when the DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
@@ -9,6 +10,12 @@ document.addEventListener('DOMContentLoaded', () => {
     // Create a new game instance
     const game = new Game(gameBoard);
     game.initialize();
+    
+    // Initialize settings manager
+    const settings = new Settings(game);
+    
+    // Load saved settings (or defaults)
+    settings.loadSettings();
     
     // Add event listener for the reset button
     resetButton.addEventListener('click', () => {

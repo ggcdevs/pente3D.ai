@@ -7,10 +7,29 @@ export class Game {
     constructor(container) {
         this.container = container;
         this.boardSize = 9; // 9x9x9 3D board
-        this.playerBlack = new Player('black');
-        this.playerWhite = new Player('white');
+        this.playerBlack = new Player('black', this);
+        this.playerWhite = new Player('white', this);
         this.currentPlayer = this.playerBlack;
         this.board = new Board(this.boardSize);
+        
+        // Reference to the game for settings
+        this.board.game = this;
+        
+        // Settings for rendering
+        this.pieceSettings = {
+            blackColor: '#111111',
+            whiteColor: '#ffffff',
+            opacity: 0.85  // 15% translucency
+        };
+        
+        this.nodeHoverSettings = {
+            opacity: 0.8
+        };
+        
+        this.gridlineHoverSettings = {
+            color: '#00ff00',
+            opacity: 0.8
+        };
         this.isGameOver = false;
         this.winningLine = null;
         
@@ -151,7 +170,8 @@ export class Game {
                 if (!this.board.isOccupied(firstObject.position)) {
                     // Highlight the node
                     firstObject.material.color.set(this.currentPlayer.color);
-                    firstObject.material.opacity = 0.8; // Increased opacity for better visibility
+                    // Use hover settings if available
+                    firstObject.material.opacity = this.nodeHoverSettings?.opacity || 0.8;
                     this.hoveredPoint = firstObject;
                     
                     // Also highlight the 3 grid lines that intersect at this node
