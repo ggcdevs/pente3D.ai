@@ -11,11 +11,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const game = new Game(gameBoard);
     game.initialize();
     
-    // Initialize settings manager
-    const settings = new Settings(game);
-    
-    // Load saved settings (or defaults)
-    settings.loadSettings();
+    // Initialize settings manager after a small delay to ensure DOM is fully ready
+    setTimeout(() => {
+        const settings = new Settings(game);
+        
+        // Load saved settings (or defaults)
+        if (settings.panel) { // Only if panel was found
+            settings.loadSettings();
+        }
+    }, 100);
     
     // Add event listener for the reset button
     resetButton.addEventListener('click', () => {

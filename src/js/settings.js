@@ -1,12 +1,9 @@
+import * as THREE from 'three';
+
 // Game settings manager
 export class Settings {
     constructor(game) {
         this.game = game;
-        this.modal = document.getElementById('settings-modal');
-        this.settingsButton = document.getElementById('settings-button');
-        this.closeButton = document.querySelector('.close-button');
-        this.saveButton = document.getElementById('save-settings');
-        this.resetButton = document.getElementById('reset-settings');
         
         // Default settings
         this.defaults = {
@@ -28,33 +25,44 @@ export class Settings {
         // Current settings (start with defaults)
         this.current = {...this.defaults};
         
+        // Initialize after DOM is fully loaded
+        this.initializeElements();
+    }
+    
+    initializeElements() {
+        // Get all required DOM elements
+        this.panel = document.getElementById('settings-panel');
+        this.settingsButton = document.getElementById('settings-button');
+        this.closeButton = document.querySelector('.close-button');
+        this.saveButton = document.getElementById('save-settings');
+        this.resetButton = document.getElementById('reset-settings');
+        
+        if (!this.panel || !this.settingsButton || !this.closeButton || 
+            !this.saveButton || !this.resetButton) {
+            console.error("Settings panel elements not found in DOM");
+            return;
+        }
+        
         // Initialize event listeners
         this.initEventListeners();
         this.initSettingListeners();
     }
     
     initEventListeners() {
-        // Settings button opens the modal
+        // Settings button opens the panel
         this.settingsButton.addEventListener('click', () => {
-            this.modal.classList.remove('hidden');
+            this.panel.classList.add('open');
         });
         
-        // Close button closes the modal
+        // Close button closes the panel
         this.closeButton.addEventListener('click', () => {
-            this.modal.classList.add('hidden');
+            this.panel.classList.remove('open');
         });
         
-        // Click outside the modal content closes the modal
-        this.modal.addEventListener('click', (event) => {
-            if (event.target === this.modal) {
-                this.modal.classList.add('hidden');
-            }
-        });
-        
-        // Save button applies settings and closes modal
+        // Save button applies settings
         this.saveButton.addEventListener('click', () => {
             this.saveSettings();
-            this.modal.classList.add('hidden');
+            // Keep the panel open to see the changes
         });
         
         // Reset button resets to defaults
@@ -67,22 +75,31 @@ export class Settings {
         // For each input, update display value and/or preview
         const inputs = document.querySelectorAll('.setting-item input');
         
+        if (!inputs || inputs.length === 0) {
+            console.error("No setting inputs found");
+            return;
+        }
+        
         inputs.forEach(input => {
             // Initial value display
             if (input.type === 'range') {
                 const valueDisplay = input.nextElementSibling;
-                valueDisplay.textContent = input.type === 'range' && input.id === 'gridline-diameter' 
-                    ? input.value.padStart(5, '0')
-                    : input.value + (input.id.includes('translucency') ? '%' : '');
+                if (valueDisplay) {
+                    valueDisplay.textContent = input.id === 'gridline-diameter' 
+                        ? input.value.padStart(5, '0')
+                        : input.value + (input.id.includes('translucency') ? '%' : '');
+                }
             }
             
             // Update value display when input changes
             input.addEventListener('input', (e) => {
                 if (input.type === 'range') {
                     const valueDisplay = input.nextElementSibling;
-                    valueDisplay.textContent = input.id === 'gridline-diameter' 
-                        ? input.value.padStart(5, '0')
-                        : input.value + (input.id.includes('translucency') ? '%' : '');
+                    if (valueDisplay) {
+                        valueDisplay.textContent = input.id === 'gridline-diameter' 
+                            ? input.value.padStart(5, '0')
+                            : input.value + (input.id.includes('translucency') ? '%' : '');
+                    }
                 }
                 
                 // Preview the change
@@ -244,23 +261,31 @@ export class Settings {
     }
     
     applySettingsToGame(settings) {
+        // Ensure game and all required properties exist
+        if (!this.game || !this.game.scene) {
+            console.error("Game or scene not available");
+            return;
+        }
+            
         // Apply background color
         this.game.scene.background = new THREE.Color(settings.backgroundColor);
         
         // Apply piece translucency to any existing pieces
         const pieceOpacity = 1 - (settings.pieceTranslucency / 100);
-        this.game.board.forEachPiece(piece => {
-            if (piece.mesh) {
-                piece.mesh.material.opacity = pieceOpacity;
-                
-                // Update piece colors
-                if (piece.color === 'black') {
-                    piece.mesh.material.color.set(settings.blackColor);
-                } else {
-                    piece.mesh.material.color.set(settings.whiteColor);
+        if (this.game.board && typeof this.game.board.forEachPiece === 'function') {
+            this.game.board.forEachPiece(piece => {
+                if (piece && piece.mesh) {
+                    piece.mesh.material.opacity = pieceOpacity;
+                    
+                    // Update piece colors
+                    if (piece.color === 'black') {
+                        piece.mesh.material.color.set(settings.blackColor);
+                    } else {
+                        piece.mesh.material.color.set(settings.whiteColor);
+                    }
                 }
-            }
-        });
+            });
+        }
         
         // Store settings for future piece creation
         this.game.pieceSettings = {
@@ -269,11 +294,15 @@ export class Settings {
             opacity: pieceOpacity
         };
         
-        // Apply node settings
-        const nodeOpacity = 1 - (settings.nodeTranslucency / 100);
-        for (const point of this.game.board.intersectionPoints) {
-            point.material.color.set(settings.nodeColor);
-            point.material.opacity = nodeOpacity;
+        // Apply node settings if intersection points exist
+        if (this.game.board && this.game.board.intersectionPoints) {
+            const nodeOpacity = 1 - (settings.nodeTranslucency / 100);
+            for (const point of this.game.board.intersectionPoints) {
+                if (point && point.material) {
+                    point.material.color.set(settings.nodeColor);
+                    point.material.opacity = nodeOpacity;
+                }
+            }
         }
         
         // Store hover node settings
@@ -281,16 +310,22 @@ export class Settings {
             opacity: 1 - (settings.hoverNodeTranslucency / 100)
         };
         
-        // Apply grid line settings
-        const gridlineOpacity = 1 - (settings.gridlineTranslucency / 100);
-        for (const line of this.game.board.gridLines) {
-            line.material.color.set(settings.gridlineColor);
-            line.material.opacity = gridlineOpacity;
-            
-            // Adjust grid line diameter - this is more complex and would require recreating the cylinders
-            // For simplicity in this preview, we're just scaling them
-            const scale = settings.gridlineDiameter / 0.02; // 0.02 is the default diameter
-            line.scale.set(scale, 1, scale);
+        // Apply grid line settings if grid lines exist
+        if (this.game.board && this.game.board.gridLines) {
+            const gridlineOpacity = 1 - (settings.gridlineTranslucency / 100);
+            for (const line of this.game.board.gridLines) {
+                if (line && line.material) {
+                    line.material.color.set(settings.gridlineColor);
+                    line.material.opacity = gridlineOpacity;
+                    
+                    // Adjust grid line diameter - this is more complex and would require recreating the cylinders
+                    // For simplicity in this preview, we're just scaling them
+                    if (typeof settings.gridlineDiameter === 'number') {
+                        const scale = settings.gridlineDiameter / 0.02; // 0.02 is the default diameter
+                        line.scale.set(scale, 1, scale);
+                    }
+                }
+            }
         }
         
         // Store hover gridline settings
