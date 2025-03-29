@@ -22,10 +22,17 @@ export class Game {
             opacity: 0.85  // 15% translucency
         };
         
+        // Node settings
+        this.nodeColor = '#888888';
+        this.nodeTranslucency = 50;
         this.nodeHoverSettings = {
+            color: '#ffcc00',
             opacity: 0.8
         };
         
+        // Gridline settings
+        this.gridlineColor = '#444444';
+        this.gridlineTranslucency = 50;
         this.gridlineHoverSettings = {
             color: '#00ff00',
             opacity: 0.8
@@ -48,6 +55,7 @@ export class Game {
         // Raycaster for mouse interaction
         this.raycaster = new THREE.Raycaster();
         this.mouse = new THREE.Vector2();
+        this.isMouseOverCanvas = false;
         
         // Bind event handlers
         this.handleMouseMove = this.handleMouseMove.bind(this);
@@ -82,6 +90,11 @@ export class Game {
         this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.container.appendChild(this.renderer.domElement);
         
+        // Prevent context menu on right-click to allow right-click zooming
+        this.renderer.domElement.addEventListener('contextmenu', (event) => {
+            event.preventDefault();
+        });
+        
         // Handle window resize
         window.addEventListener('resize', () => {
             this.camera.aspect = window.innerWidth / window.innerHeight;
@@ -107,8 +120,36 @@ export class Game {
     
     setupControls() {
         this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+        
+        // Enable damping for smoother camera movement
         this.controls.enableDamping = true;
         this.controls.dampingFactor = 0.05;
+        
+        // Configure control buttons - Fusion 360 style
+        this.controls.mouseButtons = {
+            LEFT: THREE.MOUSE.PAN,       // Left click - pan (when Shift is held)
+            MIDDLE: THREE.MOUSE.ROTATE,  // Middle click - orbit/rotate (Fusion 360 style)
+            RIGHT: THREE.MOUSE.DOLLY     // Right click - zoom
+        };
+        
+        // Additional orbit control options
+        this.controls.enablePan = true;  
+        this.controls.panSpeed = 0.8;    
+        this.controls.rotateSpeed = 0.8; // Adjust rotation speed
+        this.controls.screenSpacePanning = true; // Pan parallel to the screen
+        
+        // Configure keys to mimic Fusion 360
+        this.controls.keys = {
+            LEFT: 'KeyA',   // A
+            UP: 'KeyW',     // W
+            RIGHT: 'KeyD',  // D
+            BOTTOM: 'KeyS'  // S
+        };
+        
+        // Disable left-click rotation by requiring the shift key
+        // This mimics Fusion 360's behavior where left-click by itself selects
+        this.controls.enableRotate = true;
+        this.controls.keyPanSpeed = 10.0; // Make keyboard panning faster
     }
     
     createBoard() {
@@ -118,12 +159,74 @@ export class Game {
     }
     
     setupEventListeners() {
+        // Game interaction events
         this.renderer.domElement.addEventListener('mousemove', this.handleMouseMove);
         this.renderer.domElement.addEventListener('click', this.handleMouseClick);
+        
+        // Navigation and cursor style events
+        this.renderer.domElement.addEventListener('mousedown', (event) => {
+            // Update cursor based on which button is pressed
+            if (event.button === 1) { // Middle button
+                // Middle-click orbiting (Fusion 360 style)
+                this.renderer.domElement.style.cursor = 'move';
+            } else if (event.button === 0 && event.shiftKey) {
+                // Shift+Left click panning
+                this.renderer.domElement.style.cursor = 'grabbing';
+            } else if (event.button === 2) {
+                // Right-click zooming
+                this.renderer.domElement.style.cursor = 'ns-resize';
+            }
+        });
+        
+        this.renderer.domElement.addEventListener('mouseup', () => {
+            // Reset cursor when mouse button is released
+            this.renderer.domElement.style.cursor = 'default';
+        });
+        
+        // Handle mouse leaving the canvas
+        this.renderer.domElement.addEventListener('mouseleave', () => {
+            this.renderer.domElement.style.cursor = 'default';
+        });
+        
+        // Handle key presses for shift key
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Shift') {
+                // Show grabbing cursor when shift is held (ready to pan)
+                if (this.isMouseOverCanvas) {
+                    this.renderer.domElement.style.cursor = 'grab';
+                }
+            }
+        });
+        
+        document.addEventListener('keyup', (event) => {
+            if (event.key === 'Shift') {
+                // Reset cursor when shift is released
+                if (this.isMouseOverCanvas) {
+                    this.renderer.domElement.style.cursor = 'default';
+                }
+            }
+        });
+        
+        // Track if mouse is over the canvas
+        this.isMouseOverCanvas = false;
+        this.renderer.domElement.addEventListener('mouseenter', () => {
+            this.isMouseOverCanvas = true;
+        });
+        this.renderer.domElement.addEventListener('mouseleave', () => {
+            this.isMouseOverCanvas = false;
+        });
     }
     
     handleMouseMove(event) {
         if (this.isGameOver) return;
+        
+        // Skip hover effects during navigation (Fusion 360 style)
+        // Skip for middle-click (orbit), shift+left-click (pan), or right-click (zoom)
+        if (event.buttons === 4 ||                         // Middle button
+            (event.buttons === 1 && event.shiftKey) ||     // Left button + Shift
+            event.buttons === 2) {                         // Right button
+            return;
+        }
         
         // Calculate mouse position
         const rect = this.renderer.domElement.getBoundingClientRect();
@@ -136,6 +239,9 @@ export class Game {
     
     handleMouseClick(event) {
         if (this.isGameOver) return;
+        
+        // Only handle left clicks (button 0) without modifier keys
+        if (event.button !== 0 || event.shiftKey || event.ctrlKey || event.altKey) return;
         
         // Calculate mouse position
         const rect = this.renderer.domElement.getBoundingClientRect();
@@ -169,7 +275,9 @@ export class Game {
                 // Prioritize nodes over grid lines behind them
                 if (!this.board.isOccupied(firstObject.position)) {
                     // Highlight the node
-                    firstObject.material.color.set(this.currentPlayer.color);
+                    // Use the hover node color if available, otherwise use player color
+                    const hoverColor = this.nodeHoverSettings?.color || this.currentPlayer.color;
+                    firstObject.material.color.set(hoverColor);
                     // Use hover settings if available
                     firstObject.material.opacity = this.nodeHoverSettings?.opacity || 0.8;
                     this.hoveredPoint = firstObject;
@@ -188,14 +296,23 @@ export class Game {
         if (!this.hoveredPoint) return;
         
         const position = this.hoveredPoint.position.clone();
-        const x = Math.round(position.x + (this.boardSize - 1) / 2);
-        const y = Math.round(position.y + (this.boardSize - 1) / 2);
-        const z = Math.round(position.z + (this.boardSize - 1) / 2);
+        
+        // Get the node spacing for calculating board coordinates
+        const spacing = this.nodeSpacing || 1.0;
+        
+        // Adjust for spacing when converting from 3D position to board coordinates
+        // For a spacing of 1.0, this is the same as before
+        // For other spacings, we need to divide by the spacing factor
+        const offset = (this.boardSize - 1) / 2;
+        const x = Math.round((position.x / spacing) + offset);
+        const y = Math.round((position.y / spacing) + offset);
+        const z = Math.round((position.z / spacing) + offset);
         
         // Place the piece on the board data structure
         if (this.board.placePiece(x, y, z, this.currentPlayer.color)) {
             // Create a visual representation of the piece
             const pieceMesh = this.currentPlayer.createPiece();
+            // Use the exact position of the hovered node for visual accuracy
             pieceMesh.position.copy(position);
             this.scene.add(pieceMesh);
             
@@ -318,6 +435,9 @@ export class Game {
         // Clear the board data
         this.board = new Board(this.boardSize);
         
+        // Reference to the game for settings
+        this.board.game = this;
+        
         // Remove the old board mesh and create a new one
         if (this.boardMesh) {
             this.scene.remove(this.boardMesh);
@@ -345,7 +465,57 @@ export class Game {
         // Update controls
         this.controls.update();
         
+        // Ensure grid lines and nodes maintain their colors
+        this.maintainGridLineColors();
+        this.maintainNodeColors();
+        
         // Render the scene
         this.renderer.render(this.scene, this.camera);
+    }
+    
+    // Helper method to ensure grid line colors are preserved
+    maintainGridLineColors() {
+        // If we have custom grid line settings, make sure they're applied
+        if (this.board && this.board.gridLines && this.gridlineHoverSettings) {
+            const gridlineOpacity = 1 - ((this.gridlineTranslucency || 50) / 100);
+            const gridlineColor = this.gridlineColor || "#444444";
+            
+            // Check each grid line to ensure it has the correct color if not being hovered
+            for (const line of this.board.gridLines) {
+                // Skip lines that are currently highlighted (being hovered)
+                if (line && line.material && 
+                    line.material.opacity !== this.gridlineHoverSettings.opacity) {
+                    
+                    // This is not a highlighted line, ensure it has the correct base color
+                    if (line.material.color.getHexString() !== gridlineColor.replace('#', '')) {
+                        line.material.color.set(gridlineColor);
+                        line.material.opacity = gridlineOpacity;
+                    }
+                }
+            }
+        }
+    }
+    
+    // Helper method to ensure node colors are preserved
+    maintainNodeColors() {
+        // If we have custom node settings, make sure they're applied
+        if (this.board && this.board.intersectionPoints && this.nodeHoverSettings) {
+            const nodeOpacity = 1 - ((this.nodeTranslucency || 50) / 100);
+            const nodeColor = this.nodeColor || "#888888";
+            
+            // Check each node to ensure it has the correct color if not being hovered
+            for (const node of this.board.intersectionPoints) {
+                // Skip nodes that are currently highlighted (being hovered)
+                if (node && node.material && 
+                    node.material.opacity !== this.nodeHoverSettings.opacity) {
+                    
+                    // This is not a highlighted node, ensure it has the correct base color
+                    if (node.material.color.getHexString() !== nodeColor.replace('#', '')) {
+                        node.material.color.set(nodeColor);
+                        node.material.opacity = nodeOpacity;
+                    }
+                }
+            }
+        }
     }
 }

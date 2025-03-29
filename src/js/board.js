@@ -26,9 +26,13 @@ export class Board {
         const direction = new THREE.Vector3().subVectors(end, start);
         const length = direction.length();
         
+        // Get node spacing or default to 1.0
+        const spacing = this.game?.nodeSpacing || 1.0;
+        
         // Create a cylinder geometry
-        // Use a very thin cylinder (radius 0.02) for the line
-        const geometry = new THREE.CylinderGeometry(0.02, 0.02, length, 8, 1);
+        // Use a thin cylinder for the line, scale radius based on spacing to keep proportions
+        const radius = 0.02 * spacing;
+        const geometry = new THREE.CylinderGeometry(radius, radius, length, 8, 1);
         
         // Position and rotate the cylinder
         geometry.translate(0, length / 2, 0); // Move up so the bottom face is at the origin
@@ -64,32 +68,35 @@ export class Board {
         const boardGroup = new THREE.Group();
         const offset = (this.size - 1) / 2;
         
+        // Get node spacing value from game if available, otherwise use default of 1.0
+        const spacing = this.game?.nodeSpacing || 1.0;
+        
         // Create grid lines using cylinders for better hover detection
         for (let i = 0; i < this.size; i++) {
             for (let j = 0; j < this.size; j++) {
-                // Define line endpoints
-                const xStart = new THREE.Vector3(-offset, i - offset, j - offset);
-                const xEnd = new THREE.Vector3(offset, i - offset, j - offset);
+                // Define line endpoints with proper spacing
+                const xStart = new THREE.Vector3(-offset * spacing, (i - offset) * spacing, (j - offset) * spacing);
+                const xEnd = new THREE.Vector3(offset * spacing, (i - offset) * spacing, (j - offset) * spacing);
                 
-                const yStart = new THREE.Vector3(i - offset, -offset, j - offset);
-                const yEnd = new THREE.Vector3(i - offset, offset, j - offset);
+                const yStart = new THREE.Vector3((i - offset) * spacing, -offset * spacing, (j - offset) * spacing);
+                const yEnd = new THREE.Vector3((i - offset) * spacing, offset * spacing, (j - offset) * spacing);
                 
-                const zStart = new THREE.Vector3(i - offset, j - offset, -offset);
-                const zEnd = new THREE.Vector3(i - offset, j - offset, offset);
+                const zStart = new THREE.Vector3((i - offset) * spacing, (j - offset) * spacing, -offset * spacing);
+                const zEnd = new THREE.Vector3((i - offset) * spacing, (j - offset) * spacing, offset * spacing);
                 
-                // Create X-axis line
+                // Create X-axis line with adjusted length
                 const xLine = this.createCylinderLine(xStart, xEnd, 0x444444);
                 xLine.userData = { type: 'line', axis: 'x', i, j };
                 this.gridLines.push(xLine);
                 boardGroup.add(xLine);
                 
-                // Create Y-axis line
+                // Create Y-axis line with adjusted length
                 const yLine = this.createCylinderLine(yStart, yEnd, 0x444444);
                 yLine.userData = { type: 'line', axis: 'y', i, j };
                 this.gridLines.push(yLine);
                 boardGroup.add(yLine);
                 
-                // Create Z-axis line
+                // Create Z-axis line with adjusted length
                 const zLine = this.createCylinderLine(zStart, zEnd, 0x444444);
                 zLine.userData = { type: 'line', axis: 'z', i, j };
                 this.gridLines.push(zLine);
@@ -99,7 +106,9 @@ export class Board {
         
         // Create intersection points
         this.intersectionPoints = [];
-        const pointGeometry = new THREE.SphereGeometry(0.15, 16, 16); // Increased size for better hover detection
+        // Scale point size with spacing to maintain proportions
+        const pointRadius = 0.15 * spacing;
+        const pointGeometry = new THREE.SphereGeometry(pointRadius, 16, 16);
         const pointMaterial = new THREE.MeshBasicMaterial({
             color: 0x888888,
             transparent: true,
@@ -110,7 +119,12 @@ export class Board {
             for (let y = 0; y < this.size; y++) {
                 for (let z = 0; z < this.size; z++) {
                     const point = new THREE.Mesh(pointGeometry, pointMaterial.clone());
-                    point.position.set(x - offset, y - offset, z - offset);
+                    // Apply spacing to all point positions
+                    point.position.set(
+                        (x - offset) * spacing, 
+                        (y - offset) * spacing, 
+                        (z - offset) * spacing
+                    );
                     point.userData = { x, y, z };
                     this.intersectionPoints.push(point);
                     boardGroup.add(point);
@@ -149,24 +163,33 @@ export class Board {
     
     isOccupied(position) {
         const offset = (this.size - 1) / 2;
-        const x = Math.round(position.x + offset);
-        const y = Math.round(position.y + offset);
-        const z = Math.round(position.z + offset);
+        const spacing = this.game?.nodeSpacing || 1.0;
+        
+        // Adjust for spacing when converting from 3D position to board coordinates
+        const x = Math.round((position.x / spacing) + offset);
+        const y = Math.round((position.y / spacing) + offset);
+        const z = Math.round((position.z / spacing) + offset);
         
         return this.getPieceAt(x, y, z) !== null;
     }
     
     resetHoverState() {
-        // Reset intersection points
+        // Reset intersection points - use custom colors if available
+        const nodeColor = this.game?.nodeColor || 0x888888;
+        const nodeOpacity = 1 - ((this.game?.nodeTranslucency || 50) / 100);
+        
         for (const point of this.intersectionPoints) {
-            point.material.color.set(0x888888);
-            point.material.opacity = 0.5;
+            point.material.color.set(nodeColor);
+            point.material.opacity = nodeOpacity;
         }
         
-        // Reset grid lines
+        // Reset grid lines - use custom colors if available 
+        const gridColor = this.game?.gridlineColor || 0x444444;
+        const gridOpacity = 1 - ((this.game?.gridlineTranslucency || 50) / 100);
+        
         for (const line of this.gridLines) {
-            line.material.color.set(0x444444);
-            line.material.opacity = 0.5;
+            line.material.color.set(gridColor);
+            line.material.opacity = gridOpacity;
         }
     }
     
@@ -201,8 +224,12 @@ export class Board {
                 (axis === 'y' && i === x && j === z) ||  // Y-axis line at the point's X and Z coordinates
                 (axis === 'z' && i === x && j === y)     // Z-axis line at the point's X and Y coordinates
             ) {
-                line.material.color.set(0x00ff00); // Bright green
-                line.material.opacity = 0.8;
+                // Use settings if available, otherwise fallback to default
+                const color = this.game?.gridlineHoverSettings?.color || '#00ff00';
+                const opacity = this.game?.gridlineHoverSettings?.opacity || 0.8;
+                
+                line.material.color.set(color);
+                line.material.opacity = opacity;
             }
         }
     }

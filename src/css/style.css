@@ -93,8 +93,8 @@ button:hover {
 .settings-panel {
     position: fixed;
     top: 0;
-    right: -350px; /* Start off-screen */
-    width: 350px;
+    right: -450px; /* Start off-screen with increased width */
+    width: 450px; /* Wider panel */
     height: 100%;
     background-color: rgba(240, 240, 240, 0.9);
     box-shadow: -2px 0 10px rgba(0, 0, 0, 0.3);
@@ -130,21 +130,27 @@ button:hover {
 }
 
 .settings-body {
-    padding: 15px;
+    padding: 20px 25px;
     overflow-y: auto;
     flex-grow: 1;
 }
 
 .settings-footer {
-    padding: 15px;
+    padding: 15px 25px;
     text-align: right;
     border-top: 1px solid #ddd;
     background-color: rgba(240, 240, 240, 0.95);
 }
 
+.settings-footer button {
+    padding: 8px 15px;
+    font-size: 14px;
+}
+
 /* Settings Styles */
 .settings-section {
-    margin-bottom: 25px;
+    margin-bottom: 30px;
+    width: 100%;
 }
 
 .settings-section h3 {
@@ -152,21 +158,25 @@ button:hover {
     margin-bottom: 15px;
     padding-bottom: 8px;
     border-bottom: 1px solid #ddd;
+    font-size: 16px;
 }
 
 .setting-item {
     display: flex;
     align-items: center;
-    margin-bottom: 12px;
+    margin-bottom: 15px;
+    width: 100%;
+    flex-wrap: nowrap;
 }
 
 .setting-item label {
     flex: 0 0 180px;
     margin-right: 15px;
+    font-size: 14px;
 }
 
 .setting-item input[type="color"] {
-    width: 50px;
+    width: 60px;
     height: 30px;
     border: none;
     border-radius: 4px;
@@ -175,15 +185,39 @@ button:hover {
 
 .setting-item input[type="range"] {
     flex: 1;
-    max-width: 300px;
+    min-width: 120px;
+    max-width: 160px;
 }
 
 .setting-value {
     margin-left: 10px;
-    min-width: 40px;
+    min-width: 50px;
     text-align: right;
+    font-size: 14px;
 }
 
 #save-settings, #reset-settings {
     margin-left: 10px;
+}
+
+/* Responsive adjustments */
+@media screen and (max-width: 500px) {
+    .settings-panel {
+        width: 100%;
+        right: -100%;
+    }
+    
+    .setting-item {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+    
+    .setting-item label {
+        margin-bottom: 8px;
+    }
+    
+    .setting-item input[type="range"] {
+        width: 100%;
+        max-width: none;
+    }
 }

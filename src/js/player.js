@@ -8,8 +8,12 @@ export class Player {
     }
     
     createPiece() {
-        // Create a mesh for the piece
-        const geometry = new THREE.SphereGeometry(0.4, 32, 32);
+        // Get node spacing to scale piece size appropriately
+        const spacing = this.game?.nodeSpacing || 1.0;
+        
+        // Create a mesh for the piece with size proportional to node spacing
+        const pieceRadius = 0.4 * spacing;
+        const geometry = new THREE.SphereGeometry(pieceRadius, 32, 32);
         
         // Use settings if available
         let pieceColor = this.color === 'black' ? 0x111111 : 0xffffff;

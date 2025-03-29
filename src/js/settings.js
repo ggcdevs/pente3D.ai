@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { Board } from './board.js';
 
 // Game settings manager
 export class Settings {
@@ -14,6 +15,7 @@ export class Settings {
             pieceTranslucency: 15,
             nodeColor: '#888888',
             nodeTranslucency: 50,
+            hoverNodeColor: '#ffcc00',
             hoverNodeTranslucency: 20,
             gridlineColor: '#444444',
             gridlineDiameter: 0.02,
@@ -91,8 +93,9 @@ export class Settings {
                 }
             }
             
-            // Update value display when input changes
-            input.addEventListener('input', (e) => {
+            // Real-time update handling
+            const handleChange = () => {
+                // Update display for range inputs
                 if (input.type === 'range') {
                     const valueDisplay = input.nextElementSibling;
                     if (valueDisplay) {
@@ -102,88 +105,99 @@ export class Settings {
                     }
                 }
                 
-                // Preview the change
-                this.previewSetting(input.id, input.value);
+                // Apply the change immediately
+                this.updateCurrentSetting(input.id, input.value);
+            };
+            
+            // For real-time updates during dragging
+            input.addEventListener('input', handleChange);
+            
+            // For final change when control is released
+            input.addEventListener('change', () => {
+                handleChange();
+                // Save to localStorage for persistence
+                this.saveToLocalStorage();
             });
         });
     }
     
-    previewSetting(id, value) {
-        // Create a temporary object to preview the setting
-        const setting = {};
-        
+    updateCurrentSetting(id, value) {
+        // Update the current settings object with this new value
         switch (id) {
             case 'background-color':
-                setting.backgroundColor = value;
+                this.current.backgroundColor = value;
                 break;
             case 'node-spacing':
-                setting.nodeSpacing = parseFloat(value);
+                this.current.nodeSpacing = parseFloat(value);
                 break;
             case 'black-color':
-                setting.blackColor = value;
+                this.current.blackColor = value;
                 break;
             case 'white-color':
-                setting.whiteColor = value;
+                this.current.whiteColor = value;
                 break;
             case 'piece-translucency':
-                setting.pieceTranslucency = parseInt(value);
+                this.current.pieceTranslucency = parseInt(value);
                 break;
             case 'node-color':
-                setting.nodeColor = value;
+                this.current.nodeColor = value;
                 break;
             case 'node-translucency':
-                setting.nodeTranslucency = parseInt(value);
+                this.current.nodeTranslucency = parseInt(value);
+                break;
+            case 'hover-node-color':
+                this.current.hoverNodeColor = value;
                 break;
             case 'hover-node-translucency':
-                setting.hoverNodeTranslucency = parseInt(value);
+                this.current.hoverNodeTranslucency = parseInt(value);
                 break;
             case 'gridline-color':
-                setting.gridlineColor = value;
+                this.current.gridlineColor = value;
                 break;
             case 'gridline-diameter':
-                setting.gridlineDiameter = parseFloat(value);
+                this.current.gridlineDiameter = parseFloat(value);
                 break;
             case 'gridline-translucency':
-                setting.gridlineTranslucency = parseInt(value);
+                this.current.gridlineTranslucency = parseInt(value);
                 break;
             case 'hover-gridline-color':
-                setting.hoverGridlineColor = value;
+                this.current.hoverGridlineColor = value;
                 break;
             case 'hover-gridline-translucency':
-                setting.hoverGridlineTranslucency = parseInt(value);
+                this.current.hoverGridlineTranslucency = parseInt(value);
                 break;
         }
         
-        // Apply just this setting for preview
-        this.applySettingsPreview(setting);
+        // Apply the updated settings to the game
+        this.applySettings();
     }
     
+    saveToLocalStorage() {
+        // Save current settings to localStorage
+        localStorage.setItem('pente3d_settings', JSON.stringify(this.current));
+    }
+    
+    // Removed preview method - now using direct apply via updateCurrentSetting
+    
     saveSettings() {
-        // Get all settings from the form
-        const settings = {
-            backgroundColor: document.getElementById('background-color').value,
-            nodeSpacing: parseFloat(document.getElementById('node-spacing').value),
-            blackColor: document.getElementById('black-color').value,
-            whiteColor: document.getElementById('white-color').value,
-            pieceTranslucency: parseInt(document.getElementById('piece-translucency').value),
-            nodeColor: document.getElementById('node-color').value,
-            nodeTranslucency: parseInt(document.getElementById('node-translucency').value),
-            hoverNodeTranslucency: parseInt(document.getElementById('hover-node-translucency').value),
-            gridlineColor: document.getElementById('gridline-color').value,
-            gridlineDiameter: parseFloat(document.getElementById('gridline-diameter').value),
-            gridlineTranslucency: parseInt(document.getElementById('gridline-translucency').value),
-            hoverGridlineColor: document.getElementById('hover-gridline-color').value,
-            hoverGridlineTranslucency: parseInt(document.getElementById('hover-gridline-translucency').value)
-        };
+        // Get all current form values
+        document.querySelectorAll('.setting-item input').forEach(input => {
+            // Update each setting based on current form value
+            this.updateCurrentSetting(input.id, input.value);
+        });
         
-        // Save to current settings
-        this.current = settings;
+        // Save to localStorage
+        this.saveToLocalStorage();
         
-        // Apply the settings to the game
-        this.applySettings();
-        
-        // Save to localStorage for persistence
-        localStorage.setItem('pente3d_settings', JSON.stringify(settings));
+        // Confirm save with visual feedback (optional)
+        const saveButton = document.getElementById('save-settings');
+        if (saveButton) {
+            const originalText = saveButton.textContent;
+            saveButton.textContent = "✓ Saved!";
+            setTimeout(() => {
+                saveButton.textContent = originalText;
+            }, 1000);
+        }
     }
     
     loadSettings() {
@@ -231,6 +245,7 @@ export class Settings {
         document.getElementById('piece-translucency').value = this.current.pieceTranslucency;
         document.getElementById('node-color').value = this.current.nodeColor;
         document.getElementById('node-translucency').value = this.current.nodeTranslucency;
+        document.getElementById('hover-node-color').value = this.current.hoverNodeColor;
         document.getElementById('hover-node-translucency').value = this.current.hoverNodeTranslucency;
         document.getElementById('gridline-color').value = this.current.gridlineColor;
         document.getElementById('gridline-diameter').value = this.current.gridlineDiameter;
@@ -247,13 +262,7 @@ export class Settings {
         });
     }
     
-    applySettingsPreview(setting) {
-        // Create a merged settings object for preview
-        const previewSettings = {...this.current, ...setting};
-        
-        // Apply the preview settings
-        this.applySettingsToGame(previewSettings);
-    }
+    // Removed preview method - now applying settings directly
     
     applySettings() {
         // Apply all settings to the game
@@ -269,6 +278,90 @@ export class Settings {
             
         // Apply background color
         this.game.scene.background = new THREE.Color(settings.backgroundColor);
+        
+        // Store the node spacing setting in the game object
+        this.game.nodeSpacing = settings.nodeSpacing;
+        
+        // Check if node spacing has changed - will be true even on first change
+        const nodeSpacingChanged = this.game.prevNodeSpacing === undefined || 
+                                   this.game.prevNodeSpacing !== settings.nodeSpacing;
+        
+        // If node spacing changed, we need to rebuild the board
+        if (nodeSpacingChanged) {
+            // Store pieces temporarily
+            const pieces = [];
+            if (this.game.board) {
+                this.game.board.forEachPiece((piece, x, y, z) => {
+                    pieces.push({
+                        x, y, z, 
+                        color: piece.color
+                    });
+                });
+            }
+            
+            // Remove existing board and pieces
+            if (this.game.boardMesh) {
+                this.game.scene.remove(this.game.boardMesh);
+            }
+            
+            // Create a new board with proper spacing
+            const oldBoardSize = this.game.board ? this.game.board.size : this.game.boardSize;
+            this.game.board = new Board(oldBoardSize);
+            this.game.board.game = this.game;
+            
+            // Create and add new board mesh
+            this.game.boardMesh = this.game.board.createBoardMesh();
+            this.game.scene.add(this.game.boardMesh);
+            
+            // Find the node positions in the newly created board
+            const findNodeByCoords = (x, y, z) => {
+                for (const node of this.game.board.intersectionPoints) {
+                    if (node.userData && 
+                        node.userData.x === x && 
+                        node.userData.y === y && 
+                        node.userData.z === z) {
+                        return node;
+                    }
+                }
+                return null;
+            };
+            
+            // Restore pieces
+            for (const piece of pieces) {
+                if (this.game.board.placePiece(piece.x, piece.y, piece.z, piece.color)) {
+                    const player = piece.color === 'black' ? this.game.playerBlack : this.game.playerWhite;
+                    const pieceMesh = player.createPiece();
+                    
+                    // Find the exact node where this piece should be placed
+                    const node = findNodeByCoords(piece.x, piece.y, piece.z);
+                    
+                    if (node) {
+                        // Use the node's exact position
+                        pieceMesh.position.copy(node.position);
+                    } else {
+                        // Fallback to calculated position
+                        const offset = (this.game.board.size - 1) / 2;
+                        const position = new THREE.Vector3(
+                            (piece.x - offset) * settings.nodeSpacing,
+                            (piece.y - offset) * settings.nodeSpacing,
+                            (piece.z - offset) * settings.nodeSpacing
+                        );
+                        pieceMesh.position.copy(position);
+                    }
+                    
+                    this.game.scene.add(pieceMesh);
+                    
+                    // Store reference to the mesh
+                    const boardPiece = this.game.board.getPieceAt(piece.x, piece.y, piece.z);
+                    if (boardPiece) {
+                        boardPiece.mesh = pieceMesh;
+                    }
+                }
+            }
+            
+            // Store current spacing for future comparison
+            this.game.prevNodeSpacing = settings.nodeSpacing;
+        }
         
         // Apply piece translucency to any existing pieces
         const pieceOpacity = 1 - (settings.pieceTranslucency / 100);
@@ -297,6 +390,11 @@ export class Settings {
         // Apply node settings if intersection points exist
         if (this.game.board && this.game.board.intersectionPoints) {
             const nodeOpacity = 1 - (settings.nodeTranslucency / 100);
+            
+            // Store node settings in game object for persistence
+            this.game.nodeColor = settings.nodeColor;
+            this.game.nodeTranslucency = settings.nodeTranslucency;
+            
             for (const point of this.game.board.intersectionPoints) {
                 if (point && point.material) {
                     point.material.color.set(settings.nodeColor);
@@ -307,12 +405,18 @@ export class Settings {
         
         // Store hover node settings
         this.game.nodeHoverSettings = {
+            color: settings.hoverNodeColor,
             opacity: 1 - (settings.hoverNodeTranslucency / 100)
         };
         
         // Apply grid line settings if grid lines exist
         if (this.game.board && this.game.board.gridLines) {
             const gridlineOpacity = 1 - (settings.gridlineTranslucency / 100);
+            
+            // Store grid line settings in game object for persistence
+            this.game.gridlineColor = settings.gridlineColor;
+            this.game.gridlineTranslucency = settings.gridlineTranslucency;
+            
             for (const line of this.game.board.gridLines) {
                 if (line && line.material) {
                     line.material.color.set(settings.gridlineColor);
