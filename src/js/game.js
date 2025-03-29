@@ -135,22 +135,28 @@ export class Game {
         this.board.resetHoverState();
         this.hoveredPoint = null;
         
-        // Check for intersection with grid lines first
-        const lineIntersects = this.raycaster.intersectObjects(this.board.gridLines);
-        if (lineIntersects.length > 0) {
-            // Highlight the grid line that was directly hovered
-            const line = lineIntersects[0].object;
-            this.board.highlightGridLine(line);
-            return; // Exit early, we found a grid line
-        }
+        // Get all objects (points and lines) and check intersections
+        const allObjects = [...this.board.intersectionPoints, ...this.board.gridLines];
+        const intersects = this.raycaster.intersectObjects(allObjects);
         
-        // If no grid line was intersected, check for intersection points
-        const pointIntersects = this.raycaster.intersectObjects(this.board.intersectionPoints);
-        if (pointIntersects.length > 0 && !this.board.isOccupied(pointIntersects[0].object.position)) {
-            const point = pointIntersects[0].object;
-            point.material.color.set(this.currentPlayer.color);
-            point.material.opacity = 0.8; // Increased opacity for better visibility
-            this.hoveredPoint = point;
+        // If we have any intersections
+        if (intersects.length > 0) {
+            const firstObject = intersects[0].object;
+            
+            // Check if the first intersection is a point (intersection node)
+            const isPointIntersection = this.board.intersectionPoints.includes(firstObject);
+            
+            if (isPointIntersection) {
+                // Prioritize nodes over grid lines behind them
+                if (!this.board.isOccupied(firstObject.position)) {
+                    firstObject.material.color.set(this.currentPlayer.color);
+                    firstObject.material.opacity = 0.8; // Increased opacity for better visibility
+                    this.hoveredPoint = firstObject;
+                }
+            } else {
+                // It's a grid line
+                this.board.highlightGridLine(firstObject);
+            }
         }
     }
     

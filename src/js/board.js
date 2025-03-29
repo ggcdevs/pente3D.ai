@@ -99,7 +99,7 @@ export class Board {
         
         // Create intersection points
         this.intersectionPoints = [];
-        const pointGeometry = new THREE.SphereGeometry(0.1, 16, 16);
+        const pointGeometry = new THREE.SphereGeometry(0.15, 16, 16); // Increased size for better hover detection
         const pointMaterial = new THREE.MeshBasicMaterial({
             color: 0x888888,
             transparent: true,
