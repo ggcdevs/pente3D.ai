@@ -149,9 +149,13 @@ export class Game {
             if (isPointIntersection) {
                 // Prioritize nodes over grid lines behind them
                 if (!this.board.isOccupied(firstObject.position)) {
+                    // Highlight the node
                     firstObject.material.color.set(this.currentPlayer.color);
                     firstObject.material.opacity = 0.8; // Increased opacity for better visibility
                     this.hoveredPoint = firstObject;
+                    
+                    // Also highlight the 3 grid lines that intersect at this node
+                    this.board.highlightIntersectingLines(firstObject);
                 }
             } else {
                 // It's a grid line

@@ -178,6 +178,31 @@ export class Board {
         }
     }
     
+    // Method to highlight the 3 grid lines intersecting at a point
+    highlightIntersectingLines(point) {
+        if (!point || !point.userData) return;
+        
+        const { x, y, z } = point.userData;
+        const offset = (this.size - 1) / 2;
+        
+        // Find and highlight the 3 grid lines that intersect this point
+        for (const line of this.gridLines) {
+            if (!line.userData || line.userData.type !== 'line') continue;
+            
+            const { axis, i, j } = line.userData;
+            
+            // Check if this grid line passes through the point
+            if (
+                (axis === 'x' && i === y && j === z) ||  // X-axis line at the point's Y and Z coordinates
+                (axis === 'y' && i === x && j === z) ||  // Y-axis line at the point's X and Z coordinates
+                (axis === 'z' && i === x && j === y)     // Z-axis line at the point's X and Y coordinates
+            ) {
+                line.material.color.set(0x00ff00); // Bright green
+                line.material.opacity = 0.8;
+            }
+        }
+    }
+    
     checkCaptures(x, y, z, color) {
         const capturedPositions = [];
         const opponentColor = color === 'black' ? 'white' : 'black';
