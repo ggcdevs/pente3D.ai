@@ -15,6 +15,19 @@ export const CONFIG = {
         // PeerJS specific settings
         peerjs: {
             usePublicServer: true,
+            // Connection options
+            options: {
+                debug: 3, // Log level (0=disabled, 1=errors, 2=warnings, 3=all)
+                secure: true, // Use secure connection
+                config: {
+                    // ICE server configuration
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' },
+                        { urls: 'stun:stun1.l.google.com:19302' },
+                        { urls: 'stun:stun2.l.google.com:19302' }
+                    ]
+                }
+            },
             // Custom server settings (only used if usePublicServer is false)
             customServer: {
                 host: 'localhost',

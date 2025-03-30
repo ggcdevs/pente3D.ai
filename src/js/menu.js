@@ -296,17 +296,25 @@ export class Menu {
      * @returns {NetworkManager} The initialized network manager
      */
     initNetworkManager() {
+        console.info('Menu: Initializing network manager');
         if (!this.networkManager) {
+            console.debug('Menu: Creating new NetworkManager instance');
             this.networkManager = new NetworkManager(this.game);
+            console.debug('Menu: Setting up network event handlers');
             this.setupNetworkHandlers();
+        } else {
+            console.debug('Menu: Using existing NetworkManager instance');
         }
         return this.networkManager;
     }
     
     async handleJoinGame() {
+        console.info('Menu: Handle join game action initiated');
         const gameCode = this.gameCodeInput ? this.gameCodeInput.value.trim().toUpperCase() : '';
+        console.debug(`Menu: Game code entered: ${gameCode}`);
         
         if (!gameCode) {
+            console.warn('Menu: Empty game code provided');
             // Show error for empty code
             alert('Please enter a valid game code.');
             return;
@@ -314,63 +322,83 @@ export class Menu {
         
         try {
             // Initialize network manager if not already done
+            console.debug('Menu: Ensuring network manager is initialized');
             this.initNetworkManager();
             
             // Show loading indicator
+            console.debug('Menu: Updating UI to show connecting state');
             this.joinGameButton.textContent = 'Connecting...';
             this.joinGameButton.disabled = true;
             
             // Join the game
+            console.info(`Menu: Attempting to join game with code: ${gameCode}`);
             await this.networkManager.joinGame(gameCode);
             
             // Close the modal
+            console.debug('Menu: Closing menu modal after successful connection');
             this.closeMenuModal();
             
             // Show success message
+            console.debug('Menu: Showing success connection status');
             this.showConnectionStatus(`Connected to game ${gameCode}`, 'success');
         } catch (error) {
-            console.error('Failed to join game:', error);
+            console.error('Menu: Failed to join game:', error);
             
             // Reset button
+            console.debug('Menu: Resetting join button to original state');
             this.joinGameButton.textContent = 'Join';
             this.joinGameButton.disabled = false;
             
             // Show error message
+            console.debug('Menu: Showing error alert to user');
             alert(`Failed to join game: ${error.message}`);
         }
     }
     
     async handleHostGame() {
+        console.info('Menu: Handle host game action initiated');
+        
         try {
             // Initialize network manager if not already done
+            console.debug('Menu: Ensuring network manager is initialized');
             this.initNetworkManager();
             
             // Show loading indicator
+            console.debug('Menu: Updating UI to show creating state');
             this.hostGameButton.textContent = 'Creating...';
             this.hostGameButton.disabled = true;
             
             // Create the game
+            console.info('Menu: Creating new game as host');
             const gameCode = await this.networkManager.createGame();
+            console.info(`Menu: Game created with code: ${gameCode}`);
             
             // Show the game code display
             if (this.gameCodeDisplay && this.generatedGameCode) {
+                console.debug('Menu: Showing game code display UI');
                 this.gameCodeDisplay.classList.remove('hidden');
                 this.generatedGameCode.textContent = gameCode;
                 
                 // Update host button
+                console.debug('Menu: Updating host button to waiting state');
                 this.hostGameButton.textContent = 'Waiting for Player...';
+            } else {
+                console.warn('Menu: Game code display elements missing');
             }
             
             // Show info message
+            console.debug('Menu: Showing waiting for opponent status');
             this.showConnectionStatus('Game created! Waiting for opponent...', 'info');
         } catch (error) {
-            console.error('Failed to create game:', error);
+            console.error('Menu: Failed to create game:', error);
             
             // Reset button
+            console.debug('Menu: Resetting host button to original state');
             this.hostGameButton.textContent = 'Create Game';
             this.hostGameButton.disabled = false;
             
             // Show error message
+            console.debug('Menu: Showing error alert to user');
             alert(`Failed to create game: ${error.message}`);
         }
     }
