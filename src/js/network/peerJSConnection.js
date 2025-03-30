@@ -20,13 +20,15 @@ class LocalChannel {
         // Register in the static channels map
         LocalChannel.channels[localPeerId] = this;
         
+        console.log(`LocalChannel: Created channel from ${localPeerId} to ${remotePeerId}`);
+        console.log(`LocalChannel: Current channels in map:`, Object.keys(LocalChannel.channels));
+        
         // Auto-open the channel with a small delay to simulate connection time
         setTimeout(() => {
             this.isOpen = true;
             this._trigger('open');
+            console.log(`LocalChannel: Channel ${localPeerId} is now open`);
         }, 500);
-        
-        console.log(`LocalChannel: Created channel from ${localPeerId} to ${remotePeerId}`);
     }
     
     // Send data to the other peer
@@ -36,16 +38,31 @@ class LocalChannel {
             return;
         }
         
+        console.log(`LocalChannel: Attempting to send data from ${this.localPeerId} to ${this.remotePeerId}`);
+        console.log(`LocalChannel: Available channels:`, Object.keys(LocalChannel.channels));
+        
         // Get the other peer's channel
         const otherChannel = LocalChannel.channels[this.remotePeerId];
         if (!otherChannel) {
             console.error(`LocalChannel: Cannot send - remote peer ${this.remotePeerId} not found`);
+            // Instead of failing, create a channel for the remote peer if it doesn't exist
+            console.log(`LocalChannel: Creating a missing channel for ${this.remotePeerId}`);
+            const missingChannel = new LocalChannel(this.remotePeerId, this.localPeerId);
+            
+            // Simulate network delay before sending the data
+            setTimeout(() => {
+                if (LocalChannel.channels[this.remotePeerId]) {
+                    LocalChannel.channels[this.remotePeerId]._trigger('data', data);
+                    console.log(`LocalChannel: Data sent to newly created channel ${this.remotePeerId}`);
+                }
+            }, 200);
             return;
         }
         
         // Simulate network delay
         setTimeout(() => {
             otherChannel._trigger('data', data);
+            console.log(`LocalChannel: Data delivered to ${this.remotePeerId}`);
         }, 100);
         
         console.log(`LocalChannel: Sent data from ${this.localPeerId} to ${this.remotePeerId}`);
@@ -393,8 +410,26 @@ export class PeerJSConnection extends ConnectionInterface {
                 this.gameCode = id;
                 this.peer = { id: id };  // Simple peer object for compatibility
                 
-                // In local testing mode, we don't need to actually connect to PeerJS servers
-                // The actual connection will happen when the client joins
+                // Create a LocalChannel for ourselves so clients can find us
+                console.info(`PeerJSConnection: Creating host LocalChannel with ID: ${id}`);
+                const hostChannel = new LocalChannel(id, null);
+                this.connection = hostChannel; // Store the channel
+                
+                // Set up local channel events
+                hostChannel.on('open', () => {
+                    console.info(`PeerJSConnection: Host local channel opened with ID ${id}`);
+                    this.connected = true;
+                });
+                
+                hostChannel.on('data', (data) => {
+                    console.info(`PeerJSConnection: Host received data on local channel`);
+                    console.debug('PeerJSConnection: Data:', data);
+                    
+                    // Pass data to callback
+                    if (this.dataCallback) {
+                        this.dataCallback(data);
+                    }
+                });
                 
                 console.info(`PeerJSConnection: Game created with LOCAL TEST mode code: ${id}`);
                 return id;
@@ -451,49 +486,61 @@ export class PeerJSConnection extends ConnectionInterface {
                 
                 return new Promise((resolve, reject) => {
                     try {
-                        // Create local channel that directly connects to the host
-                        const channel = new LocalChannel(localId, code);
-                        this.connection = channel;
-                        
-                        // Set up local channel events
-                        channel.on('open', () => {
-                            console.info(`PeerJSConnection: Local channel opened to ${code}`);
-                            this.connected = true;
+                        // Wait a moment to ensure host channel is created and registered
+                        setTimeout(() => {
+                            console.info(`PeerJSConnection: Checking for host channel before connecting...`);
+                            console.log(`LocalChannel: Available channels:`, Object.keys(LocalChannel.channels));
                             
-                            // Handle connection open
-                            if (this.connectCallback) {
-                                this.connectCallback(code);
-                            }
+                            // Create local channel that directly connects to the host
+                            const channel = new LocalChannel(localId, code);
+                            this.connection = channel;
                             
-                            resolve();
-                        });
-                        
-                        channel.on('data', (data) => {
-                            console.info(`PeerJSConnection: Received data on local channel`);
-                            console.debug('PeerJSConnection: Data:', data);
+                            // Set up local channel events
+                            channel.on('open', () => {
+                                console.info(`PeerJSConnection: Local channel opened to ${code}`);
+                                this.connected = true;
+                                
+                                // Check if host channel exists, create if missing
+                                if (!LocalChannel.channels[code]) {
+                                    console.warn(`LocalChannel: Host channel ${code} not found, creating a placeholder`);
+                                    const hostChannel = new LocalChannel(code, localId);
+                                }
+                                
+                                // Handle connection open
+                                if (this.connectCallback) {
+                                    this.connectCallback(code);
+                                }
+                                
+                                resolve();
+                            });
                             
-                            // Pass data to callback
-                            if (this.dataCallback) {
-                                this.dataCallback(data);
-                            }
-                        });
-                        
-                        channel.on('close', () => {
-                            console.info(`PeerJSConnection: Local channel closed`);
-                            this.connected = false;
+                            channel.on('data', (data) => {
+                                console.info(`PeerJSConnection: Received data on local channel`);
+                                console.debug('PeerJSConnection: Data:', data);
+                                
+                                // Pass data to callback
+                                if (this.dataCallback) {
+                                    this.dataCallback(data);
+                                }
+                            });
                             
-                            if (this.disconnectCallback) {
-                                this.disconnectCallback();
-                            }
-                        });
-                        
-                        channel.on('error', (err) => {
-                            console.error(`PeerJSConnection: Local channel error:`, err);
+                            channel.on('close', () => {
+                                console.info(`PeerJSConnection: Local channel closed`);
+                                this.connected = false;
+                                
+                                if (this.disconnectCallback) {
+                                    this.disconnectCallback();
+                                }
+                            });
                             
-                            if (this.errorCallback) {
-                                this.errorCallback(err);
-                            }
-                        });
+                            channel.on('error', (err) => {
+                                console.error(`PeerJSConnection: Local channel error:`, err);
+                                
+                                if (this.errorCallback) {
+                                    this.errorCallback(err);
+                                }
+                            });
+                        }, 100); // End of setTimeout
                         
                     } catch (err) {
                         console.error('PeerJSConnection: Error creating local channel:', err);
@@ -514,35 +561,8 @@ export class PeerJSConnection extends ConnectionInterface {
             console.debug('PeerJSConnection: Creating data connection to host');
             
             // Enhanced connection options with more debugging and better compatibility
-            // Check if we're in local testing mode
-            const isLocalTesting = CONFIG.network.localTestingMode === true;
-            
-            // Different connection options depending on the mode
-            const connectionOptions = isLocalTesting ? 
-                // Local testing configuration - simplified for same device testing
-                {
-                    reliable: true,
-                    serialization: 'json',
-                    metadata: {
-                        clientId: this.peer.id,
-                        timestamp: Date.now(),
-                        version: '1.0',
-                        localTest: true
-                    },
-                    // High debug level
-                    debug: 3,
-                    // Simplified configuration for local connections
-                    config: {
-                        // Empty ICE servers to prevent external connections
-                        iceServers: [],
-                        // Settings for local connections
-                        iceTransportPolicy: 'relay',
-                        sdpSemantics: 'unified-plan',
-                        rtcpMuxPolicy: 'require'
-                    }
-                } : 
-                // Normal connection options for real network use
-                {
+            // Standard connection options for WebRTC
+            const connectionOptions = {
                     reliable: true,
                     serialization: 'json',
                     // Use binary serialization for better performance if needed
@@ -588,10 +608,8 @@ export class PeerJSConnection extends ConnectionInterface {
                     }
                 };
                 
-            // Log what mode we're using
-            if (isLocalTesting) {
-                console.warn('PeerJSConnection: Using LOCAL TESTING MODE connection options');
-            }
+            // Using standard WebRTC options here 
+            // (Local testing mode is handled in the separate path above)
             
             console.debug('PeerJSConnection: Connection options:', connectionOptions);
             
@@ -604,7 +622,7 @@ export class PeerJSConnection extends ConnectionInterface {
                     throw error;
                 }
                 
-                console.info(`PeerJSConnection: Connection object created with peer ID: ${code}`);
+                console.info(`PeerJSConnection: Standard WebRTC connection created to host: ${code}`);
                 console.debug('PeerJSConnection: Connection details:', {
                     connectionId: this.connection.connectionId,
                     type: this.connection.type,
