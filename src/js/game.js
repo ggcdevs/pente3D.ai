@@ -18,10 +18,14 @@ export class Game {
         // Visualization mode flags
         this.isGridVisible = true;
         this.isNodesVisible = true;
+        this.isDiagonalGridVisible = false;
         
         // Temporary piece tracking
         this.temporaryPiece = null;
         this.temporaryPiecePosition = null;
+        
+        // Diagonal gridlines storage
+        this.diagonalGridLines = [];
         
         // Settings for rendering
         this.pieceSettings = {
@@ -126,6 +130,11 @@ export class Game {
             this.isGridVisible = !this.isGridVisible;
             this.isNodesVisible = !this.isNodesVisible;
             this.toggleBoardVisibility();
+        } else if (event.key.toLowerCase() === 'd') {
+            console.log('D key pressed - toggling diagonal gridlines');
+            // Toggle diagonal gridlines
+            this.isDiagonalGridVisible = !this.isDiagonalGridVisible;
+            this.toggleDiagonalGridlines();
         } else if (event.key.toLowerCase() === 't') {
             console.log('T key pressed - toggling temporary piece');
             // Toggle temporary piece at currently hovered node
@@ -295,6 +304,111 @@ export class Game {
         } else {
             this.viewModeIndicator.classList.add('hidden');
         }
+    }
+    
+    // Creates diagonal gridlines if they don't exist yet, or toggles their visibility
+    toggleDiagonalGridlines() {
+        console.log('Toggling diagonal gridlines. Visible:', this.isDiagonalGridVisible);
+        
+        // If diagonal gridlines don't exist yet, create them
+        if (this.diagonalGridLines.length === 0 && this.isDiagonalGridVisible) {
+            this.createDiagonalGridlines();
+        }
+        
+        // Toggle visibility of diagonal gridlines
+        for (const line of this.diagonalGridLines) {
+            line.visible = this.isDiagonalGridVisible;
+        }
+        
+        // Show indicator if diagonal gridlines are visible
+        if (this.isDiagonalGridVisible) {
+            // Only create a new indicator if it doesn't exist
+            if (!this.diagonalIndicator) {
+                this.diagonalIndicator = document.createElement('div');
+                this.diagonalIndicator.id = 'diagonal-indicator';
+                this.diagonalIndicator.textContent = 'Diagonal Gridlines (D to toggle)';
+                this.diagonalIndicator.classList.add('mode-indicator');
+                document.querySelector('.game-container').appendChild(this.diagonalIndicator);
+            }
+            this.diagonalIndicator.classList.remove('hidden');
+        } else if (this.diagonalIndicator) {
+            this.diagonalIndicator.classList.add('hidden');
+        }
+    }
+    
+    // Creates the diagonal gridlines
+    createDiagonalGridlines() {
+        console.log('Creating diagonal gridlines');
+        
+        const offset = (this.boardSize - 1) / 2;
+        const spacing = this.nodeSpacing || 1.0;
+        
+        // We'll create diagonal gridlines between the corners of the cube
+        // and between the centers of each face
+        
+        // Get the color and opacity from the game settings or use defaults
+        const gridlineColor = this.gridlineColor || '#444444';
+        const gridOpacity = 1 - ((this.gridlineTranslucency || 50) / 100);
+        
+        // 1. Diagonals connecting the corners of the cube (4 diagonals)
+        const corners = [
+            new THREE.Vector3(-offset * spacing, -offset * spacing, -offset * spacing),
+            new THREE.Vector3(offset * spacing, -offset * spacing, -offset * spacing),
+            new THREE.Vector3(-offset * spacing, offset * spacing, -offset * spacing),
+            new THREE.Vector3(offset * spacing, offset * spacing, -offset * spacing),
+            new THREE.Vector3(-offset * spacing, -offset * spacing, offset * spacing),
+            new THREE.Vector3(offset * spacing, -offset * spacing, offset * spacing),
+            new THREE.Vector3(-offset * spacing, offset * spacing, offset * spacing),
+            new THREE.Vector3(offset * spacing, offset * spacing, offset * spacing)
+        ];
+        
+        // Main diagonals connecting opposite corners
+        this.createDiagonalLine(corners[0], corners[7], gridlineColor, gridOpacity); // Bottom-left-front to top-right-back
+        this.createDiagonalLine(corners[1], corners[6], gridlineColor, gridOpacity); // Bottom-right-front to top-left-back
+        this.createDiagonalLine(corners[2], corners[5], gridlineColor, gridOpacity); // Top-left-front to bottom-right-back
+        this.createDiagonalLine(corners[3], corners[4], gridlineColor, gridOpacity); // Top-right-front to bottom-left-back
+        
+        // 2. Diagonals on each face (2 diagonals per face, 6 faces = 12 diagonals)
+        // Front face (z = -offset)
+        this.createDiagonalLine(corners[0], corners[3], gridlineColor, gridOpacity);
+        this.createDiagonalLine(corners[1], corners[2], gridlineColor, gridOpacity);
+        
+        // Back face (z = offset)
+        this.createDiagonalLine(corners[4], corners[7], gridlineColor, gridOpacity);
+        this.createDiagonalLine(corners[5], corners[6], gridlineColor, gridOpacity);
+        
+        // Left face (x = -offset)
+        this.createDiagonalLine(corners[0], corners[6], gridlineColor, gridOpacity);
+        this.createDiagonalLine(corners[2], corners[4], gridlineColor, gridOpacity);
+        
+        // Right face (x = offset)
+        this.createDiagonalLine(corners[1], corners[7], gridlineColor, gridOpacity);
+        this.createDiagonalLine(corners[3], corners[5], gridlineColor, gridOpacity);
+        
+        // Bottom face (y = -offset)
+        this.createDiagonalLine(corners[0], corners[5], gridlineColor, gridOpacity);
+        this.createDiagonalLine(corners[1], corners[4], gridlineColor, gridOpacity);
+        
+        // Top face (y = offset)
+        this.createDiagonalLine(corners[2], corners[7], gridlineColor, gridOpacity);
+        this.createDiagonalLine(corners[3], corners[6], gridlineColor, gridOpacity);
+    }
+    
+    // Helper method to create a diagonal gridline
+    createDiagonalLine(start, end, color, opacity) {
+        const line = this.board.createCylinderLine(start, end, color);
+        
+        // Adjust opacity
+        line.material.opacity = opacity;
+        
+        // Set visibility based on current state
+        line.visible = this.isDiagonalGridVisible;
+        
+        // Add to scene and to the list of diagonal gridlines
+        this.scene.add(line);
+        this.diagonalGridLines.push(line);
+        
+        return line;
     }
     
     // Clean up event listeners
@@ -852,6 +966,20 @@ export class Game {
         
         // Remove any temporary piece
         this.removeTemporaryPiece();
+        
+        // Remove diagonal gridlines if they exist
+        if (this.diagonalGridLines.length > 0) {
+            for (const line of this.diagonalGridLines) {
+                this.scene.remove(line);
+            }
+            this.diagonalGridLines = [];
+        }
+        
+        // Reset visibility flags
+        this.isDiagonalGridVisible = false;
+        if (this.diagonalIndicator) {
+            this.diagonalIndicator.classList.add('hidden');
+        }
     }
     
     animate() {
