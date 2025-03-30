@@ -147,6 +147,13 @@ export class Menu {
         if (this.joinGameForm) {
             if (this.isJoinGameFormVisible) {
                 this.joinGameForm.classList.remove('hidden');
+                
+                // Adjust border-radius when form is visible
+                const header = this.joinGameOption?.querySelector('.menu-option-header');
+                if (header) {
+                    header.style.borderRadius = '8px 8px 0 0';
+                }
+                
                 // Focus on the input field
                 setTimeout(() => {
                     if (this.gameCodeInput) {
@@ -155,6 +162,12 @@ export class Menu {
                 }, 100);
             } else {
                 this.joinGameForm.classList.add('hidden');
+                
+                // Restore border-radius when form is hidden
+                const header = this.joinGameOption?.querySelector('.menu-option-header');
+                if (header) {
+                    header.style.borderRadius = '8px';
+                }
             }
         }
     }
