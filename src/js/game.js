@@ -290,33 +290,36 @@ export class Game {
             this.isMouseOverCanvas = false;
         });
     }
-    
-    // Method to toggle visibility of grid and nodes
+
     toggleBoardVisibility() {
         console.log('Toggling board visibility. Grid visible:', this.isGridVisible, 'Nodes visible:', this.isNodesVisible);
         
         if (this.board && this.board.gridLines) {
-            // Toggle grid lines visibility
             for (const line of this.board.gridLines) {
                 line.visible = this.isGridVisible;
             }
         }
-        
+
         if (this.board && this.board.intersectionPoints) {
-            // Toggle intersection points visibility
             for (const point of this.board.intersectionPoints) {
                 point.visible = this.isNodesVisible;
             }
         }
-        
-        // Toggle the indicator
+
+        // Add diagonals visibility toggle here
+        if (this.perfectDiagonals) {
+            for (const diagonal of this.perfectDiagonals) {
+                diagonal.visible = this.isGridVisible; // tied to the grid visibility
+            }
+        }
+
         if (!this.isGridVisible && !this.isNodesVisible) {
             this.viewModeIndicator.classList.remove('hidden');
         } else {
             this.viewModeIndicator.classList.add('hidden');
         }
     }
-    
+
     // Helper to ensure a point is strictly within the grid bounds
     clampPointToBounds(point, min, max) {
         return new THREE.Vector3(
@@ -584,46 +587,89 @@ export class Game {
         // Reset basic hover state using the board's method
         this.board.resetHoverState();
     }
-    
+
+    highlightDiagonalLine(diagonalLine) {
+        diagonalLine.material.color.set(this.gridlineHoverSettings.color);
+        diagonalLine.material.opacity = this.gridlineHoverSettings.opacity;
+
+        // Highlight pieces on this diagonal line
+        const threshold = 0.1; // Adjust tolerance
+        const lineStart = diagonalLine.geometry.boundingSphere.center.clone().applyMatrix4(diagonalLine.matrixWorld);
+        const lineEnd = lineStart.clone().add(new THREE.Vector3(0, diagonalLine.geometry.parameters.height, 0).applyQuaternion(diagonalLine.quaternion));
+
+        this.board.forEachPiece(piece => {
+            if (piece && piece.mesh) {
+                const point = piece.mesh.position;
+                const distToLine = this.distancePointToLine(point, lineStart, lineEnd);
+                if (distToLine < threshold) {
+                    piece.mesh.material.emissive = new THREE.Color(this.nodeHoverSettings.color);
+                    piece.mesh.material.emissiveIntensity = 0.8;
+                }
+            }
+        });
+    }
+
+    // Helper method to calculate distance from a point to a line segment
+    distancePointToLine(point, lineStart, lineEnd) {
+        const lineDir = new THREE.Vector3().subVectors(lineEnd, lineStart);
+        const projectedLength = new THREE.Vector3().subVectors(point, lineStart).dot(lineDir.normalize());
+        const nearestPoint = lineStart.clone().add(lineDir.multiplyScalar(projectedLength / lineDir.length()));
+        return nearestPoint.distanceTo(point);
+    }
+
     updateHoverPoint() {
-        // Update the raycaster
         this.raycaster.setFromCamera(this.mouse, this.camera);
-        
-        // Reset previous hover state
         this.resetHoverState();
         this.hoveredPoint = null;
-        
-        // Get all objects (points and regular grid lines)
-        const allObjects = [...this.board.intersectionPoints, ...this.board.gridLines];
-        
+
+        // Include diagonals in raycaster intersections
+        const allObjects = [
+            ...this.board.intersectionPoints,
+            ...this.board.gridLines,
+            ...this.perfectDiagonals
+        ];
+
         const intersects = this.raycaster.intersectObjects(allObjects);
-        
-        // If we have any intersections
+
         if (intersects.length > 0) {
             const firstObject = intersects[0].object;
-            
-            // Check if the first intersection is a point (intersection node)
+
+            // Check if the first intersection is a point
             const isPointIntersection = this.board.intersectionPoints.includes(firstObject);
-            
+            const isDiagonalIntersection = this.perfectDiagonals.includes(firstObject);
+
             if (isPointIntersection) {
-                // Prioritize nodes over grid lines behind them
                 if (!this.board.isOccupied(firstObject.position)) {
-                    // Highlight the node
-                    // Use the hover node color if available, otherwise use player color
                     const hoverColor = this.nodeHoverSettings?.color || this.currentPlayer.color;
                     firstObject.material.color.set(hoverColor);
-                    // Use hover settings if available
                     firstObject.material.opacity = this.nodeHoverSettings?.opacity || 0.8;
                     this.hoveredPoint = firstObject;
-                    
-                    // Also highlight the 3 grid lines that intersect at this node
                     this.board.highlightIntersectingLines(firstObject);
                 }
             } else if (firstObject.userData && firstObject.userData.type === 'line') {
-                // It's a regular grid line
                 this.board.highlightGridLine(firstObject);
+            } else if (isDiagonalIntersection) {
+                this.highlightDiagonalLine(firstObject);
             }
         }
+    }
+
+    resetHoverState() {
+        this.board.resetHoverState();
+
+        // Reset diagonal lines
+        for (const diagonal of this.perfectDiagonals) {
+            diagonal.material.color.set(this.gridlineColor);
+            diagonal.material.opacity = 1 - ((this.gridlineTranslucency || 50) / 100);
+        }
+
+        // Reset piece emissive highlights
+        this.board.forEachPiece(piece => {
+            if (piece && piece.mesh) {
+                piece.mesh.material.emissive = new THREE.Color(0x000000);
+                piece.mesh.material.emissiveIntensity = 0;
+            }
+        });
     }
     
     placePiece() {
