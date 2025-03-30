@@ -130,6 +130,10 @@ export class Game {
             this.isGridVisible = !this.isGridVisible;
             this.isNodesVisible = !this.isNodesVisible;
             this.toggleBoardVisibility();
+        } else if (event.key.toLowerCase() === 'd') {
+            console.log('d key pressed - toggling diagonals');
+            // Toggle diagonals with each press of the 'd' key
+            this.togglePerfectDiagonals();
         } else if (event.key.toLowerCase() === 't') {
             console.log('T key pressed - toggling temporary piece');
             // Toggle temporary piece at currently hovered node
@@ -1017,6 +1021,79 @@ export class Game {
                     }
                 }
             }
+        }
+    }
+
+    // Add this method inside your Game class
+    createPerfectDiagonals() {
+        const size = this.boardSize; // 9x9x9
+        const spacing = this.nodeSpacing || 1.0;
+        const offset = (size - 1) / 2;
+
+        // Clear existing diagonals first
+        for (const line of this.perfectDiagonals) {
+            this.scene.remove(line);
+        }
+        this.perfectDiagonals = [];
+
+        const directions = [
+            [1, 1, 1], [1, 1, -1], [1, -1, 1], [1, -1, -1],
+            [-1, 1, 1], [-1, 1, -1], [-1, -1, 1], [-1, -1, -1]
+        ];
+
+        const isValidCoord = (x, y, z) =>
+            x >= 0 && x < size && y >= 0 && y < size && z >= 0 && z < size;
+
+        const visitedLines = new Set();
+
+        directions.forEach(([dx, dy, dz]) => {
+            // Iterate through all points in the grid
+            for (let x = 0; x < size; x++) {
+                for (let y = 0; y < size; y++) {
+                    for (let z = 0; z < size; z++) {
+                        const endX = x + (size - 1) * dx;
+                        const endY = y + (size - 1) * dy;
+                        const endZ = z + (size - 1) * dz;
+
+                        if (isValidCoord(endX, endY, endZ)) {
+                            const startKey = `${x},${y},${z}`;
+                            const endKey = `${endX},${endY},${endZ}`;
+                            const lineKey = [startKey, endKey].sort().join('-');
+
+                            if (visitedLines.has(lineKey)) continue;
+                            visitedLines.add(lineKey);
+
+                            const worldStart = new THREE.Vector3(
+                                (x - offset) * spacing,
+                                (y - offset) * spacing,
+                                (z - offset) * spacing
+                            );
+
+                            const worldEnd = new THREE.Vector3(
+                                (endX - offset) * spacing,
+                                (endY - offset) * spacing,
+                                (endZ - offset) * spacing
+                            );
+
+                            this.createDiagonalCylinder(worldStart, worldEnd);
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // Ensure the toggling method uses this correctly:
+    togglePerfectDiagonals() {
+        this.isPerfectDiagonalsVisible = !this.isPerfectDiagonalsVisible;
+
+        if (this.isPerfectDiagonalsVisible) {
+            this.createPerfectDiagonals();
+        } else {
+            for (const line of this.perfectDiagonals) {
+                this.scene.remove(line);
+            }
+            this.perfectDiagonals = [];
         }
     }
     
