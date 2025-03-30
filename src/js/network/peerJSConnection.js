@@ -15,7 +15,9 @@ class LocalChannel {
     static findOrCreateChannel(id) {
         if (!LocalChannel.channels[id]) {
             console.warn(`LocalChannel: Channel ${id} not found in map, creating placeholder`);
+            
             // Don't call the constructor to avoid circular reference
+            // This creates a minimal channel with just enough functionality to handle messages
             LocalChannel.channels[id] = {
                 localPeerId: id,
                 remotePeerId: null,
@@ -26,10 +28,44 @@ class LocalChannel {
                     close: [],
                     error: []
                 },
-                _trigger: function(event, data) {
-                    console.log(`LocalChannel: Placeholder channel ${id} triggering ${event} event`);
+                // Add on method to allow registering handlers on placeholders
+                on: function(event, callback) {
+                    console.log(`LocalChannel: Placeholder ${id} registering ${event} handler`);
                     if (this.callbacks[event]) {
-                        this.callbacks[event].forEach(callback => callback(data));
+                        this.callbacks[event].push(callback);
+                        console.log(`LocalChannel: Placeholder ${id} now has ${this.callbacks[event].length} ${event} handlers`);
+                    }
+                },
+                // Add send method to allow sending from placeholders
+                send: function(data) {
+                    console.log(`LocalChannel: Placeholder ${id} attempting to send:`, data);
+                    if (this.remotePeerId && LocalChannel.channels[this.remotePeerId]) {
+                        console.log(`LocalChannel: Placeholder ${id} sending to ${this.remotePeerId}`);
+                        const dataCopy = JSON.parse(JSON.stringify(data));
+                        setTimeout(() => {
+                            LocalChannel.channels[this.remotePeerId]._trigger('data', dataCopy);
+                        }, 100);
+                        return true;
+                    } else {
+                        console.error(`LocalChannel: Placeholder ${id} has no remote peer to send to`);
+                        return false;
+                    }
+                },
+                // Trigger method
+                _trigger: function(event, data) {
+                    console.log(`LocalChannel: Placeholder ${id} triggering ${event} event with data:`, data);
+                    if (this.callbacks[event]) {
+                        console.log(`LocalChannel: Placeholder ${id} has ${this.callbacks[event].length} handlers for ${event}`);
+                        this.callbacks[event].forEach(callback => {
+                            try {
+                                callback(data);
+                                console.log(`LocalChannel: Placeholder ${id} ${event} handler executed successfully`);
+                            } catch (err) {
+                                console.error(`LocalChannel: Placeholder ${id} ${event} handler error:`, err);
+                            }
+                        });
+                    } else {
+                        console.warn(`LocalChannel: Placeholder ${id} has no handlers for ${event} event`);
                     }
                 }
             };
@@ -473,15 +509,42 @@ export class PeerJSConnection extends ConnectionInterface {
                 this.gameCode = id;
                 this.peer = { id: id };  // Simple peer object for compatibility
                 
-                // Create a LocalChannel for ourselves so clients can find us
+                // Create a LocalChannel for ourselves that browsers can find across windows
                 console.info(`PeerJSConnection: Creating host LocalChannel with ID: ${id}`);
-                const hostChannel = new LocalChannel(id, null);
+                
+                // First, check if a channel already exists for this ID (reconnection case)
+                let hostChannel;
+                if (LocalChannel.channels[id]) {
+                    console.log(`PeerJSConnection: Using existing channel for host ${id}`);
+                    hostChannel = LocalChannel.channels[id];
+                } else {
+                    console.log(`PeerJSConnection: Creating new channel for host ${id}`);
+                    hostChannel = new LocalChannel(id, null);
+                }
+                
                 this.connection = hostChannel; // Store the channel
                 
+                // Enable window storage to share state across windows
+                try {
+                    // Store the game code in localStorage so other windows can find it
+                    window.localStorage.setItem('localChannel_hostId', id);
+                    console.log(`PeerJSConnection: Stored host ID ${id} in localStorage`);
+                } catch (err) {
+                    console.warn(`PeerJSConnection: Could not store host ID in localStorage:`, err);
+                }
+                
                 // Set up local channel events
+                console.log(`PeerJSConnection: Setting up event handlers for host channel ${id}`);
+                
+                // Set up the open event handler
                 hostChannel.on('open', () => {
                     console.info(`PeerJSConnection: Host local channel opened with ID ${id}`);
                     this.connected = true;
+                    
+                    // Log the channel status
+                    console.log(`PeerJSConnection: Host channel is now open and ready to receive data`);
+                    console.log(`PeerJSConnection: Available channels:`, Object.keys(LocalChannel.channels));
+                    
                     // Notify connection callback to indicate "self-connection" is ready
                     if (this.connectCallback) {
                         console.debug('PeerJSConnection: Executing host connect callback');
@@ -498,19 +561,45 @@ export class PeerJSConnection extends ConnectionInterface {
                     
                     // Check if we received join data and store the client's ID for future messaging
                     if (data && data.type === 'join' && data.playerInfo) {
-                        console.info(`PeerJSConnection: Join message received, storing client info`);
+                        console.info(`PeerJSConnection: Join message received, storing client info:`, data.playerInfo);
+                        
                         // We would normally get this from the connection object
                         // But for LocalChannel, we need to extract it
                         if (data.playerInfo.clientId) {
                             this.clientPeerId = data.playerInfo.clientId;
                             console.info(`PeerJSConnection: Stored client ID: ${this.clientPeerId}`);
+                            
+                            // Update the remote channel relationship
+                            if (LocalChannel.channels[id].remotePeerId === null) {
+                                LocalChannel.channels[id].remotePeerId = this.clientPeerId;
+                                console.log(`PeerJSConnection: Updated host channel with remotePeerId = ${this.clientPeerId}`);
+                            }
+                            
+                            // Extra debugging - log the channel state
+                            const hostChannel = LocalChannel.channels[id];
+                            console.log(`PeerJSConnection: Host channel state:`, {
+                                id: hostChannel.localPeerId,
+                                remotePeerId: hostChannel.remotePeerId,
+                                isOpen: hostChannel.isOpen,
+                                callbackCounts: {
+                                    open: hostChannel.callbacks.open.length,
+                                    data: hostChannel.callbacks.data.length,
+                                    close: hostChannel.callbacks.close.length,
+                                    error: hostChannel.callbacks.error.length
+                                }
+                            });
                         }
                     }
                     
                     // Pass data to callback
                     if (this.dataCallback) {
                         console.debug('PeerJSConnection: Executing host data callback with data:', data);
-                        this.dataCallback(data);
+                        try {
+                            this.dataCallback(data);
+                            console.log(`PeerJSConnection: Host data callback completed successfully`);
+                        } catch (err) {
+                            console.error(`PeerJSConnection: Error in host data callback:`, err);
+                        }
                     } else {
                         console.warn('PeerJSConnection: No data callback registered to process message:', data);
                     }
@@ -571,14 +660,41 @@ export class PeerJSConnection extends ConnectionInterface {
                 
                 return new Promise((resolve, reject) => {
                     try {
+                        // First, check if we can find the host ID in localStorage
+                        const storedHostId = window.localStorage.getItem('localChannel_hostId');
+                        if (storedHostId && storedHostId === code) {
+                            console.log(`PeerJSConnection: Found matching host ID ${code} in localStorage`);
+                        }
+                        
                         // Wait a moment to ensure host channel is created and registered
                         setTimeout(() => {
                             console.info(`PeerJSConnection: Checking for host channel before connecting...`);
-                            console.log(`LocalChannel: Available channels:`, Object.keys(LocalChannel.channels));
+                            console.log(`LocalChannel: Available channels in client window:`, Object.keys(LocalChannel.channels));
+                            
+                            // If host channel exists in our window, log its state
+                            if (LocalChannel.channels[code]) {
+                                console.log(`PeerJSConnection: Host channel ${code} found in client window`);
+                                const hostChannel = LocalChannel.channels[code];
+                                console.log(`PeerJSConnection: Host channel state:`, {
+                                    remotePeerId: hostChannel.remotePeerId,
+                                    isOpen: hostChannel.isOpen,
+                                    hasCallbacks: {
+                                        open: hostChannel.callbacks.open.length > 0,
+                                        data: hostChannel.callbacks.data.length > 0,
+                                        close: hostChannel.callbacks.close.length > 0,
+                                        error: hostChannel.callbacks.error.length > 0
+                                    }
+                                });
+                            } else {
+                                console.log(`PeerJSConnection: Host channel ${code} not found in client window, will create placeholder`);
+                            }
                             
                             // Create local channel that directly connects to the host
+                            console.log(`PeerJSConnection: Creating client channel ${localId} with remote ${code}`);
                             const channel = new LocalChannel(localId, code);
                             this.connection = channel;
+                            
+                            console.log(`PeerJSConnection: Setting up event handlers for client channel ${localId}`);
                             
                             // Set up local channel events
                             channel.on('open', () => {
@@ -588,11 +704,29 @@ export class PeerJSConnection extends ConnectionInterface {
                                 // Check if host channel exists, create if missing
                                 if (!LocalChannel.channels[code]) {
                                     console.warn(`LocalChannel: Host channel ${code} not found, creating a placeholder`);
-                                    const hostChannel = new LocalChannel(code, localId);
+                                    const hostChannelPlaceholder = LocalChannel.findOrCreateChannel(code);
+                                    
+                                    // Set the relationship
+                                    hostChannelPlaceholder.remotePeerId = localId;
+                                    console.log(`LocalChannel: Set placeholder host channel ${code} remotePeerId to ${localId}`);
+                                } else {
+                                    console.log(`LocalChannel: Host channel ${code} exists`);
+                                    // Update relationship if needed
+                                    if (!LocalChannel.channels[code].remotePeerId) {
+                                        LocalChannel.channels[code].remotePeerId = localId;
+                                        console.log(`LocalChannel: Updated host channel ${code} remotePeerId to ${localId}`);
+                                    }
+                                }
+                                
+                                // Print debug info about all channels
+                                for (const channelId of Object.keys(LocalChannel.channels)) {
+                                    const ch = LocalChannel.channels[channelId];
+                                    console.log(`Channel ${channelId} -> ${ch.remotePeerId || 'null'}, isOpen: ${ch.isOpen}, dataHandlers: ${ch.callbacks.data.length}`);
                                 }
                                 
                                 // Handle connection open
                                 if (this.connectCallback) {
+                                    console.log(`PeerJSConnection: Executing client connect callback for peer ${code}`);
                                     this.connectCallback(code);
                                 }
                                 
@@ -600,12 +734,19 @@ export class PeerJSConnection extends ConnectionInterface {
                             });
                             
                             channel.on('data', (data) => {
-                                console.info(`PeerJSConnection: Received data on local channel`);
-                                console.debug('PeerJSConnection: Data:', data);
+                                console.info(`PeerJSConnection: Client received data:`, data);
                                 
                                 // Pass data to callback
                                 if (this.dataCallback) {
-                                    this.dataCallback(data);
+                                    console.log(`PeerJSConnection: Executing client data callback`);
+                                    try {
+                                        this.dataCallback(data);
+                                        console.log(`PeerJSConnection: Client data callback completed successfully`);
+                                    } catch (err) {
+                                        console.error(`PeerJSConnection: Error in client data callback:`, err);
+                                    }
+                                } else {
+                                    console.warn(`PeerJSConnection: No client data callback registered`);
                                 }
                             });
                             
@@ -614,6 +755,7 @@ export class PeerJSConnection extends ConnectionInterface {
                                 this.connected = false;
                                 
                                 if (this.disconnectCallback) {
+                                    console.log(`PeerJSConnection: Executing client disconnect callback`);
                                     this.disconnectCallback();
                                 }
                             });
@@ -622,10 +764,11 @@ export class PeerJSConnection extends ConnectionInterface {
                                 console.error(`PeerJSConnection: Local channel error:`, err);
                                 
                                 if (this.errorCallback) {
+                                    console.log(`PeerJSConnection: Executing client error callback`);
                                     this.errorCallback(err);
                                 }
                             });
-                        }, 100); // End of setTimeout
+                        }, 200); // Give more time for initialization
                         
                     } catch (err) {
                         console.error('PeerJSConnection: Error creating local channel:', err);

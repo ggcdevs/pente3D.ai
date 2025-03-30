@@ -554,29 +554,66 @@ export class Menu {
             console.log('Connected to peer:', peerId);
             this.showConnectionStatus(`Connected to peer ${peerId}`, 'success');
             
-            // If we're the host, close the menu when a player connects
+            // If we're the host, we want to keep the menu open to show the game code
+            // The menu will close later when a player joins
             if (this.networkManager.isGameHost()) {
+                console.log('Menu: Host connected (to self or broker) - keeping menu open to show game code');
+                // Notice we're NOT closing the menu here anymore
+            } else {
+                // For clients, we can close the menu as soon as they're connected
+                console.log('Menu: Client connected to host - closing menu');
                 this.closeMenuModal();
             }
         });
         
         // When someone joins (host only)
         this.networkManager.on('join', (playerInfo) => {
-            console.log('Player joined:', playerInfo);
+            console.log('Menu: Player joined!', playerInfo);
+            this.showConnectionStatus(`Player joined! Client ID: ${playerInfo.clientId || 'unknown'}`, 'success');
             
             // Update host button state
             if (this.hostGameButton && this.networkManager.isGameHost()) {
+                console.log('Menu: Updating host UI for player join');
                 this.hostGameButton.textContent = 'Player Connected!';
+                
+                // Show a prominent notification
+                this.showConnectionStatus(`🎉 A player has joined! You can now start the game.`, 'success', 10000);
+                
+                // Add pulsing effect to the button to draw attention
+                this.hostGameButton.classList.add('pulse-animation');
+                
+                // Close the menu modal after a brief delay to show the connection
                 setTimeout(() => {
+                    console.log('Menu: Closing host menu after player joined');
+                    this.closeMenuModal();
+                    
+                    // Update button outside the menu
                     this.hostGameButton.textContent = 'Start Game';
                     this.hostGameButton.disabled = false;
                     
                     // Change button action to start game
-                    this.hostGameButton.removeEventListener('click', this.handleHostGame);
-                    this.hostGameButton.addEventListener('click', () => {
+                    console.log('Menu: Changing host button action to start game');
+                    // Use a proper bind for handleHostGame to ensure proper removal
+                    if (this.handleHostGame) {
+                        this.hostGameButton.removeEventListener('click', this.handleHostGame);
+                    }
+                    
+                    const startGameHandler = () => {
+                        console.log('Menu: Start game button clicked');
                         this.startGame();
-                    });
+                    };
+                    
+                    this.hostGameButton.addEventListener('click', startGameHandler);
+                    // Store reference to make it easy to remove later
+                    this.startGameHandler = startGameHandler;
+                    
+                    // Remove pulsing effect after a little while
+                    setTimeout(() => {
+                        this.hostGameButton.classList.remove('pulse-animation');
+                    }, 5000);
                 }, 1500);
+            } else {
+                console.log('Menu: Host button not available or not host');
             }
         });
         

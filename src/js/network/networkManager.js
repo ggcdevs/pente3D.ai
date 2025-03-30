@@ -123,10 +123,33 @@ export class NetworkManager {
         switch (data.type) {
             case 'join':
                 console.debug('NetworkManager: Processing join event with data:', data.playerInfo);
+                console.log('NetworkManager: JOIN EVENT RECEIVED FROM CLIENT');
+                
+                // Host debug info
+                if (this.isHost) {
+                    console.log('NetworkManager: I AM THE HOST and received join event');
+                } else {
+                    console.warn('NetworkManager: I am a client but received join event - this is unexpected');
+                }
+                
+                // Verify callback is registered
+                if (this.connectionCallbacks.onJoin) {
+                    console.log('NetworkManager: onJoin callback exists:', !!this.connectionCallbacks.onJoin);
+                    console.log('NetworkManager: onJoin callback type:', typeof this.connectionCallbacks.onJoin);
+                } else {
+                    console.warn('NetworkManager: No onJoin callback registered');
+                }
+                
                 // Player joined
                 if (this.connectionCallbacks.onJoin) {
                     console.debug('NetworkManager: Executing onJoin callback');
-                    this.connectionCallbacks.onJoin(data.playerInfo);
+                    
+                    try {
+                        this.connectionCallbacks.onJoin(data.playerInfo);
+                        console.log('NetworkManager: onJoin callback executed successfully');
+                    } catch (err) {
+                        console.error('NetworkManager: Error in onJoin callback:', err);
+                    }
                 } else {
                     console.debug('NetworkManager: No onJoin callback registered');
                 }
