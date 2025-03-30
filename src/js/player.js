@@ -7,7 +7,7 @@ export class Player {
         this.game = game;
     }
     
-    createPiece() {
+    createPiece(isTemporary = false) {
         // Get node spacing to scale piece size appropriately
         const spacing = this.game?.nodeSpacing || 1.0;
         
@@ -27,6 +27,19 @@ export class Player {
                 pieceColor = this.game.pieceSettings.whiteColor;
             }
             pieceOpacity = this.game.pieceSettings.opacity;
+        }
+        
+        // For temporary pieces, we add a slight tint and make them more transparent
+        if (isTemporary) {
+            if (this.color === 'black') {
+                // Brighten black pieces slightly to make them look less solid
+                pieceColor = new THREE.Color(pieceColor).offsetHSL(0, 0, 0.15).getHex();
+            } else {
+                // Add a slight blue tint to white pieces to distinguish them
+                pieceColor = new THREE.Color(pieceColor).offsetHSL(0.6, 0.2, -0.05).getHex();
+            }
+            // Make temporary pieces more transparent
+            pieceOpacity = 0.6;
         }
         
         const material = new THREE.MeshPhongMaterial({

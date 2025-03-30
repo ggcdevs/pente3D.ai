@@ -19,6 +19,10 @@ export class Game {
         this.isGridVisible = true;
         this.isNodesVisible = true;
         
+        // Temporary piece tracking
+        this.temporaryPiece = null;
+        this.temporaryPiecePosition = null;
+        
         // Settings for rendering
         this.pieceSettings = {
             blackColor: '#111111',
@@ -51,6 +55,7 @@ export class Game {
         this.gameMessage = document.getElementById('game-message');
         this.undoButton = document.getElementById('undo-move');
         this.viewModeIndicator = document.getElementById('view-mode-indicator');
+        this.tempPieceIndicator = document.getElementById('temp-piece-indicator');
         
         // Game history for undo functionality
         this.moveHistory = [];
@@ -217,6 +222,12 @@ export class Game {
                 this.isGridVisible = false;
                 this.isNodesVisible = false;
                 this.toggleBoardVisibility();
+            } else if (event.key.toLowerCase() === 't') {
+                // Toggle temporary piece at currently hovered node
+                this.toggleTemporaryPiece();
+            } else if (event.key === 'Enter') {
+                // Confirm temporary piece placement
+                this.confirmTemporaryPiece();
             }
         });
         
@@ -265,6 +276,188 @@ export class Game {
             this.viewModeIndicator.classList.remove('hidden');
         } else {
             this.viewModeIndicator.classList.add('hidden');
+        }
+    }
+    
+    // Creates or removes a temporary piece at the hovered node
+    toggleTemporaryPiece() {
+        // If there's already a temporary piece, remove it
+        if (this.temporaryPiece) {
+            this.removeTemporaryPiece();
+            return;
+        }
+        
+        // If no node is hovered, we can't place a piece
+        if (!this.hoveredPoint) return;
+        
+        // Get position from hovered node
+        const position = this.hoveredPoint.position.clone();
+        const spacing = this.nodeSpacing || 1.0;
+        const offset = (this.boardSize - 1) / 2;
+        const x = Math.round((position.x / spacing) + offset);
+        const y = Math.round((position.y / spacing) + offset);
+        const z = Math.round((position.z / spacing) + offset);
+        
+        // Check if there's already a piece at this position
+        if (this.board.getPieceAt(x, y, z)) return;
+        
+        // Create a temporary piece mesh (semi-transparent)
+        const tempPiece = this.currentPlayer.createPiece(true); // true indicates temporary
+        
+        // Make it more transparent than normal pieces
+        tempPiece.material.opacity = 0.5;
+        
+        // Add a pulsing effect
+        const originalScale = tempPiece.scale.clone();
+        const animate = () => {
+            if (!this.temporaryPiece) return;
+            
+            const pulse = 0.15 * Math.sin(Date.now() * 0.005) + 1;
+            tempPiece.scale.set(
+                originalScale.x * pulse,
+                originalScale.y * pulse,
+                originalScale.z * pulse
+            );
+            
+            requestAnimationFrame(animate);
+        };
+        animate();
+        
+        // Position the temporary piece
+        tempPiece.position.copy(position);
+        this.scene.add(tempPiece);
+        
+        // Store reference to the temporary piece and its position
+        this.temporaryPiece = tempPiece;
+        this.temporaryPiecePosition = { x, y, z };
+        
+        // Show the temporary piece indicator
+        this.tempPieceIndicator.classList.remove('hidden');
+    }
+    
+    // Removes the temporary piece
+    removeTemporaryPiece() {
+        if (this.temporaryPiece) {
+            this.scene.remove(this.temporaryPiece);
+            this.temporaryPiece = null;
+            this.temporaryPiecePosition = null;
+            
+            // Hide the temporary piece indicator
+            this.tempPieceIndicator.classList.add('hidden');
+        }
+    }
+    
+    // Confirms the temporary piece (places a real piece)
+    confirmTemporaryPiece() {
+        if (!this.temporaryPiece || !this.temporaryPiecePosition) return;
+        
+        const { x, y, z } = this.temporaryPiecePosition;
+        
+        // Remove the temporary piece
+        this.scene.remove(this.temporaryPiece);
+        this.temporaryPiece = null;
+        
+        // Hide the temporary piece indicator
+        this.tempPieceIndicator.classList.add('hidden');
+        
+        // Place a real piece at the same position
+        if (this.board.placePiece(x, y, z, this.currentPlayer.color)) {
+            // Create move data for undo history
+            const moveData = {
+                x, y, z,
+                playerColor: this.currentPlayer.color,
+                playerCaptures: this.currentPlayer.captures,
+                opponentCaptures: this.currentPlayer === this.playerBlack 
+                    ? this.playerWhite.captures 
+                    : this.playerBlack.captures,
+                captures: []
+            };
+            
+            // Calculate the position in world space
+            const spacing = this.nodeSpacing || 1.0;
+            const offset = (this.boardSize - 1) / 2;
+            const position = new THREE.Vector3(
+                (x - offset) * spacing,
+                (y - offset) * spacing,
+                (z - offset) * spacing
+            );
+            
+            // Create a visual representation of the piece
+            const pieceMesh = this.currentPlayer.createPiece();
+            pieceMesh.position.copy(position);
+            this.scene.add(pieceMesh);
+            
+            // Store reference to the mesh in the board data structure
+            const boardPiece = this.board.getPieceAt(x, y, z);
+            if (boardPiece) {
+                boardPiece.mesh = pieceMesh;
+            }
+            
+            // Check for captures
+            const captures = this.board.checkCaptures(x, y, z, this.currentPlayer.color);
+            
+            if (captures.length > 0) {
+                // Remove captured pieces
+                for (const capturedPos of captures) {
+                    const capturedPiece = this.board.getPieceAt(capturedPos.x, capturedPos.y, capturedPos.z);
+                    if (capturedPiece && capturedPiece.mesh) {
+                        // Store capture data for undo history
+                        moveData.captures.push({
+                            x: capturedPos.x,
+                            y: capturedPos.y,
+                            z: capturedPos.z,
+                            color: capturedPiece.color,
+                            mesh: capturedPiece.mesh
+                        });
+                        
+                        // Remove the piece visually from the scene
+                        this.scene.remove(capturedPiece.mesh);
+                        // Remove the piece from the board data structure
+                        this.board.board[capturedPos.x][capturedPos.y][capturedPos.z] = null;
+                    }
+                }
+                
+                // Increment capture count
+                this.currentPlayer.captures += captures.length;
+                
+                // Update the capture counts
+                this.updateCaptureDisplay();
+                
+                // Check for win by capture
+                if (this.currentPlayer.captures >= 5) {
+                    // Record the move in history
+                    this.moveHistory.push(moveData);
+                    this.undoButton.disabled = false;
+                    
+                    this.endGame(`${this.currentPlayer.color.charAt(0).toUpperCase() + this.currentPlayer.color.slice(1)} wins by capture!`);
+                    return;
+                }
+            }
+            
+            // Check for win by five in a row
+            const winningLine = this.board.checkWin(x, y, z, this.currentPlayer.color);
+            if (winningLine.length >= 5) {
+                // Record the move in history
+                this.moveHistory.push(moveData);
+                this.undoButton.disabled = false;
+                
+                this.winningLine = winningLine;
+                this.highlightWinningLine();
+                this.endGame(`${this.currentPlayer.color.charAt(0).toUpperCase() + this.currentPlayer.color.slice(1)} wins with 5 in a row!`);
+                return;
+            }
+            
+            // Add the move to history
+            this.moveHistory.push(moveData);
+            
+            // Enable the undo button
+            this.undoButton.disabled = false;
+            
+            // Switch players
+            this.switchPlayer();
+        } else {
+            // If piece placement failed, clear the temporary piece position
+            this.temporaryPiecePosition = null;
         }
     }
     
@@ -351,6 +544,11 @@ export class Game {
     
     placePiece() {
         if (!this.hoveredPoint) return;
+        
+        // If there's a temporary piece, remove it
+        if (this.temporaryPiece) {
+            this.removeTemporaryPiece();
+        }
         
         const position = this.hoveredPoint.position.clone();
         
@@ -560,6 +758,9 @@ export class Game {
     }
     
     endGame(message) {
+        // Remove any temporary piece
+        this.removeTemporaryPiece();
+        
         this.isGameOver = true;
         this.gameMessage.textContent = message;
         this.gameMessage.classList.remove('hidden');
@@ -602,6 +803,9 @@ export class Game {
         // Clear move history and disable undo button
         this.moveHistory = [];
         this.undoButton.disabled = true;
+        
+        // Remove any temporary piece
+        this.removeTemporaryPiece();
     }
     
     animate() {

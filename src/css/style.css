@@ -68,6 +68,30 @@ body {
     animation: pulse 2s infinite;
 }
 
+#temp-piece-indicator {
+    position: absolute;
+    top: 110px;
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: rgba(70, 130, 180, 0.8);
+    color: white;
+    padding: 8px 15px;
+    border-radius: 5px;
+    z-index: 150;
+    font-size: 16px;
+    font-weight: bold;
+    animation: glow 1.5s infinite alternate;
+}
+
+@keyframes glow {
+    from {
+        box-shadow: 0 0 5px rgba(70, 130, 180, 0.5);
+    }
+    to {
+        box-shadow: 0 0 15px rgba(70, 130, 180, 1);
+    }
+}
+
 @keyframes pulse {
     0% { opacity: 0.7; }
     50% { opacity: 1; }
