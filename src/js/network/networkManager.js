@@ -212,7 +212,8 @@ export class NetworkManager {
             // Send join event to host
             const playerInfo = {
                 // Add any player info here
-                joinTime: Date.now()
+                joinTime: Date.now(),
+                clientId: this.connection.peer?.id || null  // Include the client's ID for LocalChannel mode
             };
             console.debug('NetworkManager: Sending join event to host with info:', playerInfo);
             
