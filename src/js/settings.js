@@ -58,7 +58,7 @@ export class Settings {
         
         // Close button closes the panel
         this.closeButton.addEventListener('click', () => {
-            this.panel.classList.remove('open');
+            this.closePanel();
         });
         
         // Save button applies settings
@@ -71,6 +71,29 @@ export class Settings {
         this.resetButton.addEventListener('click', () => {
             this.resetToDefaults();
         });
+        
+        // Close panel when clicking outside
+        document.addEventListener('mousedown', (event) => {
+            // Check if panel is open and click was outside the panel
+            if (this.panel.classList.contains('open') && 
+                !this.panel.contains(event.target) && 
+                event.target !== this.settingsButton &&
+                !this.settingsButton.contains(event.target)) {
+                this.closePanel();
+            }
+        });
+        
+        // Close panel with Escape key
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape' && this.panel.classList.contains('open')) {
+                this.closePanel();
+            }
+        });
+    }
+    
+    // Helper method to close panel
+    closePanel() {
+        this.panel.classList.remove('open');
     }
     
     initSettingListeners() {
