@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { Utility } from './utility.js';
 
 export class Player {
     constructor(color, game) {
@@ -17,30 +18,16 @@ export class Player {
         const pieceRadius = 0.4 * spacing;
         const geometry = new THREE.SphereGeometry(pieceRadius, 32, 32);
         
-        // Use settings if available
-        let pieceColor = this.color === 'black' ? 0x111111 : 0xffffff;
-        let pieceOpacity = 0.85;  // Default 15% translucency
-        
-        // Apply settings if available
-        if (this.game && this.game.pieceSettings) {
-            if (this.color === 'black') {
-                pieceColor = this.game.pieceSettings.blackColor;
-            } else {
-                pieceColor = this.game.pieceSettings.whiteColor;
-            }
-            pieceOpacity = this.game.pieceSettings.opacity;
-        }
+        // Get piece color and opacity from game settings or use defaults
+        let pieceColor = this.getPieceColor();
+        let pieceOpacity = this.getPieceOpacity();
         
         // For temporary pieces, we add a slight tint and make them more transparent
         if (isTemporary) {
             console.log('Applying temporary piece styling');
             
-            // Convert pieceColor to THREE.Color if it's a hex string
-            if (typeof pieceColor === 'string') {
-                pieceColor = new THREE.Color(pieceColor);
-            } else if (typeof pieceColor === 'number') {
-                pieceColor = new THREE.Color(pieceColor);
-            }
+            // Convert pieceColor to THREE.Color if it's not already
+            pieceColor = this.ensureThreeColor(pieceColor);
             
             if (this.color === 'black') {
                 // Brighten black pieces slightly to make them look less solid
@@ -67,5 +54,31 @@ export class Player {
         const mesh = new THREE.Mesh(geometry, material);
         
         return mesh;
+    }
+    
+    // Helper method to get the correct piece color from game settings
+    getPieceColor() {
+        if (this.game && this.game.pieceSettings) {
+            return this.color === 'black' 
+                ? this.game.pieceSettings.blackColor 
+                : this.game.pieceSettings.whiteColor;
+        }
+        return this.color === 'black' ? 0x111111 : 0xffffff;
+    }
+    
+    // Helper method to get the correct piece opacity from game settings
+    getPieceOpacity() {
+        if (this.game && this.game.pieceSettings) {
+            return this.game.pieceSettings.opacity;
+        }
+        return 0.85; // Default 15% translucency
+    }
+    
+    // Helper method to ensure we have a THREE.Color object
+    ensureThreeColor(color) {
+        if (color instanceof THREE.Color) {
+            return color;
+        }
+        return new THREE.Color(color);
     }
 }

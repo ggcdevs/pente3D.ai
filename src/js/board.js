@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { Utility } from './utility.js';
 
 export class Board {
     constructor(size) {
@@ -20,56 +21,17 @@ export class Board {
         return board;
     }
     
-    // Helper method to create a cylinder representing a line
-    createCylinderLine(start, end, color) {
-        // Calculate the direction vector
-        const direction = new THREE.Vector3().subVectors(end, start);
-        const length = direction.length();
-        
-        // Get node spacing or default to 1.0
-        const spacing = this.game?.nodeSpacing || 1.0;
-        
-        // Create a cylinder geometry
-        // Use a thin cylinder for the line, scale radius based on spacing to keep proportions
-        const radius = 0.02 * spacing;
-        const geometry = new THREE.CylinderGeometry(radius, radius, length, 8, 1);
-        
-        // Position and rotate the cylinder
-        geometry.translate(0, length / 2, 0); // Move up so the bottom face is at the origin
-        
-        const material = new THREE.MeshBasicMaterial({ 
-            color: color,
-            transparent: true,
-            opacity: 0.5
-        });
-        
-        const cylinder = new THREE.Mesh(geometry, material);
-        
-        // Position at the start point
-        cylinder.position.copy(start);
-        
-        // Orient the cylinder to point from start to end
-        if (direction.y > 0.99) {
-            // Special case: vertical line (already aligned with Y-axis)
-            // No rotation needed
-        } else if (direction.y < -0.99) {
-            // Special case: vertical line pointing down
-            cylinder.rotateX(Math.PI); // Rotate 180 degrees around X axis
-        } else {
-            // General case: use lookAt
-            cylinder.lookAt(end);
-            cylinder.rotateX(Math.PI / 2); // Adjust to match THREE.js cylinder orientation
-        }
-        
-        return cylinder;
-    }
-    
     createBoardMesh() {
         const boardGroup = new THREE.Group();
         const offset = (this.size - 1) / 2;
         
         // Get node spacing value from game if available, otherwise use default of 1.0
         const spacing = this.game?.nodeSpacing || 1.0;
+        
+        // Get gridline color and opacity from the game or use defaults
+        const gridlineColor = this.game?.gridlineColor || 0x444444;
+        const gridlineOpacity = 1 - ((this.game?.gridlineTranslucency || 50) / 100);
+        const radius = 0.02 * spacing;
         
         // Create grid lines using cylinders for better hover detection
         for (let i = 0; i < this.size; i++) {
@@ -85,20 +47,38 @@ export class Board {
                 const zEnd = new THREE.Vector3((i - offset) * spacing, (j - offset) * spacing, offset * spacing);
                 
                 // Create X-axis line with adjusted length
-                const xLine = this.createCylinderLine(xStart, xEnd, 0x444444);
-                xLine.userData = { type: 'line', axis: 'x', i, j };
+                const xLine = Utility.createCylinderLine(
+                    xStart, 
+                    xEnd, 
+                    gridlineColor, 
+                    radius, 
+                    gridlineOpacity, 
+                    { type: 'line', axis: 'x', i, j }
+                );
                 this.gridLines.push(xLine);
                 boardGroup.add(xLine);
                 
                 // Create Y-axis line with adjusted length
-                const yLine = this.createCylinderLine(yStart, yEnd, 0x444444);
-                yLine.userData = { type: 'line', axis: 'y', i, j };
+                const yLine = Utility.createCylinderLine(
+                    yStart, 
+                    yEnd, 
+                    gridlineColor, 
+                    radius, 
+                    gridlineOpacity, 
+                    { type: 'line', axis: 'y', i, j }
+                );
                 this.gridLines.push(yLine);
                 boardGroup.add(yLine);
                 
                 // Create Z-axis line with adjusted length
-                const zLine = this.createCylinderLine(zStart, zEnd, 0x444444);
-                zLine.userData = { type: 'line', axis: 'z', i, j };
+                const zLine = Utility.createCylinderLine(
+                    zStart, 
+                    zEnd, 
+                    gridlineColor, 
+                    radius, 
+                    gridlineOpacity, 
+                    { type: 'line', axis: 'z', i, j }
+                );
                 this.gridLines.push(zLine);
                 boardGroup.add(zLine);
             }
@@ -106,13 +86,18 @@ export class Board {
         
         // Create intersection points
         this.intersectionPoints = [];
+        
+        // Get node color and opacity from the game or use defaults
+        const nodeColor = this.game?.nodeColor || 0x888888;
+        const nodeOpacity = 1 - ((this.game?.nodeTranslucency || 50) / 100);
+        
         // Scale point size with spacing to maintain proportions
         const pointRadius = 0.15 * spacing;
         const pointGeometry = new THREE.SphereGeometry(pointRadius, 16, 16);
         const pointMaterial = new THREE.MeshBasicMaterial({
-            color: 0x888888,
+            color: nodeColor,
             transparent: true,
-            opacity: 0.5
+            opacity: nodeOpacity
         });
         
         for (let x = 0; x < this.size; x++) {
@@ -270,7 +255,6 @@ export class Board {
         if (!point || !point.userData) return;
         
         const { x, y, z } = point.userData;
-        const offset = (this.size - 1) / 2;
         
         // Track the lines that we've highlighted to highlight pieces along them
         const highlightedLines = [];

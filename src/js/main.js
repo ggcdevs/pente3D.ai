@@ -45,7 +45,6 @@ document.addEventListener('DOMContentLoaded', () => {
     // Confirm reset
     confirmResetButton.addEventListener('click', () => {
         game.reset();
-        gameMessage.classList.add('hidden');
         confirmModal.classList.add('hidden');
         confirmModal.style.display = 'none';
     });

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { Board } from './board.js';
 import { Player } from './player.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { Utility } from './utility.js';
 
 export class Game {
     constructor(container) {
@@ -313,20 +314,16 @@ export class Game {
             }
         }
 
-        if (!this.isGridVisible && !this.isNodesVisible) {
-            this.viewModeIndicator.classList.remove('hidden');
-        } else {
-            this.viewModeIndicator.classList.add('hidden');
-        }
+        // Update view mode indicator
+        Utility.toggleElementVisibility(
+            this.viewModeIndicator, 
+            !this.isGridVisible && !this.isNodesVisible
+        );
     }
 
     // Helper to ensure a point is strictly within the grid bounds
     clampPointToBounds(point, min, max) {
-        return new THREE.Vector3(
-            Math.max(min, Math.min(max, point.x)),
-            Math.max(min, Math.min(max, point.y)),
-            Math.max(min, Math.min(max, point.z))
-        );
+        return Utility.clampPointToBounds(point, min, max);
     }
     
     // Clean up event listeners
@@ -399,7 +396,7 @@ export class Game {
         this.temporaryPiecePosition = { x, y, z };
         
         // Show the temporary piece indicator
-        this.tempPieceIndicator.classList.remove('hidden');
+        Utility.toggleElementVisibility(this.tempPieceIndicator, true);
     }
     
     // Removes the temporary piece
@@ -412,7 +409,7 @@ export class Game {
             this.temporaryPiecePosition = null;
             
             // Hide the temporary piece indicator
-            this.tempPieceIndicator.classList.add('hidden');
+            Utility.toggleElementVisibility(this.tempPieceIndicator, false);
         } else {
             console.log('No temporary piece to remove');
         }
@@ -589,19 +586,23 @@ export class Game {
     }
 
     highlightDiagonalLine(diagonalLine) {
+        // Set highlighting color and opacity
         diagonalLine.material.color.set(this.gridlineHoverSettings.color);
         diagonalLine.material.opacity = this.gridlineHoverSettings.opacity;
 
         // Highlight pieces on this diagonal line
         const threshold = 0.1; // Adjust tolerance
         const lineStart = diagonalLine.geometry.boundingSphere.center.clone().applyMatrix4(diagonalLine.matrixWorld);
-        const lineEnd = lineStart.clone().add(new THREE.Vector3(0, diagonalLine.geometry.parameters.height, 0).applyQuaternion(diagonalLine.quaternion));
+        const lineEnd = lineStart.clone().add(
+            new THREE.Vector3(0, diagonalLine.geometry.parameters.height, 0)
+                .applyQuaternion(diagonalLine.quaternion)
+        );
 
         this.board.forEachPiece(piece => {
             if (piece && piece.mesh) {
                 const point = piece.mesh.position;
-                const distToLine = this.distancePointToLine(point, lineStart, lineEnd);
-                if (distToLine < threshold) {
+                if (Utility.distancePointToLine(point, lineStart, lineEnd) < threshold) {
+                    // Highlight the piece with an emissive glow
                     piece.mesh.material.emissive = new THREE.Color(this.nodeHoverSettings.color);
                     piece.mesh.material.emissiveIntensity = 0.8;
                 }
@@ -611,10 +612,7 @@ export class Game {
 
     // Helper method to calculate distance from a point to a line segment
     distancePointToLine(point, lineStart, lineEnd) {
-        const lineDir = new THREE.Vector3().subVectors(lineEnd, lineStart);
-        const projectedLength = new THREE.Vector3().subVectors(point, lineStart).dot(lineDir.normalize());
-        const nearestPoint = lineStart.clone().add(lineDir.multiplyScalar(projectedLength / lineDir.length()));
-        return nearestPoint.distanceTo(point);
+        return Utility.distancePointToLine(point, lineStart, lineEnd);
     }
 
     updateHoverPoint() {
@@ -660,18 +658,11 @@ export class Game {
                 new THREE.Vector3(0, diagonal.geometry.parameters.height, 0)
                     .applyQuaternion(diagonal.quaternion)
             );
-            if (this.isPointOnLine(nodePosition, start, end, threshold)) {
+            if (Utility.isPointOnLine(nodePosition, start, end, threshold)) {
                 diagonal.material.color.set(this.gridlineHoverSettings.color);
                 diagonal.material.opacity = this.gridlineHoverSettings.opacity;
             }
         }
-    }
-
-    isPointOnLine(point, start, end, threshold) {
-        const closestPoint = new THREE.Vector3();
-        const line = new THREE.Line3(start, end);
-        line.closestPointToPoint(point, true, closestPoint);
-        return closestPoint.distanceTo(point) < threshold;
     }
 
     resetHoverState() {
@@ -1005,8 +996,12 @@ export class Game {
         this.removeTemporaryPiece();
         
         this.isGameOver = true;
-        this.gameMessage.textContent = message;
-        this.gameMessage.classList.remove('hidden');
+        
+        // Show game over message
+        if (this.gameMessage) {
+            this.gameMessage.textContent = message;
+            Utility.toggleElementVisibility(this.gameMessage, true);
+        }
     }
     
     reset() {
@@ -1043,6 +1038,9 @@ export class Game {
         this.isGameOver = false;
         this.winningLine = null;
         
+        // Hide game message
+        Utility.toggleElementVisibility(this.gameMessage, false);
+        
         // Clear move history and redo history
         this.moveHistory = [];
         this.redoHistory = [];
@@ -1053,6 +1051,11 @@ export class Game {
         
         // Remove any temporary piece
         this.removeTemporaryPiece();
+        
+        // Recreate perfect diagonals if they were visible
+        if (this.isPerfectDiagonalsVisible) {
+            this.createPerfectDiagonals();
+        }
     }
     
     animate() {
@@ -1093,34 +1096,18 @@ export class Game {
     }
 
     createDiagonalCylinder(start, end) {
-        const direction = new THREE.Vector3().subVectors(end, start);
-        const length = direction.length();
-        
-        // Create cylinder geometry
         const spacing = this.nodeSpacing || 1.0;
-        const radius = 0.02 * spacing;  // Adjust thickness as desired
-        const geometry = new THREE.CylinderGeometry(radius, radius, length, 8, 1);
-
-        // Set cylinder material (use gridline color settings)
-        const material = new THREE.MeshBasicMaterial({
-            color: this.gridlineColor || '#444444',
-            transparent: true,
-            opacity: 1 - ((this.gridlineTranslucency || 50) / 100),
-        });
-
-        // Create cylinder mesh
-        const cylinder = new THREE.Mesh(geometry, material);
-
-        // Align cylinder geometry correctly
-        geometry.translate(0, length / 2, 0);  // Move cylinder midpoint to origin
-        cylinder.position.copy(start);         // Position at start point
-        cylinder.lookAt(end);                  // Orient towards endpoint
-        cylinder.rotateX(Math.PI / 2);         // Rotate to correct orientation
-
+        const radius = 0.02 * spacing;
+        const color = this.gridlineColor || '#444444';
+        const opacity = 1 - ((this.gridlineTranslucency || 50) / 100);
+        
+        // Create cylinder using utility function
+        const cylinder = Utility.createCylinderLine(start, end, color, radius, opacity);
+        
         // Add to scene and track in perfectDiagonals array
         this.scene.add(cylinder);
         this.perfectDiagonals.push(cylinder);
-
+        
         return cylinder;
     }
 
@@ -1196,6 +1183,13 @@ export class Game {
             }
             this.perfectDiagonals = [];
         }
+        
+        // Update the visual indicator
+        Utility.updateIndicator(
+            'diagonal-indicator', 
+            'Perfect Diagonals (D to toggle)', 
+            this.isPerfectDiagonalsVisible
+        );
     }
     
     // Helper method to ensure node colors are preserved
