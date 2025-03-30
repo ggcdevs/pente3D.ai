@@ -85,6 +85,7 @@ export class Game {
         this.createBoard();
         this.setupEventListeners();
         this.setupGameControls();
+        this.setupKeyboardShortcuts();
         this.animate();
     }
     
@@ -94,6 +95,58 @@ export class Game {
         
         // Setup undo button click handler
         this.undoButton.addEventListener('click', () => this.undoLastMove());
+    }
+    
+    setupKeyboardShortcuts() {
+        // Move keyboard event listeners directly to the window object
+        // and make them instance methods to ensure proper context
+        this.handleKeyDown = this.handleKeyDown.bind(this);
+        this.handleKeyUp = this.handleKeyUp.bind(this);
+        
+        window.addEventListener('keydown', this.handleKeyDown);
+        window.addEventListener('keyup', this.handleKeyUp);
+        
+        console.log('Keyboard shortcuts initialized');
+    }
+    
+    handleKeyDown(event) {
+        console.log('Key pressed:', event.key);
+        
+        if (event.key === 'Shift') {
+            // Show grabbing cursor when shift is held (ready to pan)
+            if (this.isMouseOverCanvas) {
+                this.renderer.domElement.style.cursor = 'grab';
+            }
+        } else if (event.key.toLowerCase() === 'v') {
+            console.log('V key pressed - hiding grid and nodes');
+            // 'v' key hides the grid and nodes, showing only pieces
+            this.isGridVisible = false;
+            this.isNodesVisible = false;
+            this.toggleBoardVisibility();
+        } else if (event.key.toLowerCase() === 't') {
+            console.log('T key pressed - toggling temporary piece');
+            // Toggle temporary piece at currently hovered node
+            this.toggleTemporaryPiece();
+        } else if (event.key === 'Enter') {
+            console.log('Enter key pressed - confirming temporary piece');
+            // Confirm temporary piece placement
+            this.confirmTemporaryPiece();
+        }
+    }
+    
+    handleKeyUp(event) {
+        if (event.key === 'Shift') {
+            // Reset cursor when shift is released
+            if (this.isMouseOverCanvas) {
+                this.renderer.domElement.style.cursor = 'default';
+            }
+        } else if (event.key.toLowerCase() === 'v') {
+            console.log('V key released - showing grid and nodes');
+            // Show grid and nodes again when 'v' is released
+            this.isGridVisible = true;
+            this.isNodesVisible = true;
+            this.toggleBoardVisibility();
+        }
     }
     
     setupScene() {
@@ -210,41 +263,6 @@ export class Game {
             this.renderer.domElement.style.cursor = 'default';
         });
         
-        // Handle key presses
-        document.addEventListener('keydown', (event) => {
-            if (event.key === 'Shift') {
-                // Show grabbing cursor when shift is held (ready to pan)
-                if (this.isMouseOverCanvas) {
-                    this.renderer.domElement.style.cursor = 'grab';
-                }
-            } else if (event.key.toLowerCase() === 'v') {
-                // 'v' key hides the grid and nodes, showing only pieces
-                this.isGridVisible = false;
-                this.isNodesVisible = false;
-                this.toggleBoardVisibility();
-            } else if (event.key.toLowerCase() === 't') {
-                // Toggle temporary piece at currently hovered node
-                this.toggleTemporaryPiece();
-            } else if (event.key === 'Enter') {
-                // Confirm temporary piece placement
-                this.confirmTemporaryPiece();
-            }
-        });
-        
-        document.addEventListener('keyup', (event) => {
-            if (event.key === 'Shift') {
-                // Reset cursor when shift is released
-                if (this.isMouseOverCanvas) {
-                    this.renderer.domElement.style.cursor = 'default';
-                }
-            } else if (event.key.toLowerCase() === 'v') {
-                // Show grid and nodes again when 'v' is released
-                this.isGridVisible = true;
-                this.isNodesVisible = true;
-                this.toggleBoardVisibility();
-            }
-        });
-        
         // Track if mouse is over the canvas
         this.isMouseOverCanvas = false;
         this.renderer.domElement.addEventListener('mouseenter', () => {
@@ -257,6 +275,8 @@ export class Game {
     
     // Method to toggle visibility of grid and nodes
     toggleBoardVisibility() {
+        console.log('Toggling board visibility. Grid visible:', this.isGridVisible, 'Nodes visible:', this.isNodesVisible);
+        
         if (this.board && this.board.gridLines) {
             // Toggle grid lines visibility
             for (const line of this.board.gridLines) {
@@ -279,16 +299,28 @@ export class Game {
         }
     }
     
+    // Clean up event listeners
+    cleanup() {
+        window.removeEventListener('keydown', this.handleKeyDown);
+        window.removeEventListener('keyup', this.handleKeyUp);
+    }
+    
     // Creates or removes a temporary piece at the hovered node
     toggleTemporaryPiece() {
+        console.log('Toggle temporary piece called');
+        
         // If there's already a temporary piece, remove it
         if (this.temporaryPiece) {
+            console.log('Removing existing temporary piece');
             this.removeTemporaryPiece();
             return;
         }
         
         // If no node is hovered, we can't place a piece
-        if (!this.hoveredPoint) return;
+        if (!this.hoveredPoint) {
+            console.log('No node is hovered, cannot place temporary piece');
+            return;
+        }
         
         // Get position from hovered node
         const position = this.hoveredPoint.position.clone();
@@ -299,7 +331,12 @@ export class Game {
         const z = Math.round((position.z / spacing) + offset);
         
         // Check if there's already a piece at this position
-        if (this.board.getPieceAt(x, y, z)) return;
+        if (this.board.getPieceAt(x, y, z)) {
+            console.log('Position is already occupied, cannot place temporary piece');
+            return;
+        }
+        
+        console.log('Creating temporary piece at position', x, y, z);
         
         // Create a temporary piece mesh (semi-transparent)
         const tempPiece = this.currentPlayer.createPiece(true); // true indicates temporary
@@ -337,19 +374,30 @@ export class Game {
     
     // Removes the temporary piece
     removeTemporaryPiece() {
+        console.log('Remove temporary piece called');
         if (this.temporaryPiece) {
+            console.log('Removing temporary piece from scene');
             this.scene.remove(this.temporaryPiece);
             this.temporaryPiece = null;
             this.temporaryPiecePosition = null;
             
             // Hide the temporary piece indicator
             this.tempPieceIndicator.classList.add('hidden');
+        } else {
+            console.log('No temporary piece to remove');
         }
     }
     
     // Confirms the temporary piece (places a real piece)
     confirmTemporaryPiece() {
-        if (!this.temporaryPiece || !this.temporaryPiecePosition) return;
+        console.log('Confirm temporary piece called');
+        
+        if (!this.temporaryPiece || !this.temporaryPiecePosition) {
+            console.log('No temporary piece to confirm');
+            return;
+        }
+        
+        console.log('Confirming temporary piece placement');
         
         const { x, y, z } = this.temporaryPiecePosition;
         

@@ -8,6 +8,8 @@ export class Player {
     }
     
     createPiece(isTemporary = false) {
+        console.log('Creating piece, temporary:', isTemporary, 'color:', this.color);
+        
         // Get node spacing to scale piece size appropriately
         const spacing = this.game?.nodeSpacing || 1.0;
         
@@ -31,15 +33,27 @@ export class Player {
         
         // For temporary pieces, we add a slight tint and make them more transparent
         if (isTemporary) {
+            console.log('Applying temporary piece styling');
+            
+            // Convert pieceColor to THREE.Color if it's a hex string
+            if (typeof pieceColor === 'string') {
+                pieceColor = new THREE.Color(pieceColor);
+            } else if (typeof pieceColor === 'number') {
+                pieceColor = new THREE.Color(pieceColor);
+            }
+            
             if (this.color === 'black') {
                 // Brighten black pieces slightly to make them look less solid
-                pieceColor = new THREE.Color(pieceColor).offsetHSL(0, 0, 0.15).getHex();
+                pieceColor = pieceColor.offsetHSL(0, 0, 0.15);
             } else {
                 // Add a slight blue tint to white pieces to distinguish them
-                pieceColor = new THREE.Color(pieceColor).offsetHSL(0.6, 0.2, -0.05).getHex();
+                pieceColor = pieceColor.offsetHSL(0.6, 0.2, -0.05);
             }
+            
             // Make temporary pieces more transparent
             pieceOpacity = 0.6;
+            
+            console.log('Temporary piece color:', pieceColor);
         }
         
         const material = new THREE.MeshPhongMaterial({
