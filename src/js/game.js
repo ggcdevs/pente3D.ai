@@ -19,6 +19,10 @@ export class Game {
         this.isGridVisible = true;
         this.isNodesVisible = true;
         
+        // Diagonals are diagonal
+        this.isPerfectDiagonalsVisible = false;
+        this.perfectDiagonals = [];
+        
         // Temporary piece tracking
         this.temporaryPiece = null;
         this.temporaryPiecePosition = null;
@@ -1024,7 +1028,38 @@ export class Game {
         }
     }
 
-    // Add this method inside your Game class
+    createDiagonalCylinder(start, end) {
+        const direction = new THREE.Vector3().subVectors(end, start);
+        const length = direction.length();
+        
+        // Create cylinder geometry
+        const spacing = this.nodeSpacing || 1.0;
+        const radius = 0.02 * spacing;  // Adjust thickness as desired
+        const geometry = new THREE.CylinderGeometry(radius, radius, length, 8, 1);
+
+        // Set cylinder material (use gridline color settings)
+        const material = new THREE.MeshBasicMaterial({
+            color: this.gridlineColor || '#444444',
+            transparent: true,
+            opacity: 1 - ((this.gridlineTranslucency || 50) / 100),
+        });
+
+        // Create cylinder mesh
+        const cylinder = new THREE.Mesh(geometry, material);
+
+        // Align cylinder geometry correctly
+        geometry.translate(0, length / 2, 0);  // Move cylinder midpoint to origin
+        cylinder.position.copy(start);         // Position at start point
+        cylinder.lookAt(end);                  // Orient towards endpoint
+        cylinder.rotateX(Math.PI / 2);         // Rotate to correct orientation
+
+        // Add to scene and track in perfectDiagonals array
+        this.scene.add(cylinder);
+        this.perfectDiagonals.push(cylinder);
+
+        return cylinder;
+    }
+
     createPerfectDiagonals() {
         const size = this.boardSize; // 9x9x9
         const spacing = this.nodeSpacing || 1.0;
@@ -1041,46 +1076,48 @@ export class Game {
             [-1, 1, 1], [-1, 1, -1], [-1, -1, 1], [-1, -1, -1]
         ];
 
+        const visitedLines = new Set();
+
         const isValidCoord = (x, y, z) =>
             x >= 0 && x < size && y >= 0 && y < size && z >= 0 && z < size;
 
-        const visitedLines = new Set();
+        const coordToWorld = (x, y, z) => new THREE.Vector3(
+            (x - offset) * spacing,
+            (y - offset) * spacing,
+            (z - offset) * spacing
+        );
 
-        directions.forEach(([dx, dy, dz]) => {
-            // Iterate through all points in the grid
-            for (let x = 0; x < size; x++) {
-                for (let y = 0; y < size; y++) {
-                    for (let z = 0; z < size; z++) {
-                        const endX = x + (size - 1) * dx;
-                        const endY = y + (size - 1) * dy;
-                        const endZ = z + (size - 1) * dz;
-
-                        if (isValidCoord(endX, endY, endZ)) {
-                            const startKey = `${x},${y},${z}`;
-                            const endKey = `${endX},${endY},${endZ}`;
-                            const lineKey = [startKey, endKey].sort().join('-');
-
-                            if (visitedLines.has(lineKey)) continue;
-                            visitedLines.add(lineKey);
-
-                            const worldStart = new THREE.Vector3(
-                                (x - offset) * spacing,
-                                (y - offset) * spacing,
-                                (z - offset) * spacing
-                            );
-
-                            const worldEnd = new THREE.Vector3(
-                                (endX - offset) * spacing,
-                                (endY - offset) * spacing,
-                                (endZ - offset) * spacing
-                            );
-
-                            this.createDiagonalCylinder(worldStart, worldEnd);
+        for (let x = 0; x < size; x++) {
+            for (let y = 0; y < size; y++) {
+                for (let z = 0; z < size; z++) {
+                    for (const [dx, dy, dz] of directions) {
+                        // Move backwards to find start of diagonal
+                        let nx = x, ny = y, nz = z;
+                        while (isValidCoord(nx - dx, ny - dy, nz - dz)) {
+                            nx -= dx; ny -= dy; nz -= dz;
                         }
+                        const startKey = `${nx},${ny},${nz}`;
+
+                        // Move forward to find end of diagonal
+                        let ex = nx, ey = ny, ez = nz;
+                        while (isValidCoord(ex + dx, ey + dy, ez + dz)) {
+                            ex += dx; ey += dy; ez += dz;
+                        }
+                        const endKey = `${ex},${ey},${ez}`;
+
+                        // Avoid duplicate lines
+                        const lineKey = [startKey, endKey].sort().join('-');
+                        if (visitedLines.has(lineKey)) continue;
+                        visitedLines.add(lineKey);
+
+                        const worldStart = coordToWorld(nx, ny, nz);
+                        const worldEnd = coordToWorld(ex, ey, ez);
+
+                        this.createDiagonalCylinder(worldStart, worldEnd);
                     }
                 }
             }
-        });
+        }
     }
 
     // Ensure the toggling method uses this correctly:
