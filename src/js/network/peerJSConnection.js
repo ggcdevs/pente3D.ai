@@ -1,4 +1,5 @@
 import { ConnectionInterface } from './connectionInterface.js';
+import { CONFIG } from '../config.js';
 
 /**
  * PeerJS implementation of the ConnectionInterface
@@ -55,7 +56,20 @@ export class PeerJSConnection extends ConnectionInterface {
                 let id = this._generateId();
                 console.info(`PeerJSConnection: Generated peer ID: ${id}`);
                 
-                if (this.config.usePublicServer) {
+                // Check if we're in local testing mode
+                const isLocalTesting = CONFIG.network.localTestingMode === true;
+                
+                if (isLocalTesting) {
+                    // Special configuration for local testing (same machine)
+                    console.info('PeerJSConnection: Using LOCAL TESTING MODE configuration');
+                    const options = this.config.localTestingOptions || {};
+                    console.debug('PeerJSConnection: Using local testing options:', options);
+                    
+                    this.peer = new Peer(id, options);
+                    console.debug('PeerJSConnection: Peer created with local testing config', this.peer);
+                    console.warn('PeerJSConnection: LOCAL TESTING MODE is enabled - this will only work on the same machine');
+                }
+                else if (this.config.usePublicServer) {
                     // Use the public PeerJS server with custom options
                     console.info('PeerJSConnection: Using public PeerJS server');
                     const options = this.config.options || {};
@@ -341,51 +355,84 @@ export class PeerJSConnection extends ConnectionInterface {
             console.debug('PeerJSConnection: Creating data connection to host');
             
             // Enhanced connection options with more debugging and better compatibility
-            const connectionOptions = {
-                reliable: true,
-                serialization: 'json',
-                // Use binary serialization for better performance if needed
-                // serialization: 'binary',
-                metadata: {
-                    clientId: this.peer.id,
-                    timestamp: Date.now(),
-                    version: '1.0'
-                },
-                // Debug level for this specific connection
-                debug: 3,
-                // Modify SDP to improve NAT traversal chances
-                sdpTransform: (sdp) => {
-                    console.debug('PeerJSConnection: SDP before transform:', sdp);
-                    
-                    // Add a=candidate lines to the SDP to improve NAT traversal
-                    // Format: a=candidate:foundation_id component_id transport priority ip port type ...
-                    // This adds public candidates that might help with connectivity
-                    const modifiedSdp = sdp;
-                    
-                    /* 
-                    // Uncomment if you need to modify SDP for specific network conditions
-                    // Example: Add IPV6 preference if needed
-                    modifiedSdp = sdp.replace(
-                        /a=ice-options:trickle\r\n/g, 
-                        "a=ice-options:trickle\r\na=ipv6-default-address:2001:db8:85a3:8d3:1319:8a2e:370:7344\r\n"
-                    );
-                    */
-                    
-                    return modifiedSdp;
-                },
-                // Try to configure the connection for better reliability
-                config: {
-                    // Re-use the same ICE servers from the peer object
-                    iceServers: this.peer.options.config.iceServers,
-                    // These settings may help with NAT traversal
-                    bundlePolicy: 'max-bundle',
-                    rtcpMuxPolicy: 'require',
-                    // Use UDP and TCP
-                    iceTransportPolicy: 'all',
-                    // Force IPv4 if IPv6 is causing issues
-                    // iceTransportPolicy: 'relay'
-                }
-            };
+            // Check if we're in local testing mode
+            const isLocalTesting = CONFIG.network.localTestingMode === true;
+            
+            // Different connection options depending on the mode
+            const connectionOptions = isLocalTesting ? 
+                // Local testing configuration - simplified for same device testing
+                {
+                    reliable: true,
+                    serialization: 'json',
+                    metadata: {
+                        clientId: this.peer.id,
+                        timestamp: Date.now(),
+                        version: '1.0',
+                        localTest: true
+                    },
+                    // High debug level
+                    debug: 3,
+                    // Simplified configuration for local connections
+                    config: {
+                        // Empty ICE servers to prevent external connections
+                        iceServers: [],
+                        // Settings for local connections
+                        iceTransportPolicy: 'relay',
+                        sdpSemantics: 'unified-plan',
+                        rtcpMuxPolicy: 'require'
+                    }
+                } : 
+                // Normal connection options for real network use
+                {
+                    reliable: true,
+                    serialization: 'json',
+                    // Use binary serialization for better performance if needed
+                    // serialization: 'binary',
+                    metadata: {
+                        clientId: this.peer.id,
+                        timestamp: Date.now(),
+                        version: '1.0'
+                    },
+                    // Debug level for this specific connection
+                    debug: 3,
+                    // Modify SDP to improve NAT traversal chances
+                    sdpTransform: (sdp) => {
+                        console.debug('PeerJSConnection: SDP before transform:', sdp);
+                        
+                        // Add a=candidate lines to the SDP to improve NAT traversal
+                        // Format: a=candidate:foundation_id component_id transport priority ip port type ...
+                        // This adds public candidates that might help with connectivity
+                        const modifiedSdp = sdp;
+                        
+                        /* 
+                        // Uncomment if you need to modify SDP for specific network conditions
+                        // Example: Add IPV6 preference if needed
+                        modifiedSdp = sdp.replace(
+                            /a=ice-options:trickle\r\n/g, 
+                            "a=ice-options:trickle\r\na=ipv6-default-address:2001:db8:85a3:8d3:1319:8a2e:370:7344\r\n"
+                        );
+                        */
+                        
+                        return modifiedSdp;
+                    },
+                    // Try to configure the connection for better reliability
+                    config: {
+                        // Re-use the same ICE servers from the peer object
+                        iceServers: this.peer.options.config.iceServers,
+                        // These settings may help with NAT traversal
+                        bundlePolicy: 'max-bundle',
+                        rtcpMuxPolicy: 'require',
+                        // Use UDP and TCP
+                        iceTransportPolicy: 'all',
+                        // Force IPv4 if IPv6 is causing issues
+                        // iceTransportPolicy: 'relay'
+                    }
+                };
+                
+            // Log what mode we're using
+            if (isLocalTesting) {
+                console.warn('PeerJSConnection: Using LOCAL TESTING MODE connection options');
+            }
             
             console.debug('PeerJSConnection: Connection options:', connectionOptions);
             

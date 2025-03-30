@@ -12,6 +12,10 @@ export const CONFIG = {
         connectionType: 'peerjs',
         debug: true, // Set to false in production
         
+        // Special local testing mode for same-machine connections
+        // Set this to true when testing two instances on the same computer
+        localTestingMode: true,
+        
         // PeerJS specific settings
         peerjs: {
             usePublicServer: true,
@@ -43,6 +47,23 @@ export const CONFIG = {
                     iceTransportPolicy: 'all'
                 }
             },
+            
+            // Local testing options - used only when localTestingMode is true
+            localTestingOptions: {
+                // Special configuration for testing on the same machine 
+                // This uses a data channel directly without ICE
+                debug: 3,
+                // This configuration allows WebRTC to connect to itself on the same machine
+                config: {
+                    iceServers: [],  // No ICE servers needed for local testing
+                    iceTransportPolicy: 'relay', // Force relay
+                    // Setting for Chrome that helps with local connections
+                    // This disables the use of mDNS which can cause issues with local testing
+                    sdpSemantics: 'unified-plan',
+                    rtcpMuxPolicy: 'require'
+                }
+            },
+            
             // Custom server settings (only used if usePublicServer is false)
             customServer: {
                 host: 'localhost',

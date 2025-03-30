@@ -131,6 +131,13 @@ body {
     animation: glow 1.5s infinite alternate;
 }
 
+#local-testing-mode {
+    top: 178px;
+    background-color: rgba(220, 20, 60, 0.6); /* Crimson red */
+    animation: pulse 2s infinite;
+    font-weight: bold;
+}
+
 @keyframes glow {
     from {
         box-shadow: 0 0 8px rgba(40, 80, 140, 0.6);

@@ -1,4 +1,5 @@
 import { NetworkManager } from './network/networkManager.js';
+import { CONFIG } from './config.js';
 
 // Menu functionality
 export class Menu {
@@ -29,6 +30,14 @@ export class Menu {
         this.troubleshootingPanel = document.getElementById('connection-troubleshooting');
         this.showDetailsButton = document.getElementById('show-connection-details');
         this.technicalDetails = document.getElementById('connection-technical-details');
+        
+        // Testing mode indicator
+        this.localTestingMode = document.getElementById('local-testing-mode');
+        
+        // Check if local testing mode is enabled and show the indicator
+        if (CONFIG.network.localTestingMode && this.localTestingMode) {
+            this.localTestingMode.classList.remove('hidden');
+        }
         
         // Flag to track menu state
         this.isMenuOpen = false;
@@ -314,6 +323,12 @@ export class Menu {
             this.networkManager = new NetworkManager(this.game);
             console.debug('Menu: Setting up network event handlers');
             this.setupNetworkHandlers();
+            
+            // Show local testing mode notification if enabled
+            if (CONFIG.network.localTestingMode) {
+                console.warn('Menu: Local testing mode is enabled');
+                this.showConnectionStatus('⚠️ LOCAL TESTING MODE - for same-device connections only', 'warning', 10000);
+            }
         } else {
             console.debug('Menu: Using existing NetworkManager instance');
         }
@@ -657,8 +672,9 @@ export class Menu {
      * Show a connection status message
      * @param {string} message - The message to show
      * @param {string} type - The type of message: 'success', 'warning', 'error', 'info'
+     * @param {number} duration - How long to show the message in milliseconds (default: 5000)
      */
-    showConnectionStatus(message, type = 'info') {
+    showConnectionStatus(message, type = 'info', duration = 5000) {
         // Create status element if it doesn't exist
         let statusEl = document.getElementById('connection-status');
         if (!statusEl) {
@@ -677,6 +693,6 @@ export class Menu {
         // Hide after delay
         setTimeout(() => {
             statusEl.classList.add('hidden');
-        }, 5000);
+        }, duration);
     }
 }
