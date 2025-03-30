@@ -18,14 +18,10 @@ export class Game {
         // Visualization mode flags
         this.isGridVisible = true;
         this.isNodesVisible = true;
-        this.isDiagonalGridVisible = false;
         
         // Temporary piece tracking
         this.temporaryPiece = null;
         this.temporaryPiecePosition = null;
-        
-        // Diagonal gridlines storage
-        this.diagonalGridLines = [];
         
         // Settings for rendering
         this.pieceSettings = {
@@ -134,12 +130,6 @@ export class Game {
             this.isGridVisible = !this.isGridVisible;
             this.isNodesVisible = !this.isNodesVisible;
             this.toggleBoardVisibility();
-        } else if (event.key.toLowerCase() === 'd') {
-            console.log('D key pressed - toggling diagonal gridlines');
-            // Toggle diagonal gridlines
-            this.isDiagonalGridVisible = !this.isDiagonalGridVisible;
-            this.toggleDiagonalGridlines();
-            console.log('Diagonal gridlines are now:', this.isDiagonalGridVisible ? 'visible' : 'hidden');
         } else if (event.key.toLowerCase() === 't') {
             console.log('T key pressed - toggling temporary piece');
             // Toggle temporary piece at currently hovered node
@@ -319,222 +309,6 @@ export class Game {
         }
     }
     
-    // Creates diagonal gridlines if they don't exist yet, or toggles their visibility
-    toggleDiagonalGridlines() {
-        console.log('Toggling diagonal gridlines. Visible:', this.isDiagonalGridVisible);
-        
-        // Always clean up existing diagonal gridlines when toggling off
-        if (!this.isDiagonalGridVisible) {
-            console.log('Removing existing diagonal gridlines');
-            for (const line of this.diagonalGridLines) {
-                this.scene.remove(line);
-            }
-            this.diagonalGridLines = [];
-        }
-        // If we're turning on diagonals, create them
-        else if (this.isDiagonalGridVisible) {
-            // First clean up any existing diagonal lines
-            for (const line of this.diagonalGridLines) {
-                this.scene.remove(line);
-            }
-            this.diagonalGridLines = [];
-            
-            console.log('Creating new diagonal gridlines');
-            this.createDiagonalGridlines();
-        }
-        
-        // Show indicator if diagonal gridlines are visible
-        if (this.isDiagonalGridVisible) {
-            // Only create a new indicator if it doesn't exist
-            if (!this.diagonalIndicator) {
-                this.diagonalIndicator = document.createElement('div');
-                this.diagonalIndicator.id = 'diagonal-indicator';
-                this.diagonalIndicator.textContent = 'Diagonal Gridlines (D to toggle)';
-                this.diagonalIndicator.classList.add('mode-indicator');
-                document.querySelector('.game-container').appendChild(this.diagonalIndicator);
-            }
-            this.diagonalIndicator.classList.remove('hidden');
-        } else if (this.diagonalIndicator) {
-            this.diagonalIndicator.classList.add('hidden');
-        }
-    }
-    
-    // Creates diagonal gridlines that only extend to the exact boundaries of the grid
-    createDiagonalGridlines() {
-        console.log('Creating clean diagonal gridlines');
-        
-        const offset = (this.boardSize - 1) / 2;
-        const spacing = this.nodeSpacing || 1.0;
-        const size = this.boardSize;
-        
-        // Get the color and opacity from the game settings or use defaults
-        const gridlineColor = this.gridlineColor || '#444444';
-        const gridOpacity = 1 - ((this.gridlineTranslucency || 50) / 100);
-        
-        // Calculate the exact min/max boundaries of the grid
-        const minBound = -offset * spacing;
-        const maxBound = offset * spacing;
-        
-        // Create a list of diagonal line definitions (start and end points)
-        const diagonals = [];
-        
-        // --------- STRICTLY CONTAINED DIAGONAL LINES ---------
-        
-        // Limit diagonals to just a few key planes to reduce visual clutter and pokie issues
-        // Only generate diagonals for the middle plane and possibly the boundary planes
-        // We're being more selective to avoid the cascading pokie issues
-        
-        // Define only the middle plane for better clarity and fewer visual artifacts
-        const midPlane = Math.floor(size / 2);
-        
-        // 1. XY plane diagonals (only for the middle Z plane)
-        const zPos = (midPlane - offset) * spacing;
-        
-        // Main diagonal 1: Bottom-left to top-right (middle Z plane only)
-        diagonals.push({
-            start: new THREE.Vector3(minBound, minBound, zPos),
-            end: new THREE.Vector3(maxBound, maxBound, zPos),
-            type: 'xy-diagonal1',
-            index: midPlane
-        });
-        
-        // Main diagonal 2: Top-left to bottom-right (middle Z plane only)
-        diagonals.push({
-            start: new THREE.Vector3(minBound, maxBound, zPos),
-            end: new THREE.Vector3(maxBound, minBound, zPos),
-            type: 'xy-diagonal2',
-            index: midPlane
-        });
-        
-        // 2. XZ plane diagonals (only for the middle Y plane)
-        const yPos = (midPlane - offset) * spacing;
-        
-        // Main diagonal 1: Back-left to front-right
-        diagonals.push({
-            start: new THREE.Vector3(minBound, yPos, minBound),
-            end: new THREE.Vector3(maxBound, yPos, maxBound),
-            type: 'xz-diagonal1',
-            index: midPlane
-        });
-        
-        // Main diagonal 2: Front-left to back-right
-        diagonals.push({
-            start: new THREE.Vector3(minBound, yPos, maxBound),
-            end: new THREE.Vector3(maxBound, yPos, minBound),
-            type: 'xz-diagonal2',
-            index: midPlane
-        });
-        
-        // 3. YZ plane diagonals (only for the middle X plane)
-        const xPos = (midPlane - offset) * spacing;
-        
-        // Main diagonal 1: Bottom-back to top-front
-        diagonals.push({
-            start: new THREE.Vector3(xPos, minBound, minBound),
-            end: new THREE.Vector3(xPos, maxBound, maxBound),
-            type: 'yz-diagonal1',
-            index: midPlane
-        });
-        
-        // Main diagonal 2: Bottom-front to top-back
-        diagonals.push({
-            start: new THREE.Vector3(xPos, minBound, maxBound),
-            end: new THREE.Vector3(xPos, maxBound, minBound),
-            type: 'yz-diagonal2',
-            index: midPlane
-        });
-        
-        // 4. Space diagonals - connecting opposite corners of the cube
-        
-        // Main diagonal 1: Bottom-back-left to top-front-right
-        diagonals.push({
-            start: new THREE.Vector3(minBound, minBound, minBound),
-            end: new THREE.Vector3(maxBound, maxBound, maxBound),
-            type: 'space-diagonal1',
-            index: 0
-        });
-        
-        // Main diagonal 2: Bottom-front-left to top-back-right
-        diagonals.push({
-            start: new THREE.Vector3(minBound, minBound, maxBound),
-            end: new THREE.Vector3(maxBound, maxBound, minBound),
-            type: 'space-diagonal2',
-            index: 0
-        });
-        
-        // Main diagonal 3: Top-back-left to bottom-front-right
-        diagonals.push({
-            start: new THREE.Vector3(minBound, maxBound, minBound),
-            end: new THREE.Vector3(maxBound, minBound, maxBound),
-            type: 'space-diagonal3',
-            index: 0
-        });
-        
-        // Main diagonal 4: Top-front-left to bottom-back-right
-        diagonals.push({
-            start: new THREE.Vector3(minBound, maxBound, maxBound),
-            end: new THREE.Vector3(maxBound, minBound, minBound),
-            type: 'space-diagonal4',
-            index: 0
-        });
-        
-        // Create all the diagonal lines
-        for (const diagonal of diagonals) {
-            // Strictly ensure the start and end points are within the grid bounds
-            const clampedStart = this.clampPointToBounds(diagonal.start, minBound, maxBound);
-            const clampedEnd = this.clampPointToBounds(diagonal.end, minBound, maxBound);
-            
-            // Calculate direction vector between clamped points
-            const direction = new THREE.Vector3().subVectors(clampedEnd, clampedStart);
-            const length = direction.length();
-            
-            // Skip lines that are too short (this would happen when the clamping makes them too small)
-            // Using a higher threshold to avoid tiny segments that can cause visual artifacts
-            if (length < spacing * 0.8) continue;
-            
-            // To prevent "pokies", we'll inset the start and end points from the grid boundaries
-            // Calculate unit direction vector
-            const unitDirection = direction.clone().normalize();
-            
-            // Use a larger base inset amount to prevent pokies
-            const insetAmount = 0.075 * spacing;
-            
-            // Apply even larger insets for points near top/bottom boundaries
-            // Check if start or end is at/near the top or bottom boundary
-            const yEdgeThreshold = 0.01;
-            const isStartAtTopEdge = Math.abs(clampedStart.y - maxBound) < yEdgeThreshold;
-            const isStartAtBottomEdge = Math.abs(clampedStart.y - minBound) < yEdgeThreshold;
-            const isEndAtTopEdge = Math.abs(clampedEnd.y - maxBound) < yEdgeThreshold;
-            const isEndAtBottomEdge = Math.abs(clampedEnd.y - minBound) < yEdgeThreshold;
-            
-            // Additional inset for y-direction when on top/bottom edges
-            let startInset = insetAmount;
-            let endInset = insetAmount;
-            
-            // Apply extra inset at top/bottom edges to fix the cascade effect
-            if (isStartAtTopEdge || isStartAtBottomEdge || isEndAtTopEdge || isEndAtBottomEdge) {
-                startInset = 0.12 * spacing;
-                endInset = 0.12 * spacing;
-            }
-            
-            const insetStart = clampedStart.clone().add(unitDirection.clone().multiplyScalar(startInset));
-            const insetEnd = clampedEnd.clone().sub(unitDirection.clone().multiplyScalar(endInset));
-            
-            // Skip if the diagonal becomes too short after insetting
-            if (insetStart.distanceTo(insetEnd) < spacing * 0.5) continue;
-            
-            // Create the diagonal line with inset endpoints to avoid pokies
-            this.createDiagonalLine(
-                insetStart, 
-                insetEnd, 
-                gridlineColor, 
-                gridOpacity, 
-                diagonal.type, 
-                diagonal.index
-            );
-        }
-    }
-    
     // Helper to ensure a point is strictly within the grid bounds
     clampPointToBounds(point, min, max) {
         return new THREE.Vector3(
@@ -542,219 +316,6 @@ export class Game {
             Math.max(min, Math.min(max, point.y)),
             Math.max(min, Math.min(max, point.z))
         );
-    }
-    
-    // Helper method to create a diagonal gridline
-    createDiagonalLine(start, end, color, opacity, diagonalType, index) {
-        // For diagonal lines, we'll create a custom cylinder that's slightly thinner
-        const direction = new THREE.Vector3().subVectors(end, start);
-        const length = direction.length();
-        
-        // Get node spacing or default to 1.0
-        const spacing = this.nodeSpacing || 1.0;
-        
-        // Skip creating perfectly vertical lines (those are already covered by regular grid lines)
-        // Check if this is a vertical line by comparing X and Z components
-        const isVertical = Math.abs(direction.x) < 0.001 && Math.abs(direction.z) < 0.001;
-        if (isVertical) {
-            return null; // Skip creating this line
-        }
-        
-        // Skip creating perfectly horizontal lines in X, Y, or Z directions (already covered by grid)
-        const isHorizontalX = Math.abs(direction.y) < 0.001 && Math.abs(direction.z) < 0.001;
-        const isHorizontalY = Math.abs(direction.x) < 0.001 && Math.abs(direction.z) < 0.001;
-        const isHorizontalZ = Math.abs(direction.x) < 0.001 && Math.abs(direction.y) < 0.001;
-        if (isHorizontalX || isHorizontalY || isHorizontalZ) {
-            return null; // Skip creating this line
-        }
-        
-        // Create a cylinder geometry - make diagonals 75% as thick as regular grid lines
-        const radius = 0.015 * spacing; // Thinner than regular gridlines (0.02)
-        const geometry = new THREE.CylinderGeometry(radius, radius, length, 8, 1);
-        
-        // Position and rotate the cylinder
-        geometry.translate(0, length / 2, 0); // Move up so the bottom face is at the origin
-        
-        const material = new THREE.MeshBasicMaterial({ 
-            color: color,
-            transparent: true,
-            opacity: opacity
-        });
-        
-        const line = new THREE.Mesh(geometry, material);
-        
-        // Position at the start point
-        line.position.copy(start);
-        
-        // Orient the cylinder to point from start to end
-        if (direction.y > 0.99) {
-            // Special case: vertical line (already aligned with Y-axis)
-            // No rotation needed
-        } else if (direction.y < -0.99) {
-            // Special case: vertical line pointing down
-            line.rotateX(Math.PI); // Rotate 180 degrees around X axis
-        } else {
-            // General case: use lookAt
-            line.lookAt(end);
-            line.rotateX(Math.PI / 2); // Adjust to match THREE.js cylinder orientation
-        }
-        
-        // Mark this as a diagonal line for hover highlighting
-        line.userData = { 
-            type: 'diagonalLine',
-            diagonalType: diagonalType,
-            index: index,
-            start: start.clone(),
-            end: end.clone()
-        };
-        
-        // Set visibility based on current state
-        line.visible = this.isDiagonalGridVisible;
-        
-        // Add to scene and to the list of diagonal gridlines
-        this.scene.add(line);
-        this.diagonalGridLines.push(line);
-        
-        return line;
-    }
-    
-    // Helper method to highlight a diagonal gridline
-    highlightDiagonalLine(line) {
-        if (line && line.userData && line.userData.type === 'diagonalLine') {
-            // Use settings if available, otherwise fallback to default
-            const color = this.gridlineHoverSettings?.color || '#00ff00';
-            const opacity = this.gridlineHoverSettings?.opacity || 0.8;
-            
-            line.material.color.set(color);
-            line.material.opacity = opacity;
-            
-            // Highlight pieces that lie along this diagonal line
-            this.highlightPiecesAlongDiagonalLine(line);
-        }
-    }
-    
-    // Method to highlight all diagonal gridlines that pass through a node
-    highlightIntersectingDiagonalLines(point) {
-        if (!point || !point.userData) return;
-        
-        const { x, y, z } = point.userData;
-        const offset = (this.boardSize - 1) / 2;
-        const spacing = this.nodeSpacing || 1.0;
-        
-        // Convert board coordinates to world coordinates
-        const pointPos = point.position.clone();
-        
-        // For our full-span diagonal lines, we need to check if the node lies on each diagonal line
-        for (const line of this.diagonalGridLines) {
-            if (!line.userData || line.userData.type !== 'diagonalLine') continue;
-            
-            const { start, end, diagonalType, index } = line.userData;
-            
-            // Different checks based on the type of diagonal line
-            let isOnDiagonal = false;
-            
-            // For diagonals in the XY plane
-            if (diagonalType.startsWith('xy-')) {
-                // Node must be on the same Z level as the diagonal
-                if (Math.abs(z - index) < 0.01 && diagonalType.includes('main')) {
-                    // For main diagonals, check if the point lies on the line
-                    isOnDiagonal = this.isPointOnLine(pointPos, start, end);
-                }
-                else if (Math.abs(z - Math.floor(index / this.boardSize)) < 0.01) {
-                    // For non-main diagonals, we need to check if the point lies on the line
-                    isOnDiagonal = this.isPointOnLine(pointPos, start, end);
-                }
-            }
-            // For diagonals in the XZ plane
-            else if (diagonalType.startsWith('xz-')) {
-                // Node must be on the same Y level as the diagonal
-                if (Math.abs(y - index) < 0.01 && diagonalType.includes('main')) {
-                    // For main diagonals, check if the point lies on the line
-                    isOnDiagonal = this.isPointOnLine(pointPos, start, end);
-                }
-                else if (Math.abs(y - Math.floor(index / this.boardSize)) < 0.01) {
-                    // For non-main diagonals, we need to check if the point lies on the line
-                    isOnDiagonal = this.isPointOnLine(pointPos, start, end);
-                }
-            }
-            // For diagonals in the YZ plane
-            else if (diagonalType.startsWith('yz-')) {
-                // Node must be on the same X level as the diagonal
-                if (Math.abs(x - index) < 0.01 && diagonalType.includes('main')) {
-                    // For main diagonals, check if the point lies on the line
-                    isOnDiagonal = this.isPointOnLine(pointPos, start, end);
-                }
-                else if (Math.abs(x - Math.floor(index / this.boardSize)) < 0.01) {
-                    // For non-main diagonals, we need to check if the point lies on the line
-                    isOnDiagonal = this.isPointOnLine(pointPos, start, end);
-                }
-            }
-            // For full 3D space diagonals
-            else if (diagonalType.startsWith('space-')) {
-                // Check if the point lies on the line
-                isOnDiagonal = this.isPointOnLine(pointPos, start, end);
-            }
-            
-            if (isOnDiagonal) {
-                this.highlightDiagonalLine(line);
-            }
-        }
-    }
-    
-    // Helper method to check if a point is on a line segment
-    isPointOnLine(point, lineStart, lineEnd) {
-        // Create a direction vector from start to end
-        const lineDir = new THREE.Vector3().subVectors(lineEnd, lineStart).normalize();
-        
-        // Vector from start to point
-        const startToPoint = new THREE.Vector3().subVectors(point, lineStart);
-        
-        // Project this vector onto the line direction
-        const projection = startToPoint.dot(lineDir);
-        
-        // Check if projection is within line segment bounds
-        if (projection >= 0 && projection <= lineStart.distanceTo(lineEnd)) {
-            // Calculate the point on the line that's closest to the point
-            const projectedPoint = new THREE.Vector3().copy(lineStart).addScaledVector(lineDir, projection);
-            
-            // Check if the point is very close to this projected point
-            const distance = point.distanceTo(projectedPoint);
-            const threshold = 0.01 * (this.nodeSpacing || 1.0); // Small threshold for floating point comparison
-            
-            return distance < threshold;
-        }
-        
-        return false;
-    }
-    
-    // Method to highlight pieces along a diagonal gridline
-    highlightPiecesAlongDiagonalLine(line) {
-        if (!line || !line.userData || line.userData.type !== 'diagonalLine') return;
-        
-        const { start, end } = line.userData;
-        const offset = (this.boardSize - 1) / 2;
-        const spacing = this.nodeSpacing || 1.0;
-        
-        // For our full-span diagonal lines, we need to check all nodes along the line
-        // to find any pieces that should be highlighted
-        
-        // Highlight any pieces that lie on this diagonal line
-        this.board.forEachPiece((piece, x, y, z) => {
-            // Convert board coordinates to world coordinates
-            const pieceX = (x - offset) * spacing;
-            const pieceY = (y - offset) * spacing;
-            const pieceZ = (z - offset) * spacing;
-            const piecePos = new THREE.Vector3(pieceX, pieceY, pieceZ);
-            
-            // Check if the piece is on this diagonal line
-            if (this.isPointOnLine(piecePos, start, end) && piece.mesh) {
-                // Highlight the piece
-                const highlightColor = new THREE.Color(this.gridlineHoverSettings?.color || '#00ff00');
-                piece.mesh.material.emissive = highlightColor;
-                piece.mesh.material.emissiveIntensity = 0.5;
-                piece.isHighlighted = true;
-            }
-        });
     }
     
     // Clean up event listeners
@@ -1010,40 +571,22 @@ export class Game {
         this.placePiece();
     }
     
-    // Method to reset all hover highlighting, including diagonal lines
+    // Method to reset all hover highlighting
     resetHoverState() {
         // Reset basic hover state using the board's method
         this.board.resetHoverState();
-        
-        // Additionally reset diagonal gridlines if they exist
-        if (this.diagonalGridLines.length > 0) {
-            const gridlineColor = this.gridlineColor || '#444444';
-            const gridOpacity = 1 - ((this.gridlineTranslucency || 50) / 100);
-            
-            for (const line of this.diagonalGridLines) {
-                if (line.visible) {
-                    line.material.color.set(gridlineColor);
-                    line.material.opacity = gridOpacity;
-                }
-            }
-        }
     }
     
     updateHoverPoint() {
         // Update the raycaster
         this.raycaster.setFromCamera(this.mouse, this.camera);
         
-        // Reset previous hover state (including diagonal lines)
+        // Reset previous hover state
         this.resetHoverState();
         this.hoveredPoint = null;
         
-        // Get all objects (points, regular grid lines, and diagonal lines if visible)
+        // Get all objects (points and regular grid lines)
         const allObjects = [...this.board.intersectionPoints, ...this.board.gridLines];
-        
-        // Add diagonal grid lines to raycast targets if they're visible
-        if (this.isDiagonalGridVisible && this.diagonalGridLines.length > 0) {
-            allObjects.push(...this.diagonalGridLines);
-        }
         
         const intersects = this.raycaster.intersectObjects(allObjects);
         
@@ -1067,18 +610,10 @@ export class Game {
                     
                     // Also highlight the 3 grid lines that intersect at this node
                     this.board.highlightIntersectingLines(firstObject);
-                    
-                    // If diagonal gridlines are visible, also highlight any diagonal lines passing through this point
-                    if (this.isDiagonalGridVisible) {
-                        this.highlightIntersectingDiagonalLines(firstObject);
-                    }
                 }
             } else if (firstObject.userData && firstObject.userData.type === 'line') {
                 // It's a regular grid line
                 this.board.highlightGridLine(firstObject);
-            } else if (firstObject.userData && firstObject.userData.type === 'diagonalLine') {
-                // It's a diagonal grid line
-                this.highlightDiagonalLine(firstObject);
             }
         }
     }
@@ -1446,23 +981,6 @@ export class Game {
         
         // Remove any temporary piece
         this.removeTemporaryPiece();
-        
-        // Remove diagonal gridlines if they exist
-        if (this.diagonalGridLines.length > 0) {
-            console.log('Removing diagonal gridlines during reset');
-            for (const line of this.diagonalGridLines) {
-                this.scene.remove(line);
-            }
-            this.diagonalGridLines = [];
-        }
-        
-        // Reset diagonal visibility flag
-        this.isDiagonalGridVisible = false;
-        
-        // Update indicator
-        if (this.diagonalIndicator) {
-            this.diagonalIndicator.classList.add('hidden');
-        }
     }
     
     animate() {
