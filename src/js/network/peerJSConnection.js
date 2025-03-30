@@ -1,6 +1,79 @@
 import { ConnectionInterface } from './connectionInterface.js';
 import { CONFIG } from '../config.js';
 
+// Simple LocalChannel implementation for when testing on the same device
+// This bypasses WebRTC completely for local testing
+class LocalChannel {
+    static channels = {};
+    
+    constructor(localPeerId, remotePeerId) {
+        this.localPeerId = localPeerId;
+        this.remotePeerId = remotePeerId;
+        this.callbacks = {
+            open: [],
+            data: [],
+            close: [],
+            error: []
+        };
+        this.isOpen = false;
+        
+        // Register in the static channels map
+        LocalChannel.channels[localPeerId] = this;
+        
+        // Auto-open the channel with a small delay to simulate connection time
+        setTimeout(() => {
+            this.isOpen = true;
+            this._trigger('open');
+        }, 500);
+        
+        console.log(`LocalChannel: Created channel from ${localPeerId} to ${remotePeerId}`);
+    }
+    
+    // Send data to the other peer
+    send(data) {
+        if (!this.isOpen) {
+            console.error('LocalChannel: Cannot send - channel not open');
+            return;
+        }
+        
+        // Get the other peer's channel
+        const otherChannel = LocalChannel.channels[this.remotePeerId];
+        if (!otherChannel) {
+            console.error(`LocalChannel: Cannot send - remote peer ${this.remotePeerId} not found`);
+            return;
+        }
+        
+        // Simulate network delay
+        setTimeout(() => {
+            otherChannel._trigger('data', data);
+        }, 100);
+        
+        console.log(`LocalChannel: Sent data from ${this.localPeerId} to ${this.remotePeerId}`);
+    }
+    
+    // Close the channel
+    close() {
+        this.isOpen = false;
+        this._trigger('close');
+        delete LocalChannel.channels[this.localPeerId];
+        console.log(`LocalChannel: Closed channel ${this.localPeerId}`);
+    }
+    
+    // Register event handlers
+    on(event, callback) {
+        if (this.callbacks[event]) {
+            this.callbacks[event].push(callback);
+        }
+    }
+    
+    // Trigger an event
+    _trigger(event, data) {
+        if (this.callbacks[event]) {
+            this.callbacks[event].forEach(callback => callback(data));
+        }
+    }
+}
+
 /**
  * PeerJS implementation of the ConnectionInterface
  * Uses PeerJS for WebRTC connections with a simple broker
@@ -309,15 +382,33 @@ export class PeerJSConnection extends ConnectionInterface {
         console.info('PeerJSConnection: Creating a new game as host');
         
         try {
-            // Initialize PeerJS
-            console.debug('PeerJSConnection: Initializing peer for host');
-            const id = await this._initializePeer();
-            this.isHost = true;
-            this.gameCode = id;
+            // Check if we're in local testing mode
+            const isLocalTesting = CONFIG.network.localTestingMode === true;
             
-            console.info(`PeerJSConnection: Game created successfully with code: ${id}`);
-            console.debug('PeerJSConnection: Host mode activated, waiting for connections');
-            return id;
+            if (isLocalTesting) {
+                console.warn('PeerJSConnection: Using direct local channel for testing');
+                // Generate a simple ID for local testing
+                const id = this._generateId();
+                this.isHost = true;
+                this.gameCode = id;
+                this.peer = { id: id };  // Simple peer object for compatibility
+                
+                // In local testing mode, we don't need to actually connect to PeerJS servers
+                // The actual connection will happen when the client joins
+                
+                console.info(`PeerJSConnection: Game created with LOCAL TEST mode code: ${id}`);
+                return id;
+            } else {
+                // Standard PeerJS initialization for normal operation
+                console.debug('PeerJSConnection: Initializing peer for host');
+                const id = await this._initializePeer();
+                this.isHost = true;
+                this.gameCode = id;
+                
+                console.info(`PeerJSConnection: Game created successfully with code: ${id}`);
+                console.debug('PeerJSConnection: Host mode activated, waiting for connections');
+                return id;
+            }
         } catch (error) {
             console.error('PeerJSConnection: Error creating game:', error);
             if (this.errorCallback) {
@@ -343,8 +434,76 @@ export class PeerJSConnection extends ConnectionInterface {
         }
         
         try {
-            // Initialize PeerJS
-            console.debug('PeerJSConnection: Initializing peer for guest');
+            // Check if we're in local testing mode
+            const isLocalTesting = CONFIG.network.localTestingMode === true;
+            
+            if (isLocalTesting) {
+                console.warn('PeerJSConnection: Using direct local channel for local testing');
+                
+                // For local testing, create a simple peer ID
+                const localId = this._generateId();
+                this.isHost = false;
+                this.gameCode = code;
+                this.peer = { id: localId };  // Simple peer object for compatibility
+                
+                // Create a direct local channel instead of WebRTC
+                console.info(`PeerJSConnection: Creating local test channel from ${localId} to ${code}`);
+                
+                return new Promise((resolve, reject) => {
+                    try {
+                        // Create local channel that directly connects to the host
+                        const channel = new LocalChannel(localId, code);
+                        this.connection = channel;
+                        
+                        // Set up local channel events
+                        channel.on('open', () => {
+                            console.info(`PeerJSConnection: Local channel opened to ${code}`);
+                            this.connected = true;
+                            
+                            // Handle connection open
+                            if (this.connectCallback) {
+                                this.connectCallback(code);
+                            }
+                            
+                            resolve();
+                        });
+                        
+                        channel.on('data', (data) => {
+                            console.info(`PeerJSConnection: Received data on local channel`);
+                            console.debug('PeerJSConnection: Data:', data);
+                            
+                            // Pass data to callback
+                            if (this.dataCallback) {
+                                this.dataCallback(data);
+                            }
+                        });
+                        
+                        channel.on('close', () => {
+                            console.info(`PeerJSConnection: Local channel closed`);
+                            this.connected = false;
+                            
+                            if (this.disconnectCallback) {
+                                this.disconnectCallback();
+                            }
+                        });
+                        
+                        channel.on('error', (err) => {
+                            console.error(`PeerJSConnection: Local channel error:`, err);
+                            
+                            if (this.errorCallback) {
+                                this.errorCallback(err);
+                            }
+                        });
+                        
+                    } catch (err) {
+                        console.error('PeerJSConnection: Error creating local channel:', err);
+                        reject(err);
+                    }
+                });
+            }
+            
+            // Initialize PeerJS for non-local testing
+            console.debug('PeerJSConnection: Initializing peer for guest (standard WebRTC)');
             await this._initializePeer();
             this.isHost = false;
             this.gameCode = code;
@@ -596,17 +755,47 @@ export class PeerJSConnection extends ConnectionInterface {
      * @returns {Promise<void>}
      */
     async sendData(data) {
-        if (!this.connection || !this.connected) {
+        if (!this.connection) {
+            console.error('PeerJSConnection: Cannot send data - no connection object');
             throw new Error('Not connected to a peer');
         }
         
-        try {
-            this.connection.send(data);
-            return Promise.resolve();
-        } catch (error) {
-            if (this.config.debug) console.error('Error sending data:', error);
-            if (this.errorCallback) this.errorCallback(error);
-            throw error;
+        // Special handling for local testing mode
+        const isLocalTesting = CONFIG.network.localTestingMode === true;
+        
+        if (isLocalTesting) {
+            // Use local channel directly
+            try {
+                console.debug('PeerJSConnection: Sending data via local channel:', data);
+                
+                if (this.connection.send) {
+                    this.connection.send(data);
+                    return Promise.resolve();
+                } else {
+                    console.error('PeerJSConnection: Local channel does not have send method');
+                    throw new Error('Local channel implementation error');
+                }
+            } catch (error) {
+                console.error('PeerJSConnection: Error sending data via local channel:', error);
+                if (this.errorCallback) this.errorCallback(error);
+                throw error;
+            }
+        } else {
+            // Standard WebRTC data channel
+            if (!this.connected) {
+                console.error('PeerJSConnection: Cannot send data - not connected');
+                throw new Error('Not connected to a peer');
+            }
+            
+            try {
+                console.debug('PeerJSConnection: Sending data via WebRTC:', data);
+                this.connection.send(data);
+                return Promise.resolve();
+            } catch (error) {
+                console.error('PeerJSConnection: Error sending data via WebRTC:', error);
+                if (this.errorCallback) this.errorCallback(error);
+                throw error;
+            }
         }
     }
     
@@ -615,23 +804,43 @@ export class PeerJSConnection extends ConnectionInterface {
      * @returns {Promise<void>}
      */
     async disconnect() {
+        // Special handling for local testing mode
+        const isLocalTesting = CONFIG.network.localTestingMode === true;
+        
+        console.info('PeerJSConnection: Disconnecting from game');
+        
         // Close connection
         if (this.connection) {
-            this.connection.close();
+            console.debug('PeerJSConnection: Closing connection');
+            
+            if (isLocalTesting) {
+                // LocalChannel close
+                if (this.connection.close) {
+                    console.debug('PeerJSConnection: Closing local channel');
+                    this.connection.close();
+                }
+            } else {
+                // WebRTC connection close
+                console.debug('PeerJSConnection: Closing WebRTC connection');
+                this.connection.close();
+            }
+            
             this.connection = null;
         }
         
-        // Destroy peer
-        if (this.peer) {
+        // Destroy peer if it's a WebRTC peer
+        if (this.peer && this.peer.destroy && !isLocalTesting) {
+            console.debug('PeerJSConnection: Destroying peer');
             this.peer.destroy();
-            this.peer = null;
         }
         
         // Reset state
+        this.peer = null;
         this.connected = false;
         this.gameCode = null;
         this.isHost = false;
         
+        console.info('PeerJSConnection: Disconnected successfully');
         return Promise.resolve();
     }
     
