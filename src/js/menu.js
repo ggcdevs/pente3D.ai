@@ -25,6 +25,11 @@ export class Menu {
         this.copyGameCodeButton = document.getElementById('copy-game-code');
         this.hostGameButton = document.getElementById('host-game-button');
         
+        // Troubleshooting elements
+        this.troubleshootingPanel = document.getElementById('connection-troubleshooting');
+        this.showDetailsButton = document.getElementById('show-connection-details');
+        this.technicalDetails = document.getElementById('connection-technical-details');
+        
         // Flag to track menu state
         this.isMenuOpen = false;
         this.isJoinGameFormVisible = false;
@@ -110,6 +115,13 @@ export class Menu {
         if (this.copyGameCodeButton) {
             this.copyGameCodeButton.addEventListener('click', () => {
                 this.copyGameCodeToClipboard();
+            });
+        }
+        
+        // Handle show technical details button
+        if (this.showDetailsButton) {
+            this.showDetailsButton.addEventListener('click', () => {
+                this.toggleTechnicalDetails();
             });
         }
     }
@@ -349,9 +361,25 @@ export class Menu {
             this.joinGameButton.textContent = 'Join';
             this.joinGameButton.disabled = false;
             
-            // Show error message
+            // Show error message with network troubleshooting help
             console.debug('Menu: Showing error alert to user');
-            alert(`Failed to join game: ${error.message}`);
+            
+            // Enhanced error message with troubleshooting suggestions
+            let errorMsg = `Failed to join game: ${error.message}\n\n`;
+            
+            if (error.message.includes('WebRTC connection failed') || 
+                error.message.includes('Connection timed out')) {
+                errorMsg += "Network troubleshooting tips:\n";
+                errorMsg += "1. Make sure both devices are on the same network\n";
+                errorMsg += "2. Some corporate/school networks may block WebRTC connections\n";
+                errorMsg += "3. Try disabling VPN or firewall software if you're using any\n";
+                errorMsg += "4. If on mobile, try switching to WiFi if using cellular data";
+            }
+            
+            alert(errorMsg);
+            
+            // Show troubleshooting panel
+            this.showTroubleshooting();
         }
     }
     
@@ -397,9 +425,12 @@ export class Menu {
             this.hostGameButton.textContent = 'Create Game';
             this.hostGameButton.disabled = false;
             
-            // Show error message
+            // Show error message and troubleshooting panel
             console.debug('Menu: Showing error alert to user');
             alert(`Failed to create game: ${error.message}`);
+            
+            // Show troubleshooting panel
+            this.showTroubleshooting();
         }
     }
     
@@ -429,6 +460,72 @@ export class Menu {
                 console.error('Failed to copy game code:', err);
                 alert('Failed to copy game code. Please copy it manually.');
             });
+    }
+    
+    /**
+     * Toggle the display of technical connection details
+     */
+    toggleTechnicalDetails() {
+        if (!this.technicalDetails) return;
+        
+        const isHidden = this.technicalDetails.classList.contains('hidden');
+        
+        if (isHidden) {
+            // Show details and update content
+            this.technicalDetails.classList.remove('hidden');
+            this.updateTechnicalDetails();
+            this.showDetailsButton.textContent = 'Hide Technical Details';
+        } else {
+            // Hide details
+            this.technicalDetails.classList.add('hidden');
+            this.showDetailsButton.textContent = 'Show Technical Details';
+        }
+    }
+    
+    /**
+     * Update the technical details panel with connection information
+     */
+    updateTechnicalDetails() {
+        if (!this.technicalDetails || !this.networkManager) return;
+        
+        try {
+            // Get browser info
+            const browserInfo = {
+                userAgent: navigator.userAgent,
+                platform: navigator.platform,
+                language: navigator.language,
+                webRTC: 'RTCPeerConnection' in window ? 'Supported' : 'Not supported'
+            };
+            
+            // Get connection info if available
+            let connectionInfo = 'No active connection';
+            if (this.networkManager.connection) {
+                connectionInfo = this.networkManager.getConnectionInfo();
+            }
+            
+            // Format the information
+            const details = 
+                `BROWSER INFORMATION:\n` +
+                `- User Agent: ${browserInfo.userAgent}\n` +
+                `- Platform: ${browserInfo.platform}\n` +
+                `- WebRTC Support: ${browserInfo.webRTC}\n\n` +
+                `CONNECTION INFORMATION:\n` +
+                JSON.stringify(connectionInfo, null, 2);
+            
+            this.technicalDetails.textContent = details;
+        } catch (error) {
+            console.error('Error generating technical details:', error);
+            this.technicalDetails.textContent = 'Error generating technical details';
+        }
+    }
+    
+    /**
+     * Show troubleshooting panel after connection attempts fail
+     */
+    showTroubleshooting() {
+        if (this.troubleshootingPanel) {
+            this.troubleshootingPanel.classList.remove('hidden');
+        }
     }
     
     /**

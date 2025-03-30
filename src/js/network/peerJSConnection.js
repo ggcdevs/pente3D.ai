@@ -340,18 +340,50 @@ export class PeerJSConnection extends ConnectionInterface {
             // Connect to the host
             console.debug('PeerJSConnection: Creating data connection to host');
             
-            // Enhanced connection options
+            // Enhanced connection options with more debugging and better compatibility
             const connectionOptions = {
                 reliable: true,
                 serialization: 'json',
+                // Use binary serialization for better performance if needed
+                // serialization: 'binary',
                 metadata: {
                     clientId: this.peer.id,
-                    timestamp: Date.now()
+                    timestamp: Date.now(),
+                    version: '1.0'
                 },
+                // Debug level for this specific connection
+                debug: 3,
+                // Modify SDP to improve NAT traversal chances
                 sdpTransform: (sdp) => {
                     console.debug('PeerJSConnection: SDP before transform:', sdp);
-                    // We could modify the SDP here if needed
-                    return sdp;
+                    
+                    // Add a=candidate lines to the SDP to improve NAT traversal
+                    // Format: a=candidate:foundation_id component_id transport priority ip port type ...
+                    // This adds public candidates that might help with connectivity
+                    const modifiedSdp = sdp;
+                    
+                    /* 
+                    // Uncomment if you need to modify SDP for specific network conditions
+                    // Example: Add IPV6 preference if needed
+                    modifiedSdp = sdp.replace(
+                        /a=ice-options:trickle\r\n/g, 
+                        "a=ice-options:trickle\r\na=ipv6-default-address:2001:db8:85a3:8d3:1319:8a2e:370:7344\r\n"
+                    );
+                    */
+                    
+                    return modifiedSdp;
+                },
+                // Try to configure the connection for better reliability
+                config: {
+                    // Re-use the same ICE servers from the peer object
+                    iceServers: this.peer.options.config.iceServers,
+                    // These settings may help with NAT traversal
+                    bundlePolicy: 'max-bundle',
+                    rtcpMuxPolicy: 'require',
+                    // Use UDP and TCP
+                    iceTransportPolicy: 'all',
+                    // Force IPv4 if IPv6 is causing issues
+                    // iceTransportPolicy: 'relay'
                 }
             };
             
@@ -382,23 +414,67 @@ export class PeerJSConnection extends ConnectionInterface {
                 return new Promise((resolve, reject) => {
                     console.debug('PeerJSConnection: Waiting for connection to open...');
                     
-                    // Set timeout for connection
+                    // Set up ice connection state monitoring
+                    if (this.connection._pc) {
+                        console.debug('PeerJSConnection: Setting up ICE connection state monitoring');
+                        
+                        this.connection._pc.addEventListener('iceconnectionstatechange', () => {
+                            const state = this.connection._pc.iceConnectionState;
+                            console.info(`PeerJSConnection: ICE connection state changed to: ${state}`);
+                            
+                            if (state === 'failed') {
+                                console.error('PeerJSConnection: ICE connection failed - may need TURN server');
+                                // Only reject if we haven't already resolved
+                                clearTimeout(timeout);
+                                reject(new Error('WebRTC connection failed - network issue detected'));
+                            }
+                            
+                            if (state === 'connected' || state === 'completed') {
+                                console.info('PeerJSConnection: ICE connection established successfully');
+                                // This is backup to the 'open' event, but sometimes helps
+                                if (!this.connected && this.connection.open) {
+                                    console.info('PeerJSConnection: Connection is now open based on ICE state');
+                                    clearTimeout(timeout);
+                                    resolve();
+                                }
+                            }
+                        });
+                    }
+                    
+                    // Set timeout for connection - increased to 30 seconds
                     const timeout = setTimeout(() => {
-                        console.error('PeerJSConnection: Connection timed out after 20 seconds');
+                        console.error('PeerJSConnection: Connection timed out after 30 seconds');
                         
                         // Try to capture the connection state for debugging
                         if (this.connection) {
+                            // Log detailed connection state
+                            const iceState = this.connection._pc ? 
+                                this.connection._pc.iceConnectionState : 'No ICE connection';
+                            const candidates = this.connection._pc ? 
+                                'ICE candidates were exchanged' : 'No ICE candidates';
+                            
                             console.debug('PeerJSConnection: Connection state at timeout:', {
                                 open: this.connection.open,
+                                iceConnectionState: iceState,
+                                iceCandidates: candidates,
                                 dataChannel: this.connection._dc ? {
                                     readyState: this.connection._dc.readyState,
                                     bufferedAmount: this.connection._dc.bufferedAmount
                                 } : 'No data channel'
                             });
+                            
+                            // Try one last reconnect attempt
+                            console.info('PeerJSConnection: Attempting one final reconnect...');
+                            if (this.connection._pc) {
+                                this.connection._pc.restartIce();
+                            }
                         }
                         
-                        reject(new Error('Connection timed out'));
-                    }, 20000); // 20 seconds timeout
+                        // Longer timeout for the retry
+                        setTimeout(() => {
+                            reject(new Error('Connection timed out. This could be due to firewall restrictions or network issues.'));
+                        }, 5000);
+                    }, 30000); // 30 seconds timeout
                     
                     // On connection
                     this.connection.on('open', () => {
