@@ -13,8 +13,13 @@ export class Menu {
         this.gameCodeInput = document.getElementById('game-code-input');
         this.joinGameButton = document.getElementById('join-game-button');
         
-        // Flag to track if join game form is visible
+        // Flag to track menu state
+        this.isMenuOpen = false;
         this.isJoinGameFormVisible = false;
+        
+        // Store reference to original game keyboard handlers
+        this.originalKeyDownHandler = null;
+        this.originalKeyUpHandler = null;
         
         // Initialize event listeners
         this.initEventListeners();
@@ -47,16 +52,18 @@ export class Menu {
             }
         });
         
-        // Handle settings option click
-        if (this.settingsOption) {
-            this.settingsOption.addEventListener('click', () => {
+        // Handle settings option header click
+        const settingsHeader = this.settingsOption?.querySelector('.menu-option-header');
+        if (settingsHeader) {
+            settingsHeader.addEventListener('click', () => {
                 this.openSettings();
             });
         }
         
-        // Handle join game option click
-        if (this.joinGameOption) {
-            this.joinGameOption.addEventListener('click', () => {
+        // Handle join game option header click
+        const joinGameHeader = this.joinGameOption?.querySelector('.menu-option-header');
+        if (joinGameHeader) {
+            joinGameHeader.addEventListener('click', () => {
                 this.toggleJoinGameForm();
             });
         }
@@ -73,12 +80,16 @@ export class Menu {
         if (this.menuModal) {
             this.menuModal.classList.remove('hidden');
             this.menuModal.style.display = 'flex';
+            this.isMenuOpen = true;
             
             // Reset join game form to hidden state when opening menu
             this.isJoinGameFormVisible = false;
             if (this.joinGameForm) {
                 this.joinGameForm.classList.add('hidden');
             }
+            
+            // Disable game keyboard shortcuts while menu is open
+            this.disableGameKeyboardShortcuts();
         }
     }
     
@@ -86,6 +97,36 @@ export class Menu {
         if (this.menuModal) {
             this.menuModal.classList.add('hidden');
             this.menuModal.style.display = 'none';
+            this.isMenuOpen = false;
+            
+            // Re-enable game keyboard shortcuts after menu is closed
+            this.enableGameKeyboardShortcuts();
+        }
+    }
+    
+    // Disable game keyboard shortcuts by temporarily removing them
+    disableGameKeyboardShortcuts() {
+        if (this.game && this.game.handleKeyDown && this.game.handleKeyUp) {
+            // Store original handlers
+            this.originalKeyDownHandler = this.game.handleKeyDown;
+            this.originalKeyUpHandler = this.game.handleKeyUp;
+            
+            // Remove event listeners
+            window.removeEventListener('keydown', this.game.handleKeyDown);
+            window.removeEventListener('keyup', this.game.handleKeyUp);
+            
+            console.log('Game keyboard shortcuts disabled');
+        }
+    }
+    
+    // Re-enable game keyboard shortcuts
+    enableGameKeyboardShortcuts() {
+        if (this.game && this.originalKeyDownHandler && this.originalKeyUpHandler) {
+            // Restore event listeners
+            window.addEventListener('keydown', this.originalKeyDownHandler);
+            window.addEventListener('keyup', this.originalKeyUpHandler);
+            
+            console.log('Game keyboard shortcuts re-enabled');
         }
     }
     
