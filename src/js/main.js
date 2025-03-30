@@ -1,5 +1,6 @@
 import { Game } from './game.js';
 import { Settings } from './settings.js';
+import { Menu } from './menu.js';
 
 // Initialize the game when the DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
@@ -11,14 +12,18 @@ document.addEventListener('DOMContentLoaded', () => {
     const game = new Game(gameBoard);
     game.initialize();
     
-    // Initialize settings manager after a small delay to ensure DOM is fully ready
+    // Initialize settings manager and menu after a small delay to ensure DOM is fully ready
     setTimeout(() => {
+        // Initialize settings
         const settings = new Settings(game);
         
         // Load saved settings (or defaults)
         if (settings.panel) { // Only if panel was found
             settings.loadSettings();
         }
+        
+        // Initialize menu
+        const menu = new Menu(game);
     }, 100);
     
     // Setup reset game confirmation modal
@@ -26,9 +31,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const confirmResetButton = document.getElementById('confirm-reset');
     const cancelResetButton = document.getElementById('cancel-reset');
     
-    // Make sure the modal is hidden initially
+    // Make sure the modals are hidden initially
     confirmModal.classList.add('hidden');
     confirmModal.style.display = 'none';
+    
+    const menuModal = document.getElementById('menu-modal');
+    if (menuModal) {
+        menuModal.classList.add('hidden');
+        menuModal.style.display = 'none';
+    }
     
     // Show the confirmation modal when reset button is clicked
     resetButton.addEventListener('click', () => {

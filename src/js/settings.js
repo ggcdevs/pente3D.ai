@@ -34,12 +34,11 @@ export class Settings {
     initializeElements() {
         // Get all required DOM elements
         this.panel = document.getElementById('settings-panel');
-        this.settingsButton = document.getElementById('settings-button');
         this.closeButton = document.querySelector('.close-button');
         this.saveButton = document.getElementById('save-settings');
         this.resetButton = document.getElementById('reset-settings');
         
-        if (!this.panel || !this.settingsButton || !this.closeButton || 
+        if (!this.panel || !this.closeButton || 
             !this.saveButton || !this.resetButton) {
             console.error("Settings panel elements not found in DOM");
             return;
@@ -51,10 +50,7 @@ export class Settings {
     }
     
     initEventListeners() {
-        // Settings button opens the panel
-        this.settingsButton.addEventListener('click', () => {
-            this.panel.classList.add('open');
-        });
+        // We no longer need the settings button listener since it's handled by Menu class
         
         // Close button closes the panel
         this.closeButton.addEventListener('click', () => {
@@ -76,9 +72,7 @@ export class Settings {
         document.addEventListener('mousedown', (event) => {
             // Check if panel is open and click was outside the panel
             if (this.panel.classList.contains('open') && 
-                !this.panel.contains(event.target) && 
-                event.target !== this.settingsButton &&
-                !this.settingsButton.contains(event.target)) {
+                !this.panel.contains(event.target)) {
                 this.closePanel();
             }
         });
