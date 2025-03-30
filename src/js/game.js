@@ -622,7 +622,6 @@ export class Game {
         this.resetHoverState();
         this.hoveredPoint = null;
 
-        // Include diagonals in raycaster intersections
         const allObjects = [
             ...this.board.intersectionPoints,
             ...this.board.gridLines,
@@ -634,19 +633,18 @@ export class Game {
         if (intersects.length > 0) {
             const firstObject = intersects[0].object;
 
-            // Check if the first intersection is a point
             const isPointIntersection = this.board.intersectionPoints.includes(firstObject);
             const isDiagonalIntersection = this.perfectDiagonals.includes(firstObject);
 
             if (isPointIntersection) {
                 if (!this.board.isOccupied(firstObject.position)) {
-                    const hoverColor = this.nodeHoverSettings?.color || this.currentPlayer.color;
-                    firstObject.material.color.set(hoverColor);
-                    firstObject.material.opacity = this.nodeHoverSettings?.opacity || 0.8;
+                    firstObject.material.color.set(this.nodeHoverSettings.color);
+                    firstObject.material.opacity = this.nodeHoverSettings.opacity;
                     this.hoveredPoint = firstObject;
                     this.board.highlightIntersectingLines(firstObject);
+                    this.highlightConnectedDiagonals(firstObject.position);
                 }
-            } else if (firstObject.userData && firstObject.userData.type === 'line') {
+            } else if (firstObject.userData?.type === 'line') {
                 this.board.highlightGridLine(firstObject);
             } else if (isDiagonalIntersection) {
                 this.highlightDiagonalLine(firstObject);
@@ -654,18 +652,38 @@ export class Game {
         }
     }
 
+    highlightConnectedDiagonals(nodePosition) {
+        const threshold = 0.1; // Sensitivity threshold
+        for (const diagonal of this.perfectDiagonals) {
+            const start = diagonal.geometry.boundingSphere.center.clone().applyMatrix4(diagonal.matrixWorld);
+            const end = start.clone().add(
+                new THREE.Vector3(0, diagonal.geometry.parameters.height, 0)
+                    .applyQuaternion(diagonal.quaternion)
+            );
+            if (this.isPointOnLine(nodePosition, start, end, threshold)) {
+                diagonal.material.color.set(this.gridlineHoverSettings.color);
+                diagonal.material.opacity = this.gridlineHoverSettings.opacity;
+            }
+        }
+    }
+
+    isPointOnLine(point, start, end, threshold) {
+        const closestPoint = new THREE.Vector3();
+        const line = new THREE.Line3(start, end);
+        line.closestPointToPoint(point, true, closestPoint);
+        return closestPoint.distanceTo(point) < threshold;
+    }
+
     resetHoverState() {
         this.board.resetHoverState();
-
-        // Reset diagonal lines
+    
         for (const diagonal of this.perfectDiagonals) {
             diagonal.material.color.set(this.gridlineColor);
             diagonal.material.opacity = 1 - ((this.gridlineTranslucency || 50) / 100);
         }
-
-        // Reset piece emissive highlights
+    
         this.board.forEachPiece(piece => {
-            if (piece && piece.mesh) {
+            if (piece?.mesh) {
                 piece.mesh.material.emissive = new THREE.Color(0x000000);
                 piece.mesh.material.emissiveIntensity = 0;
             }
