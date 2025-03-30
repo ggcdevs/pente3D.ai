@@ -112,16 +112,19 @@ export class Game {
     handleKeyDown(event) {
         console.log('Key pressed:', event.key);
         
+        // Avoid repeating key events when key is held down
+        if (event.repeat) return;
+        
         if (event.key === 'Shift') {
             // Show grabbing cursor when shift is held (ready to pan)
             if (this.isMouseOverCanvas) {
                 this.renderer.domElement.style.cursor = 'grab';
             }
         } else if (event.key.toLowerCase() === 'v') {
-            console.log('V key pressed - hiding grid and nodes');
-            // 'v' key hides the grid and nodes, showing only pieces
-            this.isGridVisible = false;
-            this.isNodesVisible = false;
+            console.log('V key pressed - toggling grid and node visibility');
+            // Toggle grid and node visibility with each press of the 'v' key
+            this.isGridVisible = !this.isGridVisible;
+            this.isNodesVisible = !this.isNodesVisible;
             this.toggleBoardVisibility();
         } else if (event.key.toLowerCase() === 't') {
             console.log('T key pressed - toggling temporary piece');
@@ -140,13 +143,8 @@ export class Game {
             if (this.isMouseOverCanvas) {
                 this.renderer.domElement.style.cursor = 'default';
             }
-        } else if (event.key.toLowerCase() === 'v') {
-            console.log('V key released - showing grid and nodes');
-            // Show grid and nodes again when 'v' is released
-            this.isGridVisible = true;
-            this.isNodesVisible = true;
-            this.toggleBoardVisibility();
         }
+        // Note: 'v' key is now a toggle, so no action needed on key up
     }
     
     setupScene() {
