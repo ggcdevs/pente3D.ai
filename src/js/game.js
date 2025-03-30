@@ -819,12 +819,6 @@ export class Game {
         this.currentPlayer = lastMove.playerColor === 'black' ? this.playerBlack : this.playerWhite;
         
         if (this.playerIndicator) {
-            // Change player indicator background based on current player
-            if (this.currentPlayer === this.playerBlack) {
-                this.playerIndicator.style.backgroundColor = 'rgba(30, 30, 30, 0.5)';
-            } else {
-                this.playerIndicator.style.backgroundColor = 'rgba(255, 255, 255, 0.15)';
-            }
             this.playerIndicator.textContent = this.currentPlayer.color.charAt(0).toUpperCase() + this.currentPlayer.color.slice(1);
         }
         
@@ -929,12 +923,6 @@ export class Game {
         this.currentPlayer = playerColor === 'black' ? this.playerWhite : this.playerBlack;
         
         if (this.playerIndicator) {
-            // Change player indicator background based on current player
-            if (this.currentPlayer === this.playerBlack) {
-                this.playerIndicator.style.backgroundColor = 'rgba(30, 30, 30, 0.5)';
-            } else {
-                this.playerIndicator.style.backgroundColor = 'rgba(255, 255, 255, 0.15)';
-            }
             this.playerIndicator.textContent = this.currentPlayer.color.charAt(0).toUpperCase() + this.currentPlayer.color.slice(1);
         }
         
@@ -959,13 +947,6 @@ export class Game {
         this.currentPlayer = this.currentPlayer === this.playerBlack ? this.playerWhite : this.playerBlack;
         
         if (this.playerIndicator) {
-            // Change player indicator background based on current player
-            if (this.currentPlayer === this.playerBlack) {
-                this.playerIndicator.style.backgroundColor = 'rgba(30, 30, 30, 0.5)';
-            } else {
-                this.playerIndicator.style.backgroundColor = 'rgba(255, 255, 255, 0.15)';
-            }
-            
             // Update text with capitalized player color
             this.playerIndicator.textContent = this.currentPlayer.color.charAt(0).toUpperCase() + this.currentPlayer.color.slice(1);
         }
@@ -1061,7 +1042,6 @@ export class Game {
         
         // Set the player indicator back to black and update text
         if (this.playerIndicator) {
-            this.playerIndicator.style.backgroundColor = 'rgba(30, 30, 30, 0.5)';
             this.playerIndicator.textContent = this.currentPlayer.color.charAt(0).toUpperCase() + this.currentPlayer.color.slice(1);
         }
         
