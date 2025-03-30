@@ -316,10 +316,108 @@ body {
     color: rgba(255, 255, 255, 0.5);
 }
 
-#join-game-button {
+#join-game-button, #host-game-button {
     padding: 10px 16px;
     background-color: #4CAF50;
     align-self: flex-end;
+}
+
+/* Game code display */
+.game-code-display {
+    background-color: rgba(0, 0, 0, 0.2);
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 16px;
+    animation: fadeIn 0.5s ease;
+}
+
+.game-code-label {
+    margin: 0 0 12px 0;
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.8);
+}
+
+.game-code-container {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background-color: rgba(0, 0, 0, 0.3);
+    border-radius: 6px;
+    padding: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.generated-game-code {
+    font-family: 'Courier New', monospace;
+    font-size: 20px;
+    font-weight: bold;
+    letter-spacing: 2px;
+    color: #4CAF50;
+}
+
+.copy-code-button {
+    background-color: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    padding: 6px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.copy-code-button:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.3);
+}
+
+/* Connection status styles */
+.connection-status {
+    position: absolute;
+    top: 70px;
+    right: 16px;
+    background-color: rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(10px);
+    color: white;
+    padding: 12px 16px;
+    border-radius: 8px;
+    z-index: 150;
+    font-size: 14px;
+    font-weight: 500;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    transition: opacity 0.3s, transform 0.3s;
+    opacity: 1;
+    transform: translateX(0);
+}
+
+.connection-status.hidden {
+    opacity: 0;
+    transform: translateX(20px);
+    pointer-events: none;
+}
+
+.connection-status.success {
+    background-color: rgba(46, 125, 50, 0.7);
+    border-color: rgba(129, 199, 132, 0.4);
+}
+
+.connection-status.warning {
+    background-color: rgba(245, 124, 0, 0.7);
+    border-color: rgba(255, 183, 77, 0.4);
+}
+
+.connection-status.error {
+    background-color: rgba(211, 47, 47, 0.7);
+    border-color: rgba(239, 154, 154, 0.4);
+}
+
+.connection-status.info {
+    background-color: rgba(21, 101, 192, 0.7);
+    border-color: rgba(100, 181, 246, 0.4);
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
 }
 
 @keyframes modalFadeIn {

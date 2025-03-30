@@ -1,3 +1,5 @@
+import { NetworkManager } from './network/networkManager.js';
+
 // Menu functionality
 export class Menu {
     constructor(game) {
@@ -8,18 +10,32 @@ export class Menu {
         this.menuModal = document.getElementById('menu-modal');
         this.closeModalButton = document.querySelector('.close-modal-button');
         this.settingsOption = document.getElementById('settings-option');
+        
+        // Join game elements
         this.joinGameOption = document.getElementById('join-game-option');
         this.joinGameForm = document.getElementById('join-game-form');
         this.gameCodeInput = document.getElementById('game-code-input');
         this.joinGameButton = document.getElementById('join-game-button');
         
+        // Host game elements
+        this.hostGameOption = document.getElementById('host-game-option');
+        this.hostGameForm = document.getElementById('host-game-form');
+        this.gameCodeDisplay = document.getElementById('game-code-display');
+        this.generatedGameCode = document.getElementById('generated-game-code');
+        this.copyGameCodeButton = document.getElementById('copy-game-code');
+        this.hostGameButton = document.getElementById('host-game-button');
+        
         // Flag to track menu state
         this.isMenuOpen = false;
         this.isJoinGameFormVisible = false;
+        this.isHostGameFormVisible = false;
         
         // Store reference to original game keyboard handlers
         this.originalKeyDownHandler = null;
         this.originalKeyUpHandler = null;
+        
+        // Network manager
+        this.networkManager = null;
         
         // Initialize event listeners
         this.initEventListeners();
@@ -74,6 +90,28 @@ export class Menu {
                 this.handleJoinGame();
             });
         }
+        
+        // Handle host game option header click
+        const hostGameHeader = this.hostGameOption?.querySelector('.menu-option-header');
+        if (hostGameHeader) {
+            hostGameHeader.addEventListener('click', () => {
+                this.toggleHostGameForm();
+            });
+        }
+        
+        // Handle host game button click
+        if (this.hostGameButton) {
+            this.hostGameButton.addEventListener('click', () => {
+                this.handleHostGame();
+            });
+        }
+        
+        // Handle copy game code button click
+        if (this.copyGameCodeButton) {
+            this.copyGameCodeButton.addEventListener('click', () => {
+                this.copyGameCodeToClipboard();
+            });
+        }
     }
     
     openMenuModal() {
@@ -82,10 +120,26 @@ export class Menu {
             this.menuModal.style.display = 'flex';
             this.isMenuOpen = true;
             
-            // Reset join game form to hidden state when opening menu
+            // Reset forms to hidden state when opening menu
             this.isJoinGameFormVisible = false;
+            this.isHostGameFormVisible = false;
+            
             if (this.joinGameForm) {
                 this.joinGameForm.classList.add('hidden');
+                // Reset border-radius
+                const joinHeader = this.joinGameOption?.querySelector('.menu-option-header');
+                if (joinHeader) {
+                    joinHeader.style.borderRadius = '8px';
+                }
+            }
+            
+            if (this.hostGameForm) {
+                this.hostGameForm.classList.add('hidden');
+                // Reset border-radius
+                const hostHeader = this.hostGameOption?.querySelector('.menu-option-header');
+                if (hostHeader) {
+                    hostHeader.style.borderRadius = '8px';
+                }
             }
             
             // Disable game keyboard shortcuts while menu is open
@@ -142,6 +196,21 @@ export class Menu {
     }
     
     toggleJoinGameForm() {
+        // If host game form is visible, hide it first
+        if (this.isHostGameFormVisible) {
+            this.isHostGameFormVisible = false;
+            if (this.hostGameForm) {
+                this.hostGameForm.classList.add('hidden');
+                
+                // Reset host header border-radius
+                const hostHeader = this.hostGameOption?.querySelector('.menu-option-header');
+                if (hostHeader) {
+                    hostHeader.style.borderRadius = '8px';
+                }
+            }
+        }
+        
+        // Toggle join game form
         this.isJoinGameFormVisible = !this.isJoinGameFormVisible;
         
         if (this.joinGameForm) {
@@ -172,18 +241,317 @@ export class Menu {
         }
     }
     
-    handleJoinGame() {
-        const gameCode = this.gameCodeInput ? this.gameCodeInput.value.trim() : '';
+    toggleHostGameForm() {
+        // If join game form is visible, hide it first
+        if (this.isJoinGameFormVisible) {
+            this.isJoinGameFormVisible = false;
+            if (this.joinGameForm) {
+                this.joinGameForm.classList.add('hidden');
+                
+                // Reset join header border-radius
+                const joinHeader = this.joinGameOption?.querySelector('.menu-option-header');
+                if (joinHeader) {
+                    joinHeader.style.borderRadius = '8px';
+                }
+            }
+        }
         
-        if (gameCode) {
-            console.log('Joining game with code:', gameCode);
-            // Here we would implement the actual joining logic later
-            
-            // For now, just close the modal
-            this.closeMenuModal();
-        } else {
+        // Toggle host game form
+        this.isHostGameFormVisible = !this.isHostGameFormVisible;
+        
+        if (this.hostGameForm) {
+            if (this.isHostGameFormVisible) {
+                this.hostGameForm.classList.remove('hidden');
+                
+                // Adjust border-radius when form is visible
+                const header = this.hostGameOption?.querySelector('.menu-option-header');
+                if (header) {
+                    header.style.borderRadius = '8px 8px 0 0';
+                }
+                
+                // Hide the game code display when first opening the form
+                if (this.gameCodeDisplay) {
+                    this.gameCodeDisplay.classList.add('hidden');
+                }
+                
+                // Reset host button
+                if (this.hostGameButton) {
+                    this.hostGameButton.textContent = 'Create Game';
+                    this.hostGameButton.disabled = false;
+                }
+            } else {
+                this.hostGameForm.classList.add('hidden');
+                
+                // Restore border-radius when form is hidden
+                const header = this.hostGameOption?.querySelector('.menu-option-header');
+                if (header) {
+                    header.style.borderRadius = '8px';
+                }
+            }
+        }
+    }
+    
+    /**
+     * Initialize the network manager
+     * @returns {NetworkManager} The initialized network manager
+     */
+    initNetworkManager() {
+        if (!this.networkManager) {
+            this.networkManager = new NetworkManager(this.game);
+            this.setupNetworkHandlers();
+        }
+        return this.networkManager;
+    }
+    
+    async handleJoinGame() {
+        const gameCode = this.gameCodeInput ? this.gameCodeInput.value.trim().toUpperCase() : '';
+        
+        if (!gameCode) {
             // Show error for empty code
             alert('Please enter a valid game code.');
+            return;
         }
+        
+        try {
+            // Initialize network manager if not already done
+            this.initNetworkManager();
+            
+            // Show loading indicator
+            this.joinGameButton.textContent = 'Connecting...';
+            this.joinGameButton.disabled = true;
+            
+            // Join the game
+            await this.networkManager.joinGame(gameCode);
+            
+            // Close the modal
+            this.closeMenuModal();
+            
+            // Show success message
+            this.showConnectionStatus(`Connected to game ${gameCode}`, 'success');
+        } catch (error) {
+            console.error('Failed to join game:', error);
+            
+            // Reset button
+            this.joinGameButton.textContent = 'Join';
+            this.joinGameButton.disabled = false;
+            
+            // Show error message
+            alert(`Failed to join game: ${error.message}`);
+        }
+    }
+    
+    async handleHostGame() {
+        try {
+            // Initialize network manager if not already done
+            this.initNetworkManager();
+            
+            // Show loading indicator
+            this.hostGameButton.textContent = 'Creating...';
+            this.hostGameButton.disabled = true;
+            
+            // Create the game
+            const gameCode = await this.networkManager.createGame();
+            
+            // Show the game code display
+            if (this.gameCodeDisplay && this.generatedGameCode) {
+                this.gameCodeDisplay.classList.remove('hidden');
+                this.generatedGameCode.textContent = gameCode;
+                
+                // Update host button
+                this.hostGameButton.textContent = 'Waiting for Player...';
+            }
+            
+            // Show info message
+            this.showConnectionStatus('Game created! Waiting for opponent...', 'info');
+        } catch (error) {
+            console.error('Failed to create game:', error);
+            
+            // Reset button
+            this.hostGameButton.textContent = 'Create Game';
+            this.hostGameButton.disabled = false;
+            
+            // Show error message
+            alert(`Failed to create game: ${error.message}`);
+        }
+    }
+    
+    copyGameCodeToClipboard() {
+        if (!this.generatedGameCode) return;
+        
+        const gameCode = this.generatedGameCode.textContent;
+        if (!gameCode) return;
+        
+        // Copy to clipboard
+        navigator.clipboard.writeText(gameCode)
+            .then(() => {
+                // Show success message
+                this.showConnectionStatus('Game code copied to clipboard!', 'success');
+                
+                // Visual feedback on button
+                if (this.copyGameCodeButton) {
+                    const originalText = this.copyGameCodeButton.textContent;
+                    this.copyGameCodeButton.textContent = '✓';
+                    
+                    setTimeout(() => {
+                        this.copyGameCodeButton.textContent = originalText;
+                    }, 1500);
+                }
+            })
+            .catch(err => {
+                console.error('Failed to copy game code:', err);
+                alert('Failed to copy game code. Please copy it manually.');
+            });
+    }
+    
+    /**
+     * Set up network event handlers
+     */
+    setupNetworkHandlers() {
+        if (!this.networkManager) return;
+        
+        // When connected to a peer
+        this.networkManager.on('connect', (peerId) => {
+            console.log('Connected to peer:', peerId);
+            this.showConnectionStatus(`Connected to peer ${peerId}`, 'success');
+            
+            // If we're the host, close the menu when a player connects
+            if (this.networkManager.isGameHost()) {
+                this.closeMenuModal();
+            }
+        });
+        
+        // When someone joins (host only)
+        this.networkManager.on('join', (playerInfo) => {
+            console.log('Player joined:', playerInfo);
+            
+            // Update host button state
+            if (this.hostGameButton && this.networkManager.isGameHost()) {
+                this.hostGameButton.textContent = 'Player Connected!';
+                setTimeout(() => {
+                    this.hostGameButton.textContent = 'Start Game';
+                    this.hostGameButton.disabled = false;
+                    
+                    // Change button action to start game
+                    this.hostGameButton.removeEventListener('click', this.handleHostGame);
+                    this.hostGameButton.addEventListener('click', () => {
+                        this.startGame();
+                    });
+                }, 1500);
+            }
+        });
+        
+        // When disconnected
+        this.networkManager.on('disconnect', () => {
+            console.log('Disconnected from peer');
+            this.showConnectionStatus('Disconnected from game', 'warning');
+            
+            // Reset host button if we're the host
+            if (this.networkManager.isGameHost() && this.hostGameButton) {
+                this.hostGameButton.textContent = 'Create Game';
+                this.hostGameButton.disabled = false;
+                
+                // Reset button action
+                this.hostGameButton.removeEventListener('click', this.startGame);
+                this.hostGameButton.addEventListener('click', () => {
+                    this.handleHostGame();
+                });
+            }
+        });
+        
+        // When there's an error
+        this.networkManager.on('error', (error) => {
+            console.error('Network error:', error);
+            this.showConnectionStatus(`Error: ${error.message}`, 'error');
+        });
+        
+        // When game starts
+        this.networkManager.on('gameStart', (gameState) => {
+            console.log('Game started:', gameState);
+            // Initialize game with the received state
+            // this.game.initializeNetworkGame(gameState);
+            
+            // Close the menu modal if it's still open
+            this.closeMenuModal();
+            
+            // Show success message
+            this.showConnectionStatus('Game started!', 'success');
+        });
+        
+        // When receiving a move
+        this.networkManager.on('move', (move) => {
+            console.log('Received move:', move);
+            // Apply the received move
+            // this.game.applyNetworkMove(move);
+        });
+    }
+    
+    /**
+     * Start the game (host only)
+     */
+    async startGame() {
+        if (!this.networkManager || !this.networkManager.isGameHost()) {
+            console.error('Only the host can start the game');
+            return;
+        }
+        
+        try {
+            // Disable button
+            if (this.hostGameButton) {
+                this.hostGameButton.textContent = 'Starting...';
+                this.hostGameButton.disabled = true;
+            }
+            
+            // Start the game
+            await this.networkManager.startGame({
+                // Add initial game state here
+                boardSize: this.game.board.boardSize,
+                currentPlayer: this.game.currentPlayer.id,
+                moves: [] // Initial empty moves
+            });
+            
+            // Close the menu
+            this.closeMenuModal();
+            
+            // Show success message
+            this.showConnectionStatus('Game started!', 'success');
+        } catch (error) {
+            console.error('Failed to start game:', error);
+            
+            // Reset button
+            if (this.hostGameButton) {
+                this.hostGameButton.textContent = 'Start Game';
+                this.hostGameButton.disabled = false;
+            }
+            
+            // Show error message
+            alert(`Failed to start game: ${error.message}`);
+        }
+    }
+    
+    /**
+     * Show a connection status message
+     * @param {string} message - The message to show
+     * @param {string} type - The type of message: 'success', 'warning', 'error', 'info'
+     */
+    showConnectionStatus(message, type = 'info') {
+        // Create status element if it doesn't exist
+        let statusEl = document.getElementById('connection-status');
+        if (!statusEl) {
+            statusEl = document.createElement('div');
+            statusEl.id = 'connection-status';
+            document.querySelector('.game-container').appendChild(statusEl);
+        }
+        
+        // Set class based on type
+        statusEl.className = `connection-status ${type}`;
+        statusEl.textContent = message;
+        
+        // Show the status
+        statusEl.classList.remove('hidden');
+        
+        // Hide after delay
+        setTimeout(() => {
+            statusEl.classList.add('hidden');
+        }, 5000);
     }
 }
