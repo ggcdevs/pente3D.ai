@@ -191,6 +191,27 @@ export class Board {
             line.material.color.set(gridColor);
             line.material.opacity = gridOpacity;
         }
+        
+        // Reset any highlighted pieces to their original appearance
+        this.forEachPiece((piece) => {
+            if (piece.mesh && piece.isHighlighted) {
+                // Get the color based on the piece's player color
+                const colorHex = piece.color === 'black' 
+                    ? this.game?.pieceSettings?.blackColor || '#111111'
+                    : this.game?.pieceSettings?.whiteColor || '#ffffff';
+                
+                // Get opacity from game settings
+                const opacity = this.game?.pieceSettings?.opacity || 0.85;
+                
+                piece.mesh.material.color.set(colorHex);
+                piece.mesh.material.opacity = opacity;
+                piece.mesh.material.emissive.set(0x000000); // Reset emissive
+                piece.mesh.material.emissiveIntensity = 0;
+                
+                // Reset the highlighted flag
+                piece.isHighlighted = false;
+            }
+        });
     }
     
     // Method to highlight a single grid line
@@ -202,7 +223,46 @@ export class Board {
             
             line.material.color.set(color);
             line.material.opacity = opacity;
+            
+            // Highlight pieces that are along this gridline
+            this.highlightPiecesAlongLine(line);
         }
+    }
+    
+    // Method to highlight pieces along a gridline
+    highlightPiecesAlongLine(line) {
+        if (!line || !line.userData || line.userData.type !== 'line') return;
+        
+        const { axis, i, j } = line.userData;
+        
+        // Highlight pieces that lie on this gridline
+        this.forEachPiece((piece, x, y, z) => {
+            let isOnLine = false;
+            
+            // Check if the piece is on this gridline based on the axis
+            if (axis === 'x' && y === i && z === j) {
+                // Piece is on an X-axis line
+                isOnLine = true;
+            } else if (axis === 'y' && x === i && z === j) {
+                // Piece is on a Y-axis line
+                isOnLine = true;
+            } else if (axis === 'z' && x === i && y === j) {
+                // Piece is on a Z-axis line
+                isOnLine = true;
+            }
+            
+            if (isOnLine && piece.mesh) {
+                // Highlight the piece
+                const highlightColor = new THREE.Color(this.game?.gridlineHoverSettings?.color || '#00ff00');
+                
+                // Set the piece to have an emissive glow
+                piece.mesh.material.emissive = highlightColor;
+                piece.mesh.material.emissiveIntensity = 0.5;
+                
+                // Mark the piece as highlighted
+                piece.isHighlighted = true;
+            }
+        });
     }
     
     // Method to highlight the 3 grid lines intersecting at a point
@@ -211,6 +271,9 @@ export class Board {
         
         const { x, y, z } = point.userData;
         const offset = (this.size - 1) / 2;
+        
+        // Track the lines that we've highlighted to highlight pieces along them
+        const highlightedLines = [];
         
         // Find and highlight the 3 grid lines that intersect this point
         for (const line of this.gridLines) {
@@ -230,7 +293,24 @@ export class Board {
                 
                 line.material.color.set(color);
                 line.material.opacity = opacity;
+                
+                // Add to the list of highlighted lines
+                highlightedLines.push(line);
             }
+        }
+        
+        // Highlight all pieces along the three highlighted lines
+        for (const line of highlightedLines) {
+            this.highlightPiecesAlongLine(line);
+        }
+        
+        // Also highlight any piece that might be at this exact point
+        const pieceAtPoint = this.getPieceAt(x, y, z);
+        if (pieceAtPoint && pieceAtPoint.mesh) {
+            const highlightColor = new THREE.Color(this.game?.gridlineHoverSettings?.color || '#00ff00');
+            pieceAtPoint.mesh.material.emissive = highlightColor;
+            pieceAtPoint.mesh.material.emissiveIntensity = 0.7; // Slightly stronger at intersection
+            pieceAtPoint.isHighlighted = true;
         }
     }
     

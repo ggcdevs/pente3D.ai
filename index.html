@@ -23,6 +23,7 @@
             <div id="white-captures">White Captures: <span id="white-capture-count">0</span></div>
             <div class="game-buttons">
                 <button id="undo-move">Undo Move</button>
+                <button id="redo-move">Redo Move</button>
                 <button id="reset-game">Reset Game</button>
             </div>
         </div>
@@ -31,6 +32,22 @@
         <div id="temp-piece-indicator" class="mode-indicator hidden">Temporary Piece (Enter to confirm, T to cancel)</div>
         <div id="game-board"></div>
         <div id="game-message" class="hidden"></div>
+        
+        <!-- Confirmation Modal -->
+        <div id="confirm-modal" class="modal hidden" style="display: none;">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2>Confirm Reset</h2>
+                </div>
+                <div class="modal-body">
+                    <p>Are you sure you want to reset the game? All progress will be lost.</p>
+                </div>
+                <div class="modal-footer">
+                    <button id="cancel-reset" class="cancel-button">Cancel</button>
+                    <button id="confirm-reset" class="confirm-button">Reset Game</button>
+                </div>
+            </div>
+        </div>
         
         <!-- Settings Panel (slides in from right) -->
         <div id="settings-panel" class="settings-panel">

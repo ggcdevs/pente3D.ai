@@ -21,9 +21,40 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }, 100);
     
-    // Add event listener for the reset button
+    // Setup reset game confirmation modal
+    const confirmModal = document.getElementById('confirm-modal');
+    const confirmResetButton = document.getElementById('confirm-reset');
+    const cancelResetButton = document.getElementById('cancel-reset');
+    
+    // Make sure the modal is hidden initially
+    confirmModal.classList.add('hidden');
+    confirmModal.style.display = 'none';
+    
+    // Show the confirmation modal when reset button is clicked
     resetButton.addEventListener('click', () => {
+        confirmModal.classList.remove('hidden');
+        confirmModal.style.display = 'flex';
+    });
+    
+    // Cancel reset
+    cancelResetButton.addEventListener('click', () => {
+        confirmModal.classList.add('hidden');
+        confirmModal.style.display = 'none';
+    });
+    
+    // Confirm reset
+    confirmResetButton.addEventListener('click', () => {
         game.reset();
         gameMessage.classList.add('hidden');
+        confirmModal.classList.add('hidden');
+        confirmModal.style.display = 'none';
+    });
+    
+    // Also close modal when clicking outside of it
+    confirmModal.addEventListener('click', (event) => {
+        if (event.target === confirmModal) {
+            confirmModal.classList.add('hidden');
+            confirmModal.style.display = 'none';
+        }
     });
 });

@@ -58,11 +58,13 @@ export class Game {
         this.whiteCaptureCount = document.getElementById('white-capture-count');
         this.gameMessage = document.getElementById('game-message');
         this.undoButton = document.getElementById('undo-move');
+        this.redoButton = document.getElementById('redo-move');
         this.viewModeIndicator = document.getElementById('view-mode-indicator');
         this.tempPieceIndicator = document.getElementById('temp-piece-indicator');
         
-        // Game history for undo functionality
+        // Game history for undo/redo functionality
         this.moveHistory = [];
+        this.redoHistory = [];
         
         // Scene setup
         this.scene = null;
@@ -94,11 +96,13 @@ export class Game {
     }
     
     setupGameControls() {
-        // Set initial state of undo button
+        // Set initial state of undo and redo buttons
         this.undoButton.disabled = true;
+        this.redoButton.disabled = true;
         
-        // Setup undo button click handler
+        // Setup undo and redo button click handlers
         this.undoButton.addEventListener('click', () => this.undoLastMove());
+        this.redoButton.addEventListener('click', () => this.redoMove());
     }
     
     setupKeyboardShortcuts() {
@@ -143,6 +147,14 @@ export class Game {
             console.log('Enter key pressed - confirming temporary piece');
             // Confirm temporary piece placement
             this.confirmTemporaryPiece();
+        } else if (event.key === 'z' && (event.ctrlKey || event.metaKey)) {
+            console.log('Ctrl+Z pressed - undo last move');
+            // Undo last move
+            this.undoLastMove();
+        } else if ((event.key === 'Z' || event.key === 'y') && (event.ctrlKey || event.metaKey)) {
+            console.log('Ctrl+Shift+Z or Ctrl+Y pressed - redo move');
+            // Redo move
+            this.redoMove();
         }
     }
     
@@ -607,11 +619,13 @@ export class Game {
                 return;
             }
             
-            // Add the move to history
+            // Add the move to history and clear redo history
             this.moveHistory.push(moveData);
+            this.redoHistory = [];
             
-            // Enable the undo button
+            // Enable the undo button and disable the redo button
             this.undoButton.disabled = false;
+            this.redoButton.disabled = true;
             
             // Switch players
             this.switchPlayer();
@@ -780,9 +794,11 @@ export class Game {
                 
                 // Check for win by capture
                 if (this.currentPlayer.captures >= 5) {
-                    // Still record the move in history
+                    // Still record the move in history and clear redo history
                     this.moveHistory.push(moveData);
+                    this.redoHistory = [];
                     this.undoButton.disabled = false;
+                    this.redoButton.disabled = true;
                     
                     this.endGame(`${this.currentPlayer.color.charAt(0).toUpperCase() + this.currentPlayer.color.slice(1)} wins by capture!`);
                     return;
@@ -792,9 +808,11 @@ export class Game {
             // Check for win by five in a row
             const winningLine = this.board.checkWin(x, y, z, this.currentPlayer.color);
             if (winningLine.length >= 5) {
-                // Still record the move in history
+                // Still record the move in history and clear redo history
                 this.moveHistory.push(moveData);
+                this.redoHistory = [];
                 this.undoButton.disabled = false;
+                this.redoButton.disabled = true;
                 
                 this.winningLine = winningLine;
                 this.highlightWinningLine();
@@ -802,11 +820,13 @@ export class Game {
                 return;
             }
             
-            // Add the move to history
+            // Add the move to history and clear redo history
             this.moveHistory.push(moveData);
+            this.redoHistory = [];
             
-            // Enable the undo button
+            // Enable the undo button and disable the redo button
             this.undoButton.disabled = false;
+            this.redoButton.disabled = true;
             
             // Switch players
             this.switchPlayer();
@@ -818,6 +838,12 @@ export class Game {
         
         // Get the last move from history
         const lastMove = this.moveHistory.pop();
+        
+        // Move the undone move to redoHistory for potential redo
+        this.redoHistory.push(lastMove);
+        
+        // Enable the redo button since we now have something to redo
+        this.redoButton.disabled = false;
         
         // If this is the last move, disable the undo button
         if (this.moveHistory.length === 0) {
@@ -860,6 +886,89 @@ export class Game {
             this.isGameOver = false;
             this.gameMessage.classList.add('hidden');
             this.winningLine = null;
+        }
+    }
+    
+    redoMove() {
+        if (this.redoHistory.length === 0 || this.isGameOver) return;
+        
+        // Get the last undone move
+        const redoMove = this.redoHistory.pop();
+        
+        // If no more moves to redo, disable the redo button
+        if (this.redoHistory.length === 0) {
+            this.redoButton.disabled = true;
+        }
+        
+        // Enable the undo button
+        this.undoButton.disabled = false;
+        
+        // Add the move back to the moveHistory
+        this.moveHistory.push(redoMove);
+        
+        // Place the piece back on the board
+        const { x, y, z, playerColor } = redoMove;
+        
+        // Calculate the position in world space
+        const spacing = this.nodeSpacing || 1.0;
+        const offset = (this.boardSize - 1) / 2;
+        const position = new THREE.Vector3(
+            (x - offset) * spacing,
+            (y - offset) * spacing,
+            (z - offset) * spacing
+        );
+        
+        // Place the piece back on the board data structure
+        this.board.placePiece(x, y, z, playerColor);
+        
+        // Get the player who made the move
+        const player = playerColor === 'black' ? this.playerBlack : this.playerWhite;
+        
+        // Create a visual representation of the piece
+        const pieceMesh = player.createPiece();
+        pieceMesh.position.copy(position);
+        this.scene.add(pieceMesh);
+        
+        // Store reference to the mesh in the board data structure
+        const boardPiece = this.board.getPieceAt(x, y, z);
+        if (boardPiece) {
+            boardPiece.mesh = pieceMesh;
+        }
+        
+        // Remove the captured pieces from the board again
+        for (const capture of redoMove.captures) {
+            const capturedPiece = this.board.getPieceAt(capture.x, capture.y, capture.z);
+            if (capturedPiece && capturedPiece.mesh) {
+                // Remove the piece visually from the scene
+                this.scene.remove(capturedPiece.mesh);
+                // Remove the piece from the board data structure
+                this.board.board[capture.x][capture.y][capture.z] = null;
+            }
+        }
+        
+        // Restore capture counts from the redoMove
+        this.playerBlack.captures = playerColor === 'black' ? redoMove.playerCaptures : redoMove.opponentCaptures;
+        this.playerWhite.captures = playerColor === 'white' ? redoMove.playerCaptures : redoMove.opponentCaptures;
+        this.updateCaptureDisplay();
+        
+        // Switch to the next player
+        this.currentPlayer = playerColor === 'black' ? this.playerWhite : this.playerBlack;
+        this.playerIndicator.textContent = this.currentPlayer.color.charAt(0).toUpperCase() + this.currentPlayer.color.slice(1);
+        
+        // Check if this was a winning move
+        if (playerColor === 'black' && this.playerBlack.captures >= 5 || 
+            playerColor === 'white' && this.playerWhite.captures >= 5) {
+            // Win by capture
+            this.endGame(`${playerColor.charAt(0).toUpperCase() + playerColor.slice(1)} wins by capture!`);
+            return;
+        }
+        
+        // Check for win by five in a row (would need to run checkWin again)
+        const winningLine = this.board.checkWin(x, y, z, playerColor);
+        if (winningLine.length >= 5) {
+            this.winningLine = winningLine;
+            this.highlightWinningLine();
+            this.endGame(`${playerColor.charAt(0).toUpperCase() + playerColor.slice(1)} wins with 5 in a row!`);
         }
     }
     
@@ -960,9 +1069,13 @@ export class Game {
         this.isGameOver = false;
         this.winningLine = null;
         
-        // Clear move history and disable undo button
+        // Clear move history and redo history
         this.moveHistory = [];
+        this.redoHistory = [];
+        
+        // Disable undo and redo buttons
         this.undoButton.disabled = true;
+        this.redoButton.disabled = true;
         
         // Remove any temporary piece
         this.removeTemporaryPiece();
