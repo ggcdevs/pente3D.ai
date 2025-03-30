@@ -577,8 +577,8 @@ export class Game {
                     }
                 }
                 
-                // Increment capture count
-                this.currentPlayer.captures += captures.length;
+                // Increment capture count - each capture is 2 pieces, so divide by 2
+                this.currentPlayer.captures += captures.length / 2;
                 
                 // Update the capture counts
                 this.updateCaptureDisplay();
