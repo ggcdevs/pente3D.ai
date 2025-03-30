@@ -18,6 +18,10 @@ export class Game {
         // Visualization mode flags
         this.isGridVisible = true;
         this.isNodesVisible = true;
+        this.isPerfectDiagonalsVisible = false;
+        
+        // Perfect diagonals storage
+        this.perfectDiagonals = [];
         
         // Temporary piece tracking
         this.temporaryPiece = null;
@@ -130,6 +134,10 @@ export class Game {
             this.isGridVisible = !this.isGridVisible;
             this.isNodesVisible = !this.isNodesVisible;
             this.toggleBoardVisibility();
+        } else if (event.key.toLowerCase() === 'd') {
+            console.log('D key pressed - toggling perfect diagonals');
+            // Toggle perfect diagonal lines
+            this.togglePerfectDiagonals();
         } else if (event.key.toLowerCase() === 't') {
             console.log('T key pressed - toggling temporary piece');
             // Toggle temporary piece at currently hovered node
@@ -576,6 +584,185 @@ export class Game {
         // Reset basic hover state using the board's method
         this.board.resetHoverState();
     }
+
+    // Method to toggle perfect diagonal lines
+    togglePerfectDiagonals() {
+        console.log('Toggling perfect diagonals');
+        
+        this.isPerfectDiagonalsVisible = !this.isPerfectDiagonalsVisible;
+        
+        // If turning on, create the diagonals
+        if (this.isPerfectDiagonalsVisible) {
+            this.createPerfectDiagonals();
+        } 
+        // If turning off, remove them
+        else {
+            if (this.perfectDiagonals && this.perfectDiagonals.length > 0) {
+                for (const line of this.perfectDiagonals) {
+                    this.scene.remove(line);
+                }
+                this.perfectDiagonals = [];
+            }
+        }
+        
+        // Show or hide indicator
+        if (this.isPerfectDiagonalsVisible) {
+            // Only create a new indicator if it doesn't exist
+            if (!this.diagonalIndicator) {
+                this.diagonalIndicator = document.createElement('div');
+                this.diagonalIndicator.id = 'diagonal-indicator';
+                this.diagonalIndicator.textContent = 'Perfect Diagonals (D to toggle)';
+                this.diagonalIndicator.classList.add('mode-indicator');
+                document.querySelector('.game-container').appendChild(this.diagonalIndicator);
+            }
+            this.diagonalIndicator.classList.remove('hidden');
+        } else if (this.diagonalIndicator) {
+            this.diagonalIndicator.classList.add('hidden');
+        }
+    }
+    
+    // Create all valid perfect 3D diagonal lines through the cube
+    createPerfectDiagonals() {
+        console.log('Creating all valid perfect 3D diagonals');
+        
+        // Clear any existing diagonals
+        if (!this.perfectDiagonals) {
+            this.perfectDiagonals = [];
+        } else {
+            for (const line of this.perfectDiagonals) {
+                this.scene.remove(line);
+            }
+            this.perfectDiagonals = [];
+        }
+        
+        // Grid parameters
+        const size = this.boardSize; // 9x9x9
+        const offset = (size - 1) / 2;
+        const spacing = this.nodeSpacing || 1.0;
+        
+        // Grid coordinates range from 0 to 8 (for a 9x9x9 grid)
+        const minCoord = 0;
+        const maxCoord = size - 1;
+        const length = maxCoord; // Number of steps = 8 for a 9×9×9 grid
+        
+        // The 8 diagonal directions: all combinations of ±1 (no zeros)
+        const directions = [
+            [1, 1, 1], [1, 1, -1], [1, -1, 1], [1, -1, -1],
+            [-1, 1, 1], [-1, 1, -1], [-1, -1, 1], [-1, -1, -1]
+        ];
+        
+        // Set to track drawn lines to avoid duplicates
+        const drawnLines = new Set();
+        
+        // For each direction, find all valid starting points
+        for (const [dx, dy, dz] of directions) {
+            // Calculate valid starting ranges for each coordinate
+            const validX = dx > 0 ? [0, maxCoord - length] : [length, maxCoord];
+            const validY = dy > 0 ? [0, maxCoord - length] : [length, maxCoord];
+            const validZ = dz > 0 ? [0, maxCoord - length] : [length, maxCoord];
+            
+            // Get all possible starting points within the valid ranges
+            for (let startX = validX[0]; startX <= validX[1]; startX++) {
+                for (let startY = validY[0]; startY <= validY[1]; startY++) {
+                    for (let startZ = validZ[0]; startZ <= validZ[1]; startZ++) {
+                        // Calculate the end point by taking exactly 8 steps in the direction
+                        const endX = startX + dx * length;
+                        const endY = startY + dy * length;
+                        const endZ = startZ + dz * length;
+                        
+                        // Ensure the end point is within grid bounds (redundant check, but good to have)
+                        if (
+                            endX >= minCoord && endX <= maxCoord &&
+                            endY >= minCoord && endY <= maxCoord &&
+                            endZ >= minCoord && endZ <= maxCoord
+                        ) {
+                            // Create a unique identifier for the line (unordered pair of endpoints)
+                            // Sort coordinates lexicographically to avoid duplicates
+                            const startPoint = [startX, startY, startZ].join(',');
+                            const endPoint = [endX, endY, endZ].join(',');
+                            const lineKey = startPoint < endPoint 
+                                ? `${startPoint}-${endPoint}` 
+                                : `${endPoint}-${startPoint}`;
+                            
+                            // Only draw the line if we haven't drawn it yet
+                            if (!drawnLines.has(lineKey)) {
+                                drawnLines.add(lineKey);
+                                
+                                // Convert grid coordinates to world coordinates
+                                const worldStart = new THREE.Vector3(
+                                    (startX - offset) * spacing,
+                                    (startY - offset) * spacing,
+                                    (startZ - offset) * spacing
+                                );
+                                
+                                const worldEnd = new THREE.Vector3(
+                                    (endX - offset) * spacing,
+                                    (endY - offset) * spacing,
+                                    (endZ - offset) * spacing
+                                );
+                                
+                                // Create the diagonal line
+                                this.createDiagonalCylinder(worldStart, worldEnd);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        console.log(`Created ${this.perfectDiagonals.length} perfect diagonal lines`);
+    }
+    
+    // Helper method to create a diagonal cylinder
+    createDiagonalCylinder(start, end) {
+        // Calculate the direction and length
+        const direction = new THREE.Vector3().subVectors(end, start);
+        const length = direction.length();
+        
+        // Get the node spacing or default to 1.0
+        const spacing = this.nodeSpacing || 1.0;
+        
+        // Create a thin cylinder
+        const radius = 0.015 * spacing;
+        const geometry = new THREE.CylinderGeometry(radius, radius, length, 8, 1);
+        
+        // Position and rotate the cylinder
+        geometry.translate(0, length / 2, 0); // Move up so bottom face is at origin
+        
+        // Use the gridline color and opacity
+        const color = this.gridlineColor || '#444444';
+        const opacity = 1 - ((this.gridlineTranslucency || 50) / 100);
+        
+        const material = new THREE.MeshBasicMaterial({
+            color: color,
+            transparent: true,
+            opacity: opacity
+        });
+        
+        const cylinder = new THREE.Mesh(geometry, material);
+        
+        // Position at the start point
+        cylinder.position.copy(start);
+        
+        // Orient the cylinder to point from start to end
+        if (direction.y > 0.99) {
+            // Special case: vertical line (already aligned with Y-axis)
+            // No rotation needed
+        } else if (direction.y < -0.99) {
+            // Special case: vertical line pointing down
+            cylinder.rotateX(Math.PI); // Rotate 180 degrees around X axis
+        } else {
+            // General case: use lookAt
+            cylinder.lookAt(end);
+            cylinder.rotateX(Math.PI / 2); // Adjust to match THREE.js cylinder orientation
+        }
+        
+        // Add to scene and to the list of perfect diagonals
+        this.scene.add(cylinder);
+        this.perfectDiagonals.push(cylinder);
+        
+        return cylinder;
+    }
     
     updateHoverPoint() {
         // Update the raycaster
@@ -981,6 +1168,11 @@ export class Game {
         
         // Remove any temporary piece
         this.removeTemporaryPiece();
+        
+        // Recreate diagonal lines if they were visible
+        if (this.isPerfectDiagonalsVisible) {
+            this.createPerfectDiagonals();
+        }
     }
     
     animate() {
