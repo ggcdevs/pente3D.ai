@@ -817,7 +817,16 @@ export class Game {
         
         // Switch back to the player who made the move
         this.currentPlayer = lastMove.playerColor === 'black' ? this.playerBlack : this.playerWhite;
-        this.playerIndicator.textContent = this.currentPlayer.color.charAt(0).toUpperCase() + this.currentPlayer.color.slice(1);
+        
+        if (this.playerIndicator) {
+            // Change player indicator background based on current player
+            if (this.currentPlayer === this.playerBlack) {
+                this.playerIndicator.style.backgroundColor = 'rgba(30, 30, 30, 0.5)';
+            } else {
+                this.playerIndicator.style.backgroundColor = 'rgba(255, 255, 255, 0.15)';
+            }
+            this.playerIndicator.textContent = this.currentPlayer.color.charAt(0).toUpperCase() + this.currentPlayer.color.slice(1);
+        }
         
         // Remove the piece from the board
         const piece = this.board.getPieceAt(lastMove.x, lastMove.y, lastMove.z);
@@ -918,7 +927,16 @@ export class Game {
         
         // Switch to the next player
         this.currentPlayer = playerColor === 'black' ? this.playerWhite : this.playerBlack;
-        this.playerIndicator.textContent = this.currentPlayer.color.charAt(0).toUpperCase() + this.currentPlayer.color.slice(1);
+        
+        if (this.playerIndicator) {
+            // Change player indicator background based on current player
+            if (this.currentPlayer === this.playerBlack) {
+                this.playerIndicator.style.backgroundColor = 'rgba(30, 30, 30, 0.5)';
+            } else {
+                this.playerIndicator.style.backgroundColor = 'rgba(255, 255, 255, 0.15)';
+            }
+            this.playerIndicator.textContent = this.currentPlayer.color.charAt(0).toUpperCase() + this.currentPlayer.color.slice(1);
+        }
         
         // Check if this was a winning move
         if (playerColor === 'black' && this.playerBlack.captures >= 5 || 
@@ -939,7 +957,18 @@ export class Game {
     
     switchPlayer() {
         this.currentPlayer = this.currentPlayer === this.playerBlack ? this.playerWhite : this.playerBlack;
-        this.playerIndicator.textContent = this.currentPlayer.color.charAt(0).toUpperCase() + this.currentPlayer.color.slice(1);
+        
+        if (this.playerIndicator) {
+            // Change player indicator background based on current player
+            if (this.currentPlayer === this.playerBlack) {
+                this.playerIndicator.style.backgroundColor = 'rgba(30, 30, 30, 0.5)';
+            } else {
+                this.playerIndicator.style.backgroundColor = 'rgba(255, 255, 255, 0.15)';
+            }
+            
+            // Update text with capitalized player color
+            this.playerIndicator.textContent = this.currentPlayer.color.charAt(0).toUpperCase() + this.currentPlayer.color.slice(1);
+        }
     }
     
     updateCaptureDisplay() {
@@ -1029,7 +1058,12 @@ export class Game {
         this.playerBlack.captures = 0;
         this.playerWhite.captures = 0;
         this.currentPlayer = this.playerBlack;
-        this.playerIndicator.textContent = this.currentPlayer.color.charAt(0).toUpperCase() + this.currentPlayer.color.slice(1);
+        
+        // Set the player indicator back to black and update text
+        if (this.playerIndicator) {
+            this.playerIndicator.style.backgroundColor = 'rgba(30, 30, 30, 0.5)';
+            this.playerIndicator.textContent = this.currentPlayer.color.charAt(0).toUpperCase() + this.currentPlayer.color.slice(1);
+        }
         
         // Reset capture display
         this.updateCaptureDisplay();

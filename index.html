@@ -18,13 +18,19 @@
 <body>
     <div class="game-container">
         <div id="game-info">
-            <div id="current-player">Current Player: <span id="player-indicator">Black</span></div>
-            <div id="black-captures">Black Captures: <span id="black-capture-count">0</span></div>
-            <div id="white-captures">White Captures: <span id="white-capture-count">0</span></div>
+            <div id="current-player">Current Turn</div>
+            <div id="player-indicator" class="info-value">Black</div>
+            
+            <div id="black-label">Black Captures</div>
+            <div id="black-capture-count" class="info-value">0</div>
+            
+            <div id="white-label">White Captures</div>
+            <div id="white-capture-count" class="info-value">0</div>
+            
             <div class="game-buttons">
-                <button id="undo-move">Undo Move</button>
-                <button id="redo-move">Redo Move</button>
-                <button id="reset-game">Reset Game</button>
+                <button id="undo-move">Undo</button>
+                <button id="redo-move">Redo</button>
+                <button id="reset-game">Reset</button>
             </div>
         </div>
         <div id="settings-button">⚙️ Settings</div>
