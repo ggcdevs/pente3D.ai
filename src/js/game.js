@@ -15,6 +15,10 @@ export class Game {
         // Reference to the game for settings
         this.board.game = this;
         
+        // Visualization mode flags
+        this.isGridVisible = true;
+        this.isNodesVisible = true;
+        
         // Settings for rendering
         this.pieceSettings = {
             blackColor: '#111111',
@@ -46,6 +50,7 @@ export class Game {
         this.whiteCaptureCount = document.getElementById('white-capture-count');
         this.gameMessage = document.getElementById('game-message');
         this.undoButton = document.getElementById('undo-move');
+        this.viewModeIndicator = document.getElementById('view-mode-indicator');
         
         // Game history for undo functionality
         this.moveHistory = [];
@@ -200,13 +205,18 @@ export class Game {
             this.renderer.domElement.style.cursor = 'default';
         });
         
-        // Handle key presses for shift key
+        // Handle key presses
         document.addEventListener('keydown', (event) => {
             if (event.key === 'Shift') {
                 // Show grabbing cursor when shift is held (ready to pan)
                 if (this.isMouseOverCanvas) {
                     this.renderer.domElement.style.cursor = 'grab';
                 }
+            } else if (event.key.toLowerCase() === 'v') {
+                // 'v' key hides the grid and nodes, showing only pieces
+                this.isGridVisible = false;
+                this.isNodesVisible = false;
+                this.toggleBoardVisibility();
             }
         });
         
@@ -216,6 +226,11 @@ export class Game {
                 if (this.isMouseOverCanvas) {
                     this.renderer.domElement.style.cursor = 'default';
                 }
+            } else if (event.key.toLowerCase() === 'v') {
+                // Show grid and nodes again when 'v' is released
+                this.isGridVisible = true;
+                this.isNodesVisible = true;
+                this.toggleBoardVisibility();
             }
         });
         
@@ -229,14 +244,39 @@ export class Game {
         });
     }
     
+    // Method to toggle visibility of grid and nodes
+    toggleBoardVisibility() {
+        if (this.board && this.board.gridLines) {
+            // Toggle grid lines visibility
+            for (const line of this.board.gridLines) {
+                line.visible = this.isGridVisible;
+            }
+        }
+        
+        if (this.board && this.board.intersectionPoints) {
+            // Toggle intersection points visibility
+            for (const point of this.board.intersectionPoints) {
+                point.visible = this.isNodesVisible;
+            }
+        }
+        
+        // Toggle the indicator
+        if (!this.isGridVisible && !this.isNodesVisible) {
+            this.viewModeIndicator.classList.remove('hidden');
+        } else {
+            this.viewModeIndicator.classList.add('hidden');
+        }
+    }
+    
     handleMouseMove(event) {
         if (this.isGameOver) return;
         
-        // Skip hover effects during navigation (Fusion 360 style)
-        // Skip for middle-click (orbit), shift+left-click (pan), or right-click (zoom)
+        // Skip hover effects during navigation or when grid is hidden
+        // Skip for middle-click (orbit), shift+left-click (pan), right-click (zoom), or v key
         if (event.buttons === 4 ||                         // Middle button
             (event.buttons === 1 && event.shiftKey) ||     // Left button + Shift
-            event.buttons === 2) {                         // Right button
+            event.buttons === 2 ||                         // Right button
+            !this.isGridVisible) {                         // When 'v' key is pressed
             return;
         }
         
@@ -253,7 +293,12 @@ export class Game {
         if (this.isGameOver) return;
         
         // Only handle left clicks (button 0) without modifier keys
-        if (event.button !== 0 || event.shiftKey || event.ctrlKey || event.altKey) return;
+        // Also don't place pieces when viewing in pieces-only mode ('v' key held)
+        if (event.button !== 0 || 
+            event.shiftKey || 
+            event.ctrlKey || 
+            event.altKey || 
+            !this.isGridVisible) return;
         
         // Calculate mouse position
         const rect = this.renderer.domElement.getBoundingClientRect();
