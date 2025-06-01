@@ -1,8 +1,9 @@
 import './style.css';
 import { Game } from './core/Game';
 import { Renderer } from './rendering/Renderer';
-import { InputHandler } from './ui/InputHandler';
+import { InputHandler, MenuModal, SettingsModal, DialogManager } from './ui';
 import { StorageManager } from './storage';
+import { downloadFile, uploadJSON } from './utils/fileIO';
 
 // Get canvas element
 const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
@@ -13,9 +14,12 @@ if (!canvas) {
 // Load settings first
 const settings = StorageManager.loadSettings();
 
+// Create dialog manager
+const dialogManager = new DialogManager();
+
 // Create game instance - try to restore from storage
 const loadedGame = StorageManager.loadGame();
-const game = loadedGame || new Game({ boardSize: 7 });
+let game = loadedGame || new Game({ boardSize: 7 });
 
 // Create renderer
 const renderer = new Renderer({
@@ -116,8 +120,12 @@ redoBtn.addEventListener('click', () => {
   }
 });
 
-resetBtn.addEventListener('click', () => {
-  if (confirm('Are you sure you want to reset the game?')) {
+resetBtn.addEventListener('click', async () => {
+  const confirmed = await dialogManager.confirmAction(
+    'reset the game',
+    'This will clear all moves and start a new game.'
+  );
+  if (confirmed) {
     game.reset();
     renderer.updatePieces();
     updateUI();
@@ -172,8 +180,109 @@ settings.addChangeListener((newSettings) => {
   StorageManager.save(game, newSettings);
 });
 
+// Add menu button to controls
+const menuBtn = document.createElement('button');
+menuBtn.id = 'menu-btn';
+menuBtn.textContent = '☰ Menu';
+menuBtn.style.marginRight = 'auto';
+document.getElementById('game-controls')?.prepend(menuBtn);
+
+// Create menu modal
+const menuModal = new MenuModal({
+  game,
+  onNewGame: async () => {
+    const confirmed = await dialogManager.confirmAction(
+      'start a new game',
+      'This will clear the current game progress.'
+    );
+    if (confirmed) {
+      game.reset();
+      renderer.updatePieces();
+      updateUI();
+      dialogManager.showInfo('New game started!');
+    }
+  },
+  onLoadGame: (gameState) => {
+    try {
+      const newGame = Game.importGame(JSON.stringify(gameState));
+      if (newGame) {
+        game = newGame;
+      }
+      renderer.setBoard(game.getBoard());
+      renderer.updatePieces();
+      updateUI();
+      dialogManager.showInfo('Game loaded successfully!');
+    } catch (error) {
+      dialogManager.showError('Failed to load game: ' + (error as Error).message);
+    }
+  },
+  onSaveGame: () => {
+    try {
+      StorageManager.save(game, settings);
+    } catch (error) {
+      dialogManager.showError('Failed to save game: ' + (error as Error).message);
+    }
+  },
+  onExportGame: () => {
+    try {
+      const exportData = game.exportGame();
+      downloadFile(exportData, `pente3d_${new Date().toISOString().slice(0, 10)}.json`, 'application/json');
+      dialogManager.showInfo('Game exported successfully!');
+    } catch (error) {
+      dialogManager.showError('Failed to export game: ' + (error as Error).message);
+    }
+  },
+  onImportGame: async (file) => {
+    try {
+      const gameData = await uploadJSON(file);
+      const newGame = Game.importGame(JSON.stringify(gameData));
+      if (newGame) {
+        game = newGame;
+      }
+      renderer.setBoard(game.getBoard());
+      renderer.updatePieces();
+      updateUI();
+      dialogManager.showInfo('Game imported successfully!');
+    } catch (error) {
+      dialogManager.showError('Failed to import game: ' + (error as Error).message);
+    }
+  },
+  onSettings: () => {
+    const settingsModal = new SettingsModal({
+      settings,
+      renderer,
+      onSettingsChange: (newSettings) => {
+        // Apply settings changes
+        StorageManager.save(game, newSettings);
+        dialogManager.showInfo('Settings saved!');
+      }
+    });
+    settingsModal.open();
+  },
+  onAbout: () => {
+    dialogManager.showInfo(
+      'Pente3D v1.0\n\nA 3D implementation of the classic Pente game.\n\nBuilt with Three.js and TypeScript.',
+      'About Pente3D'
+    );
+  }
+});
+
+// Menu button click handler
+menuBtn.addEventListener('click', () => {
+  menuModal.open();
+});
+
+// Add keyboard shortcut for menu (Escape key)
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !document.querySelector('.modal')) {
+    menuModal.open();
+  }
+});
+
 // Cleanup on page unload
 window.addEventListener('beforeunload', () => {
   inputHandler.dispose();
   renderer.dispose();
+  menuModal.destroy();
+  dialogManager.closeAll();
 });

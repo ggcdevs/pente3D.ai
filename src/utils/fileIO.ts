@@ -90,3 +90,17 @@ export async function uploadMultipleFiles(accept: string = '.json'): Promise<{ c
     input.click();
   });
 }
+
+export function downloadJSON(data: any, filename: string): void {
+  const jsonString = JSON.stringify(data, null, 2);
+  downloadFile(jsonString, filename, 'application/json');
+}
+
+export async function uploadJSON(file: File): Promise<any> {
+  const content = await file.text();
+  try {
+    return JSON.parse(content);
+  } catch (error) {
+    throw new Error(`Invalid JSON file: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}

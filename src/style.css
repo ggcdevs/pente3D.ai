@@ -169,3 +169,142 @@ button:disabled {
   align-items: center;
   gap: 5px;
 }
+
+/* Modal System Responsive Styles */
+@media (max-width: 768px) {
+  .modal-container {
+    width: calc(100vw - 40px) !important;
+    max-height: calc(100vh - 40px) !important;
+    margin: 20px !important;
+  }
+
+  .modal-header {
+    padding: 15px !important;
+  }
+
+  .modal-content {
+    padding: 15px !important;
+    max-height: calc(100vh - 120px) !important;
+  }
+
+  .modal-footer {
+    padding: 15px !important;
+  }
+
+  .modal-title {
+    font-size: 1.25rem !important;
+  }
+
+  .menu-button {
+    padding: 12px 16px !important;
+    font-size: 1rem !important;
+  }
+
+  .settings-container {
+    gap: 15px !important;
+  }
+
+  .setting-control {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 8px;
+  }
+
+  .setting-control label {
+    width: 100%;
+  }
+
+  .setting-control input[type="range"] {
+    width: 100% !important;
+  }
+
+  .modal-footer > div {
+    flex-direction: column !important;
+    width: 100%;
+  }
+
+  .modal-footer button {
+    width: 100% !important;
+  }
+}
+
+@media (max-width: 480px) {
+  .modal-container {
+    width: 100vw !important;
+    height: 100vh !important;
+    max-width: 100vw !important;
+    max-height: 100vh !important;
+    margin: 0 !important;
+    border-radius: 0 !important;
+    transform: translate(-50%, -50%) scale(1) !important;
+  }
+
+  .modal-content {
+    max-height: calc(100vh - 100px) !important;
+  }
+
+  .dialog {
+    min-width: calc(100vw - 40px) !important;
+  }
+
+  #game-controls {
+    bottom: 10px;
+    left: 10px;
+    right: 10px;
+    transform: none;
+    padding: 10px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  #game-status {
+    top: 10px;
+    right: 10px;
+    padding: 10px;
+    font-size: 14px;
+  }
+
+  #history-slider {
+    width: 150px;
+  }
+
+  .control-group {
+    flex-wrap: wrap;
+  }
+}
+
+/* Focus visible styles for accessibility */
+button:focus-visible,
+input:focus-visible,
+.modal-close:focus-visible,
+.menu-button:focus-visible {
+  outline: 2px solid #4CAF50;
+  outline-offset: 2px;
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+  .modal-container {
+    border: 2px solid white;
+  }
+
+  button {
+    border: 2px solid white;
+  }
+
+  .modal-header,
+  .modal-footer {
+    border-color: white;
+  }
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+  .modal-backdrop,
+  .modal-container,
+  button,
+  .toggle-slider,
+  .toggle-slider span {
+    transition: none !important;
+  }
+}

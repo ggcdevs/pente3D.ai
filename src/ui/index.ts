@@ -1,2 +1,10 @@
 export { InputHandler } from './InputHandler';
 export type { InputHandlerOptions, InteractionState } from './InputHandler';
+export { Modal } from './Modal';
+export type { ModalOptions } from './Modal';
+export { MenuModal } from './MenuModal';
+export type { MenuModalOptions } from './MenuModal';
+export { SettingsModal } from './SettingsModal';
+export type { SettingsModalOptions } from './SettingsModal';
+export { DialogManager } from './DialogManager';
+export type { DialogOptions, DialogType } from './DialogManager';
