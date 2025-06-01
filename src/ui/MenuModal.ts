@@ -11,6 +11,7 @@ export interface MenuModalOptions extends ModalOptions {
   onImportGame?: (file: File) => void;
   onSettings?: () => void;
   onAbout?: () => void;
+  onNetworkGame?: () => void;
 }
 
 export class MenuModal extends Modal {
@@ -89,6 +90,21 @@ export class MenuModal extends Modal {
       this.showImportDialog();
     });
     menuContainer.appendChild(importBtn);
+
+    // Divider
+    const divider = document.createElement('hr');
+    divider.style.cssText = 'width: 100%; border: none; border-top: 1px solid #333; margin: 10px 0;';
+    menuContainer.appendChild(divider);
+
+    // Network Game button
+    const networkBtn = this.createMenuButton('Network Game', '🌐', () => {
+      if (this.menuOptions.onNetworkGame) {
+        this.menuOptions.onNetworkGame();
+        this.close();
+      }
+    });
+    networkBtn.style.background = 'linear-gradient(135deg, #2196F3, #1976D2)';
+    menuContainer.appendChild(networkBtn);
 
     // Settings button
     const settingsBtn = this.createMenuButton('Settings', '⚙️', () => {

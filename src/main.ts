@@ -1,7 +1,7 @@
 import './style.css';
 import { Game } from './core/Game';
 import { Renderer } from './rendering/Renderer';
-import { InputHandler, MenuModal, SettingsModal, DialogManager } from './ui';
+import { InputHandler, MenuModal, SettingsModal, DialogManager, NetworkModal, NetworkStatus, ConflictNotification } from './ui';
 import { StorageManager } from './storage';
 import { downloadFile, uploadJSON } from './utils/fileIO';
 
@@ -16,6 +16,15 @@ const settings = StorageManager.loadSettings();
 
 // Create dialog manager
 const dialogManager = new DialogManager();
+
+// Create network status UI (initially hidden)
+const networkStatus = new NetworkStatus();
+
+// Create conflict notification UI
+const conflictNotification = new ConflictNotification();
+
+// NetworkManager instance (created when network game starts)
+let networkManager: any = null;
 
 // Create game instance - try to restore from storage
 const loadedGame = StorageManager.loadGame();
@@ -206,6 +215,12 @@ const menuModal = new MenuModal({
       renderer.updatePieces();
       updateUI();
       dialogManager.showInfo('New game started!');
+      // Disconnect network if active
+      if (networkManager) {
+        networkManager.disconnect();
+        networkManager = null;
+        networkStatus.hide();
+      }
     }
   },
   onLoadGame: (gameState) => {
@@ -267,9 +282,23 @@ const menuModal = new MenuModal({
   },
   onAbout: () => {
     dialogManager.showInfo(
-      'Pente3D v1.0\n\nA 3D implementation of the classic Pente game.\n\nBuilt with Three.js and TypeScript.',
-      'About Pente3D'
+      'Pente3D v1.0\n\nA 3D implementation of the classic Pente game.\n\nBuilt with Three.js and TypeScript.'
     );
+  },
+  onNetworkGame: () => {
+    const networkModal = new NetworkModal({
+      game,
+      onNetworkStart: (nm) => {
+        networkManager = nm;
+        networkStatus.setNetworkManager(nm);
+        setupNetworkHandlers();
+        dialogManager.showInfo('Network game started!');
+      },
+      onCancel: () => {
+        // User cancelled network game
+      }
+    });
+    networkModal.open();
   }
 });
 
@@ -285,10 +314,119 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
+// Setup network handlers
+function setupNetworkHandlers() {
+  if (!networkManager) return;
+
+  // Handle network moves
+  networkManager.on('move', (data: any) => {
+    const move = data.move;
+    const position = move.getPosition();
+    if (game.placePiece(position)) {
+      renderer.updatePieces();
+      updateUI();
+    }
+  });
+
+  // Handle undo
+  networkManager.on('undo', () => {
+    if (game.undo()) {
+      renderer.updatePieces();
+      updateUI();
+    }
+  });
+
+  // Handle redo
+  networkManager.on('redo', () => {
+    if (game.redo()) {
+      renderer.updatePieces();
+      updateUI();
+    }
+  });
+
+  // Handle reset
+  networkManager.on('reset', () => {
+    game.reset();
+    renderer.updatePieces();
+    updateUI();
+  });
+
+  // Handle sync
+  networkManager.on('sync', (data: any) => {
+    try {
+      const newGame = Game.importGame(data.gameState);
+      if (newGame) {
+        game = newGame;
+        renderer.setBoard(game.getBoard());
+        renderer.updatePieces();
+        updateUI();
+      }
+    } catch (error) {
+      console.error('Failed to sync game state:', error);
+    }
+  });
+
+  // Handle conflicts
+  networkManager.on('conflictDetected', (data: any) => {
+    // Show conflict notification using dialog manager for now
+    dialogManager.showWarning(data.message);
+  });
+
+  // Handle connection events
+  networkManager.on('error', (error: Error) => {
+    dialogManager.showError('Network error: ' + error.message);
+  });
+
+  networkManager.on('disconnected', () => {
+    dialogManager.showWarning('Network connection lost');
+  });
+
+  // Hook into game events to send to network
+  game.on('move', (data: any) => {
+    if (networkManager && networkManager.getConnectionInfo().status === 'connected') {
+      networkManager.sendMove(data.move);
+    }
+  });
+}
+
+// Check URL for join parameter
+const urlParams = new URLSearchParams(window.location.search);
+const joinCode = urlParams.get('join');
+if (joinCode) {
+  // Auto-open network modal to join game
+  setTimeout(() => {
+    const networkModal = new NetworkModal({
+      game,
+      onNetworkStart: (nm) => {
+        networkManager = nm;
+        networkStatus.setNetworkManager(nm);
+        setupNetworkHandlers();
+        dialogManager.showInfo('Joined network game!');
+      }
+    });
+    networkModal.open();
+    // Trigger join with the code
+    setTimeout(() => {
+      const input = document.querySelector('.game-code-input') as HTMLInputElement;
+      const joinBtn = document.querySelector('.join-game-btn') as HTMLButtonElement;
+      if (input && joinBtn) {
+        input.value = joinCode;
+        input.dispatchEvent(new Event('input'));
+        joinBtn.click();
+      }
+    }, 100);
+  }, 500);
+}
+
 // Cleanup on page unload
 window.addEventListener('beforeunload', () => {
   inputHandler.dispose();
   renderer.dispose();
   menuModal.destroy();
   dialogManager.closeAll();
+  networkStatus.dispose();
+  conflictNotification.dispose();
+  if (networkManager) {
+    networkManager.disconnect();
+  }
 });

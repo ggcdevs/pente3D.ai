@@ -10,3 +10,5 @@ export { DialogManager } from './DialogManager';
 export type { DialogOptions, DialogType } from './DialogManager';
 export { NetworkStatus } from './NetworkStatus';
 export { ConflictNotification } from './ConflictNotification';
+export { NetworkModal } from './NetworkModal';
+export type { NetworkModalOptions } from './NetworkModal';
