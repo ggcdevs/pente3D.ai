@@ -13,6 +13,10 @@ export enum MessageType {
   PONG = 'pong',
   PLAYER_DISCONNECTED = 'player_disconnected',
   PLAYER_RECONNECTED = 'player_reconnected',
+  CONFLICT_DETECTED = 'conflict_detected',
+  CONFLICT_RESOLUTION = 'conflict_resolution',
+  HASH_CHAIN_REQUEST = 'hash_chain_request',
+  HASH_CHAIN_RESPONSE = 'hash_chain_response',
 }
 
 export enum ConnectionStatus {
@@ -120,6 +124,45 @@ export interface PlayerReconnectedMessage extends NetworkMessage {
   };
 }
 
+export interface ConflictDetectedMessage extends NetworkMessage {
+  type: MessageType.CONFLICT_DETECTED;
+  payload: {
+    localStateHash: string;
+    remoteStateHash: string;
+    moveIndex: number;
+    conflictType: 'state_divergence' | 'missing_moves' | 'invalid_sequence';
+  };
+}
+
+export interface ConflictResolutionMessage extends NetworkMessage {
+  type: MessageType.CONFLICT_RESOLUTION;
+  payload: {
+    resolution: 'rollback' | 'sync' | 'retry';
+    targetStateHash: string;
+    targetMoveIndex: number;
+    gameState?: string; // Serialized game state for sync
+  };
+}
+
+export interface HashChainRequestMessage extends NetworkMessage {
+  type: MessageType.HASH_CHAIN_REQUEST;
+  payload: {
+    fromIndex: number;
+    toIndex: number;
+  };
+}
+
+export interface HashChainResponseMessage extends NetworkMessage {
+  type: MessageType.HASH_CHAIN_RESPONSE;
+  payload: {
+    hashChain: Array<{
+      index: number;
+      hash: string;
+      moveCount: number;
+    }>;
+  };
+}
+
 export type NetworkMessageTypes = 
   | MoveMessage
   | MoveAckMessage
@@ -132,7 +175,11 @@ export type NetworkMessageTypes =
   | PingMessage
   | PongMessage
   | PlayerDisconnectedMessage
-  | PlayerReconnectedMessage;
+  | PlayerReconnectedMessage
+  | ConflictDetectedMessage
+  | ConflictResolutionMessage
+  | HashChainRequestMessage
+  | HashChainResponseMessage;
 
 export interface NetworkConfig {
   host?: string;
@@ -171,4 +218,23 @@ export interface NetworkGameState {
   turnValidationEnabled: boolean;
   pendingMoves: Map<number, PendingMove>;
   lastConfirmedStateHash: string;
+  hashChain: Array<{ index: number; hash: string; moveCount: number }>;
+  conflictResolutionInProgress: boolean;
+  lastConflictTimestamp?: number;
+}
+
+export interface ConflictInfo {
+  type: 'state_divergence' | 'missing_moves' | 'invalid_sequence';
+  localHash: string;
+  remoteHash: string;
+  divergencePoint: number;
+  detectedAt: number;
+  resolved: boolean;
+}
+
+export interface ConflictLog {
+  timestamp: number;
+  message: string;
+  type: 'info' | 'warning' | 'error';
+  data?: any;
 }

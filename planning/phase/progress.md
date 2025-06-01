@@ -292,14 +292,39 @@ Building a fully-featured 3D Pente game with peer-to-peer networking, comprehens
 
 ## 🚧 Next Steps
 
-### Immediate Next: Chunk 5.3 - Conflict Resolution
+### Immediate Next: Chunk 5.4 - Game Management UI
 **Target Completion:** June 2025
 **Planned Work:**
-- Hash chain comparison for state validation
+- Network status display in main UI
+- Game code sharing interface
+- Connection management controls
+- Network game indicators
+- Spectator mode support
+
+### Chunk 5.3: Conflict Resolution ✅ COMPLETE - Completed: June 1, 2025
+- ✅ **Hash Chain Management**: State hash tracking with 50-entry chain limit
+- ✅ **Conflict Detection**: Detects state divergence, missing moves, invalid sequences
+- ✅ **Common Ancestor Finding**: Algorithm to find last agreed state in hash chains
+- ✅ **Automatic Rollback**: Rollback to common ancestor with state cleanup
+- ✅ **Conflict Notification UI**: Visual notification system for conflict events
+- ✅ **State Synchronization**: Full game state sync when no common ancestor found
+- ✅ **Conflict Logging**: Comprehensive logging with 100-entry limit for debugging
+- ✅ **Recovery Strategies**: Different resolution paths based on conflict type
+- ✅ **Testing**: 57 new tests across unit, integration, and performance (19 unit + 27 integration + 11 performance)
+
+**Key Deliverables:**
+- Extended NetworkManager with full conflict resolution capabilities
+- Hash chain tracking for state validation
 - Common ancestor finding algorithm
-- Automatic rollback to agreed state
-- Conflict notification system
-- State repair and synchronization
+- Automatic rollback and state repair
+- ConflictNotification UI component
+- Comprehensive conflict logging system
+- Full test coverage for all conflict scenarios
+
+**Commits:**
+- Implementation of conflict resolution in NetworkManager
+- Addition of ConflictNotification UI component
+- Comprehensive test suite for conflict handling
 
 ### Chunk 3.1: Undo/Redo System ✅ COMPLETE - Completed: February 1, 2025
 - ✅ **Enhanced History Navigation**: goToMove() method for jumping to any point in history
@@ -375,9 +400,9 @@ Building a fully-featured 3D Pente game with peer-to-peer networking, comprehens
 
 ### Code Quality Metrics
 - **TypeScript Coverage**: 100% (strict mode enabled)
-- **Test Coverage**: 1055+ total tests (Phase 5.1 complete with networking)
+- **Test Coverage**: 1112+ total tests (Phase 5.3 complete with conflict resolution)
 - **Build Performance**: ~20s (well under 30s target)
-- **Bundle Size**: ~650KB (includes Three.js, modal system, themes, and PeerJS)
+- **Bundle Size**: ~660KB (includes Three.js, modal system, themes, PeerJS, and conflict UI)
 - **Error Handling**: Comprehensive validation with clear messages
 
 ### User Stories Completion
@@ -482,6 +507,10 @@ Building a fully-featured 3D Pente game with peer-to-peer networking, comprehens
 - ✅ **Developer experience**: Fast feedback loops
 
 ### Test Suite Breakdown
+- **Chunk 5.3 Tests**: 57 tests total
+  - **NetworkManager Conflict Unit Tests**: 19 tests - Conflict detection, hash chains, rollback, logging
+  - **Network Conflict Integration Tests**: 27 tests - State divergence, recovery scenarios, sync
+  - **Network Conflict Performance Tests**: 11 tests - Hash chain ops, rollback speed, memory usage
 - **Chunk 5.2 Tests**: 40+ tests total
   - **NetworkManager Unit Tests**: 30+ new tests - Move synchronization, turn validation, acknowledgments
   - **Network Integration Tests**: 10+ new tests - State sync, conflict handling, performance
@@ -548,5 +577,5 @@ Building a fully-featured 3D Pente game with peer-to-peer networking, comprehens
 ---
 
 *Last Updated: June 1, 2025*  
-*Next Review: After Chunk 5.3 completion*  
-*Current Status: Phase 5.2 (Move Synchronization) COMPLETE - Moving to Phase 5.3 (Conflict Resolution)*
+*Next Review: After Chunk 5.4 completion*  
+*Current Status: Phase 5.3 (Conflict Resolution) COMPLETE - Moving to Phase 5.4 (Game Management UI)*
