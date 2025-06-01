@@ -1,6 +1,47 @@
 *.png
 
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+dist/
+build/
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
 # Build automation scripts and logs
 overnight_build.sh
 overnight_build.log
 .current_chunk_state
+
+# Environment files
+.env
+.env.local
+.env.production.local
+.env.development.local
+
+# Debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Test coverage
+coverage/
+*.lcov
+
+# Vite
+.vite/
