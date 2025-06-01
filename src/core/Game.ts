@@ -186,6 +186,21 @@ export class Game {
   addEventListener(handler: GameEventHandler): void {
     this.eventHandlers.add(handler);
   }
+  
+  // Alias for addEventListener to match common event pattern
+  on(event: string, handler: (data: any) => void): void {
+    // Create a wrapper that filters by event type
+    const wrapper: GameEventHandler = (gameEvent) => {
+      if (event === 'move' && gameEvent.type === 'move') {
+        handler({ move: gameEvent.move, state: gameEvent.state });
+      } else if (event === 'gameOver' && gameEvent.type === 'gameOver') {
+        handler({ winner: gameEvent.winner, winType: gameEvent.winResult.type });
+      } else if (event === gameEvent.type) {
+        handler(gameEvent);
+      }
+    };
+    this.eventHandlers.add(wrapper);
+  }
 
   removeEventListener(handler: GameEventHandler): void {
     this.eventHandlers.delete(handler);

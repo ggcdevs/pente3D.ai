@@ -48,6 +48,10 @@ export class Renderer {
   // Animation
   private animationId: number | null = null;
   
+  // Highlighting
+  private highlightedPositions: Map<string, THREE.Mesh> = new Map();
+  private temporaryPiece: THREE.Mesh | null = null;
+  
   constructor(options: RendererOptions) {
     // Set default options
     this.options = {
@@ -154,6 +158,7 @@ export class Renderer {
       opacity: 0.3,
       transparent: true
     });
+    
     
     // Piece materials
     this.blackPieceMaterial = new THREE.MeshPhongMaterial({
@@ -310,6 +315,11 @@ export class Renderer {
             y * cellSize - halfSize,
             z * cellSize - halfSize
           );
+          // Store position data for raycasting
+          node.userData = {
+            type: 'intersection',
+            position: Vector3.create(x, y, z)
+          };
           this.gridGroup.add(node);
         }
       }
@@ -412,6 +422,13 @@ export class Renderer {
   }
   
   highlightPosition(position: Vector3, color: number = 0xffff00): void {
+    const key = `${position.x},${position.y},${position.z}`;
+    
+    // Remove existing highlight at this position
+    if (this.highlightedPositions.has(key)) {
+      return; // Already highlighted
+    }
+    
     const cellSize = this.options.cellSize;
     const halfSize = (this.options.boardSize - 1) * cellSize / 2;
     
@@ -419,7 +436,7 @@ export class Renderer {
     const geometry = new THREE.SphereGeometry(this.options.pieceSize * 0.6, 16, 16);
     const material = new THREE.MeshBasicMaterial({
       color,
-      opacity: 0.3,
+      opacity: 0.5,
       transparent: true
     });
     
@@ -431,15 +448,62 @@ export class Renderer {
     );
     
     highlight.name = 'highlight';
+    this.highlightedPositions.set(key, highlight);
     this.scene.add(highlight);
-    
-    // Remove after a delay
-    setTimeout(() => {
-      this.scene.remove(highlight);
-      this.render();
-    }, 1000);
-    
     this.render();
+  }
+  
+  unhighlightPosition(position: Vector3): void {
+    const key = `${position.x},${position.y},${position.z}`;
+    const highlight = this.highlightedPositions.get(key);
+    
+    if (highlight) {
+      this.scene.remove(highlight);
+      this.highlightedPositions.delete(key);
+      highlight.geometry.dispose();
+      if (Array.isArray(highlight.material)) {
+        highlight.material.forEach(m => m.dispose());
+      } else {
+        highlight.material.dispose();
+      }
+      this.render();
+    }
+  }
+  
+  setTemporaryPiece(position: Vector3, player: Player): void {
+    // Clear existing temporary piece
+    this.clearTemporaryPiece();
+    
+    const cellSize = this.options.cellSize;
+    const halfSize = (this.options.boardSize - 1) * cellSize / 2;
+    
+    // Create temporary piece
+    const material = player.id === 'black' ? 
+      this.temporaryBlackMaterial.clone() : 
+      this.temporaryWhiteMaterial.clone();
+    
+    this.temporaryPiece = new THREE.Mesh(this.pieceGeometry, material);
+    this.temporaryPiece.position.set(
+      position.x * cellSize - halfSize,
+      position.y * cellSize - halfSize,
+      position.z * cellSize - halfSize
+    );
+    
+    this.temporaryPiecesGroup.add(this.temporaryPiece);
+    this.render();
+  }
+  
+  clearTemporaryPiece(): void {
+    if (this.temporaryPiece) {
+      this.temporaryPiecesGroup.remove(this.temporaryPiece);
+      if (Array.isArray(this.temporaryPiece.material)) {
+        this.temporaryPiece.material.forEach(m => m.dispose());
+      } else {
+        this.temporaryPiece.material.dispose();
+      }
+      this.temporaryPiece = null;
+      this.render();
+    }
   }
   
   startRenderLoop(): void {

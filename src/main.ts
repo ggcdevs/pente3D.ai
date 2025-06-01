@@ -1,7 +1,7 @@
 import './style.css';
 import { Game } from './core/Game';
 import { Renderer } from './rendering/Renderer';
-import { Vector3 } from './core/Vector3';
+import { InputHandler } from './ui/InputHandler';
 
 // Get canvas element
 const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
@@ -22,26 +22,41 @@ const renderer = new Renderer({
 // Set the board
 renderer.setBoard(game.getBoard());
 
+// Create input handler
+const inputHandler = new InputHandler({
+  canvas,
+  camera: renderer.getCamera(),
+  scene: renderer.getScene(),
+  controls: renderer.getControls() as any, // OrbitControls type mismatch with Three.js version
+  game,
+  renderer
+});
+
+// Set up input event listeners
+inputHandler.on('piecePlaced', () => {
+  renderer.updatePieces();
+});
+
+inputHandler.on('invalidMove', (data) => {
+  console.warn('Invalid move:', data.error);
+});
+
+inputHandler.on('temporaryModeChanged', (data) => {
+  console.log('Temporary mode:', data.enabled);
+});
+
+// Subscribe to game events
+game.on('move', () => {
+  renderer.updatePieces();
+});
+
+game.on('gameOver', (data: any) => {
+  console.log('Game Over! Winner:', data.winner?.id);
+  console.log('Win type:', data.winType);
+});
+
 // Start render loop
 renderer.startRenderLoop();
-
-// Demo: Add some pieces
-const demoMoves = [
-  Vector3.create(3, 3, 3),
-  Vector3.create(4, 3, 3),
-  Vector3.create(3, 4, 3),
-  Vector3.create(4, 4, 3),
-  Vector3.create(3, 3, 4),
-];
-
-// Place pieces with delay for visual effect
-demoMoves.forEach((position, index) => {
-  setTimeout(() => {
-    if (game.placePiece(position)) {
-      renderer.updatePieces();
-    }
-  }, index * 1000);
-});
 
 // Handle window focus/blur for performance
 window.addEventListener('blur', () => renderer.stopRenderLoop());
@@ -49,5 +64,6 @@ window.addEventListener('focus', () => renderer.startRenderLoop());
 
 // Cleanup on page unload
 window.addEventListener('beforeunload', () => {
+  inputHandler.dispose();
   renderer.dispose();
 });

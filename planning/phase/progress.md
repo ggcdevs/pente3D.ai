@@ -120,18 +120,18 @@ Building a fully-featured 3D Pente game with peer-to-peer networking, comprehens
 
 ## 🚧 Next Steps
 
-### Immediate Next: Chunk 2.2 - Mouse Interaction & Raycasting
+### Immediate Next: Chunk 2.3 - Visual Feedback & Highlighting
 **Target Completion:** June 2025
 **Planned Work:**
-- InputHandler class with raycasting setup
-- Click detection for board intersections
-- Hover highlighting for nodes and lines
-- Mouse control mapping (pan, rotate, zoom)
-- Temporary piece placement mode
-- Keyboard shortcut handling
-- Interaction state management
+- Node highlighting with material changes
+- Line highlighting that shows entire lines
+- Piece highlighting for connected pieces  
+- Temporary piece rendering with transparency
+- Visual state indicators (current player, captures)
+- Smooth transitions and animations
+- Performance optimization for highlighting
 
-### Phase 2: 3D Rendering & Basic Interaction
+### Phase 2: 3D Rendering & Basic Interaction (IN PROGRESS)
 **Chunk 2.1: Three.js Scene Setup** ✅ COMPLETE - Completed: June 1, 2025
 - ✅ **Renderer Class**: Complete Three.js scene management with WebGL renderer
 - ✅ **Camera Setup**: Perspective camera with OrbitControls for rotation/pan/zoom
@@ -154,6 +154,29 @@ Building a fully-featured 3D Pente game with peer-to-peer networking, comprehens
 - Implementation of complete Renderer class with all features
 - Comprehensive test suite with proper Three.js mocking
 - Integration with main.ts and full-screen canvas setup
+
+**Chunk 2.2: Mouse Interaction & Raycasting** ✅ COMPLETE - Completed: June 1, 2025
+- ✅ **InputHandler Class**: Complete raycasting-based interaction system
+- ✅ **Click Detection**: Accurate 3D intersection detection for piece placement
+- ✅ **Hover Highlighting**: Dynamic position highlighting with visual feedback
+- ✅ **Mouse Controls**: Left click for pieces, orbit controls for camera
+- ✅ **Temporary Piece Mode**: Preview pieces before placement with 'T' key
+- ✅ **Keyboard Shortcuts**: Undo (Ctrl+Z), Redo (Ctrl+Y), Reset view (R), Toggle grid (G)
+- ✅ **Interaction State**: Complete state management for all interaction modes
+- ✅ **Testing**: 32 tests across unit and integration (21 unit + 11 integration)
+
+**Key Deliverables:**
+- InputHandler class with full 3D interaction capabilities
+- Raycasting for accurate board position detection
+- Comprehensive keyboard shortcut system
+- Temporary piece mode for move preview
+- Event-driven architecture for UI updates
+- Integration with Game and Renderer classes
+
+**Commits:**
+- Implementation of InputHandler with all interaction features
+- Unit and integration tests for interaction system
+- Integration with main.ts for complete user experience
 
 ## 📊 Progress Metrics
 
@@ -284,6 +307,10 @@ Building a fully-featured 3D Pente game with peer-to-peer networking, comprehens
   - **Renderer Integration Tests**: 24 tests - Game integration, performance, edge cases
   - **Visual Tests**: 3 tests - Rendering consistency and visual accuracy
   - **Performance Tests**: 6 tests - Initialization, frame rate, memory management
+- **Chunk 2.2 Tests**: 32 tests total
+  - **InputHandler Unit Tests**: 21 tests - Mouse events, keyboard shortcuts, state management
+  - **Input Integration Tests**: 9 tests - Game flow, highlighting, performance
+  - **Main Integration Tests**: 2 tests - Application initialization, event handling
 - **Total Coverage**: Phase 1 implementation complete, Phase 2 rendering begun
 
 ---

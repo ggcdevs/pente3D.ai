@@ -11,7 +11,8 @@ const THREE = {
     remove: jest.fn(),
     clear: jest.fn(),
     background: null,
-    traverse: jest.fn()
+    traverse: jest.fn(),
+    children: []
   })),
   PerspectiveCamera: jest.fn().mockImplementation(() => ({
     position: { set: jest.fn() },
@@ -60,7 +61,22 @@ const THREE = {
   DirectionalLight: jest.fn().mockImplementation(() => ({
     position: { set: jest.fn() }
   })),
-  Color: jest.fn().mockImplementation(() => ({}))
+  Color: jest.fn().mockImplementation(() => ({})),
+  Raycaster: jest.fn().mockImplementation(() => ({
+    setFromCamera: jest.fn(),
+    intersectObjects: jest.fn(() => [])
+  })),
+  Vector2: jest.fn().mockImplementation(() => ({
+    x: 0,
+    y: 0,
+    set: jest.fn()
+  })),
+  Vector3: jest.fn().mockImplementation(() => ({
+    x: 0,
+    y: 0,
+    z: 0,
+    set: jest.fn()
+  }))
 };
 
 module.exports = THREE;
