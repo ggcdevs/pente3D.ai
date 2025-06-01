@@ -41,23 +41,33 @@ Building a fully-featured 3D Pente game with peer-to-peer networking, comprehens
 - `b11349f` - "Implement Chunk 1.1: Basic Data Structures with comprehensive testing"
 - `29e9b5c` - "Complete Chunk 1.1 testing: Add comprehensive test suites for all data structures"
 
+**Chunk 1.2: Board Logic & Line Generation** 📝 PLANNING COMPLETE - May 31, 2025
+- 📝 **Development Guide**: Complete implementation plan for Board, Line, WinResult classes
+- 📝 **Testing Guide**: 110 tests across 15 test groups defined
+- 📝 **3D Board**: Configurable sizes (7x7x7, 9x9x9, 11x11x11) specified
+- 📝 **Moore Neighborhoods**: 26-neighbor calculation algorithm documented
+- 📝 **Line Generation**: Full and partial line algorithms designed
+- 📝 **Performance Targets**: <1ms line generation, <5ms win detection
+
+**Planning Deliverables:**
+- development.md: 733 lines of implementation guidance
+- testing.md: 323 lines covering 110 test scenarios
+- Complete class interfaces and algorithms specified
+- Integration points with Chunk 1.1 defined
+
+**Commit:** `17c36a7` - "Add Chunk 1.2 planning: Board Logic & Line Generation"
+
 ## 🚧 Next Steps
 
-### Immediate Next: Chunk 1.2 - Board Logic & Line Generation
+### Immediate Next: Chunk 1.2 - Board Logic & Line Generation (Implementation)
 **Target Completion:** June 2025
-**Features to Implement:**
-- 3D board representation with configurable size (7x7x7, 9x9x9, 11x11x11)
-- Moore neighborhood calculations (26 neighbors in 3D)
-- `generateFullLine()` and `generatePartialLine()` functions with validation
-- Win condition detection (5-in-a-row in all 26 3D directions)
-- Capture detection (sandwich captures in all directions)
-- Board state management with immutability
-
-**Technical Requirements:**
-- Face-to-face line validation for `generateFullLine()`
-- Comprehensive line generation covering all 3D directions
-- Performance: Line generation <1ms, win detection <5ms
-- Memory efficiency for large boards (11x11x11 = 1,331 positions)
+**Ready to Implement:**
+- Board class with 3D grid representation
+- Line class with continuity validation
+- WinResult class for game outcomes
+- Moore neighborhood calculations (26 neighbors)
+- Full and partial line generation functions
+- Immutable board operations
 
 ### Phase 1 Remaining Chunks:
 **Chunk 1.3: Game Rules & Win Detection** - Target: June 2025
@@ -139,6 +149,7 @@ Building a fully-featured 3D Pente game with peer-to-peer networking, comprehens
 - **Test Organization**: Clear test structure prevents Jest configuration issues
 - **Path Mapping**: Essential for clean imports in larger codebases
 - **Documentation**: Detailed plans accelerate implementation
+- **Planning First**: Creating development.md and testing.md before coding ensures clarity
 
 ### Next Phase Optimizations
 - **Parallel Development**: Start Three.js exploration while completing game logic
