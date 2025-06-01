@@ -4,6 +4,7 @@ import { Board } from '@/core/Board';
 import { Vector3 } from '@/core/Vector3';
 import { Piece } from '@/core/Piece';
 import { Player } from '@/core/Player';
+import { Line } from '@/core/Line';
 
 export interface RendererOptions {
   canvas: HTMLCanvasElement;
@@ -29,6 +30,7 @@ export class Renderer {
   private gridGroup!: THREE.Group;
   private piecesGroup!: THREE.Group;
   private temporaryPiecesGroup!: THREE.Group;
+  private uiGroup!: THREE.Group;
   
   // Materials
   private gridMaterial!: THREE.LineBasicMaterial;
@@ -37,6 +39,12 @@ export class Renderer {
   private whitePieceMaterial!: THREE.MeshPhongMaterial;
   private temporaryBlackMaterial!: THREE.MeshPhongMaterial;
   private temporaryWhiteMaterial!: THREE.MeshPhongMaterial;
+  
+  // Highlighting materials
+  private highlightedNodeMaterial!: THREE.MeshBasicMaterial;
+  private lineHighlightMaterial!: THREE.MeshBasicMaterial;
+  private connectedPieceHighlightMaterial!: THREE.MeshPhongMaterial;
+  private captureHighlightMaterial!: THREE.MeshPhongMaterial;
   
   // Geometries (shared for performance)
   private pieceGeometry!: THREE.SphereGeometry;
@@ -47,10 +55,22 @@ export class Renderer {
   
   // Animation
   private animationId: number | null = null;
+  private animationMixers: THREE.AnimationMixer[] = [];
+  private clock: THREE.Clock = new THREE.Clock();
   
   // Highlighting
-  private highlightedPositions: Map<string, THREE.Mesh> = new Map();
   private temporaryPiece: THREE.Mesh | null = null;
+  private highlightedLines: Map<string, THREE.Group> = new Map();
+  private highlightedPieces: Map<string, { mesh: THREE.Mesh, originalMaterial: THREE.Material }> = new Map();
+  private nodeHighlights: Map<string, { mesh: THREE.Mesh, originalMaterial: THREE.Material }> = new Map();
+  
+  // State indicators
+  private currentPlayerIndicator: THREE.Mesh | null = null;
+  private captureCountSprites: { black: THREE.Sprite | null, white: THREE.Sprite | null } = { black: null, white: null };
+  
+  // Performance optimization - reserved for future use
+  // private materialPool: Map<string, THREE.Material[]> = new Map();
+  // private geometryPool: Map<string, THREE.BufferGeometry[]> = new Map();
   
   constructor(options: RendererOptions) {
     // Set default options
@@ -173,13 +193,16 @@ export class Renderer {
       shininess: 80
     });
     
-    // Temporary piece materials
+    // Temporary piece materials with enhanced transparency
     this.temporaryBlackMaterial = new THREE.MeshPhongMaterial({
       color: this.options.blackPieceColor,
       specular: 0x222222,
       shininess: 50,
       opacity: this.options.temporaryOpacity,
-      transparent: true
+      transparent: true,
+      emissive: 0x111111,
+      emissiveIntensity: 0.2,
+      depthWrite: false // Better transparency rendering
     });
     
     this.temporaryWhiteMaterial = new THREE.MeshPhongMaterial({
@@ -187,7 +210,39 @@ export class Renderer {
       specular: 0xffffff,
       shininess: 80,
       opacity: this.options.temporaryOpacity,
+      transparent: true,
+      emissive: 0xcccccc,
+      emissiveIntensity: 0.1,
+      depthWrite: false // Better transparency rendering
+    });
+    
+    // Highlighting materials
+    this.highlightedNodeMaterial = new THREE.MeshBasicMaterial({
+      color: 0xffff00,
+      opacity: 0.8,
       transparent: true
+    });
+    
+    this.lineHighlightMaterial = new THREE.MeshBasicMaterial({
+      color: 0x00ff00,
+      opacity: 0.6,
+      transparent: true
+    });
+    
+    this.connectedPieceHighlightMaterial = new THREE.MeshPhongMaterial({
+      color: 0xff8800,
+      specular: 0xffffff,
+      shininess: 100,
+      emissive: 0xff8800,
+      emissiveIntensity: 0.3
+    });
+    
+    this.captureHighlightMaterial = new THREE.MeshPhongMaterial({
+      color: 0xff0000,
+      specular: 0xffffff,
+      shininess: 100,
+      emissive: 0xff0000,
+      emissiveIntensity: 0.5
     });
   }
   
@@ -212,11 +267,13 @@ export class Renderer {
     this.gridGroup = new THREE.Group();
     this.piecesGroup = new THREE.Group();
     this.temporaryPiecesGroup = new THREE.Group();
+    this.uiGroup = new THREE.Group();
     
     // Add groups to scene
     this.scene.add(this.gridGroup);
     this.scene.add(this.piecesGroup);
     this.scene.add(this.temporaryPiecesGroup);
+    this.scene.add(this.uiGroup);
   }
   
   private setupEventListeners(): void {
@@ -424,50 +481,279 @@ export class Renderer {
   highlightPosition(position: Vector3, color: number = 0xffff00): void {
     const key = `${position.x},${position.y},${position.z}`;
     
-    // Remove existing highlight at this position
-    if (this.highlightedPositions.has(key)) {
-      return; // Already highlighted
+    // Check if already highlighted
+    if (this.nodeHighlights.has(key)) {
+      return;
     }
     
+    // Find the node mesh at this position
+    let targetNode: THREE.Mesh | null = null;
+    this.gridGroup.traverse((child) => {
+      if (child instanceof THREE.Mesh && child.userData.type === 'intersection') {
+        const nodePos = child.userData.position as Vector3;
+        if (nodePos && nodePos.equals(position)) {
+          targetNode = child as THREE.Mesh;
+        }
+      }
+    });
+    
+    if (targetNode) {
+      const node = targetNode as THREE.Mesh;
+      // Store original material
+      const originalMaterial = node.material as THREE.Material;
+      
+      // Apply highlight material
+      node.material = this.highlightedNodeMaterial.clone();
+      (node.material as THREE.MeshBasicMaterial).color = new THREE.Color(color);
+      
+      // Store in map for later removal
+      this.nodeHighlights.set(key, { mesh: node, originalMaterial });
+      
+      this.render();
+    }
+  }
+  
+  unhighlightPosition(position: Vector3): void {
+    const key = `${position.x},${position.y},${position.z}`;
+    const nodeHighlight = this.nodeHighlights.get(key);
+    
+    if (nodeHighlight) {
+      // Restore original material
+      nodeHighlight.mesh.material = nodeHighlight.originalMaterial;
+      
+      // Clean up cloned material
+      const meshMaterial = nodeHighlight.mesh.material;
+      if (meshMaterial !== nodeHighlight.originalMaterial) {
+        if (Array.isArray(meshMaterial)) {
+          meshMaterial.forEach(m => m.dispose());
+        } else {
+          const mat = meshMaterial as THREE.Material;
+          if (mat !== nodeHighlight.originalMaterial) {
+            mat.dispose();
+          }
+        }
+      }
+      
+      this.nodeHighlights.delete(key);
+      this.render();
+    }
+  }
+  
+  highlightLine(line: Line, color: number = 0x00ff00): void {
+    const lineKey = line.coords.map(c => `${c.x},${c.y},${c.z}`).join('|');
+    
+    // Check if already highlighted
+    if (this.highlightedLines.has(lineKey)) {
+      return;
+    }
+    
+    const lineGroup = new THREE.Group();
     const cellSize = this.options.cellSize;
     const halfSize = (this.options.boardSize - 1) * cellSize / 2;
     
-    // Create highlight sphere
-    const geometry = new THREE.SphereGeometry(this.options.pieceSize * 0.6, 16, 16);
-    const material = new THREE.MeshBasicMaterial({
-      color,
-      opacity: 0.5,
-      transparent: true
+    // Create cylinders connecting the positions
+    for (let i = 0; i < line.coords.length - 1; i++) {
+      const start = line.coords[i];
+      const end = line.coords[i + 1];
+      
+      // Calculate cylinder position and rotation
+      const startPos = new THREE.Vector3(
+        start.x * cellSize - halfSize,
+        start.y * cellSize - halfSize,
+        start.z * cellSize - halfSize
+      );
+      const endPos = new THREE.Vector3(
+        end.x * cellSize - halfSize,
+        end.y * cellSize - halfSize,
+        end.z * cellSize - halfSize
+      );
+      
+      const distance = startPos.distanceTo(endPos);
+      const midpoint = new THREE.Vector3().addVectors(startPos, endPos).multiplyScalar(0.5);
+      
+      // Create cylinder
+      const geometry = new THREE.CylinderGeometry(
+        this.options.pieceSize * 0.15,
+        this.options.pieceSize * 0.15,
+        distance,
+        8
+      );
+      const material = this.lineHighlightMaterial.clone();
+      (material as THREE.MeshBasicMaterial).color = new THREE.Color(color);
+      
+      const cylinder = new THREE.Mesh(geometry, material);
+      cylinder.position.copy(midpoint);
+      
+      // Orient cylinder to connect the two points
+      cylinder.lookAt(endPos);
+      cylinder.rotateX(Math.PI / 2);
+      
+      lineGroup.add(cylinder);
+    }
+    
+    // Add spheres at each position for emphasis
+    line.coords.forEach(coord => {
+      const geometry = new THREE.SphereGeometry(this.options.pieceSize * 0.25, 12, 12);
+      const material = this.lineHighlightMaterial.clone();
+      (material as THREE.MeshBasicMaterial).color = new THREE.Color(color);
+      
+      const sphere = new THREE.Mesh(geometry, material);
+      sphere.position.set(
+        coord.x * cellSize - halfSize,
+        coord.y * cellSize - halfSize,
+        coord.z * cellSize - halfSize
+      );
+      
+      lineGroup.add(sphere);
     });
     
-    const highlight = new THREE.Mesh(geometry, material);
-    highlight.position.set(
+    this.highlightedLines.set(lineKey, lineGroup);
+    this.scene.add(lineGroup);
+    this.render();
+  }
+  
+  unhighlightLine(line: Line): void {
+    const lineKey = line.coords.map(c => `${c.x},${c.y},${c.z}`).join('|');
+    const lineGroup = this.highlightedLines.get(lineKey);
+    
+    if (lineGroup) {
+      // Dispose of all geometries and materials in the group
+      lineGroup.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          child.geometry.dispose();
+          if (Array.isArray(child.material)) {
+            child.material.forEach(m => m.dispose());
+          } else {
+            child.material.dispose();
+          }
+        }
+      });
+      
+      this.scene.remove(lineGroup);
+      this.highlightedLines.delete(lineKey);
+      this.render();
+    }
+  }
+  
+  clearAllLineHighlights(): void {
+    this.highlightedLines.forEach(lineGroup => {
+      lineGroup.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          child.geometry.dispose();
+          if (Array.isArray(child.material)) {
+            child.material.forEach(m => m.dispose());
+          } else {
+            child.material.dispose();
+          }
+        }
+      });
+      this.scene.remove(lineGroup);
+    });
+    
+    this.highlightedLines.clear();
+    this.render();
+  }
+  
+  highlightPiece(position: Vector3, highlightType: 'connected' | 'capture' = 'connected'): void {
+    const key = `${position.x},${position.y},${position.z}`;
+    
+    // Check if already highlighted
+    if (this.highlightedPieces.has(key)) {
+      return;
+    }
+    
+    // Find the piece mesh at this position
+    let targetPiece: THREE.Mesh | null = null;
+    const cellSize = this.options.cellSize;
+    const halfSize = (this.options.boardSize - 1) * cellSize / 2;
+    const worldPos = new THREE.Vector3(
       position.x * cellSize - halfSize,
       position.y * cellSize - halfSize,
       position.z * cellSize - halfSize
     );
     
-    highlight.name = 'highlight';
-    this.highlightedPositions.set(key, highlight);
-    this.scene.add(highlight);
-    this.render();
-  }
-  
-  unhighlightPosition(position: Vector3): void {
-    const key = `${position.x},${position.y},${position.z}`;
-    const highlight = this.highlightedPositions.get(key);
-    
-    if (highlight) {
-      this.scene.remove(highlight);
-      this.highlightedPositions.delete(key);
-      highlight.geometry.dispose();
-      if (Array.isArray(highlight.material)) {
-        highlight.material.forEach(m => m.dispose());
-      } else {
-        highlight.material.dispose();
+    this.piecesGroup.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        if (child.position.distanceTo(worldPos) < 0.01) {
+          targetPiece = child as THREE.Mesh;
+        }
       }
+    });
+    
+    if (targetPiece) {
+      const piece = targetPiece as THREE.Mesh;
+      // Store original material
+      const originalMaterial = piece.material as THREE.Material;
+      
+      // Apply highlight material based on type
+      const highlightMaterial = highlightType === 'capture' 
+        ? this.captureHighlightMaterial.clone()
+        : this.connectedPieceHighlightMaterial.clone();
+      
+      piece.material = highlightMaterial;
+      
+      // Store in map for later removal
+      this.highlightedPieces.set(key, { mesh: piece, originalMaterial });
+      
       this.render();
     }
+  }
+  
+  unhighlightPiece(position: Vector3): void {
+    const key = `${position.x},${position.y},${position.z}`;
+    const highlight = this.highlightedPieces.get(key);
+    
+    if (highlight) {
+      // Restore original material
+      highlight.mesh.material = highlight.originalMaterial;
+      
+      // Clean up cloned material
+      const meshMaterial = highlight.mesh.material;
+      if (meshMaterial !== highlight.originalMaterial) {
+        if (Array.isArray(meshMaterial)) {
+          meshMaterial.forEach(m => m.dispose());
+        } else {
+          const mat = meshMaterial as THREE.Material;
+          if (mat !== highlight.originalMaterial) {
+            mat.dispose();
+          }
+        }
+      }
+      
+      this.highlightedPieces.delete(key);
+      this.render();
+    }
+  }
+  
+  highlightConnectedPieces(positions: Vector3[]): void {
+    positions.forEach(pos => this.highlightPiece(pos, 'connected'));
+  }
+  
+  highlightCapturablePieces(positions: Vector3[]): void {
+    positions.forEach(pos => this.highlightPiece(pos, 'capture'));
+  }
+  
+  clearAllPieceHighlights(): void {
+    this.highlightedPieces.forEach(({ mesh, originalMaterial }) => {
+      // Restore original material
+      mesh.material = originalMaterial;
+      
+      // Clean up cloned materials
+      const meshMaterial = mesh.material;
+      if (meshMaterial !== originalMaterial) {
+        if (Array.isArray(meshMaterial)) {
+          meshMaterial.forEach(m => m.dispose());
+        } else {
+          const mat = meshMaterial as THREE.Material;
+          if (mat !== originalMaterial) {
+            mat.dispose();
+          }
+        }
+      }
+    });
+    
+    this.highlightedPieces.clear();
+    this.render();
   }
   
   setTemporaryPiece(position: Vector3, player: Player): void {
@@ -477,17 +763,42 @@ export class Renderer {
     const cellSize = this.options.cellSize;
     const halfSize = (this.options.boardSize - 1) * cellSize / 2;
     
-    // Create temporary piece
+    // Create temporary piece with enhanced material
     const material = player.id === 'black' ? 
       this.temporaryBlackMaterial.clone() : 
       this.temporaryWhiteMaterial.clone();
     
+    // Add outline effect
+    const outlineGeometry = new THREE.SphereGeometry(
+      this.options.pieceSize * 1.1,
+      16,
+      16
+    );
+    const outlineMaterial = new THREE.MeshBasicMaterial({
+      color: player.id === 'black' ? 0x333333 : 0xeeeeee,
+      opacity: 0.3,
+      transparent: true,
+      side: THREE.BackSide
+    });
+    
+    const outline = new THREE.Mesh(outlineGeometry, outlineMaterial);
+    
+    // Create the main piece
     this.temporaryPiece = new THREE.Mesh(this.pieceGeometry, material);
     this.temporaryPiece.position.set(
       position.x * cellSize - halfSize,
       position.y * cellSize - halfSize,
       position.z * cellSize - halfSize
     );
+    
+    // Add outline as child
+    this.temporaryPiece.add(outline);
+    
+    // Store initial scale for animation
+    this.temporaryPiece.userData = { 
+      baseScale: 1.0,
+      time: 0
+    };
     
     this.temporaryPiecesGroup.add(this.temporaryPiece);
     this.render();
@@ -506,14 +817,157 @@ export class Renderer {
     }
   }
   
+  updateCurrentPlayerIndicator(currentPlayer: 'black' | 'white'): void {
+    // Remove existing indicator
+    if (this.currentPlayerIndicator) {
+      this.uiGroup.remove(this.currentPlayerIndicator);
+      this.currentPlayerIndicator.geometry.dispose();
+      if (Array.isArray(this.currentPlayerIndicator.material)) {
+        this.currentPlayerIndicator.material.forEach(m => m.dispose());
+      } else {
+        (this.currentPlayerIndicator.material as THREE.Material).dispose();
+      }
+    }
+    
+    // Create new indicator
+    const indicatorGeometry = new THREE.TorusGeometry(
+      this.options.pieceSize * 0.8,
+      this.options.pieceSize * 0.15,
+      8,
+      16
+    );
+    
+    const indicatorMaterial = new THREE.MeshPhongMaterial({
+      color: currentPlayer === 'black' ? 0x000000 : 0xffffff,
+      emissive: currentPlayer === 'black' ? 0x333333 : 0xcccccc,
+      emissiveIntensity: 0.5,
+      specular: 0xffffff,
+      shininess: 100
+    });
+    
+    this.currentPlayerIndicator = new THREE.Mesh(indicatorGeometry, indicatorMaterial);
+    
+    // Position at top of the board
+    const boardTop = (this.options.boardSize - 1) * this.options.cellSize / 2 + 2;
+    this.currentPlayerIndicator.position.set(0, boardTop, 0);
+    this.currentPlayerIndicator.rotation.x = Math.PI / 2;
+    
+    this.uiGroup.add(this.currentPlayerIndicator);
+    this.render();
+  }
+  
+  updateCaptureCount(blackCaptures: number, whiteCaptures: number): void {
+    // Create canvas for text rendering
+    const createTextSprite = (text: string, color: string): THREE.Sprite => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 256;
+      canvas.height = 128;
+      
+      const context = canvas.getContext('2d')!;
+      context.fillStyle = 'rgba(0, 0, 0, 0.8)';
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      
+      context.font = 'bold 48px Arial';
+      context.fillStyle = color;
+      context.textAlign = 'center';
+      context.textBaseline = 'middle';
+      context.fillText(text, canvas.width / 2, canvas.height / 2);
+      
+      const texture = new THREE.CanvasTexture(canvas);
+      const material = new THREE.SpriteMaterial({ 
+        map: texture,
+        transparent: true
+      });
+      
+      const sprite = new THREE.Sprite(material);
+      sprite.scale.set(2, 1, 1);
+      
+      return sprite;
+    };
+    
+    // Clear existing sprites
+    if (this.captureCountSprites.black) {
+      this.uiGroup.remove(this.captureCountSprites.black);
+      (this.captureCountSprites.black.material as THREE.SpriteMaterial).map?.dispose();
+      this.captureCountSprites.black.material.dispose();
+    }
+    if (this.captureCountSprites.white) {
+      this.uiGroup.remove(this.captureCountSprites.white);
+      (this.captureCountSprites.white.material as THREE.SpriteMaterial).map?.dispose();
+      this.captureCountSprites.white.material.dispose();
+    }
+    
+    // Create new sprites
+    const boardExtent = (this.options.boardSize - 1) * this.options.cellSize / 2 + 3;
+    
+    this.captureCountSprites.black = createTextSprite(
+      `Black: ${blackCaptures}`,
+      '#ffffff'
+    );
+    this.captureCountSprites.black.position.set(-boardExtent, 0, 0);
+    
+    this.captureCountSprites.white = createTextSprite(
+      `White: ${whiteCaptures}`,
+      '#ffffff'
+    );
+    this.captureCountSprites.white.position.set(boardExtent, 0, 0);
+    
+    this.uiGroup.add(this.captureCountSprites.black);
+    this.uiGroup.add(this.captureCountSprites.white);
+    
+    this.render();
+  }
+  
   startRenderLoop(): void {
     if (this.animationId !== null) return;
     
     const animate = () => {
       this.animationId = requestAnimationFrame(animate);
       
+      const delta = this.clock.getDelta();
+      const elapsed = this.clock.getElapsedTime();
+      
       // Update controls
       this.controls.update();
+      
+      // Animate temporary piece
+      if (this.temporaryPiece && this.temporaryPiece.userData.time !== undefined) {
+        this.temporaryPiece.userData.time += delta;
+        const scale = 1.0 + Math.sin(elapsed * 3) * 0.05;
+        this.temporaryPiece.scale.setScalar(scale);
+        
+        // Animate opacity
+        const material = this.temporaryPiece.material as THREE.MeshPhongMaterial;
+        material.opacity = this.options.temporaryOpacity + Math.sin(elapsed * 2) * 0.1;
+      }
+      
+      // Animate current player indicator
+      if (this.currentPlayerIndicator) {
+        this.currentPlayerIndicator.rotation.z += delta * 0.5;
+        const bobAmount = Math.sin(elapsed * 2) * 0.1;
+        const baseY = (this.options.boardSize - 1) * this.options.cellSize / 2 + 2;
+        this.currentPlayerIndicator.position.y = baseY + bobAmount;
+      }
+      
+      // Animate highlighted nodes
+      this.nodeHighlights.forEach(({ mesh }) => {
+        const material = mesh.material as THREE.MeshBasicMaterial;
+        material.opacity = 0.6 + Math.sin(elapsed * 4) * 0.2;
+      });
+      
+      // Animate line highlights
+      this.highlightedLines.forEach(lineGroup => {
+        lineGroup.children.forEach((child, index) => {
+          if (child instanceof THREE.Mesh) {
+            const offset = index * 0.1;
+            const scale = 1.0 + Math.sin(elapsed * 3 + offset) * 0.1;
+            child.scale.setScalar(scale);
+          }
+        });
+      });
+      
+      // Update animation mixers
+      this.animationMixers.forEach(mixer => mixer.update(delta));
       
       // Render scene
       this.renderer.render(this.scene, this.camera);
@@ -532,6 +986,28 @@ export class Renderer {
   render(): void {
     this.renderer.render(this.scene, this.camera);
   }
+  
+  clearAllHighlights(): void {
+    // Clear node highlights
+    this.nodeHighlights.forEach(({ mesh, originalMaterial }) => {
+      mesh.material = originalMaterial;
+    });
+    this.nodeHighlights.clear();
+    
+    // Clear line highlights
+    this.clearAllLineHighlights();
+    
+    // Clear piece highlights
+    this.clearAllPieceHighlights();
+    
+    // Clear temporary pieces
+    this.clearTemporaryPiece();
+    
+    this.render();
+  }
+  
+  // Performance optimization methods - to be implemented later
+  // The materialPool and geometryPool are defined for future optimization
   
   dispose(): void {
     // Stop render loop
@@ -581,6 +1057,10 @@ export class Renderer {
     this.whitePieceMaterial.dispose();
     this.temporaryBlackMaterial.dispose();
     this.temporaryWhiteMaterial.dispose();
+    this.highlightedNodeMaterial.dispose();
+    this.lineHighlightMaterial.dispose();
+    this.connectedPieceHighlightMaterial.dispose();
+    this.captureHighlightMaterial.dispose();
     
     // Dispose geometries
     this.pieceGeometry.dispose();

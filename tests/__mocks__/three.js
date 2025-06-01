@@ -27,11 +27,23 @@ const THREE = {
     traverse: jest.fn()
   })),
   Mesh: jest.fn().mockImplementation(() => ({
-    position: { set: jest.fn() },
+    position: { 
+      set: jest.fn(),
+      copy: jest.fn().mockReturnThis(),
+      x: 0,
+      y: 0,
+      z: 0
+    },
     userData: {},
     geometry: { dispose: jest.fn() },
     material: { dispose: jest.fn() },
-    name: ''
+    name: '',
+    add: jest.fn(),
+    remove: jest.fn(),
+    rotation: { x: 0, y: 0, z: 0 },
+    scale: { setScalar: jest.fn() },
+    lookAt: jest.fn(),
+    rotateX: jest.fn()
   })),
   LineSegments: jest.fn().mockImplementation(() => ({
     position: { set: jest.fn() },
@@ -47,10 +59,17 @@ const THREE = {
     dispose: jest.fn()
   })),
   MeshBasicMaterial: jest.fn().mockImplementation(() => ({
-    dispose: jest.fn()
+    dispose: jest.fn(),
+    clone: jest.fn().mockImplementation(() => ({
+      dispose: jest.fn(),
+      color: new (jest.fn())
+    }))
   })),
   MeshPhongMaterial: jest.fn().mockImplementation(() => ({
-    dispose: jest.fn()
+    dispose: jest.fn(),
+    clone: jest.fn().mockImplementation(() => ({
+      dispose: jest.fn()
+    }))
   })),
   SphereGeometry: jest.fn().mockImplementation(() => ({
     dispose: jest.fn()
@@ -75,8 +94,38 @@ const THREE = {
     x: 0,
     y: 0,
     z: 0,
-    set: jest.fn()
-  }))
+    set: jest.fn(),
+    addVectors: jest.fn().mockReturnThis(),
+    multiplyScalar: jest.fn().mockReturnThis(),
+    copy: jest.fn().mockReturnThis(),
+    distanceTo: jest.fn().mockReturnValue(1)
+  })),
+  Clock: jest.fn().mockImplementation(() => ({
+    getDelta: jest.fn().mockReturnValue(0.016),
+    getElapsedTime: jest.fn().mockReturnValue(1)
+  })),
+  Sprite: jest.fn().mockImplementation(() => ({
+    position: { set: jest.fn() },
+    scale: { set: jest.fn() },
+    material: { dispose: jest.fn() }
+  })),
+  SpriteMaterial: jest.fn().mockImplementation(() => ({
+    dispose: jest.fn(),
+    map: null
+  })),
+  CanvasTexture: jest.fn().mockImplementation(() => ({
+    dispose: jest.fn()
+  })),
+  TorusGeometry: jest.fn().mockImplementation(() => ({
+    dispose: jest.fn()
+  })),
+  CylinderGeometry: jest.fn().mockImplementation(() => ({
+    dispose: jest.fn()
+  })),
+  AnimationMixer: jest.fn().mockImplementation(() => ({
+    update: jest.fn()
+  })),
+  BackSide: 1
 };
 
 module.exports = THREE;

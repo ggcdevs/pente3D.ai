@@ -4,6 +4,7 @@ import { Vector3 } from '@/core/Vector3';
 import { Player } from '@/core/Player';
 import { Piece } from '@/core/Piece';
 import { Game } from '@/core/Game';
+import { Line } from '@/core/Line';
 
 describe('Renderer Integration', () => {
   let canvas: HTMLCanvasElement;
@@ -299,6 +300,204 @@ describe('Renderer Integration', () => {
       renderer.stopRenderLoop();
       renderer.startRenderLoop();
       renderer.stopRenderLoop();
+      
+      expect(() => renderer.render()).not.toThrow();
+    });
+  });
+  
+  describe('highlighting integration', () => {
+    beforeEach(() => {
+      const board = Board.create(7);
+      const player1 = Player.create('black', 'Black');
+      const player2 = Player.create('white', 'White');
+      
+      // Create board with pieces
+      let currentBoard = board;
+      currentBoard = currentBoard.placePiece(Piece.create(Vector3.create(3, 3, 3), player1));
+      currentBoard = currentBoard.placePiece(Piece.create(Vector3.create(4, 4, 4), player2));
+      currentBoard = currentBoard.placePiece(Piece.create(Vector3.create(5, 5, 5), player1));
+      currentBoard = currentBoard.placePiece(Piece.create(Vector3.create(2, 2, 2), player2));
+      
+      renderer = new Renderer({ canvas, boardSize: 7 });
+      renderer.setBoard(currentBoard);
+    });
+    
+    it('should handle complete highlighting workflow', () => {
+      // Node highlighting
+      renderer.highlightPosition(Vector3.create(1, 1, 1));
+      renderer.highlightPosition(Vector3.create(6, 6, 6));
+      
+      // Line highlighting
+      const line1 = Line.fromCoords([
+        Vector3.create(2, 2, 2),
+        Vector3.create(3, 3, 3),
+        Vector3.create(4, 4, 4)
+      ]);
+      renderer.highlightLine(line1);
+      
+      // Piece highlighting
+      renderer.highlightPiece(Vector3.create(3, 3, 3), 'connected');
+      renderer.highlightPiece(Vector3.create(2, 2, 2), 'capture');
+      
+      // Temporary piece
+      const player = Player.create('black', 'Black');
+      renderer.setTemporaryPiece(Vector3.create(0, 0, 0), player);
+      
+      // State indicators
+      renderer.updateCurrentPlayerIndicator('black');
+      renderer.updateCaptureCount(2, 1);
+      
+      expect(() => renderer.render()).not.toThrow();
+    });
+    
+    it('should handle highlighting and unhighlighting cycle', () => {
+      const position = Vector3.create(1, 1, 1);
+      const line = Line.fromCoords([
+        Vector3.create(2, 2, 2),
+        Vector3.create(3, 3, 3)
+      ]);
+      
+      // Highlight
+      renderer.highlightPosition(position);
+      renderer.highlightLine(line);
+      renderer.highlightPiece(Vector3.create(3, 3, 3));
+      
+      // Render with highlights
+      expect(() => renderer.render()).not.toThrow();
+      
+      // Unhighlight
+      renderer.unhighlightPosition(position);
+      renderer.unhighlightLine(line);
+      renderer.unhighlightPiece(Vector3.create(3, 3, 3));
+      
+      // Render without highlights
+      expect(() => renderer.render()).not.toThrow();
+    });
+    
+    it('should handle multiple simultaneous highlights', () => {
+      // Highlight multiple nodes
+      const positions = [
+        Vector3.create(0, 0, 0),
+        Vector3.create(1, 1, 1),
+        Vector3.create(2, 2, 2),
+        Vector3.create(3, 3, 3),
+        Vector3.create(4, 4, 4)
+      ];
+      
+      positions.forEach((pos, i) => {
+        renderer.highlightPosition(pos, 0xff0000 + i * 0x001100);
+      });
+      
+      // Highlight multiple lines
+      const line1 = Line.fromCoords([Vector3.create(0, 0, 0), Vector3.create(1, 1, 1)]);
+      const line2 = Line.fromCoords([Vector3.create(2, 2, 2), Vector3.create(3, 3, 3)]);
+      const line3 = Line.fromCoords([Vector3.create(4, 4, 4), Vector3.create(5, 5, 5)]);
+      
+      renderer.highlightLine(line1, 0x00ff00);
+      renderer.highlightLine(line2, 0x0000ff);
+      renderer.highlightLine(line3, 0xff00ff);
+      
+      expect(() => renderer.render()).not.toThrow();
+    });
+    
+    it('should handle clearing all highlights', () => {
+      // Add various highlights
+      renderer.highlightPosition(Vector3.create(1, 1, 1));
+      renderer.highlightLine(Line.fromCoords([Vector3.create(2, 2, 2), Vector3.create(3, 3, 3)]));
+      renderer.highlightPiece(Vector3.create(3, 3, 3));
+      renderer.setTemporaryPiece(Vector3.create(0, 0, 0), Player.create('black', 'Black'));
+      
+      // Clear all
+      renderer.clearAllHighlights();
+      
+      expect(() => renderer.render()).not.toThrow();
+    });
+    
+    it('should integrate with game state changes', () => {
+      const game = new Game({ boardSize: 7 });
+      
+      // Play some moves
+      game.placePiece(Vector3.create(3, 3, 3));
+      game.placePiece(Vector3.create(4, 4, 4));
+      
+      renderer.setBoard(game.getBoard());
+      
+      // Highlight potential moves
+      const potentialMoves = [
+        Vector3.create(2, 2, 2),
+        Vector3.create(5, 5, 5),
+        Vector3.create(3, 4, 3)
+      ];
+      
+      potentialMoves.forEach(pos => {
+        renderer.highlightPosition(pos, 0x00ff00);
+      });
+      
+      // Update state indicators
+      renderer.updateCurrentPlayerIndicator(game.getCurrentPlayer());
+      renderer.updateCaptureCount(
+        game.getPlayerCaptures('black'),
+        game.getPlayerCaptures('white')
+      );
+      
+      expect(() => renderer.render()).not.toThrow();
+    });
+    
+    it('should handle rapid highlight changes', () => {
+      // Simulate rapid hover changes
+      for (let i = 0; i < 10; i++) {
+        const x = i % 7;
+        const y = Math.floor(i / 7) % 7;
+        const z = Math.floor(i / 49) % 7;
+        const position = Vector3.create(x, y, z);
+        
+        // Highlight
+        renderer.highlightPosition(position);
+        renderer.render();
+        
+        // Unhighlight
+        renderer.unhighlightPosition(position);
+        renderer.render();
+      }
+      
+      expect(() => renderer.render()).not.toThrow();
+    });
+    
+    it('should handle animation during highlighting', () => {
+      // Set up animated elements
+      const player = Player.create('black', 'Black');
+      renderer.setTemporaryPiece(Vector3.create(3, 3, 3), player);
+      renderer.updateCurrentPlayerIndicator('black');
+      
+      // Start render loop
+      renderer.startRenderLoop();
+      
+      // Add highlights during animation
+      renderer.highlightPosition(Vector3.create(1, 1, 1));
+      renderer.highlightLine(Line.fromCoords([
+        Vector3.create(2, 2, 2),
+        Vector3.create(3, 3, 3)
+      ]));
+      
+      // Stop render loop
+      renderer.stopRenderLoop();
+      
+      expect(() => renderer.render()).not.toThrow();
+    });
+    
+    it('should handle highlighting with board updates', () => {
+      const game = new Game({ boardSize: 7 });
+      
+      // Initial highlights
+      renderer.highlightPosition(Vector3.create(3, 3, 3));
+      
+      // Make move and update board
+      game.placePiece(Vector3.create(3, 3, 3));
+      renderer.setBoard(game.getBoard());
+      
+      // Highlight new positions
+      renderer.highlightPosition(Vector3.create(4, 4, 4));
+      renderer.highlightPosition(Vector3.create(2, 2, 2));
       
       expect(() => renderer.render()).not.toThrow();
     });

@@ -3,6 +3,7 @@ import { Board } from '@/core/Board';
 import { Vector3 } from '@/core/Vector3';
 import { Player } from '@/core/Player';
 import { Piece } from '@/core/Piece';
+import { Line } from '@/core/Line';
 
 // THREE is mocked via jest.config.js moduleNameMapper
 const THREE = require('three');
@@ -15,6 +16,24 @@ describe('Renderer', () => {
     canvas = document.createElement('canvas');
     Object.defineProperty(canvas, 'clientWidth', { value: 800, configurable: true });
     Object.defineProperty(canvas, 'clientHeight', { value: 600, configurable: true });
+    
+    // Mock 2D context for text rendering
+    const mockContext2D = {
+      fillStyle: '',
+      font: '',
+      textAlign: '',
+      textBaseline: '',
+      fillRect: jest.fn(),
+      fillText: jest.fn()
+    };
+    
+    const originalGetContext = canvas.getContext.bind(canvas);
+    jest.spyOn(canvas, 'getContext').mockImplementation((type: string) => {
+      if (type === '2d') {
+        return mockContext2D as any;
+      }
+      return originalGetContext(type);
+    });
   });
   
   afterEach(() => {
@@ -114,9 +133,9 @@ describe('Renderer', () => {
     
     it('should update pieces when board is set', () => {
       const board = Board.createEmpty(7);
-      const player = Player.createLocal('black', 'Black Player');
+      const player = Player.createLocal('Black Player', 'black');
       const position = Vector3.create(3, 3, 3);
-      const boardWithPiece = board.placePiece(Piece.create(position, player));
+      const boardWithPiece = board.placePiece(Piece.createNormal(position, player));
       
       renderer.setBoard(boardWithPiece);
       
@@ -149,12 +168,12 @@ describe('Renderer', () => {
     
     it('should clear and recreate all pieces', () => {
       const board = Board.createEmpty(7);
-      const player1 = Player.createLocal('black', 'Black');
-      const player2 = Player.createLocal('white', 'White');
+      const player1 = Player.createLocal('Black Player', 'black');
+      const player2 = Player.createLocal('White Player', 'white');
       
       let currentBoard = board;
-      currentBoard = currentBoard.placePiece(Piece.create(Vector3.create(3, 3, 3), player1));
-      currentBoard = currentBoard.placePiece(Piece.create(Vector3.create(4, 4, 4), player2));
+      currentBoard = currentBoard.placePiece(Piece.createNormal(Vector3.create(3, 3, 3), player1));
+      currentBoard = currentBoard.placePiece(Piece.createNormal(Vector3.create(4, 4, 4), player2));
       
       renderer.setBoard(currentBoard);
       renderer.updatePieces();
@@ -165,11 +184,11 @@ describe('Renderer', () => {
     
     it('should separate permanent and temporary pieces', () => {
       const board = Board.createEmpty(7);
-      const player = Player.createLocal('black', 'Black');
+      const player = Player.createLocal('Black Player', 'black');
       
       let currentBoard = board;
-      currentBoard = currentBoard.placePiece(Piece.create(Vector3.create(3, 3, 3), player, false));
-      currentBoard = currentBoard.placePiece(Piece.create(Vector3.create(4, 4, 4), player, true));
+      currentBoard = currentBoard.placePiece(Piece.createNormal(Vector3.create(3, 3, 3), player, false));
+      currentBoard = currentBoard.placePiece(Piece.createNormal(Vector3.create(4, 4, 4), player, true));
       
       renderer.setBoard(currentBoard);
       
@@ -179,10 +198,10 @@ describe('Renderer', () => {
     
     it('should position pieces correctly in 3D space', () => {
       const board = Board.createEmpty(7);
-      const player = Player.createLocal('black', 'Black');
+      const player = Player.createLocal('Black Player', 'black');
       const position = Vector3.create(3, 4, 5);
       
-      const currentBoard = board.placePiece(Piece.create(position, player));
+      const currentBoard = board.placePiece(Piece.createNormal(position, player));
       renderer.setBoard(currentBoard);
       
       const mockMesh = THREE.Mesh as jest.MockedClass<typeof THREE.Mesh>;
@@ -221,7 +240,7 @@ describe('Renderer', () => {
     
     it('should add temporary piece at position', () => {
       const position = Vector3.create(3, 3, 3);
-      const player = Player.createLocal('black', 'Black');
+      const player = Player.createLocal('Black Player', 'black');
       
       renderer.addTemporaryPiece(position, player);
       
@@ -230,7 +249,7 @@ describe('Renderer', () => {
     
     it('should remove temporary piece at position', () => {
       const position = Vector3.create(3, 3, 3);
-      const player = Player.createLocal('black', 'Black');
+      const player = Player.createLocal('Black Player', 'black');
       
       renderer.addTemporaryPiece(position, player);
       renderer.removeTemporaryPiece(position);
@@ -239,7 +258,7 @@ describe('Renderer', () => {
     });
     
     it('should clear all temporary pieces', () => {
-      const player = Player.createLocal('black', 'Black');
+      const player = Player.createLocal('Black Player', 'black');
       
       renderer.addTemporaryPiece(Vector3.create(1, 1, 1), player);
       renderer.addTemporaryPiece(Vector3.create(2, 2, 2), player);
@@ -252,7 +271,7 @@ describe('Renderer', () => {
     
     it('should store position data in mesh userData', () => {
       const position = Vector3.create(3, 3, 3);
-      const player = Player.createLocal('black', 'Black');
+      const player = Player.createLocal('Black Player', 'black');
       
       renderer.addTemporaryPiece(position, player);
       
@@ -389,8 +408,8 @@ describe('Renderer', () => {
     
     it('should dispose Three.js resources', () => {
       const board = Board.createEmpty(7);
-      const player = Player.createLocal('black', 'Black');
-      const boardWithPiece = board.placePiece(Piece.create(Vector3.create(3, 3, 3), player));
+      const player = Player.createLocal('Black Player', 'black');
+      const boardWithPiece = board.placePiece(Piece.createNormal(Vector3.create(3, 3, 3), player));
       
       renderer.setBoard(boardWithPiece);
       renderer.dispose();
@@ -440,6 +459,261 @@ describe('Renderer', () => {
       }
       
       expect(renderSpy).toHaveBeenCalled();
+    });
+  });
+  
+  describe('enhanced highlighting', () => {
+    beforeEach(() => {
+      renderer = new Renderer({ canvas });
+      renderer.setBoard(Board.createEmpty(7));
+    });
+    
+    describe('node highlighting', () => {
+      it('should highlight node using material change', () => {
+        const position = Vector3.create(3, 3, 3);
+        
+        renderer.highlightPosition(position);
+        
+        // Verify material change instead of new mesh creation
+        expect(renderer['nodeHighlights'].size).toBe(1);
+      });
+      
+      it('should unhighlight node and restore original material', () => {
+        const position = Vector3.create(3, 3, 3);
+        
+        renderer.highlightPosition(position);
+        renderer.unhighlightPosition(position);
+        
+        expect(renderer['nodeHighlights'].size).toBe(0);
+      });
+      
+      it('should not highlight same position twice', () => {
+        const position = Vector3.create(3, 3, 3);
+        
+        renderer.highlightPosition(position);
+        const size1 = renderer['nodeHighlights'].size;
+        
+        renderer.highlightPosition(position);
+        const size2 = renderer['nodeHighlights'].size;
+        
+        expect(size1).toBe(size2);
+      });
+    });
+    
+    describe('line highlighting', () => {
+      it('should highlight entire line', () => {
+        const coords = [
+          Vector3.create(1, 1, 1),
+          Vector3.create(2, 2, 2),
+          Vector3.create(3, 3, 3)
+        ];
+        const line = Line.fromCoords(coords);
+        
+        renderer.highlightLine(line);
+        
+        expect(renderer['highlightedLines'].size).toBe(1);
+        expect(renderer.getScene().add).toHaveBeenCalled();
+      });
+      
+      it('should unhighlight line', () => {
+        const coords = [
+          Vector3.create(1, 1, 1),
+          Vector3.create(2, 2, 2),
+          Vector3.create(3, 3, 3)
+        ];
+        const line = Line.fromCoords(coords);
+        
+        renderer.highlightLine(line);
+        renderer.unhighlightLine(line);
+        
+        expect(renderer['highlightedLines'].size).toBe(0);
+        expect(renderer.getScene().remove).toHaveBeenCalled();
+      });
+      
+      it('should clear all line highlights', () => {
+        const line1 = Line.fromCoords([Vector3.create(1, 1, 1), Vector3.create(2, 2, 2)]);
+        const line2 = Line.fromCoords([Vector3.create(3, 3, 3), Vector3.create(4, 4, 4)]);
+        
+        renderer.highlightLine(line1);
+        renderer.highlightLine(line2);
+        renderer.clearAllLineHighlights();
+        
+        expect(renderer['highlightedLines'].size).toBe(0);
+      });
+      
+      it('should accept custom line color', () => {
+        const line = Line.fromCoords([Vector3.create(1, 1, 1), Vector3.create(2, 2, 2)]);
+        const customColor = 0xff00ff;
+        
+        renderer.highlightLine(line, customColor);
+        
+        expect(renderer['highlightedLines'].size).toBe(1);
+      });
+    });
+    
+    describe('piece highlighting', () => {
+      beforeEach(() => {
+        const board = Board.createEmpty(7);
+        const player = Player.createLocal('Black Player', 'black');
+        const boardWithPieces = board
+          .placePiece(Piece.createNormal(Vector3.create(3, 3, 3), player))
+          .placePiece(Piece.createNormal(Vector3.create(4, 4, 4), player));
+        renderer.setBoard(boardWithPieces);
+      });
+      
+      it('should highlight piece as connected', () => {
+        const position = Vector3.create(3, 3, 3);
+        
+        renderer.highlightPiece(position, 'connected');
+        
+        expect(renderer['highlightedPieces'].size).toBe(1);
+      });
+      
+      it('should highlight piece as capturable', () => {
+        const position = Vector3.create(3, 3, 3);
+        
+        renderer.highlightPiece(position, 'capture');
+        
+        expect(renderer['highlightedPieces'].size).toBe(1);
+      });
+      
+      it('should unhighlight piece', () => {
+        const position = Vector3.create(3, 3, 3);
+        
+        renderer.highlightPiece(position);
+        renderer.unhighlightPiece(position);
+        
+        expect(renderer['highlightedPieces'].size).toBe(0);
+      });
+      
+      it('should highlight multiple connected pieces', () => {
+        const positions = [
+          Vector3.create(3, 3, 3),
+          Vector3.create(4, 4, 4)
+        ];
+        
+        renderer.highlightConnectedPieces(positions);
+        
+        expect(renderer['highlightedPieces'].size).toBe(2);
+      });
+      
+      it('should highlight capturable pieces', () => {
+        const positions = [
+          Vector3.create(3, 3, 3),
+          Vector3.create(4, 4, 4)
+        ];
+        
+        renderer.highlightCapturablePieces(positions);
+        
+        expect(renderer['highlightedPieces'].size).toBe(2);
+      });
+      
+      it('should clear all piece highlights', () => {
+        renderer.highlightPiece(Vector3.create(3, 3, 3));
+        renderer.highlightPiece(Vector3.create(4, 4, 4));
+        renderer.clearAllPieceHighlights();
+        
+        expect(renderer['highlightedPieces'].size).toBe(0);
+      });
+    });
+    
+    describe('enhanced temporary pieces', () => {
+      it('should create temporary piece with outline', () => {
+        const position = Vector3.create(3, 3, 3);
+        const player = Player.createLocal('Black Player', 'black');
+        
+        renderer.setTemporaryPiece(position, player);
+        
+        expect(renderer['temporaryPiece']).toBeDefined();
+        expect(renderer['temporaryPiece']!.userData).toHaveProperty('baseScale');
+        expect(renderer['temporaryPiece']!.userData).toHaveProperty('time');
+      });
+      
+      it('should clear temporary piece with enhanced material', () => {
+        const position = Vector3.create(3, 3, 3);
+        const player = Player.createLocal('White Player', 'white');
+        
+        renderer.setTemporaryPiece(position, player);
+        renderer.clearTemporaryPiece();
+        
+        expect(renderer['temporaryPiece']).toBeNull();
+      });
+    });
+    
+    describe('state indicators', () => {
+      it('should update current player indicator', () => {
+        renderer.updateCurrentPlayerIndicator('black');
+        
+        expect(renderer['currentPlayerIndicator']).toBeDefined();
+        expect(renderer['uiGroup'].add).toHaveBeenCalled();
+      });
+      
+      it('should switch current player indicator', () => {
+        renderer.updateCurrentPlayerIndicator('black');
+        renderer.updateCurrentPlayerIndicator('white');
+        
+        expect(renderer['uiGroup'].remove).toHaveBeenCalled();
+        expect(renderer['currentPlayerIndicator']).toBeDefined();
+      });
+      
+      it('should update capture count display', () => {
+        renderer.updateCaptureCount(3, 2);
+        
+        expect(renderer['captureCountSprites'].black).toBeDefined();
+        expect(renderer['captureCountSprites'].white).toBeDefined();
+        expect(renderer['uiGroup'].add).toHaveBeenCalledTimes(2);
+      });
+      
+      it('should update capture count with new values', () => {
+        renderer.updateCaptureCount(1, 1);
+        renderer.updateCaptureCount(3, 2);
+        
+        expect(renderer['uiGroup'].remove).toHaveBeenCalledTimes(2);
+        expect(renderer['captureCountSprites'].black).toBeDefined();
+        expect(renderer['captureCountSprites'].white).toBeDefined();
+      });
+    });
+    
+    describe('clearAllHighlights', () => {
+      it('should clear all highlight types at once', () => {
+        const position = Vector3.create(3, 3, 3);
+        const line = Line.fromCoords([Vector3.create(1, 1, 1), Vector3.create(2, 2, 2)]);
+        const player = Player.createLocal('Black Player', 'black');
+        
+        // Add various highlights
+        renderer.highlightPosition(position);
+        renderer.highlightLine(line);
+        renderer.setTemporaryPiece(position, player);
+        
+        // Clear all
+        renderer.clearAllHighlights();
+        
+        expect(renderer['nodeHighlights'].size).toBe(0);
+        expect(renderer['highlightedLines'].size).toBe(0);
+        expect(renderer['highlightedPieces'].size).toBe(0);
+        expect(renderer['temporaryPiece']).toBeNull();
+      });
+    });
+    
+    describe('animations', () => {
+      it('should animate temporary piece in render loop', () => {
+        const position = Vector3.create(3, 3, 3);
+        const player = Player.createLocal('Black Player', 'black');
+        
+        renderer.setTemporaryPiece(position, player);
+        renderer.startRenderLoop();
+        
+        // Verify animation properties are being updated
+        expect(renderer['temporaryPiece']!.userData.time).toBeDefined();
+      });
+      
+      it('should animate current player indicator', () => {
+        renderer.updateCurrentPlayerIndicator('white');
+        renderer.startRenderLoop();
+        
+        // Verify rotation is applied
+        expect(renderer['currentPlayerIndicator']).toBeDefined();
+      });
     });
   });
 });
