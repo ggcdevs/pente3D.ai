@@ -1,0 +1,42 @@
+- Each node on the board should connect to all neighboring nodes as many 3D Moore Neighborhoods creating a mesh where every node is connected to every other node
+- We had trouble in V1 trying to implement diagonals. To avoid future issues, we want two functions for generating lines on the board:
+  - generateFullLine(startNode, endNode) should create a line from one face of the grid to another face and include validations:
+    - startNode and endNode are on a face
+    - startNode and endNode are connected by a line
+    - the line connecting startNode and endNode is not already drawn
+    - print a warning if either of the above is not true
+  - generatePartialLine(startNode, endNode) should create a partial line and only be used if absolutely necessary (e.g.: to draw the winning line)
+    - both nodes are connected by a line
+    - the line is not already drawn
+- We want the game to automatically declare a winner based on 5 capture events or 5 pieces in a row
+- We want keyboard shortcuts:
+  - ctl+z: undo the last move (should keep a running history such that the player can undo back to the beginning of the game, even after the game is won)
+  - ctl+shift+z / ctl+y: redo the last move
+  - t: enter temporary placement mode
+    - the user is able to place a translucent piece to examine what that would look like on the board
+    - in this mode, the two following new shortcuts are enabled:
+      - t: remove any temporary pieces and exit temporary placement mode
+      - enter: accept the temporary piece as a normal piece and conclude the player's turn
+  - d: toggle diagonal lines (set diagonal gridlines as "active" or "inactive")
+  - shift+d: show diagonal lines only (set diagonal gridlines as "active", set horizontal/vertical gridlines as "inactive")
+  - v: toggle visibility of all "active" gridlines
+- By default, vertical and horizontal gridlines should be shown forming cubes
+- Small spheres should be placed on each intersection to show placement nodes
+- We want a Menu button in the top right to toggle a menu modal with buttons for:
+  - Settings (open settings modal)
+  - Host Game (generates an inline "game code" for hosting a networked game via PeerJS (more detail below))
+  - Join Game (with an input box for joining a networked game via a "game code")
+  - Load Game (for loading a game JSON)
+  - Export Game (exports the current game state into a downloadable game JSON file)
+- Save a game state
+- A banner in the top right to show score, current player, and buttons for "Undo", "Redo", and "Reset"
+- Hovering over a line highlights that entire gridline and the pieces played on that gridline
+- Hovering over an open node highlights that node, all intersecting active gridlines, and all pieces played on those gridlines
+- Should be able to rotate (left click + drag), pan (right click + drag), and zoom (scroll)
+- All colors and transluciencies of all elements (gridlines, nodes, spheres, temporary spheres, etc...) should be configurable
+  - We would like to be able to save these configurations via localStorage
+- The size of the board should be configurable via the settings modal
+- there should be a function for placing a piece `placePiece(coordinates)` that returns either an updated GameState or throws an exception if it is an illegal move
+  - this will ultimately be used to facilitate unit testing, AI/LLM integration, and networked games
+- there should be a Game class that tracks all history and game states
+- We want networked games

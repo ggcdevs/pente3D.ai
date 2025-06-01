@@ -1,0 +1,322 @@
+digraph ClassDiagram {
+    rankdir=TB;
+    node [shape=record, fontname="Arial"];
+    edge [fontname="Arial"];
+    
+    // Core Game Logic Classes
+    Game [label="{Game|
+        - currentState: GameState\l
+        - history: GameState[]\l
+        - settings: Settings\l
+        - networkManager: NetworkManager\l
+        - players: Map\<string, Player\>\l
+        |
+        + placePiece(coords: Vector3): GameState\l
+        + undo(): GameState\l
+        + redo(): GameState\l
+        + reset(): void\l
+        + exportState(): string\l
+        + importState(json: string): void\l
+        + getCurrentPlayer(): Player\l
+        + isGameOver(): boolean\l
+        + getWinner(): Player | null\l
+    }"];
+    
+    GameState [label="{GameState|
+        - board: Board\l
+        - currentPlayer: Player\l
+        - captures: Map\<Player, number\>\l
+        - moveHistory: Move[]\l
+        - hashId: string\l
+        - timestamp: number\l
+        - isGameOver: boolean\l
+        - winner: Player | null\l
+        |
+        + constructor(board: Board, player: Player, captures: Map, moves: Move[], prevHash?: string)\l
+        + generateHash(): string\l
+        + clone(): GameState\l
+        + isValid(): boolean\l
+        + equals(other: GameState): boolean\l
+        + getMove(index: number): Move\l
+        + addMove(move: Move): GameState\l
+    }"];
+    
+    Board [label="{Board|
+        - size: Vector3\l
+        - nodes: Node[][][]\l
+        - lines: Line[]\l
+        - activeLines: Set\<string\>\l
+        - pieces: Map\<string, Piece\>\l
+        |
+        + constructor(width: number, height: number, depth: number)\l
+        + isValidMove(coords: Vector3): boolean\l
+        + placePiece(coords: Vector3, player: Player): Board\l
+        + removePiece(coords: Vector3): Board\l
+        + getPiece(coords: Vector3): Piece | null\l
+        + getNeighbors(coords: Vector3): Vector3[]\l
+        + checkWinConditions(player: Player): WinResult | null\l
+        + detectCaptures(coords: Vector3, player: Player): Vector3[]\l
+        + generateFullLine(start: Vector3, end: Vector3): Line | null\l
+        + generatePartialLine(start: Vector3, end: Vector3): Line | null\l
+        + getAllLines(): Line[]\l
+        + getLinePieces(line: Line): Piece[]\l
+        + clone(): Board\l
+    }"];
+    
+    Player [label="{Player|
+        - id: string\l
+        - color: string\l
+        - isLocal: boolean\l
+        - captures: number\l
+        - connectionId?: string\l
+        |
+        + constructor(id: string, color: string, isLocal: boolean)\l
+        + makeMove(coords: Vector3): Move\l
+        + getId(): string\l
+        + getColor(): string\l
+        + incrementCaptures(): void\l
+        + isConnected(): boolean\l
+    }"];
+    
+    // Data Structures
+    Move [label="{Move|
+        - coords: Vector3\l
+        - player: Player\l
+        - timestamp: number\l
+        - capturedPieces: Vector3[]\l
+        |
+        + constructor(coords: Vector3, player: Player, captured?: Vector3[])\l
+        + isCapture(): boolean\l
+        + getCoords(): Vector3\l
+    }"];
+    
+    Piece [label="{Piece|
+        - coords: Vector3\l
+        - player: Player\l
+        - isTemporary: boolean\l
+        |
+        + constructor(coords: Vector3, player: Player, temporary?: boolean)\l
+        + getCoords(): Vector3\l
+        + getPlayer(): Player\l
+    }"];
+    
+    Line [label="{Line|
+        - id: string\l
+        - start: Vector3\l
+        - end: Vector3\l
+        - direction: Vector3\l
+        - points: Vector3[]\l
+        - isActive: boolean\l
+        |
+        + constructor(start: Vector3, end: Vector3)\l
+        + contains(coords: Vector3): boolean\l
+        + getPoints(): Vector3[]\l
+        + getId(): string\l
+    }"];
+    
+    WinResult [label="{WinResult|
+        - type: 'five-in-row' | 'captures'\l
+        - player: Player\l
+        - winningLine?: Line\l
+        - captureCount?: number\l
+        |
+        + constructor(type: string, player: Player, line?: Line, count?: number)\l
+    }"];
+    
+    // Rendering Classes
+    Renderer [label="{Renderer|
+        - scene: THREE.Scene\l
+        - camera: THREE.PerspectiveCamera\l
+        - renderer: THREE.WebGLRenderer\l
+        - boardMesh: THREE.Group\l
+        - pieces: Map\<string, THREE.Mesh\>\l
+        - lines: Map\<string, THREE.Line\>\l
+        - nodes: Map\<string, THREE.Mesh\>\l
+        - highlightedObjects: Set\<THREE.Object3D\>\l
+        |
+        + constructor(container: HTMLElement)\l
+        + renderBoard(board: Board): void\l
+        + updatePieces(board: Board): void\l
+        + highlightLine(line: Line): void\l
+        + highlightNode(coords: Vector3): void\l
+        + clearHighlights(): void\l
+        + addTemporaryPiece(coords: Vector3, player: Player): void\l
+        + removeTemporaryPieces(): void\l
+        + animate(): void\l
+        + resize(width: number, height: number): void\l
+        + dispose(): void\l
+    }"];
+    
+    InputHandler [label="{InputHandler|
+        - camera: THREE.Camera\l
+        - raycaster: THREE.Raycaster\l
+        - game: Game\l
+        - renderer: Renderer\l
+        - isTemporaryMode: boolean\l
+        - mouse: THREE.Vector2\l
+        |
+        + constructor(game: Game, renderer: Renderer)\l
+        + handleClick(event: MouseEvent): void\l
+        + handleHover(event: MouseEvent): void\l
+        + handleKeyPress(event: KeyboardEvent): void\l
+        + handleMouseMove(event: MouseEvent): void\l
+        + handleWheel(event: WheelEvent): void\l
+        + getIntersectedObject(coords: Vector2): THREE.Intersection | null\l
+        + coordsToVector3(coords: Vector2): Vector3 | null\l
+        + enableTemporaryMode(): void\l
+        + disableTemporaryMode(): void\l
+    }"];
+    
+    // UI Classes
+    UI [label="{UI|
+        - menuModal: MenuModal\l
+        - settingsModal: SettingsModal\l
+        - scorePanel: ScorePanel\l
+        - gameUI: GameUI\l
+        - game: Game\l
+        |
+        + constructor(game: Game)\l
+        + showMenu(): void\l
+        + hideMenu(): void\l
+        + updateScore(captures: Map\<Player, number\>): void\l
+        + showDialog(title: string, message: string): Promise\<boolean\>\l
+        + showNotification(message: string): void\l
+        + setCurrentPlayer(player: Player): void\l
+    }"];
+    
+    MenuModal [label="{MenuModal|
+        - element: HTMLElement\l
+        - isVisible: boolean\l
+        |
+        + constructor()\l
+        + show(): void\l
+        + hide(): void\l
+        + onCreateGame(callback: () =\> void): void\l
+        + onJoinGame(callback: (code: string) =\> void): void\l
+        + onSettings(callback: () =\> void): void\l
+        + onExport(callback: () =\> void): void\l
+        + onImport(callback: (file: File) =\> void): void\l
+    }"];
+    
+    SettingsModal [label="{SettingsModal|
+        - element: HTMLElement\l
+        - settings: Settings\l
+        |
+        + constructor(settings: Settings)\l
+        + show(): void\l
+        + hide(): void\l
+        + updatePreview(): void\l
+        + resetToDefaults(): void\l
+        + save(): void\l
+    }"];
+    
+    Settings [label="{Settings|
+        - boardSize: Vector3\l
+        - colors: ColorScheme\l
+        - keybindings: Map\<string, string\>\l
+        - visuals: VisualSettings\l
+        |
+        + constructor()\l
+        + save(): void\l
+        + load(): Settings\l
+        + reset(): void\l
+        + getBoardSize(): Vector3\l
+        + getColor(element: string): string\l
+        + setColor(element: string, color: string): void\l
+    }"];
+    
+    // Network Classes
+    NetworkManager [label="{NetworkManager|
+        - peer: Peer | null\l
+        - connection: DataConnection | null\l
+        - gameCode: string | null\l
+        - isInitiator: boolean\l
+        - game: Game\l
+        - callbacks: Map\<string, Function\>\l
+        |
+        + constructor(game: Game)\l
+        + createNetworkedGame(): Promise\<string\>\l
+        + joinGame(code: string): Promise\<void\>\l
+        + sendMove(move: Move, gameState: GameState): void\l
+        + disconnect(): void\l
+        + syncState(gameState: GameState): void\l
+        + resolveConflict(localState: GameState, remoteState: GameState): GameState\l
+        + onMove(callback: (move: Move, state: GameState) =\> void): void\l
+        + onDisconnect(callback: () =\> void): void\l
+        + isConnected(): boolean\l
+    }"];
+    
+    // Helper Types
+    Vector3 [label="{Vector3|
+        - x: number\l
+        - y: number\l
+        - z: number\l
+        |
+        + constructor(x: number, y: number, z: number)\l
+        + equals(other: Vector3): boolean\l
+        + toString(): string\l
+        + clone(): Vector3\l
+        + add(other: Vector3): Vector3\l
+        + subtract(other: Vector3): Vector3\l
+        + distance(other: Vector3): number\l
+    }"];
+    
+    ColorScheme [label="{ColorScheme|
+        - background: string\l
+        - gridlines: string\l
+        - nodes: string\l
+        - blackPiece: string\l
+        - whitePiece: string\l
+        - highlight: string\l
+        - temporary: string\l
+        |
+        + getColor(element: string): string\l
+        + setColor(element: string, color: string): void\l
+    }"];
+    
+    VisualSettings [label="{VisualSettings|
+        - gridlineOpacity: number\l
+        - nodeSize: number\l
+        - pieceSize: number\l
+        - temporaryOpacity: number\l
+        - showDiagonals: boolean\l
+        - showGridlines: boolean\l
+        |
+        + getOpacity(element: string): number\l
+        + setOpacity(element: string, opacity: number): void\l
+    }"];
+    
+    // Relationships
+    Game -> GameState [label="1..*"];
+    Game -> Settings [label="1"];
+    Game -> NetworkManager [label="1"];
+    Game -> Player [label="2"];
+    
+    GameState -> Board [label="1"];
+    GameState -> Move [label="1..*"];
+    
+    Board -> Piece [label="0..*"];
+    Board -> Line [label="1..*"];
+    Board -> Vector3 [label="uses"];
+    Board -> WinResult [label="returns"];
+    
+    Move -> Vector3 [label="1..*"];
+    Piece -> Vector3 [label="1"];
+    Line -> Vector3 [label="2..*"];
+    
+    Renderer -> Board [label="renders"];
+    InputHandler -> Game [label="controls"];
+    InputHandler -> Renderer [label="uses"];
+    
+    UI -> MenuModal [label="1"];
+    UI -> SettingsModal [label="1"];
+    UI -> Game [label="observes"];
+    
+    Settings -> ColorScheme [label="1"];
+    Settings -> VisualSettings [label="1"];
+    Settings -> Vector3 [label="uses"];
+    
+    NetworkManager -> Game [label="syncs"];
+    NetworkManager -> GameState [label="transmits"];
+    NetworkManager -> Move [label="sends"];
+}
