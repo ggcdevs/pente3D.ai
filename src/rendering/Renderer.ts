@@ -5,6 +5,9 @@ import { Vector3 } from '@/core/Vector3';
 import { Piece } from '@/core/Piece';
 import { Player } from '@/core/Player';
 import { Line } from '@/core/Line';
+import { PerformanceMonitor } from '@/utils/PerformanceMonitor';
+import { QualityManager, QualitySettings } from './QualityManager';
+import { ObjectPool } from '@/utils/ObjectPool';
 
 export interface RendererOptions {
   canvas: HTMLCanvasElement;
@@ -68,9 +71,31 @@ export class Renderer {
   private currentPlayerIndicator: THREE.Mesh | null = null;
   private captureCountSprites: { black: THREE.Sprite | null, white: THREE.Sprite | null } = { black: null, white: null };
   
-  // Performance optimization - reserved for future use
-  // private materialPool: Map<string, THREE.Material[]> = new Map();
-  // private geometryPool: Map<string, THREE.BufferGeometry[]> = new Map();
+  // Performance optimization
+  private performanceMonitor?: PerformanceMonitor;
+  private qualityManager?: QualityManager;
+  private objectPools: Map<string, ObjectPool<any>> = new Map();
+  private materialPool: Map<string, THREE.Material[]> = new Map();
+  private geometryPool: Map<string, THREE.BufferGeometry[]> = new Map();
+  private frustumCuller: THREE.Frustum = new THREE.Frustum();
+  private cameraMatrix: THREE.Matrix4 = new THREE.Matrix4();
+  private renderStats = {
+    visibleObjects: 0,
+    culledObjects: 0,
+    batchedDrawCalls: 0
+  };
+  
+  // Level of Detail (LOD) management
+  private lodManager = {
+    enabled: true,
+    distances: [50, 150, 300],
+    updateFrequency: 10,
+    frameCounter: 0
+  };
+  
+  // Batch rendering for pieces - reserved for future use
+  // private pieceBatches: Map<string, THREE.InstancedMesh> = new Map();
+  // private maxInstancesPerBatch = 1000;
   
   constructor(options: RendererOptions) {
     // Set default options
@@ -984,7 +1009,43 @@ export class Renderer {
   }
   
   render(): void {
+    if (!this.scene || !this.camera) return;
+    
+    if (this.performanceMonitor) {
+      this.performanceMonitor.beginFrame();
+    }
+    
+    // Update frustum for culling
+    this.lodManager.frameCounter++;
+    if (this.lodManager.frameCounter % 2 === 0) { // Update frustum every other frame
+      this.cameraMatrix.multiplyMatrices(
+        this.camera.projectionMatrix,
+        this.camera.matrixWorldInverse
+      );
+      this.frustumCuller.setFromProjectionMatrix(this.cameraMatrix);
+    }
+    
+    // Perform frustum culling
+    this.performFrustumCulling();
+    
+    // Update LOD if needed
+    if (this.lodManager.enabled && 
+        this.lodManager.frameCounter % this.lodManager.updateFrequency === 0) {
+      this.updateLOD();
+    }
+    
+    // Update animations efficiently
+    if (this.qualityManager) {
+      const quality = this.qualityManager.getSettings().animationQuality;
+      this.updateAnimations(quality);
+    }
+    
+    // Render scene
     this.renderer.render(this.scene, this.camera);
+    
+    if (this.performanceMonitor) {
+      this.performanceMonitor.endFrame();
+    }
   }
   
   clearAllHighlights(): void {
@@ -1223,6 +1284,23 @@ export class Renderer {
     this.pieceGeometry.dispose();
     this.nodeGeometry.dispose();
     
+    // Dispose performance resources
+    // Clear object pools
+    this.objectPools.forEach(pool => pool.clear());
+    this.objectPools.clear();
+    
+    // Clear material pool
+    this.materialPool.forEach(materials => {
+      materials.forEach(m => m.dispose());
+    });
+    this.materialPool.clear();
+    
+    // Clear geometry pool
+    this.geometryPool.forEach(geometries => {
+      geometries.forEach(g => g.dispose());
+    });
+    this.geometryPool.clear();
+    
     // Dispose renderer
     this.renderer.dispose();
     
@@ -1245,5 +1323,171 @@ export class Renderer {
   
   getControls(): OrbitControls {
     return this.controls;
+  }
+  
+  // Performance optimization methods
+  
+  setPerformanceMonitor(monitor: PerformanceMonitor): void {
+    this.performanceMonitor = monitor;
+    monitor.setRenderer(this.renderer);
+  }
+  
+  setQualityManager(manager: QualityManager): void {
+    this.qualityManager = manager;
+    
+    // Apply quality settings
+    manager.on('quality-changed', ({ settings }: any) => {
+      this.applyQualitySettings(settings);
+    });
+  }
+  
+  private applyQualitySettings(settings: QualitySettings): void {
+    // Update renderer settings
+    this.renderer.setPixelRatio(settings.pixelRatio);
+    
+    // Update shadow settings
+    this.renderer.shadowMap.enabled = settings.shadowQuality !== 'none';
+    if (settings.shadowQuality !== 'none') {
+      switch (settings.shadowQuality) {
+        case 'low':
+          this.renderer.shadowMap.type = THREE.BasicShadowMap;
+          break;
+        case 'medium':
+          this.renderer.shadowMap.type = THREE.PCFShadowMap;
+          break;
+        case 'high':
+          this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+          break;
+      }
+    }
+    
+    // Recreate renderer if needed (for antialias changes)
+    if ((this.renderer as any).antialias !== settings.antialias) {
+      this.recreateRenderer(settings);
+    }
+  }
+  
+  private recreateRenderer(settings: QualitySettings): void {
+    const oldRenderer = this.renderer;
+    const canvas = oldRenderer.domElement;
+    
+    // Create new renderer
+    this.renderer = new THREE.WebGLRenderer({
+      canvas,
+      antialias: settings.antialias,
+      powerPreference: 'high-performance'
+    });
+    
+    // Copy settings
+    this.renderer.setSize(canvas.width, canvas.height);
+    this.renderer.setPixelRatio(settings.pixelRatio);
+    
+    // Dispose old renderer
+    oldRenderer.dispose();
+    
+    // Update performance monitor
+    if (this.performanceMonitor) {
+      this.performanceMonitor.setRenderer(this.renderer);
+    }
+  }
+  
+  private performFrustumCulling(): void {
+    this.renderStats.visibleObjects = 0;
+    this.renderStats.culledObjects = 0;
+    
+    this.scene.traverse((object) => {
+      if (object instanceof THREE.Mesh || object instanceof THREE.Line) {
+        if (object.geometry.boundingSphere === null) {
+          object.geometry.computeBoundingSphere();
+        }
+        
+        // Check if object is in frustum
+        const inFrustum = this.frustumCuller.intersectsObject(object);
+        object.visible = inFrustum;
+        
+        if (inFrustum) {
+          this.renderStats.visibleObjects++;
+        } else {
+          this.renderStats.culledObjects++;
+        }
+      }
+    });
+  }
+  
+  private updateLOD(): void {
+    const cameraPosition = this.camera.position;
+    
+    this.piecesGroup.children.forEach((piece) => {
+      if (piece instanceof THREE.Mesh) {
+        const distance = piece.position.distanceTo(cameraPosition);
+        
+        // Adjust geometry detail based on distance
+        if (distance > this.lodManager.distances[2]) {
+          // Very far - use simplest geometry
+          piece.visible = false; // Or use very low poly version
+        } else if (distance > this.lodManager.distances[1]) {
+          // Far - use low detail
+          if (piece.geometry.attributes.position.count > 100) {
+            // Switch to simpler geometry
+          }
+        } else if (distance > this.lodManager.distances[0]) {
+          // Medium distance - use medium detail
+        } else {
+          // Close - use full detail
+        }
+      }
+    });
+  }
+  
+  private updateAnimations(quality: 'low' | 'medium' | 'high'): void {
+    const deltaTime = this.clock.getDelta();
+    
+    // Update rotation animations based on quality
+    if (quality === 'high') {
+      // Update all animations every frame
+      this.updateAllAnimations(deltaTime);
+    } else if (quality === 'medium') {
+      // Update animations every other frame
+      if (this.lodManager.frameCounter % 2 === 0) {
+        this.updateAllAnimations(deltaTime);
+      }
+    } else {
+      // Update animations every 3rd frame
+      if (this.lodManager.frameCounter % 3 === 0) {
+        this.updateAllAnimations(deltaTime);
+      }
+    }
+  }
+  
+  private updateAllAnimations(deltaTime: number): void {
+    // Update pulsing animations for temporary pieces
+    if (this.temporaryPiecesGroup.children.length > 0 || this.temporaryPiece) {
+      const time = this.clock.getElapsedTime();
+      const pulseScale = 1 + Math.sin(time * 3) * 0.1;
+      
+      // Update temporary pieces group
+      this.temporaryPiecesGroup.children.forEach((piece) => {
+        piece.scale.setScalar(pulseScale);
+      });
+      
+      // Update single temporary piece
+      if (this.temporaryPiece) {
+        this.temporaryPiece.scale.setScalar(pulseScale);
+      }
+    }
+    
+    // Update rotating animations for highlights
+    this.highlightedLines.forEach((lineGroup) => {
+      lineGroup.children.forEach((child) => {
+        if (child.userData.rotating) {
+          child.rotation.y += deltaTime;
+        }
+      });
+    });
+    
+    // Update animation mixers
+    this.animationMixers.forEach((mixer) => {
+      mixer.update(deltaTime);
+    });
   }
 }

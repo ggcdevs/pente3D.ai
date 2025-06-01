@@ -1,9 +1,10 @@
 import './style.css';
 import { Game } from './core/Game';
-import { Renderer } from './rendering/Renderer';
-import { InputHandler, MenuModal, SettingsModal, DialogManager, NetworkModal, NetworkStatus, ConflictNotification } from './ui';
+import { Renderer, QualityManager } from './rendering';
+import { InputHandler, MenuModal, SettingsModal, DialogManager, NetworkModal, NetworkStatus, ConflictNotification, PerformanceStats } from './ui';
 import { StorageManager } from './storage';
 import { downloadFile, uploadJSON } from './utils/fileIO';
+import { PerformanceMonitor } from './utils';
 
 // Get canvas element
 const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
@@ -36,6 +37,41 @@ const renderer = new Renderer({
   boardSize: 7,
   antialias: true
 });
+
+// Initialize performance monitoring
+const performanceMonitor = new PerformanceMonitor({
+  targetFps: 60,
+  minAcceptableFps: 30,
+  maxMemoryUsage: 500 * 1024 * 1024, // 500MB
+  maxDrawCalls: 1000
+});
+
+const qualityManager = new QualityManager(performanceMonitor);
+
+// Set up renderer with performance optimization
+renderer.setPerformanceMonitor(performanceMonitor);
+renderer.setQualityManager(qualityManager);
+
+// Optional: Add performance stats overlay (development mode)
+let performanceStats: PerformanceStats | null = null;
+if ((import.meta as any).env?.DEV) {
+  performanceStats = new PerformanceStats(performanceMonitor);
+}
+
+// Listen for quality changes and update settings
+qualityManager.on('quality-changed', ({ preset, reason }: any) => {
+  console.log(`Quality changed to ${preset}: ${reason}`);
+  
+  // Save quality preference
+  (settings as any).performanceQuality = preset;
+  StorageManager.save(game, settings);
+});
+
+// Load saved quality preference
+const savedQuality = (settings as any).performanceQuality;
+if (savedQuality && typeof savedQuality === 'string') {
+  qualityManager.setQualityPreset(savedQuality);
+}
 
 // Apply theme settings to renderer
 const colors = settings.getColors();
@@ -420,6 +456,10 @@ if (joinCode) {
 
 // Cleanup on page unload
 window.addEventListener('beforeunload', () => {
+  performanceMonitor.stopMonitoring();
+  if (performanceStats) {
+    performanceStats.destroy();
+  }
   inputHandler.dispose();
   renderer.dispose();
   menuModal.destroy();
