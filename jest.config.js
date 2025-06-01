@@ -8,6 +8,8 @@ module.exports = {
   },
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/src/$1',
+    '^three$': '<rootDir>/tests/__mocks__/three.js',
+    '^three/examples/jsm/controls/OrbitControls$': '<rootDir>/tests/__mocks__/OrbitControls.js',
   },
   setupFilesAfterEnv: ['<rootDir>/tests/setup.ts'],
   collectCoverageFrom: [

@@ -1,53 +1,53 @@
 import './style.css';
-import { Vector3, Board } from '@/core';
+import { Game } from './core/Game';
+import { Renderer } from './rendering/Renderer';
+import { Vector3 } from './core/Vector3';
 
-console.log('Pente3D.ai - Board Logic Testing');
+// Get canvas element
+const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
+if (!canvas) {
+  throw new Error('Canvas element not found');
+}
 
-// Test board creation and line generation
-const board = Board.createEmpty(7);
-const center = Vector3.zero();
-// const player = Player.createLocal('test', 'black');
+// Create game instance
+const game = new Game({ boardSize: 7 });
 
-// Test Moore neighborhood
-const neighbors = board.getNeighbors(center);
-console.log(`Center has ${neighbors.length} neighbors`);
-
-// Test line generation
-const lineUp = board.generatePartialLine(center, { x: 0, y: 1, z: 0 }, 2);
-console.log('Vertical line:', lineUp.toString());
-
-// Test diagonal line
-const diagonalEnd = new Vector3(4, 4, 4);
-const diagonalLine = board.generateFullLine(center, diagonalEnd);
-console.log('Diagonal line:', diagonalLine?.toString());
-
-// Test getting all lines containing a position
-const allLines = board.getLinesContaining(center, 5);
-console.log(`Found ${allLines.length} possible 5-lines containing center`);
-
-// Basic application bootstrap
-document.addEventListener('DOMContentLoaded', () => {
-  const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
-  const loading = document.getElementById('loading');
-  
-  if (!canvas) {
-    throw new Error('Game canvas element not found');
-  }
-  
-  if (loading) {
-    loading.style.display = 'none';
-  }
-  
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
-  
-  console.log('Pente3D.ai board logic initialized');
+// Create renderer
+const renderer = new Renderer({
+  canvas,
+  boardSize: 7,
+  antialias: true
 });
 
-window.addEventListener('resize', () => {
-  const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
-  if (canvas) {
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-  }
+// Set the board
+renderer.setBoard(game.getBoard());
+
+// Start render loop
+renderer.startRenderLoop();
+
+// Demo: Add some pieces
+const demoMoves = [
+  Vector3.create(3, 3, 3),
+  Vector3.create(4, 3, 3),
+  Vector3.create(3, 4, 3),
+  Vector3.create(4, 4, 3),
+  Vector3.create(3, 3, 4),
+];
+
+// Place pieces with delay for visual effect
+demoMoves.forEach((position, index) => {
+  setTimeout(() => {
+    if (game.placePiece(position)) {
+      renderer.updatePieces();
+    }
+  }, index * 1000);
+});
+
+// Handle window focus/blur for performance
+window.addEventListener('blur', () => renderer.stopRenderLoop());
+window.addEventListener('focus', () => renderer.startRenderLoop());
+
+// Cleanup on page unload
+window.addEventListener('beforeunload', () => {
+  renderer.dispose();
 });
