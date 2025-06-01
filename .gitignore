@@ -1,1 +1,6 @@
 *.png
+
+# Build automation scripts and logs
+overnight_build.sh
+overnight_build.log
+.current_chunk_state

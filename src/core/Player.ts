@@ -43,6 +43,10 @@ export class Player implements IPlayer {
     return this._captures;
   }
 
+  get captureCount(): number {
+    return this._captures;
+  }
+
   // Game actions
   incrementCaptures(amount: number = 1): Player {
     if (amount < 0) {
@@ -52,6 +56,10 @@ export class Player implements IPlayer {
     const newPlayer = this.clone();
     newPlayer._captures = this._captures + amount;
     return newPlayer;
+  }
+
+  addCaptures(pairs: number): Player {
+    return this.incrementCaptures(pairs);
   }
 
   resetCaptures(): Player {
@@ -91,5 +99,18 @@ export class Player implements IPlayer {
     const cloned = new Player(this.id, this.color, this.isLocal, this.connectionId);
     cloned._captures = this._captures;
     return cloned;
+  }
+
+  // Deserialization
+  static fromJSON(json: any): Player {
+    if (!json || typeof json !== 'object') {
+      throw new Error('Invalid JSON for Player');
+    }
+    
+    const player = new Player(json.id, json.color, json.isLocal, json.connectionId);
+    if (json.captures !== undefined) {
+      player._captures = json.captures;
+    }
+    return player;
   }
 }

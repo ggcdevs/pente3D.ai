@@ -1,45 +1,49 @@
 import './style.css';
-import { testValue } from '@/utils/test';
-import { Vector3, Player, Move, Piece } from '@/core';
+import { Vector3, Board } from '@/core';
 
-console.log('Pente3D.ai initializing...');
-console.log(testValue);
+console.log('Pente3D.ai - Board Logic Testing');
 
-// Test basic data structures
-const testVector = new Vector3(1, 2, 3);
-const testPlayer = Player.createLocal('player1', 'black');
-const testMove = Move.createSimple(testVector, testPlayer);
-const testPiece = Piece.createNormal(testVector, testPlayer);
+// Test board creation and line generation
+const board = Board.createEmpty(7);
+const center = Vector3.zero();
+// const player = Player.createLocal('test', 'black');
 
-console.log('Data structures loaded:', {
-  vector: testVector.toString(),
-  player: testPlayer.toString(),
-  move: testMove.toString(),
-  piece: testPiece.toString(),
-});
+// Test Moore neighborhood
+const neighbors = board.getNeighbors(center);
+console.log(`Center has ${neighbors.length} neighbors`);
+
+// Test line generation
+const lineUp = board.generatePartialLine(center, { x: 0, y: 1, z: 0 }, 2);
+console.log('Vertical line:', lineUp.toString());
+
+// Test diagonal line
+const diagonalEnd = new Vector3(4, 4, 4);
+const diagonalLine = board.generateFullLine(center, diagonalEnd);
+console.log('Diagonal line:', diagonalLine?.toString());
+
+// Test getting all lines containing a position
+const allLines = board.getLinesContaining(center, 5);
+console.log(`Found ${allLines.length} possible 5-lines containing center`);
 
 // Basic application bootstrap
 document.addEventListener('DOMContentLoaded', () => {
   const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
   const loading = document.getElementById('loading');
-
+  
   if (!canvas) {
     throw new Error('Game canvas element not found');
   }
-
-  // Hide loading indicator
+  
   if (loading) {
     loading.style.display = 'none';
   }
-
-  // Basic canvas setup
+  
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight;
-
-  console.log('Pente3D.ai initialized successfully');
+  
+  console.log('Pente3D.ai board logic initialized');
 });
 
-// Handle window resize
 window.addEventListener('resize', () => {
   const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
   if (canvas) {

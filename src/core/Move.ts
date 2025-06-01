@@ -44,6 +44,17 @@ export class Move implements IMove {
   }
 
   // Factory methods
+  static create(
+    coords: Vector3 | IVector3,
+    playerId: string,
+    capturedPieces: (Vector3 | IVector3)[] = [],
+    timestamp?: number
+  ): Move {
+    // Create a minimal player object with just the ID
+    const player = Player.createLocal(playerId, 'white');
+    return new Move(coords, player, capturedPieces, timestamp);
+  }
+
   static createSimple(coords: Vector3 | IVector3, player: Player | IPlayer): Move {
     return new Move(coords, player);
   }
@@ -71,6 +82,19 @@ export class Move implements IMove {
 
   getPlayer(): Player {
     return this.player;
+  }
+
+  // Getter properties for compatibility
+  get position(): Vector3 {
+    return this.coords;
+  }
+
+  get playerId(): string {
+    return this.player.id;
+  }
+
+  get capturedPositions(): Vector3[] {
+    return this.capturedPieces;
   }
 
   // Validation
@@ -131,6 +155,20 @@ export class Move implements IMove {
       this.player.clone(),
       this.capturedPieces.map(piece => piece.clone()),
       this.timestamp
+    );
+  }
+
+  // Deserialization
+  static fromJSON(json: any): Move {
+    if (!json || typeof json !== 'object') {
+      throw new Error('Invalid JSON for Move');
+    }
+    
+    return new Move(
+      Vector3.fromObject(json.coords),
+      Player.fromJSON ? Player.fromJSON(json.player) : json.player,
+      json.capturedPieces?.map((p: any) => Vector3.fromObject(p)) || [],
+      json.timestamp
     );
   }
 }

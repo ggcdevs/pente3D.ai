@@ -17,6 +17,10 @@ export class Vector3 implements IVector3 {
   }
 
   // Factory methods
+  static create(x: number, y: number, z: number): Vector3 {
+    return new Vector3(x, y, z);
+  }
+
   static fromArray(coords: Coordinates): Vector3 {
     return new Vector3(coords[0], coords[1], coords[2]);
   }

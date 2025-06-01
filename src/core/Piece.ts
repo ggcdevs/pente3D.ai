@@ -140,4 +140,20 @@ export class Piece implements IPiece {
       this.placedAt
     );
   }
+
+  static fromJSON(json: any): Piece {
+    if (!json || typeof json !== 'object') {
+      throw new Error('Invalid JSON for Piece');
+    }
+    
+    return new Piece(
+      Vector3.fromObject(json.coords),
+      Player.fromJSON(json.player),
+      json.isTemporary
+    );
+  }
+
+  get playerId(): string {
+    return this.player.id;
+  }
 }

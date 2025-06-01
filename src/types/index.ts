@@ -1,6 +1,7 @@
 // Core game types
 export type PlayerColor = 'black' | 'white';
 export type PieceType = 'normal' | 'temporary';
+export type BoardSize = 7 | 9 | 11;
 
 // Game state types
 export interface IVector3 {
@@ -29,6 +30,59 @@ export interface IPiece {
   isTemporary: boolean;
 }
 
+export interface IBoard {
+  size: BoardSize;
+  pieces: Map<string, IPiece>;
+}
+
+export interface ILine {
+  coords: IVector3[];
+  direction: IVector3;
+  isComplete: boolean;
+}
+
+export interface IWinResult {
+  winner: IPlayer | null;
+  winningLine: ILine | null;
+  winType: 'five-in-a-row' | 'captures' | null;
+}
+
+// 3D direction vectors for all 26 directions
+export const DIRECTIONS_3D: IVector3[] = [
+  // Face directions (6)
+  { x: 1, y: 0, z: 0 },   // Right
+  { x: -1, y: 0, z: 0 },  // Left
+  { x: 0, y: 1, z: 0 },   // Up
+  { x: 0, y: -1, z: 0 },  // Down
+  { x: 0, y: 0, z: 1 },   // Forward
+  { x: 0, y: 0, z: -1 },  // Backward
+  
+  // Edge directions (12)
+  { x: 1, y: 1, z: 0 },   // Right-Up
+  { x: 1, y: -1, z: 0 },  // Right-Down
+  { x: -1, y: 1, z: 0 },  // Left-Up
+  { x: -1, y: -1, z: 0 }, // Left-Down
+  { x: 1, y: 0, z: 1 },   // Right-Forward
+  { x: 1, y: 0, z: -1 },  // Right-Backward
+  { x: -1, y: 0, z: 1 },  // Left-Forward
+  { x: -1, y: 0, z: -1 }, // Left-Backward
+  { x: 0, y: 1, z: 1 },   // Up-Forward
+  { x: 0, y: 1, z: -1 },  // Up-Backward
+  { x: 0, y: -1, z: 1 },  // Down-Forward
+  { x: 0, y: -1, z: -1 }, // Down-Backward
+  
+  // Corner directions (8)
+  { x: 1, y: 1, z: 1 },   // Right-Up-Forward
+  { x: 1, y: 1, z: -1 },  // Right-Up-Backward
+  { x: 1, y: -1, z: 1 },  // Right-Down-Forward
+  { x: 1, y: -1, z: -1 }, // Right-Down-Backward
+  { x: -1, y: 1, z: 1 },  // Left-Up-Forward
+  { x: -1, y: 1, z: -1 }, // Left-Up-Backward
+  { x: -1, y: -1, z: 1 }, // Left-Down-Forward
+  { x: -1, y: -1, z: -1 } // Left-Down-Backward
+];
+
 // Utility types
 export type Coordinates = [number, number, number];
 export type Direction = IVector3;
+export type CoordKey = string; // Format: "x,y,z"
