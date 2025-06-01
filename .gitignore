@@ -45,3 +45,13 @@ coverage/
 
 # Vite
 .vite/
+
+# Playwright
+test-results/
+playwright-report/
+tests/e2e/fixtures/screenshots/
+tests/e2e/fixtures/diff-screenshots/
+
+# Claude Controller
+.claudecontroller.d/logs/
+.claudecontroller.d/claude_controller.sock

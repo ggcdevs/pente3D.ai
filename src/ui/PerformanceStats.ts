@@ -51,8 +51,9 @@ export class PerformanceStats {
       </div>
     `;
     
+    // Hide it initially by setting style directly
+    container.style.display = 'none';
     document.body.appendChild(container);
-    this.hide();
     
     return container;
   }
