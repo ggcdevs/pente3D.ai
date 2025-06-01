@@ -134,6 +134,14 @@ game.on('gameOver', (data: any) => {
 // Start render loop
 renderer.startRenderLoop();
 
+// Expose objects for E2E testing
+if ((window as any).Playwright || (import.meta as any).env?.DEV) {
+  (window as any).game = game;
+  (window as any).renderer = renderer;
+  (window as any).inputHandler = inputHandler;
+  console.log('Game objects exposed for testing');
+}
+
 // Handle window focus/blur for performance
 window.addEventListener('blur', () => renderer.stopRenderLoop());
 window.addEventListener('focus', () => renderer.startRenderLoop());
@@ -247,12 +255,8 @@ settings.addChangeListener((newSettings) => {
   StorageManager.save(game, newSettings);
 });
 
-// Add menu button to controls
-const menuBtn = document.createElement('button');
-menuBtn.id = 'menu-btn';
-menuBtn.textContent = '☰ Menu';
-menuBtn.style.marginRight = 'auto';
-document.getElementById('game-controls')?.prepend(menuBtn);
+// Get the existing menu button from HTML
+const menuBtn = document.getElementById('menu-btn') as HTMLButtonElement;
 
 // Create menu modal
 const menuModal = new MenuModal({

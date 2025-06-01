@@ -32,6 +32,28 @@ export class GamePage {
 
   async navigate() {
     await this.page.goto('/');
+    
+    // Ensure game objects are exposed to window for testing
+    await this.page.evaluate(() => {
+      // Wait a bit for initialization
+      return new Promise((resolve) => {
+        setTimeout(() => {
+          // These should be set by main.ts but let's make sure
+          const win = window as any;
+          console.log('Game objects available:', {
+            game: !!win.game,
+            renderer: !!win.renderer,
+            inputHandler: !!win.inputHandler
+          });
+          resolve(true);
+        }, 100);
+      });
+    });
+  }
+  
+  async goto() {
+    // Alias for navigate
+    await this.navigate();
   }
 
   async waitForThreeJSLoad(timeout = 10000): Promise<void> {

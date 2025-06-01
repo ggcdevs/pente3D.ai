@@ -149,8 +149,11 @@ export class InputHandler {
             const object = intersection.object;
             if (object && object.userData && object.userData.type === 'intersection') {
                 const position = object.userData.position;
-                if (position instanceof Vector3) {
-                    return position;
+                // Check if it's a Vector3-like object (has x, y, z properties)
+                if (position && typeof position.x === 'number' && 
+                    typeof position.y === 'number' && 
+                    typeof position.z === 'number') {
+                    return position as Vector3;
                 }
             }
         }
@@ -246,8 +249,14 @@ export class InputHandler {
             // Try to place a piece at this position
             if (!this.state.temporaryPieceMode) {
                 try {
-                    this.game.placePiece(boardPosition);
-                    this.emit('piecePlaced', { position: boardPosition });
+                    console.log('Calling placePiece with:', boardPosition);
+                    const result = this.game.placePiece(boardPosition);
+                    console.log('placePiece returned:', result);
+                    if (result) {
+                        this.emit('piecePlaced', { position: boardPosition });
+                    } else {
+                        console.log('placePiece returned false - move was invalid');
+                    }
                 } catch (error) {
                     this.emit('invalidMove', { position: boardPosition, error });
                     console.error('Invalid move:', error);

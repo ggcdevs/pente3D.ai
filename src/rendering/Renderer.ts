@@ -179,7 +179,8 @@ export class Renderer {
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.05;
     this.controls.screenSpacePanning = false;
-    this.controls.minDistance = this.options.boardSize * this.options.cellSize;
+    // Allow camera to zoom inside the board (board radius is ~3.5 for 7x7x7)
+    this.controls.minDistance = 0.5; // Allow very close zoom
     this.controls.maxDistance = this.options.boardSize * this.options.cellSize * 4;
     
     // Set rotation limits
