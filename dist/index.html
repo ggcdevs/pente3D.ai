@@ -1,18 +1,35 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Pente3D.ai - 3D Pente Game</title>
-    <meta name="description" content="3D web-based Pente game with peer-to-peer multiplayer" />
-    <script type="module" crossorigin src="/assets/index-DnranFsa.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-COilww14.css">
+    <title>Pente3D.ai</title>
+    <script type="module" crossorigin src="/assets/index-DTRtAih0.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-BdHZiFF6.css">
   </head>
   <body>
     <div id="app">
       <canvas id="game-canvas"></canvas>
-      <div id="ui-overlay">
-        <div id="loading">Loading Pente3D...</div>
+      <div id="game-controls">
+        <div class="control-group">
+          <button id="undo-btn" title="Undo (Ctrl+Z)">↶ Undo</button>
+          <button id="redo-btn" title="Redo (Ctrl+Y)">↷ Redo</button>
+        </div>
+        <div class="control-group">
+          <button id="reset-btn" title="Reset Game">⟲ Reset</button>
+        </div>
+        <div class="history-controls">
+          <input type="range" id="history-slider" min="0" max="0" value="0" title="Navigate History">
+          <span id="history-info">Move 0 / 0</span>
+        </div>
+      </div>
+      <div id="game-status">
+        <div id="current-player">Current: <span class="player-indicator"></span></div>
+        <div id="capture-counts">
+          <div>Black: <span id="black-captures">0</span></div>
+          <div>White: <span id="white-captures">0</span></div>
+        </div>
       </div>
     </div>
   </body>
