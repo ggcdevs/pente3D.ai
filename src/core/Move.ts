@@ -97,6 +97,10 @@ export class Move implements IMove {
     return this.capturedPieces;
   }
 
+  getPosition(): Vector3 {
+    return this.coords;
+  }
+
   // Validation
   isValid(): boolean {
     try {

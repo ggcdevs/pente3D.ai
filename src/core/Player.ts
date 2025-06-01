@@ -47,6 +47,14 @@ export class Player implements IPlayer {
     return this._captures;
   }
 
+  getColor(): PlayerColor {
+    return this.color;
+  }
+
+  getCaptureCount(): number {
+    return this._captures;
+  }
+
   // Game actions
   incrementCaptures(amount: number = 1): Player {
     if (amount < 0) {

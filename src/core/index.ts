@@ -10,6 +10,7 @@ export { WinResult } from './WinResult';
 // Game logic
 export { GameRules } from './GameRules';
 export { GameState } from './GameState';
+export { Game } from './Game';
 
 // Re-export types for convenience
 export type {

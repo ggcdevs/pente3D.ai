@@ -1,10 +1,11 @@
 import { Board } from './Board';
 import { Player } from './Player';
 import { Move } from './Move';
+import { Piece } from './Piece';
 import { WinResult } from './WinResult';
 import { GameRules } from './GameRules';
 import { Vector3 } from './Vector3';
-import type { BoardSize } from '@/types';
+import type { BoardSize, PlayerColor } from '@/types';
 
 /**
  * Immutable representation of the complete game state
@@ -45,12 +46,21 @@ export class GameState {
   /**
    * Creates initial game state
    * @param boardSize Size of the board
-   * @param players Array of players
+   * @param playersOrFirstPlayer Array of players or first player color
    * @returns New game state
    */
-  static createInitialState(boardSize: number, players: Player[]): GameState {
-    const board = Board.createEmpty(boardSize as BoardSize);
-    return new GameState(board, players);
+  static createInitialState(boardSize: number, playersOrFirstPlayer: Player[] | 'black' | 'white'): GameState {
+    if (typeof playersOrFirstPlayer === 'string') {
+      const blackPlayer = new Player('player1', 'black');
+      const whitePlayer = new Player('player2', 'white');
+      const players = [blackPlayer, whitePlayer];
+      const board = Board.createEmpty(boardSize as BoardSize);
+      const currentPlayerIndex = playersOrFirstPlayer === 'black' ? 0 : 1;
+      return new GameState(board, players, [], currentPlayerIndex);
+    } else {
+      const board = Board.createEmpty(boardSize as BoardSize);
+      return new GameState(board, playersOrFirstPlayer);
+    }
   }
 
   /**
@@ -69,7 +79,8 @@ export class GameState {
     }
 
     // Apply the move to the board
-    let newBoard = this.board.placePieceByPlayer(move.position, move.playerId);
+    const piece = Piece.createNormal(move.position, move.player);
+    let newBoard = this.board.placePiece(piece);
 
     // Detect captures
     const captures = GameRules.detectCaptures(newBoard, move);
@@ -117,6 +128,70 @@ export class GameState {
    */
   getCurrentPlayer(): Player {
     return this.players[this.currentPlayerIndex];
+  }
+
+  /**
+   * Gets the winner of the game
+   * @returns Winner's color or null if game not over
+   */
+  getWinner(): PlayerColor | null {
+    return this.winResult?.getWinner() ?? null;
+  }
+
+  /**
+   * Gets the win result
+   * @returns Win result or null if game not over
+   */
+  getWinResult(): WinResult | null {
+    return this.winResult;
+  }
+
+  /**
+   * Gets the black player
+   * @returns Black player
+   */
+  getBlackPlayer(): Player {
+    const blackPlayer = this.players.find(p => p.getColor() === 'black');
+    if (!blackPlayer) {
+      throw new Error('Black player not found');
+    }
+    return blackPlayer;
+  }
+
+  /**
+   * Gets the white player
+   * @returns White player
+   */
+  getWhitePlayer(): Player {
+    const whitePlayer = this.players.find(p => p.getColor() === 'white');
+    if (!whitePlayer) {
+      throw new Error('White player not found');
+    }
+    return whitePlayer;
+  }
+
+  /**
+   * Gets the number of moves played
+   * @returns Move count
+   */
+  getMoveCount(): number {
+    return this.moveHistory.length;
+  }
+
+  /**
+   * Gets the move history
+   * @returns Readonly array of moves
+   */
+  getMoveHistory(): ReadonlyArray<Move> {
+    return this.moveHistory;
+  }
+
+  /**
+   * Gets the board
+   * @returns The game board
+   */
+  getBoard(): Board {
+    return this.board;
   }
 
   /**

@@ -1,4 +1,4 @@
-import { IWinResult, IPlayer, ILine } from '@/types';
+import { IWinResult, IPlayer, ILine, PlayerColor } from '@/types';
 import { Player } from './Player';
 import { Line } from './Line';
 
@@ -10,6 +10,18 @@ export class WinResult implements IWinResult {
   // Compatibility properties
   get type(): 'five-in-a-row' | 'captures' | null {
     return this.winType;
+  }
+
+  getWinner(): PlayerColor | null {
+    return this.winner?.color ?? null;
+  }
+
+  getWinType(): 'five-in-a-row' | 'captures' | null {
+    return this.winType;
+  }
+
+  getLine(): Line | null {
+    return this.winningLine;
   }
 
   constructor(

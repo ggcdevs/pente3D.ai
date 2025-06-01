@@ -23,6 +23,10 @@ export class Board implements IBoard {
     return new Board(size);
   }
 
+  getSize(): BoardSize {
+    return this.size;
+  }
+
   static fromPieces(pieces: (Piece | IPiece)[], size: BoardSize = 7): Board {
     let board = new Board(size);
     pieces.forEach(piece => {
