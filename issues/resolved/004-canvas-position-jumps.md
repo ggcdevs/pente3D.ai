@@ -1,9 +1,10 @@
 # Issue #004: Canvas Jumps After Click
 
-**Status**: Todo  
+**Status**: Resolved  
 **Priority**: High (Visual bug, blocks all testing)  
 **Reported**: 2025-06-01 by user  
 **Last Updated**: 2025-06-01  
+**Resolved**: 2025-06-01  
 
 ## Description
 After clicking the canvas:
@@ -43,6 +44,16 @@ After clicking the canvas:
 - Any setTimeout/setInterval calls
 - CSS position/transform properties
 
+## Resolution
+The canvas jumping was caused by the CSS focus outline with `outline-offset: 2px` pushing the layout when the canvas received focus. Fixed by:
+1. Removed outline-offset in high-contrast.css (set to 0)
+2. Disabled focus outline on canvas except in high-contrast mode
+3. Fixed canvas positioning to use absolute positioning with viewport units
+
+## Files Changed  
+- `src/styles/high-contrast.css` - Removed outline-offset (line 202)
+- `src/style.css` - Canvas uses absolute positioning (lines 41-47)
+
 ## Related Issues
 - #002 (canvas sizing - same rendering system)
-- #003 (click handling - triggers this issue)
+- #003 (click handling - triggered this issue)

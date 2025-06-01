@@ -189,27 +189,56 @@ export class InputHandler {
         this.state.mouseDown = true;
         this.state.mouseButton = event.button;
         
-        // Disable orbit controls for left click to allow piece placement
-        if (event.button === 0) {
-            this.controls.enabled = false;
-        }
+        // Track if we're dragging
+        this.updateMouse(event);
+        const startX = event.clientX;
+        const startY = event.clientY;
+        
+        // Store start position to detect drag vs click
+        (this as any).mouseDownPosition = { x: startX, y: startY };
     }
 
-    private onMouseUp(_event: MouseEvent): void {
+    private onMouseUp(event: MouseEvent): void {
+        const wasDragging = this.state.mouseDown && (this as any).mouseDownPosition && (
+            Math.abs(event.clientX - (this as any).mouseDownPosition.x) > 5 ||
+            Math.abs(event.clientY - (this as any).mouseDownPosition.y) > 5
+        );
+        
         this.state.mouseDown = false;
         this.state.mouseButton = -1;
+        (this as any).mouseDownPosition = null;
         
-        // Re-enable orbit controls
-        this.controls.enabled = true;
+        // Mark if this was a drag
+        (this as any).wasRecentDrag = wasDragging;
+        
+        // Clear drag flag after a short delay
+        if (wasDragging) {
+            setTimeout(() => {
+                (this as any).wasRecentDrag = false;
+            }, 100);
+        }
     }
 
     private onClick(event: MouseEvent): void {
         // Only process left clicks
         if (event.button !== 0) return;
         
+        // Skip if this was triggered by a drag
+        const wasDragging = (this as any).wasRecentDrag;
+        if (wasDragging) {
+            (this as any).wasRecentDrag = false;
+            return;
+        }
+        
         this.updateMouse(event);
         const intersections = this.performRaycast();
         const boardPosition = this.findBoardIntersection(intersections);
+        
+        console.log('Click detected:', { 
+            intersections: intersections.length, 
+            boardPosition,
+            temporaryMode: this.state.temporaryPieceMode 
+        });
         
         if (boardPosition) {
             this.state.selectedPosition = boardPosition;
@@ -221,6 +250,7 @@ export class InputHandler {
                     this.emit('piecePlaced', { position: boardPosition });
                 } catch (error) {
                     this.emit('invalidMove', { position: boardPosition, error });
+                    console.error('Invalid move:', error);
                 }
             } else {
                 // In temporary mode, just show the piece

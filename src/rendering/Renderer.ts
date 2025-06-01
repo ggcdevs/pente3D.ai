@@ -138,7 +138,7 @@ export class Renderer {
   }
   
   private initializeCamera(): void {
-    const aspect = this.options.canvas.clientWidth / this.options.canvas.clientHeight;
+    const aspect = window.innerWidth / window.innerHeight;
     this.camera = new THREE.PerspectiveCamera(45, aspect, 0.1, 1000);
     
     // Position camera to view the board
@@ -153,9 +153,10 @@ export class Renderer {
       antialias: this.options.antialias
     });
     
+    // Use viewport dimensions instead of canvas client dimensions
     this.renderer.setSize(
-      this.options.canvas.clientWidth,
-      this.options.canvas.clientHeight
+      window.innerWidth,
+      window.innerHeight
     );
     
     this.renderer.setPixelRatio(window.devicePixelRatio);
@@ -163,6 +164,16 @@ export class Renderer {
   
   private initializeControls(): void {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+    
+    // Configure controls per basic-wants.md:
+    // left click + drag = rotate
+    // right click + drag = pan  
+    // scroll = zoom
+    this.controls.mouseButtons = {
+      LEFT: THREE.MOUSE.ROTATE,
+      MIDDLE: THREE.MOUSE.DOLLY,
+      RIGHT: THREE.MOUSE.PAN
+    };
     
     // Configure controls
     this.controls.enableDamping = true;
@@ -317,9 +328,9 @@ export class Renderer {
   }
   
   private handleResize(): void {
-    const canvas = this.options.canvas;
-    const width = canvas.clientWidth;
-    const height = canvas.clientHeight;
+    // Use viewport dimensions
+    const width = window.innerWidth;
+    const height = window.innerHeight;
     
     // Update camera aspect ratio
     this.camera.aspect = width / height;

@@ -196,8 +196,8 @@ body.high-contrast {
   padding: 0.5rem;
 }
 
-/* Keyboard focus for game canvas */
-#game-canvas:focus {
+/* Keyboard focus for game canvas - only in high contrast mode */
+.high-contrast #game-canvas:focus {
   outline: 3px solid #ff0;
-  outline-offset: 2px;
+  outline-offset: 0; /* Prevent layout shift */
 }
