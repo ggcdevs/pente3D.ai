@@ -28,6 +28,12 @@ const renderer = new Renderer({
   antialias: true
 });
 
+// Apply theme settings to renderer
+const colors = settings.getColors();
+const opacity = settings.getOpacitySettings();
+renderer.applyColorSettings(colors);
+renderer.applyOpacitySettings(opacity);
+
 // Set the board
 renderer.setBoard(game.getBoard());
 

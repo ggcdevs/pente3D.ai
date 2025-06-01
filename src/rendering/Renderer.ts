@@ -1009,6 +1009,163 @@ export class Renderer {
   // Performance optimization methods - to be implemented later
   // The materialPool and geometryPool are defined for future optimization
   
+  // Settings application methods
+  applyColorSettings(colors: any): void {
+    // Update background color
+    if (colors.background) {
+      this.scene.background = new THREE.Color(colors.background);
+    }
+    
+    // Update grid material
+    if (colors.boardGrid && this.gridMaterial) {
+      this.gridMaterial.color.set(colors.boardGrid);
+    }
+    
+    // Update node material
+    if (colors.nodeSpheres && this.nodeMaterial) {
+      this.nodeMaterial.color.set(colors.nodeSpheres);
+    }
+    
+    // Update piece materials
+    if (colors.blackPieces && this.blackPieceMaterial) {
+      this.blackPieceMaterial.color.set(colors.blackPieces);
+      this.temporaryBlackMaterial.color.set(colors.blackPieces);
+    }
+    
+    if (colors.whitePieces && this.whitePieceMaterial) {
+      this.whitePieceMaterial.color.set(colors.whitePieces);
+      this.temporaryWhiteMaterial.color.set(colors.whitePieces);
+    }
+    
+    // Update highlight materials
+    if (colors.highlightedNodes && this.highlightedNodeMaterial) {
+      this.highlightedNodeMaterial.color.set(colors.highlightedNodes);
+    }
+    
+    if (colors.highlightedLines && this.lineHighlightMaterial) {
+      this.lineHighlightMaterial.color.set(colors.highlightedLines);
+    }
+    
+    if (colors.capturedPieces && this.captureHighlightMaterial) {
+      this.captureHighlightMaterial.color.set(colors.capturedPieces);
+    }
+    
+    if (colors.winningLine && this.connectedPieceHighlightMaterial) {
+      this.connectedPieceHighlightMaterial.color.set(colors.winningLine);
+    }
+    
+    // Update temporary piece materials
+    if (colors.temporaryPieces) {
+      // Add slight tint to temporary materials
+      const tempColor = new THREE.Color(colors.temporaryPieces);
+      this.temporaryBlackMaterial.emissive = tempColor;
+      this.temporaryBlackMaterial.emissiveIntensity = 0.3;
+      this.temporaryWhiteMaterial.emissive = tempColor;
+      this.temporaryWhiteMaterial.emissiveIntensity = 0.3;
+    }
+    
+    // Update lighting
+    if (colors.ambientLight) {
+      const ambientLight = this.scene.children.find(child => child instanceof THREE.AmbientLight) as THREE.AmbientLight;
+      if (ambientLight) {
+        ambientLight.color.set(colors.ambientLight);
+      }
+    }
+    
+    if (colors.directionalLight) {
+      const directionalLight = this.scene.children.find(child => child instanceof THREE.DirectionalLight) as THREE.DirectionalLight;
+      if (directionalLight) {
+        directionalLight.color.set(colors.directionalLight);
+      }
+    }
+    
+    // Re-render to show changes
+    this.render();
+  }
+  
+  applyOpacitySettings(opacity: any): void {
+    // Update grid opacity
+    if (opacity.boardGrid !== undefined && this.gridMaterial) {
+      this.gridMaterial.opacity = opacity.boardGrid;
+      this.gridMaterial.transparent = opacity.boardGrid < 1;
+    }
+    
+    // Update node opacity
+    if (opacity.nodeSpheres !== undefined && this.nodeMaterial) {
+      this.nodeMaterial.opacity = opacity.nodeSpheres;
+      this.nodeMaterial.transparent = opacity.nodeSpheres < 1;
+    }
+    
+    // Update piece opacity
+    if (opacity.pieces !== undefined) {
+      this.blackPieceMaterial.opacity = opacity.pieces;
+      this.blackPieceMaterial.transparent = opacity.pieces < 1;
+      this.whitePieceMaterial.opacity = opacity.pieces;
+      this.whitePieceMaterial.transparent = opacity.pieces < 1;
+    }
+    
+    // Update temporary piece opacity
+    if (opacity.temporaryPieces !== undefined) {
+      this.options.temporaryOpacity = opacity.temporaryPieces;
+      this.temporaryBlackMaterial.opacity = opacity.temporaryPieces;
+      this.temporaryBlackMaterial.transparent = opacity.temporaryPieces < 1;
+      this.temporaryWhiteMaterial.opacity = opacity.temporaryPieces;
+      this.temporaryWhiteMaterial.transparent = opacity.temporaryPieces < 1;
+      
+      // Update existing temporary piece
+      if (this.temporaryPiece) {
+        const material = this.temporaryPiece.material as THREE.MeshPhongMaterial;
+        material.opacity = opacity.temporaryPieces;
+      }
+    }
+    
+    // Update highlight opacity
+    if (opacity.highlights !== undefined) {
+      this.highlightedNodeMaterial.opacity = opacity.highlights;
+      this.highlightedNodeMaterial.transparent = opacity.highlights < 1;
+      this.lineHighlightMaterial.opacity = opacity.highlights;
+      this.lineHighlightMaterial.transparent = opacity.highlights < 1;
+      this.captureHighlightMaterial.opacity = opacity.highlights;
+      this.captureHighlightMaterial.transparent = opacity.highlights < 1;
+      this.connectedPieceHighlightMaterial.opacity = opacity.highlights;
+      this.connectedPieceHighlightMaterial.transparent = opacity.highlights < 1;
+    }
+    
+    // Re-render to show changes
+    this.render();
+  }
+  
+  updateElementColor(element: string, color: string): void {
+    const colorObj: any = {};
+    colorObj[element] = color;
+    this.applyColorSettings(colorObj);
+  }
+  
+  updateElementOpacity(element: string, opacity: number): void {
+    const opacityObj: any = {};
+    opacityObj[element] = opacity;
+    this.applyOpacitySettings(opacityObj);
+  }
+  
+  enterPreviewMode(): void {
+    // Optional: Add visual indicator that we're in preview mode
+    // For now, the live updates handle this
+  }
+  
+  exitPreviewMode(): void {
+    // Optional: Remove preview mode indicators
+    // For now, the live updates handle this
+  }
+  
+  applyPreviewSettings(settings: any): void {
+    if (settings.colors) {
+      this.applyColorSettings(settings.colors);
+    }
+    if (settings.opacity) {
+      this.applyOpacitySettings(settings.opacity);
+    }
+  }
+  
   dispose(): void {
     // Stop render loop
     this.stopRenderLoop();

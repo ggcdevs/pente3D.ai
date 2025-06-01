@@ -27,6 +27,11 @@ export interface SettingsData {
   };
   soundEnabled: boolean;
   animationSpeed: number;
+  // Enhanced settings for themes
+  colors?: any;
+  opacity?: any;
+  activeTheme?: string;
+  customThemes?: any[];
 }
 
 export class StorageManager {
@@ -34,6 +39,7 @@ export class StorageManager {
   private static readonly CURRENT_VERSION = 1;
   private static readonly MAX_SAVED_GAMES = 10;
   private static readonly STORAGE_QUOTA_WARNING = 0.8;
+  private static readonly CUSTOM_THEMES_KEY = 'pente3d_custom_themes';
 
   static save(game: Game, settings: Settings): void {
     try {
@@ -271,6 +277,53 @@ export class StorageManager {
       } catch (error) {
         console.error('Failed to free up storage space:', error);
       }
+    }
+  }
+  
+  // Custom theme storage methods
+  static saveCustomThemes(themes: any[]): void {
+    try {
+      localStorage.setItem(this.CUSTOM_THEMES_KEY, JSON.stringify(themes));
+    } catch (error) {
+      console.error('Failed to save custom themes:', error);
+      // Try to handle quota exceeded
+      if (error instanceof DOMException && error.name === 'QuotaExceededError') {
+        this.handleQuotaExceeded();
+        // Retry
+        try {
+          localStorage.setItem(this.CUSTOM_THEMES_KEY, JSON.stringify(themes));
+        } catch (retryError) {
+          console.error('Failed to save custom themes after clearing space:', retryError);
+        }
+      }
+    }
+  }
+  
+  static loadCustomThemes(): any[] {
+    try {
+      const themesData = localStorage.getItem(this.CUSTOM_THEMES_KEY);
+      if (!themesData) {
+        return [];
+      }
+      
+      const themes = JSON.parse(themesData);
+      if (!Array.isArray(themes)) {
+        console.warn('Invalid custom themes data, returning empty array');
+        return [];
+      }
+      
+      return themes;
+    } catch (error) {
+      console.error('Failed to load custom themes:', error);
+      return [];
+    }
+  }
+  
+  static clearCustomThemes(): void {
+    try {
+      localStorage.removeItem(this.CUSTOM_THEMES_KEY);
+    } catch (error) {
+      console.error('Failed to clear custom themes:', error);
     }
   }
 }

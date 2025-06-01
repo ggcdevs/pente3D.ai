@@ -104,3 +104,30 @@ export async function uploadJSON(file: File): Promise<any> {
     throw new Error(`Invalid JSON file: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
+
+export function selectFile(accept: string = '.json'): Promise<File> {
+  return new Promise((resolve, reject) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = accept;
+    
+    input.onchange = (event) => {
+      const target = event.target as HTMLInputElement;
+      const file = target.files?.[0];
+      
+      if (!file) {
+        reject(new Error('No file selected'));
+        return;
+      }
+      
+      resolve(file);
+    };
+    
+    input.oncancel = () => {
+      reject(new Error('File selection cancelled'));
+    };
+    
+    // Trigger file selection
+    input.click();
+  });
+}
