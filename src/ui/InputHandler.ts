@@ -4,11 +4,15 @@ import {
     Camera,
     Scene,
     Intersection,
+    Mesh,
+    MeshBasicMaterial,
+    RingGeometry,
 } from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Vector3 } from '@/core/Vector3';
 import { Game } from '@/core/Game';
 import { Renderer } from '@/rendering/Renderer';
+import { AccessibilityManager } from '@/utils/AccessibilityManager';
 
 export interface InputHandlerOptions {
     canvas: HTMLCanvasElement;
@@ -17,6 +21,7 @@ export interface InputHandlerOptions {
     controls: OrbitControls;
     game: Game;
     renderer: Renderer;
+    accessibilityManager?: AccessibilityManager;
 }
 
 export interface InteractionState {
@@ -28,6 +33,9 @@ export interface InteractionState {
     mouseButton: number;
     lastClickTime: number;
     doubleClickThreshold: number;
+    keyboardFocus: Vector3 | null;
+    fastNavigation: boolean;
+    keyboardMode: boolean;
 }
 
 export class InputHandler {
@@ -43,6 +51,8 @@ export class InputHandler {
     private readonly listeners: Map<string, Set<(data: any) => void>>;
     private readonly keyboardShortcuts: Map<string, () => void>;
     private animationFrameId: number | null = null;
+    private accessibilityManager?: AccessibilityManager;
+    private focusIndicator: Mesh | null = null;
 
     constructor(options: InputHandlerOptions) {
         this.canvas = options.canvas;
@@ -51,6 +61,7 @@ export class InputHandler {
         this.controls = options.controls;
         this.game = options.game;
         this.renderer = options.renderer;
+        this.accessibilityManager = options.accessibilityManager;
         
         this.raycaster = new Raycaster();
         this.mouse = new Vector2();
@@ -64,6 +75,9 @@ export class InputHandler {
             mouseButton: -1,
             lastClickTime: 0,
             doubleClickThreshold: 300,
+            keyboardFocus: null,
+            fastNavigation: false,
+            keyboardMode: false,
         };
         
         this.listeners = new Map();
@@ -71,6 +85,13 @@ export class InputHandler {
         
         this.setupEventListeners();
         this.setupKeyboardShortcuts();
+        this.setupAccessibilityKeyboardControls();
+        this.createFocusIndicator();
+        
+        // Set canvas as focusable
+        this.canvas.setAttribute('tabindex', '0');
+        this.canvas.setAttribute('role', 'application');
+        this.canvas.setAttribute('aria-label', '3D Pente game board. Use arrow keys to navigate.');
     }
 
     private setupEventListeners(): void {
@@ -104,6 +125,11 @@ export class InputHandler {
         
         // Toggle grid
         this.keyboardShortcuts.set('g', () => this.emit('toggleGrid'));
+        
+        // Accessibility shortcuts
+        this.keyboardShortcuts.set('h', () => this.emit('showHelp'));
+        this.keyboardShortcuts.set('a', () => this.announceGameState());
+        this.keyboardShortcuts.set('m', () => this.emit('openMenu'));
     }
 
     private updateMouse(event: MouseEvent): void {
@@ -232,6 +258,16 @@ export class InputHandler {
     }
 
     private onKeyDown(event: KeyboardEvent): void {
+        // Check if focus is on canvas
+        const canvasHasFocus = document.activeElement === this.canvas;
+        
+        // Handle keyboard navigation if canvas has focus
+        if (canvasHasFocus && this.isNavigationKey(event.key)) {
+            this.state.keyboardMode = true;
+            this.handleKeyboardNavigation(event);
+            return;
+        }
+        
         const key = this.getKeyString(event);
         const handler = this.keyboardShortcuts.get(key);
         
@@ -240,6 +276,10 @@ export class InputHandler {
             handler();
             this.emit('shortcut', { key });
         }
+    }
+    
+    private isNavigationKey(key: string): boolean {
+        return ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'PageUp', 'PageDown', ' ', 'Enter'].includes(key);
     }
 
     private onKeyUp(_event: KeyboardEvent): void {
@@ -292,6 +332,124 @@ export class InputHandler {
         this.emit('viewReset');
     }
 
+    private setupAccessibilityKeyboardControls(): void {
+        // Listen for accessibility manager focus changes
+        if (this.accessibilityManager) {
+            this.accessibilityManager.on('focusChanged', (event: any) => {
+                this.handleFocusChange(event.position);
+            });
+        }
+    }
+
+    private createFocusIndicator(): void {
+        // Create a ring to show keyboard focus
+        const ringGeometry = new RingGeometry(0.15, 0.2, 32);
+        const material = new MeshBasicMaterial({ 
+            color: 0xffff00,
+            opacity: 0.8,
+            transparent: true,
+            depthTest: false,
+            depthWrite: false
+        });
+        
+        this.focusIndicator = new Mesh(ringGeometry, material);
+        this.focusIndicator.visible = false;
+        this.focusIndicator.renderOrder = 999; // Render on top
+        this.scene.add(this.focusIndicator);
+    }
+
+    private handleFocusChange(position: Vector3 | null): void {
+        this.state.keyboardFocus = position;
+        this.updateFocusVisuals();
+        
+        if (position && this.state.keyboardMode) {
+            // Move camera to show focused position
+            this.renderer.focusCameraOnPosition(position);
+        }
+    }
+
+    private updateFocusVisuals(): void {
+        if (!this.focusIndicator) return;
+        
+        if (this.state.keyboardFocus && this.state.keyboardMode) {
+            const pos = this.state.keyboardFocus;
+            this.focusIndicator.position.set(pos.x, pos.y, pos.z);
+            this.focusIndicator.visible = true;
+            
+            // Make it pulsate for better visibility
+            const scale = 1 + Math.sin(Date.now() * 0.003) * 0.1;
+            this.focusIndicator.scale.set(scale, scale, scale);
+        } else {
+            this.focusIndicator.visible = false;
+        }
+    }
+
+    private announceGameState(): void {
+        if (this.accessibilityManager) {
+            this.accessibilityManager.announceBoardState();
+        }
+    }
+
+    private handleKeyboardNavigation(event: KeyboardEvent): void {
+        if (!this.accessibilityManager) return;
+        
+        const isShift = event.shiftKey;
+        this.state.fastNavigation = isShift;
+        
+        switch (event.key) {
+            case 'ArrowUp':
+                event.preventDefault();
+                this.accessibilityManager.moveFocus('up');
+                break;
+            case 'ArrowDown':
+                event.preventDefault();
+                this.accessibilityManager.moveFocus('down');
+                break;
+            case 'ArrowLeft':
+                event.preventDefault();
+                this.accessibilityManager.moveFocus('left');
+                break;
+            case 'ArrowRight':
+                event.preventDefault();
+                this.accessibilityManager.moveFocus('right');
+                break;
+            case 'PageUp':
+                event.preventDefault();
+                this.accessibilityManager.moveFocus('forward');
+                break;
+            case 'PageDown':
+                event.preventDefault();
+                this.accessibilityManager.moveFocus('backward');
+                break;
+            case ' ':
+            case 'Enter':
+                event.preventDefault();
+                this.handleKeyboardSelect();
+                break;
+        }
+    }
+
+    private handleKeyboardSelect(): void {
+        if (!this.state.keyboardFocus || !this.accessibilityManager) return;
+        
+        const position = this.state.keyboardFocus;
+        
+        if (!this.state.temporaryPieceMode) {
+            try {
+                this.game.placePiece(position);
+                this.emit('piecePlaced', { position, keyboard: true });
+            } catch (error) {
+                this.emit('invalidMove', { position, error, keyboard: true });
+            }
+        } else {
+            this.state.temporaryPosition = position;
+            this.renderer.setTemporaryPiece(position, this.game.getCurrentPlayer());
+            this.emit('temporaryPiecePlaced', { position, keyboard: true });
+        }
+        
+        this.accessibilityManager.selectCurrentPosition();
+    }
+
     // Event system
     public on(event: string, listener: (data: any) => void): void {
         if (!this.listeners.has(event)) {
@@ -326,6 +484,20 @@ export class InputHandler {
             this.state.temporaryPosition = null;
         }
     }
+    
+    public setAccessibilityManager(manager: AccessibilityManager): void {
+        this.accessibilityManager = manager;
+        this.setupAccessibilityKeyboardControls();
+    }
+    
+    // Start animation loop for focus indicator
+    public startAnimationLoop(): void {
+        const animate = () => {
+            this.updateFocusVisuals();
+            this.animationFrameId = requestAnimationFrame(animate);
+        };
+        animate();
+    }
 
     public dispose(): void {
         // Remove event listeners
@@ -348,6 +520,16 @@ export class InputHandler {
         // Cancel any pending operations
         if (this.animationFrameId !== null) {
             cancelAnimationFrame(this.animationFrameId);
+        }
+        
+        // Remove focus indicator
+        if (this.focusIndicator) {
+            this.scene.remove(this.focusIndicator);
+            if (this.focusIndicator.geometry) this.focusIndicator.geometry.dispose();
+            if (this.focusIndicator.material instanceof MeshBasicMaterial) {
+                this.focusIndicator.material.dispose();
+            }
+            this.focusIndicator = null;
         }
     }
 }

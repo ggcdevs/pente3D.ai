@@ -1,10 +1,10 @@
 import './style.css';
 import { Game } from './core/Game';
 import { Renderer, QualityManager } from './rendering';
-import { InputHandler, MenuModal, SettingsModal, DialogManager, NetworkModal, NetworkStatus, ConflictNotification, PerformanceStats } from './ui';
+import { InputHandler, MenuModal, SettingsModal, DialogManager, NetworkModal, NetworkStatus, ConflictNotification, PerformanceStats, KeyboardHelpModal } from './ui';
 import { StorageManager } from './storage';
 import { downloadFile, uploadJSON } from './utils/fileIO';
-import { PerformanceMonitor } from './utils';
+import { PerformanceMonitor, AccessibilityManager } from './utils';
 
 // Get canvas element
 const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
@@ -82,6 +82,9 @@ renderer.applyOpacitySettings(opacity);
 // Set the board
 renderer.setBoard(game.getBoard());
 
+// Create accessibility manager
+const accessibilityManager = new AccessibilityManager(game);
+
 // Create input handler
 const inputHandler = new InputHandler({
   canvas,
@@ -89,12 +92,25 @@ const inputHandler = new InputHandler({
   scene: renderer.getScene(),
   controls: renderer.getControls() as any, // OrbitControls type mismatch with Three.js version
   game,
-  renderer
+  renderer,
+  accessibilityManager
 });
+
+// Start focus indicator animation
+inputHandler.startAnimationLoop();
 
 // Set up input event listeners
 inputHandler.on('piecePlaced', () => {
   renderer.updatePieces();
+});
+
+inputHandler.on('showHelp', () => {
+  const helpModal = new KeyboardHelpModal();
+  helpModal.open();
+});
+
+inputHandler.on('openMenu', () => {
+  menuModal.open();
 });
 
 inputHandler.on('invalidMove', (data) => {
@@ -454,6 +470,53 @@ if (joinCode) {
   }, 500);
 }
 
+// Listen for accessibility preferences
+window.matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change', (e) => {
+  accessibilityManager.setReducedMotion(e.matches);
+  if (e.matches) {
+    // Disable animations in renderer
+    renderer.setReducedMotion?.(true);
+  }
+});
+
+window.matchMedia('(prefers-contrast: high)').addEventListener('change', (e) => {
+  accessibilityManager.setHighContrastMode(e.matches);
+  document.body.classList.toggle('high-contrast', e.matches);
+});
+
+// Check initial media query states
+if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+  accessibilityManager.setReducedMotion(true);
+  renderer.setReducedMotion?.(true);
+}
+
+if (window.matchMedia('(prefers-contrast: high)').matches) {
+  accessibilityManager.setHighContrastMode(true);
+  document.body.classList.add('high-contrast');
+}
+
+// Global keyboard shortcuts
+document.addEventListener('keydown', (e) => {
+  // Check if focus is in an input field
+  const target = e.target as HTMLElement;
+  if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') {
+    return;
+  }
+  
+  if (e.key === 'h' || e.key === 'H') {
+    const helpModal = new KeyboardHelpModal();
+    helpModal.open();
+  }
+});
+
+// Toggle performance stats with F3
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'F3' && performanceStats) {
+    e.preventDefault();
+    performanceStats.toggle();
+  }
+});
+
 // Cleanup on page unload
 window.addEventListener('beforeunload', () => {
   performanceMonitor.stopMonitoring();
@@ -466,6 +529,7 @@ window.addEventListener('beforeunload', () => {
   dialogManager.closeAll();
   networkStatus.dispose();
   conflictNotification.dispose();
+  accessibilityManager.dispose();
   if (networkManager) {
     networkManager.disconnect();
   }

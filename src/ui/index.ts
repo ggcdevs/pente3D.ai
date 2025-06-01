@@ -13,3 +13,4 @@ export { ConflictNotification } from './ConflictNotification';
 export { NetworkModal } from './NetworkModal';
 export type { NetworkModalOptions } from './NetworkModal';
 export { PerformanceStats } from './PerformanceStats';
+export { KeyboardHelpModal } from './KeyboardHelpModal';

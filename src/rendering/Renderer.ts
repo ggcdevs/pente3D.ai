@@ -97,6 +97,9 @@ export class Renderer {
   // private pieceBatches: Map<string, THREE.InstancedMesh> = new Map();
   // private maxInstancesPerBatch = 1000;
   
+  // Accessibility
+  private reducedMotion = false;
+  
   constructor(options: RendererOptions) {
     // Set default options
     this.options = {
@@ -956,7 +959,7 @@ export class Renderer {
       this.controls.update();
       
       // Animate temporary piece
-      if (this.temporaryPiece && this.temporaryPiece.userData.time !== undefined) {
+      if (this.temporaryPiece && this.temporaryPiece.userData.time !== undefined && !this.reducedMotion) {
         this.temporaryPiece.userData.time += delta;
         const scale = 1.0 + Math.sin(elapsed * 3) * 0.05;
         this.temporaryPiece.scale.setScalar(scale);
@@ -1489,5 +1492,61 @@ export class Renderer {
     this.animationMixers.forEach((mixer) => {
       mixer.update(deltaTime);
     });
+  }
+  
+  focusCameraOnPosition(position: Vector3): void {
+    // Smoothly move camera to look at the focused position
+    const targetPosition = new THREE.Vector3(position.x, position.y, position.z);
+    
+    // Update orbit controls target
+    this.controls.target.lerp(targetPosition, 0.1);
+    this.controls.update();
+    
+    // Ensure the position is visible
+    const cameraDistance = this.camera.position.distanceTo(targetPosition);
+    if (cameraDistance > this.options.boardSize * 2) {
+      // Move camera closer if too far
+      const direction = new THREE.Vector3().subVectors(this.camera.position, targetPosition).normalize();
+      const newPosition = targetPosition.clone().add(direction.multiplyScalar(this.options.boardSize * 1.5));
+      this.camera.position.lerp(newPosition, 0.1);
+    }
+    
+    this.render();
+  }
+  
+  setReducedMotion(enabled: boolean): void {
+    this.reducedMotion = enabled;
+    
+    if (enabled) {
+      // Disable all animations
+      this.animationMixers.forEach(mixer => {
+        mixer.timeScale = 0;
+      });
+      
+      // Stop rotating animations
+      this.highlightedLines.forEach((lineGroup) => {
+        lineGroup.children.forEach((child) => {
+          if (child.userData.rotating) {
+            child.userData.rotating = false;
+            child.rotation.y = 0;
+          }
+        });
+      });
+      
+      // Disable pulsing animations
+      if (this.temporaryPiece) {
+        this.temporaryPiece.scale.setScalar(1);
+      }
+      
+      // Disable current player indicator rotation
+      if (this.currentPlayerIndicator) {
+        this.currentPlayerIndicator.rotation.z = 0;
+      }
+    } else {
+      // Re-enable animations
+      this.animationMixers.forEach(mixer => {
+        mixer.timeScale = 1;
+      });
+    }
   }
 }

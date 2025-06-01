@@ -23,6 +23,9 @@ export abstract class Modal extends EventEmitter {
   protected options: Required<ModalOptions>;
   protected focusableElements: HTMLElement[] = [];
   protected currentFocusIndex: number = 0;
+  protected modalId: string;
+  protected titleId: string;
+  protected contentId: string;
 
   constructor(options: ModalOptions = {}) {
     super();
@@ -37,6 +40,12 @@ export abstract class Modal extends EventEmitter {
       animationDuration: 200,
       ...options
     };
+
+    // Generate unique IDs for ARIA attributes
+    const uniqueId = Math.random().toString(36).substr(2, 9);
+    this.modalId = `modal-${uniqueId}`;
+    this.titleId = `modal-title-${uniqueId}`;
+    this.contentId = `modal-content-${uniqueId}`;
 
     this.element = this.createElement();
     this.backdrop = this.createBackdrop();
@@ -102,6 +111,7 @@ export abstract class Modal extends EventEmitter {
     if (this.options.title) {
       const title = document.createElement('h2');
       title.className = 'modal-title';
+      title.id = this.titleId;
       title.textContent = this.options.title;
       title.style.margin = '0';
       title.style.fontSize = '1.5rem';
@@ -137,6 +147,7 @@ export abstract class Modal extends EventEmitter {
   private createContent(): HTMLDivElement {
     const content = document.createElement('div');
     content.className = 'modal-content';
+    content.id = this.contentId;
     content.style.padding = '20px';
     content.style.overflowY = 'auto';
     content.style.maxHeight = 'calc(90vh - 140px)';
@@ -182,16 +193,30 @@ export abstract class Modal extends EventEmitter {
     this.container.addEventListener('click', (e) => e.stopPropagation());
   }
 
-  private setupAccessibility(): void {
-    this.element.setAttribute('role', 'dialog');
-    this.element.setAttribute('aria-modal', 'true');
+  protected setupAccessibility(): void {
+    // Set ARIA attributes on container
+    this.container.setAttribute('role', 'dialog');
+    this.container.setAttribute('aria-modal', 'true');
+    this.container.setAttribute('id', this.modalId);
+    
+    // Set labelledby and describedby
     if (this.options.title) {
-      this.element.setAttribute('aria-labelledby', 'modal-title');
-      const titleElement = this.header.querySelector('.modal-title');
-      if (titleElement) {
-        titleElement.setAttribute('id', 'modal-title');
-      }
+      this.container.setAttribute('aria-labelledby', this.titleId);
     }
+    this.container.setAttribute('aria-describedby', this.contentId);
+    
+    // Make backdrop not focusable
+    this.backdrop.setAttribute('aria-hidden', 'true');
+    
+    // Ensure close button has proper ARIA
+    if (this.closeButton) {
+      this.closeButton.setAttribute('aria-label', 'Close dialog');
+      this.closeButton.setAttribute('title', 'Close dialog (Escape)');
+    }
+    
+    // Announce modal opening to screen readers
+    this.element.setAttribute('aria-live', 'assertive');
+    this.element.setAttribute('aria-atomic', 'true');
   }
 
   private handleEscape(event: KeyboardEvent): void {
@@ -302,13 +327,14 @@ export abstract class Modal extends EventEmitter {
     } else if (title) {
       const newTitle = document.createElement('h2');
       newTitle.className = 'modal-title';
+      newTitle.id = this.titleId;
       newTitle.textContent = title;
       newTitle.style.margin = '0';
       newTitle.style.fontSize = '1.5rem';
       newTitle.style.fontWeight = 'bold';
       newTitle.style.color = '#fff';
-      newTitle.setAttribute('id', 'modal-title');
       this.header.insertBefore(newTitle, this.closeButton || null);
+      this.container.setAttribute('aria-labelledby', this.titleId);
     }
   }
 
