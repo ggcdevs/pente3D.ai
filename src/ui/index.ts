@@ -8,3 +8,4 @@ export { SettingsModal } from './SettingsModal';
 export type { SettingsModalOptions } from './SettingsModal';
 export { DialogManager } from './DialogManager';
 export type { DialogOptions, DialogType } from './DialogManager';
+export { NetworkStatus } from './NetworkStatus';

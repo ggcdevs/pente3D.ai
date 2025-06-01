@@ -128,30 +128,88 @@ describe('NetworkManager', () => {
       conn._simulateOpen();
     });
 
-    it('should send move message', () => {
+    it('should send move message with turn validation', () => {
       const player = game.getCurrentState().getCurrentPlayer();
       const move = new Move(
         new Vector3(3, 3, 3),
         player,
+        [],
         Date.now()
       );
       
       const connection = (networkManager as any).connection as MockDataConnection;
       const sendSpy = jest.spyOn(connection, 'send');
       
-      networkManager.sendMove(move);
+      const result = networkManager.sendMove(move);
       
+      expect(result).toBe(true);
       expect(sendSpy).toHaveBeenCalledWith(
         expect.objectContaining({
           type: MessageType.MOVE,
           payload: expect.objectContaining({
             move: move,
             stateHash: game.getCurrentState().generateHash(),
+            expectedTurn: player.getColor(),
           }),
           timestamp: expect.any(Number),
           sequence: expect.any(Number),
         })
       );
+    });
+
+    it('should reject move when not player turn', () => {
+      // Join as white player (not first turn)
+      networkManager.dispose();
+      networkManager = new NetworkManager(game);
+      
+      // Make a move as black first
+      game.placePiece(new Vector3(3, 3, 3));
+      
+      // Now it's white's turn, but try to send as black
+      const errorSpy = jest.fn();
+      networkManager.on('error', errorSpy);
+      
+      const blackPlayer = game.getCurrentState().getBlackPlayer();
+      const move = new Move(
+        new Vector3(4, 4, 4),
+        blackPlayer,
+        [],
+        Date.now()
+      );
+      
+      // Force local player color to black when it's white's turn
+      (networkManager as any).networkGameState.localPlayerColor = 'black';
+      (networkManager as any).networkGameState.isNetworked = true;
+      
+      const result = networkManager.sendMove(move);
+      
+      expect(result).toBe(false);
+      expect(errorSpy).toHaveBeenCalledWith(expect.objectContaining({
+        message: 'Not your turn',
+      }));
+    });
+
+    it('should store pending moves and set acknowledgment timeout', () => {
+      const player = game.getCurrentState().getCurrentPlayer();
+      const move = new Move(
+        new Vector3(3, 3, 3),
+        player,
+        [],
+        Date.now()
+      );
+      
+      networkManager.sendMove(move);
+      
+      const pendingMoves = (networkManager as any).networkGameState.pendingMoves;
+      expect(pendingMoves.size).toBe(1);
+      
+      const pendingMove = pendingMoves.get(1);
+      expect(pendingMove).toBeDefined();
+      expect(pendingMove.acknowledged).toBe(false);
+      expect(pendingMove.message.payload.move).toEqual(move);
+      
+      // Timeout should be set
+      expect((networkManager as any).moveAckTimeout).not.toBeNull();
     });
 
     it('should send undo message', () => {
@@ -212,6 +270,7 @@ describe('NetworkManager', () => {
       const move = new Move(
         new Vector3(3, 3, 3),
         player,
+        [],
         Date.now()
       );
       
@@ -233,19 +292,24 @@ describe('NetworkManager', () => {
       connection._simulateOpen();
     });
 
-    it('should handle move message', () => {
+    it('should handle move message with validation and acknowledgment', () => {
       const moveSpy = jest.fn();
       networkManager.on('move', moveSpy);
+      
+      const sendSpy = jest.spyOn(connection, 'send');
+      const currentPlayer = game.getCurrentState().getCurrentPlayer();
       
       const moveMessage = {
         type: MessageType.MOVE,
         payload: {
           move: new Move(
             new Vector3(3, 3, 3),
-            game.getCurrentState().players[1],
+            currentPlayer,
+            [],
             Date.now()
           ),
-          stateHash: 'hash123',
+          stateHash: game.getCurrentState().generateHash(),
+          expectedTurn: currentPlayer.getColor(),
         },
         timestamp: Date.now(),
         sequence: 1,
@@ -253,7 +317,133 @@ describe('NetworkManager', () => {
       
       connection._simulateData(moveMessage);
       
+      // Should send acknowledgment
+      expect(sendSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: MessageType.MOVE_ACK,
+          payload: expect.objectContaining({
+            moveSequence: 1,
+            stateHash: game.getCurrentState().generateHash(),
+          }),
+        })
+      );
+      
+      // Should emit move event
       expect(moveSpy).toHaveBeenCalledWith(moveMessage.payload);
+    });
+
+    it('should reject move with wrong turn', () => {
+      const sendSpy = jest.spyOn(connection, 'send');
+      const currentPlayer = game.getCurrentState().getCurrentPlayer();
+      const wrongPlayer = currentPlayer.getColor() === 'black' ? 
+        game.getCurrentState().getWhitePlayer() : 
+        game.getCurrentState().getBlackPlayer();
+      
+      const moveMessage = {
+        type: MessageType.MOVE,
+        payload: {
+          move: new Move(
+            new Vector3(3, 3, 3),
+            wrongPlayer,
+            [],
+            Date.now()
+          ),
+          stateHash: game.getCurrentState().generateHash(),
+          expectedTurn: wrongPlayer.getColor(), // Wrong turn
+        },
+        timestamp: Date.now(),
+        sequence: 1,
+      };
+      
+      connection._simulateData(moveMessage);
+      
+      // Should send rejection
+      expect(sendSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: MessageType.MOVE_REJECT,
+          payload: expect.objectContaining({
+            moveSequence: 1,
+            reason: 'Turn mismatch',
+            correctStateHash: game.getCurrentState().generateHash(),
+          }),
+        })
+      );
+    });
+
+    it('should handle move acknowledgment', () => {
+      const ackSpy = jest.fn();
+      networkManager.on('moveAcknowledged', ackSpy);
+      
+      // Send a move first
+      const move = new Move(
+        new Vector3(3, 3, 3),
+        game.getCurrentState().getCurrentPlayer(),
+        [],
+        Date.now()
+      );
+      networkManager.sendMove(move);
+      
+      // Simulate acknowledgment
+      const ackMessage = {
+        type: MessageType.MOVE_ACK,
+        payload: {
+          moveSequence: 1,
+          stateHash: 'hash123',
+        },
+        timestamp: Date.now(),
+        sequence: 2,
+      };
+      
+      connection._simulateData(ackMessage);
+      
+      // Should clear pending move
+      const pendingMoves = (networkManager as any).networkGameState.pendingMoves;
+      expect(pendingMoves.size).toBe(0);
+      
+      // Should emit acknowledgment event
+      expect(ackSpy).toHaveBeenCalledWith({ sequence: 1 });
+    });
+
+    it('should handle move rejection', () => {
+      const rejectSpy = jest.fn();
+      const syncSpy = jest.spyOn(networkManager, 'requestSync');
+      networkManager.on('moveRejected', rejectSpy);
+      
+      // Send a move first
+      const move = new Move(
+        new Vector3(3, 3, 3),
+        game.getCurrentState().getCurrentPlayer(),
+        [],
+        Date.now()
+      );
+      networkManager.sendMove(move);
+      
+      // Simulate rejection
+      const rejectMessage = {
+        type: MessageType.MOVE_REJECT,
+        payload: {
+          moveSequence: 1,
+          reason: 'Invalid move',
+          correctStateHash: 'hash123',
+        },
+        timestamp: Date.now(),
+        sequence: 2,
+      };
+      
+      connection._simulateData(rejectMessage);
+      
+      // Should clear pending move
+      const pendingMoves = (networkManager as any).networkGameState.pendingMoves;
+      expect(pendingMoves.size).toBe(0);
+      
+      // Should emit rejection event
+      expect(rejectSpy).toHaveBeenCalledWith({
+        sequence: 1,
+        reason: 'Invalid move',
+      });
+      
+      // Should request sync
+      expect(syncSpy).toHaveBeenCalled();
     });
 
     it('should handle undo message', () => {
@@ -381,6 +571,169 @@ describe('NetworkManager', () => {
       
       expect((networkManager as any).connectionInfo.lastActivity).toBeGreaterThan(initialActivity);
     });
+
+    it('should handle player disconnected message', () => {
+      const disconnectSpy = jest.fn();
+      networkManager.on('playerDisconnected', disconnectSpy);
+      
+      const disconnectMessage = {
+        type: MessageType.PLAYER_DISCONNECTED,
+        payload: {
+          playerId: 'remote-peer',
+        },
+        timestamp: Date.now(),
+        sequence: 8,
+      };
+      
+      connection._simulateData(disconnectMessage);
+      
+      expect(disconnectSpy).toHaveBeenCalledWith({ playerId: 'remote-peer' });
+      expect(networkManager.getConnectionInfo().opponentConnected).toBe(false);
+    });
+
+    it('should handle player reconnected message', () => {
+      const reconnectSpy = jest.fn();
+      const syncSpy = jest.spyOn(networkManager, 'requestSync');
+      networkManager.on('playerReconnected', reconnectSpy);
+      
+      const reconnectMessage = {
+        type: MessageType.PLAYER_RECONNECTED,
+        payload: {
+          playerId: 'remote-peer',
+        },
+        timestamp: Date.now(),
+        sequence: 9,
+      };
+      
+      connection._simulateData(reconnectMessage);
+      
+      expect(reconnectSpy).toHaveBeenCalledWith({ playerId: 'remote-peer' });
+      expect(networkManager.getConnectionInfo().opponentConnected).toBe(true);
+      expect(syncSpy).toHaveBeenCalled();
+    });
+  });
+
+  describe('move synchronization', () => {
+    let connection: MockDataConnection;
+
+    beforeEach(async () => {
+      await networkManager.hostGame();
+      mockPeer = (networkManager as any).peer as MockPeer;
+      connection = mockPeer._simulateIncomingConnection('remote-peer');
+      connection._simulateOpen();
+    });
+
+    it('should timeout unacknowledged moves', () => {
+      const timeoutSpy = jest.fn();
+      const syncSpy = jest.spyOn(networkManager, 'requestSync');
+      networkManager.on('moveTimeout', timeoutSpy);
+      
+      // Send a move
+      const move = new Move(
+        new Vector3(3, 3, 3),
+        game.getCurrentState().getCurrentPlayer(),
+        [],
+        Date.now()
+      );
+      networkManager.sendMove(move);
+      
+      // Advance timer to trigger timeout (5000ms by default)
+      jest.advanceTimersByTime(5000);
+      
+      expect(timeoutSpy).toHaveBeenCalledWith({ sequence: 1 });
+      expect(syncSpy).toHaveBeenCalled();
+      
+      // Move should be queued for retry
+      expect((networkManager as any).queuedMoves.length).toBe(1);
+    });
+
+    it('should clear timeout on acknowledgment', () => {
+      const timeoutSpy = jest.fn();
+      networkManager.on('moveTimeout', timeoutSpy);
+      
+      // Send a move
+      const move = new Move(
+        new Vector3(3, 3, 3),
+        game.getCurrentState().getCurrentPlayer(),
+        [],
+        Date.now()
+      );
+      networkManager.sendMove(move);
+      
+      // Send acknowledgment before timeout
+      connection._simulateData({
+        type: MessageType.MOVE_ACK,
+        payload: {
+          moveSequence: 1,
+          stateHash: 'hash123',
+        },
+        timestamp: Date.now(),
+        sequence: 2,
+      });
+      
+      // Advance timer past timeout
+      jest.advanceTimersByTime(5000);
+      
+      // Timeout should not have fired
+      expect(timeoutSpy).not.toHaveBeenCalled();
+    });
+
+    it('should process queued moves when turn is available', () => {
+      // Queue a move
+      const move = new Move(
+        new Vector3(3, 3, 3),
+        game.getCurrentState().getCurrentPlayer(),
+        [],
+        Date.now()
+      );
+      (networkManager as any).queuedMoves.push(move);
+      
+      const sendSpy = jest.spyOn(connection, 'send');
+      
+      // Process queued moves
+      (networkManager as any).processQueuedMoves();
+      
+      // Should send the queued move
+      expect(sendSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: MessageType.MOVE,
+          payload: expect.objectContaining({
+            move: move,
+          }),
+        })
+      );
+      
+      expect((networkManager as any).queuedMoves.length).toBe(0);
+    });
+
+    it('should validate state hash on move reception', () => {
+      const syncSpy = jest.spyOn(networkManager, 'requestSync');
+      
+      // Make a move to change state
+      game.placePiece(new Vector3(3, 3, 3));
+      
+      // Receive move with wrong state hash
+      const moveMessage = {
+        type: MessageType.MOVE,
+        payload: {
+          move: new Move(
+            new Vector3(4, 4, 4),
+            game.getCurrentState().getCurrentPlayer(),
+            [],
+            Date.now()
+          ),
+          stateHash: 'wrong-hash',
+          expectedTurn: game.getCurrentState().getCurrentPlayer().getColor(),
+        },
+        timestamp: Date.now(),
+        sequence: 1,
+      };
+      
+      connection._simulateData(moveMessage);
+      
+      // Should request sync instead of processing move
+      expect(syncSpy).toHaveBeenCalled();
+    });
   });
 
   describe('reconnection', () => {
@@ -461,6 +814,8 @@ describe('NetworkManager', () => {
         status: ConnectionStatus.CONNECTED,
         lastActivity: expect.any(Number),
         latency: 0,
+        playerColor: 'black',
+        opponentConnected: false,
       });
     });
 
@@ -518,6 +873,7 @@ describe('NetworkManager', () => {
       networkManager.sendMove(new Move(
         new Vector3(0, 0, 0),
         player,
+        [],
         Date.now()
       ));
       
@@ -585,6 +941,7 @@ describe('NetworkManager', () => {
       networkManager.sendMove(new Move(
         new Vector3(0, 0, 0),
         player,
+        [],
         Date.now()
       ));
       
@@ -684,6 +1041,48 @@ describe('NetworkManager', () => {
       networkManager.disconnect();
       
       expect((networkManager as any).messageSequence).toBe(0);
+    });
+  });
+
+  describe('network game state', () => {
+    it('should track local player color for host', async () => {
+      await networkManager.hostGame();
+      
+      expect(networkManager.getLocalPlayerColor()).toBe('black');
+      expect(networkManager.isNetworked()).toBe(true);
+    });
+
+    it('should track local player color for client', async () => {
+      await networkManager.joinGame('ABC123');
+      
+      expect(networkManager.getLocalPlayerColor()).toBe('white');
+      expect(networkManager.isNetworked()).toBe(true);
+    });
+
+    it('should determine if it is local player turn', async () => {
+      await networkManager.hostGame();
+      
+      // Black plays first, so host should have turn
+      expect(networkManager.isLocalPlayerTurn()).toBe(true);
+      
+      // Make a move
+      game.placePiece(new Vector3(3, 3, 3));
+      
+      // Now it's white's turn, so host should not have turn
+      expect(networkManager.isLocalPlayerTurn()).toBe(false);
+    });
+
+    it('should track opponent connection status', async () => {
+      await networkManager.hostGame();
+      mockPeer = (networkManager as any).peer as MockPeer;
+      
+      expect(networkManager.getConnectionInfo().opponentConnected).toBe(false);
+      
+      // Simulate connection
+      const connection = mockPeer._simulateIncomingConnection('remote-peer');
+      connection._simulateOpen();
+      
+      expect(networkManager.getConnectionInfo().opponentConnected).toBe(true);
     });
   });
 });

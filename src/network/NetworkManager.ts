@@ -8,6 +8,8 @@ import {
   NetworkMessage,
   ConnectionInfo,
   MoveMessage,
+  MoveAckMessage,
+  MoveRejectMessage,
   UndoMessage,
   RedoMessage,
   ResetMessage,
@@ -15,6 +17,9 @@ import {
   SyncResponseMessage,
   PingMessage,
   PongMessage,
+  PlayerDisconnectedMessage,
+  PlayerReconnectedMessage,
+  NetworkGameState,
 } from './types';
 
 export class NetworkManager extends EventEmitter {
@@ -29,6 +34,9 @@ export class NetworkManager extends EventEmitter {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private messageHandlers: Map<MessageType, (message: NetworkMessage) => void>;
   private pendingMessages: NetworkMessage[] = [];
+  private networkGameState: NetworkGameState;
+  private moveAckTimeout: NodeJS.Timeout | null = null;
+  private queuedMoves: Move[] = [];
 
   constructor(game: Game, config: NetworkConfig = {}) {
     super();
@@ -57,6 +65,17 @@ export class NetworkManager extends EventEmitter {
       status: ConnectionStatus.DISCONNECTED,
       lastActivity: Date.now(),
       latency: 0,
+      playerColor: undefined,
+      opponentConnected: false,
+    };
+
+    // Initialize network game state
+    this.networkGameState = {
+      isNetworked: false,
+      localPlayerColor: undefined,
+      turnValidationEnabled: true,
+      pendingMoves: new Map(),
+      lastConfirmedStateHash: '',
     };
 
     // Set up message handlers
@@ -72,6 +91,11 @@ export class NetworkManager extends EventEmitter {
     const gameCode = this.generateGameCode();
     this.connectionInfo.gameCode = gameCode;
     
+    // Host always plays as black
+    this.connectionInfo.playerColor = 'black';
+    this.networkGameState.localPlayerColor = 'black';
+    this.networkGameState.isNetworked = true;
+    
     await this.initializePeer(gameCode);
     return gameCode;
   }
@@ -82,6 +106,11 @@ export class NetworkManager extends EventEmitter {
   async joinGame(gameCode: string): Promise<void> {
     this.connectionInfo.isHost = false;
     this.connectionInfo.gameCode = gameCode;
+    
+    // Client always plays as white
+    this.connectionInfo.playerColor = 'white';
+    this.networkGameState.localPlayerColor = 'white';
+    this.networkGameState.isNetworked = true;
     
     // Generate a unique peer ID for the client
     const clientId = `${gameCode}_client_${Math.random().toString(36).substr(2, 9)}`;
@@ -94,18 +123,41 @@ export class NetworkManager extends EventEmitter {
   /**
    * Send a move to the remote player
    */
-  sendMove(move: Move): void {
+  sendMove(move: Move): boolean {
+    // Validate it's our turn
+    const currentPlayer = this.game.getCurrentState().getCurrentPlayer();
+    if (this.networkGameState.turnValidationEnabled && 
+        currentPlayer.getColor() !== this.networkGameState.localPlayerColor) {
+      this.emit('error', new Error('Not your turn'));
+      return false;
+    }
+
+    const sequence = this.getNextSequence();
     const message: MoveMessage = {
       type: MessageType.MOVE,
       payload: {
         move: move,
         stateHash: this.game.getCurrentState().generateHash(),
+        expectedTurn: currentPlayer.getColor(),
       },
       timestamp: Date.now(),
-      sequence: this.getNextSequence(),
+      sequence: sequence,
     };
     
+    // Store pending move
+    this.networkGameState.pendingMoves.set(sequence, {
+      message: message,
+      timestamp: Date.now(),
+      acknowledged: false,
+    });
+    
+    // Send the message
     this.sendMessage(message);
+    
+    // Set timeout for acknowledgment
+    this.setMoveAckTimeout(sequence);
+    
+    return true;
   }
 
   /**
@@ -191,6 +243,28 @@ export class NetworkManager extends EventEmitter {
    */
   getLatency(): number {
     return this.connectionInfo.latency;
+  }
+
+  /**
+   * Check if it's the local player's turn
+   */
+  isLocalPlayerTurn(): boolean {
+    const currentPlayer = this.game.getCurrentState().getCurrentPlayer();
+    return currentPlayer.getColor() === this.networkGameState.localPlayerColor;
+  }
+
+  /**
+   * Get the local player's color
+   */
+  getLocalPlayerColor(): 'black' | 'white' | undefined {
+    return this.networkGameState.localPlayerColor;
+  }
+
+  /**
+   * Check if the game is networked
+   */
+  isNetworked(): boolean {
+    return this.networkGameState.isNetworked;
   }
 
   /**
@@ -300,11 +374,18 @@ export class NetworkManager extends EventEmitter {
     conn.on('open', () => {
       console.log('Connection opened');
       this.updateStatus(ConnectionStatus.CONNECTED);
+      this.connectionInfo.opponentConnected = true;
       this.reconnectAttempts = 0;
       this.startPingTimer();
       
+      // Update last confirmed state hash
+      this.networkGameState.lastConfirmedStateHash = this.game.getCurrentState().generateHash();
+      
       // Send any pending messages
       this.flushPendingMessages();
+      
+      // Process any queued moves
+      this.processQueuedMoves();
       
       this.emit('connected', { peerId: conn.peer });
     });
@@ -357,6 +438,8 @@ export class NetworkManager extends EventEmitter {
 
   private setupMessageHandlers(): void {
     this.messageHandlers.set(MessageType.MOVE, this.handleMoveMessage.bind(this));
+    this.messageHandlers.set(MessageType.MOVE_ACK, this.handleMoveAck.bind(this));
+    this.messageHandlers.set(MessageType.MOVE_REJECT, this.handleMoveReject.bind(this));
     this.messageHandlers.set(MessageType.UNDO, this.handleUndoMessage.bind(this));
     this.messageHandlers.set(MessageType.REDO, this.handleRedoMessage.bind(this));
     this.messageHandlers.set(MessageType.RESET, this.handleResetMessage.bind(this));
@@ -364,6 +447,8 @@ export class NetworkManager extends EventEmitter {
     this.messageHandlers.set(MessageType.SYNC_RESPONSE, this.handleSyncResponse.bind(this));
     this.messageHandlers.set(MessageType.PING, this.handlePing.bind(this));
     this.messageHandlers.set(MessageType.PONG, this.handlePong.bind(this));
+    this.messageHandlers.set(MessageType.PLAYER_DISCONNECTED, this.handlePlayerDisconnected.bind(this));
+    this.messageHandlers.set(MessageType.PLAYER_RECONNECTED, this.handlePlayerReconnected.bind(this));
   }
 
   private handleMessage(message: NetworkMessage): void {
@@ -379,6 +464,48 @@ export class NetworkManager extends EventEmitter {
 
   private handleMoveMessage(message: NetworkMessage): void {
     const moveMsg = message as MoveMessage;
+    
+    // Validate turn
+    const currentState = this.game.getCurrentState();
+    const expectedTurn = currentState.getCurrentPlayer().getColor();
+    
+    if (moveMsg.payload.expectedTurn !== expectedTurn) {
+      // Send rejection
+      const reject: MoveRejectMessage = {
+        type: MessageType.MOVE_REJECT,
+        payload: {
+          moveSequence: moveMsg.sequence,
+          reason: 'Turn mismatch',
+          correctStateHash: currentState.generateHash(),
+        },
+        timestamp: Date.now(),
+        sequence: this.getNextSequence(),
+      };
+      this.sendMessage(reject);
+      return;
+    }
+    
+    // Validate state hash if not the first move
+    if (currentState.getMoveCount() > 0 && 
+        moveMsg.payload.stateHash !== currentState.generateHash()) {
+      // Request sync
+      this.requestSync();
+      return;
+    }
+    
+    // Send acknowledgment
+    const ack: MoveAckMessage = {
+      type: MessageType.MOVE_ACK,
+      payload: {
+        moveSequence: moveMsg.sequence,
+        stateHash: this.game.getCurrentState().generateHash(),
+      },
+      timestamp: Date.now(),
+      sequence: this.getNextSequence(),
+    };
+    this.sendMessage(ack);
+    
+    // Emit the move for the game to process
     this.emit('move', moveMsg.payload);
   }
 
@@ -441,6 +568,63 @@ export class NetworkManager extends EventEmitter {
     
     this.connectionInfo.latency = latency;
     this.emit('latency', latency);
+  }
+
+  private handleMoveAck(message: NetworkMessage): void {
+    const ack = message as MoveAckMessage;
+    
+    // Clear acknowledgment timeout
+    if (this.moveAckTimeout) {
+      clearTimeout(this.moveAckTimeout);
+      this.moveAckTimeout = null;
+    }
+    
+    // Mark move as acknowledged
+    const pendingMove = this.networkGameState.pendingMoves.get(ack.payload.moveSequence);
+    if (pendingMove) {
+      pendingMove.acknowledged = true;
+      this.networkGameState.lastConfirmedStateHash = ack.payload.stateHash;
+      this.networkGameState.pendingMoves.delete(ack.payload.moveSequence);
+      
+      this.emit('moveAcknowledged', { sequence: ack.payload.moveSequence });
+    }
+  }
+
+  private handleMoveReject(message: NetworkMessage): void {
+    const reject = message as MoveRejectMessage;
+    
+    // Clear acknowledgment timeout
+    if (this.moveAckTimeout) {
+      clearTimeout(this.moveAckTimeout);
+      this.moveAckTimeout = null;
+    }
+    
+    // Remove rejected move
+    this.networkGameState.pendingMoves.delete(reject.payload.moveSequence);
+    
+    // Emit rejection event
+    this.emit('moveRejected', {
+      sequence: reject.payload.moveSequence,
+      reason: reject.payload.reason,
+    });
+    
+    // Request sync to get correct state
+    this.requestSync();
+  }
+
+  private handlePlayerDisconnected(message: NetworkMessage): void {
+    const msg = message as PlayerDisconnectedMessage;
+    this.connectionInfo.opponentConnected = false;
+    this.emit('playerDisconnected', { playerId: msg.payload.playerId });
+  }
+
+  private handlePlayerReconnected(message: NetworkMessage): void {
+    const msg = message as PlayerReconnectedMessage;
+    this.connectionInfo.opponentConnected = true;
+    this.emit('playerReconnected', { playerId: msg.payload.playerId });
+    
+    // Request sync to ensure we're in sync
+    this.requestSync();
   }
 
   private sendMessage(message: NetworkMessage): void {
@@ -518,12 +702,51 @@ export class NetworkManager extends EventEmitter {
     return ++this.messageSequence;
   }
 
+  private setMoveAckTimeout(sequence: number): void {
+    if (this.moveAckTimeout) {
+      clearTimeout(this.moveAckTimeout);
+    }
+    
+    this.moveAckTimeout = setTimeout(() => {
+      const pendingMove = this.networkGameState.pendingMoves.get(sequence);
+      if (pendingMove && !pendingMove.acknowledged) {
+        // Move was not acknowledged, emit timeout
+        this.emit('moveTimeout', { sequence });
+        
+        // Queue the move for retry
+        if (pendingMove.message.payload.move) {
+          this.queuedMoves.push(pendingMove.message.payload.move);
+        }
+        
+        // Remove from pending
+        this.networkGameState.pendingMoves.delete(sequence);
+        
+        // Request sync
+        this.requestSync();
+      }
+    }, this.config.messageTimeout);
+  }
+
+  private processQueuedMoves(): void {
+    while (this.queuedMoves.length > 0 && this.isLocalPlayerTurn()) {
+      const move = this.queuedMoves.shift();
+      if (move) {
+        this.sendMove(move);
+      }
+    }
+  }
+
   private cleanup(): void {
     this.stopPingTimer();
     
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
+    }
+    
+    if (this.moveAckTimeout) {
+      clearTimeout(this.moveAckTimeout);
+      this.moveAckTimeout = null;
     }
     
     if (this.connection) {
@@ -539,5 +762,7 @@ export class NetworkManager extends EventEmitter {
     this.pendingMessages = [];
     this.messageSequence = 0;
     this.reconnectAttempts = 0;
+    this.networkGameState.pendingMoves.clear();
+    this.queuedMoves = [];
   }
 }
