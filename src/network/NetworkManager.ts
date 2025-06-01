@@ -1,0 +1,543 @@
+import Peer, { DataConnection } from 'peerjs';
+import { EventEmitter } from '@/utils';
+import { Game, Move } from '@/core';
+import {
+  ConnectionStatus,
+  MessageType,
+  NetworkConfig,
+  NetworkMessage,
+  ConnectionInfo,
+  MoveMessage,
+  UndoMessage,
+  RedoMessage,
+  ResetMessage,
+  SyncRequestMessage,
+  SyncResponseMessage,
+  PingMessage,
+  PongMessage,
+} from './types';
+
+export class NetworkManager extends EventEmitter {
+  private peer: Peer | null = null;
+  private connection: DataConnection | null = null;
+  private game: Game;
+  private config: Required<NetworkConfig>;
+  private connectionInfo: ConnectionInfo;
+  private messageSequence = 0;
+  private reconnectAttempts = 0;
+  private pingTimer: NodeJS.Timeout | null = null;
+  private reconnectTimer: NodeJS.Timeout | null = null;
+  private messageHandlers: Map<MessageType, (message: NetworkMessage) => void>;
+  private pendingMessages: NetworkMessage[] = [];
+
+  constructor(game: Game, config: NetworkConfig = {}) {
+    super();
+    this.game = game;
+    
+    // Set default configuration
+    this.config = {
+      host: config.host || 'peerjs.com',
+      port: config.port || 443,
+      path: config.path || '/',
+      key: config.key || 'peerjs',
+      secure: config.secure !== false,
+      debug: config.debug || false,
+      config: config.config || { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] },
+      reconnectTimeout: config.reconnectTimeout || 5000,
+      maxReconnectAttempts: config.maxReconnectAttempts || 5,
+      pingInterval: config.pingInterval || 10000,
+      messageTimeout: config.messageTimeout || 5000,
+    };
+
+    // Initialize connection info
+    this.connectionInfo = {
+      peerId: '',
+      gameCode: '',
+      isHost: false,
+      status: ConnectionStatus.DISCONNECTED,
+      lastActivity: Date.now(),
+      latency: 0,
+    };
+
+    // Set up message handlers
+    this.messageHandlers = new Map();
+    this.setupMessageHandlers();
+  }
+
+  /**
+   * Initialize as host and generate a game code
+   */
+  async hostGame(): Promise<string> {
+    this.connectionInfo.isHost = true;
+    const gameCode = this.generateGameCode();
+    this.connectionInfo.gameCode = gameCode;
+    
+    await this.initializePeer(gameCode);
+    return gameCode;
+  }
+
+  /**
+   * Join a game using a game code
+   */
+  async joinGame(gameCode: string): Promise<void> {
+    this.connectionInfo.isHost = false;
+    this.connectionInfo.gameCode = gameCode;
+    
+    // Generate a unique peer ID for the client
+    const clientId = `${gameCode}_client_${Math.random().toString(36).substr(2, 9)}`;
+    await this.initializePeer(clientId);
+    
+    // Connect to the host
+    this.connectToPeer(gameCode);
+  }
+
+  /**
+   * Send a move to the remote player
+   */
+  sendMove(move: Move): void {
+    const message: MoveMessage = {
+      type: MessageType.MOVE,
+      payload: {
+        move: move,
+        stateHash: this.game.getCurrentState().generateHash(),
+      },
+      timestamp: Date.now(),
+      sequence: this.getNextSequence(),
+    };
+    
+    this.sendMessage(message);
+  }
+
+  /**
+   * Send an undo request to the remote player
+   */
+  sendUndo(): void {
+    const message: UndoMessage = {
+      type: MessageType.UNDO,
+      payload: {
+        stateHash: this.game.getCurrentState().generateHash(),
+      },
+      timestamp: Date.now(),
+      sequence: this.getNextSequence(),
+    };
+    
+    this.sendMessage(message);
+  }
+
+  /**
+   * Send a redo request to the remote player
+   */
+  sendRedo(): void {
+    const message: RedoMessage = {
+      type: MessageType.REDO,
+      payload: {
+        stateHash: this.game.getCurrentState().generateHash(),
+      },
+      timestamp: Date.now(),
+      sequence: this.getNextSequence(),
+    };
+    
+    this.sendMessage(message);
+  }
+
+  /**
+   * Send a reset request to the remote player
+   */
+  sendReset(): void {
+    const message: ResetMessage = {
+      type: MessageType.RESET,
+      payload: {
+        stateHash: this.game.getCurrentState().generateHash(),
+      },
+      timestamp: Date.now(),
+      sequence: this.getNextSequence(),
+    };
+    
+    this.sendMessage(message);
+  }
+
+  /**
+   * Request synchronization with the remote player
+   */
+  requestSync(): void {
+    const message: SyncRequestMessage = {
+      type: MessageType.SYNC_REQUEST,
+      payload: {
+        lastKnownHash: this.game.getCurrentState().generateHash(),
+      },
+      timestamp: Date.now(),
+      sequence: this.getNextSequence(),
+    };
+    
+    this.sendMessage(message);
+  }
+
+  /**
+   * Get the current connection status
+   */
+  getStatus(): ConnectionStatus {
+    return this.connectionInfo.status;
+  }
+
+  /**
+   * Get the current connection info
+   */
+  getConnectionInfo(): ConnectionInfo {
+    return { ...this.connectionInfo };
+  }
+
+  /**
+   * Get the current latency in milliseconds
+   */
+  getLatency(): number {
+    return this.connectionInfo.latency;
+  }
+
+  /**
+   * Disconnect from the current game
+   */
+  disconnect(): void {
+    this.cleanup();
+    this.updateStatus(ConnectionStatus.DISCONNECTED);
+  }
+
+  /**
+   * Clean up resources
+   */
+  dispose(): void {
+    this.cleanup();
+    this.removeAllListeners();
+  }
+
+  // Private methods
+
+  private async initializePeer(peerId: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      this.updateStatus(ConnectionStatus.CONNECTING);
+      
+      // Create peer with configuration
+      this.peer = new Peer(peerId, {
+        host: this.config.host,
+        port: this.config.port,
+        path: this.config.path,
+        key: this.config.key,
+        secure: this.config.secure,
+        debug: this.config.debug ? 3 : 0,
+        config: this.config.config,
+      });
+
+      this.connectionInfo.peerId = peerId;
+
+      // Set up peer event handlers
+      this.peer.on('open', (id) => {
+        console.log('Peer opened with ID:', id);
+        this.connectionInfo.peerId = id;
+        
+        if (this.connectionInfo.isHost) {
+          this.updateStatus(ConnectionStatus.CONNECTED);
+          this.startPingTimer();
+        }
+        
+        resolve();
+      });
+
+      this.peer.on('connection', (conn) => {
+        console.log('Incoming connection from:', conn.peer);
+        this.handleIncomingConnection(conn);
+      });
+
+      this.peer.on('error', (error) => {
+        console.error('Peer error:', error);
+        this.emit('error', error);
+        this.updateStatus(ConnectionStatus.ERROR);
+        
+        if (!this.peer?.open) {
+          reject(error);
+        }
+      });
+
+      this.peer.on('disconnected', () => {
+        console.log('Peer disconnected');
+        if (this.connectionInfo.status === ConnectionStatus.CONNECTED) {
+          this.handleDisconnection();
+        }
+      });
+
+      this.peer.on('close', () => {
+        console.log('Peer closed');
+        this.updateStatus(ConnectionStatus.DISCONNECTED);
+      });
+    });
+  }
+
+  private connectToPeer(remotePeerId: string): void {
+    if (!this.peer) {
+      throw new Error('Peer not initialized');
+    }
+
+    const conn = this.peer.connect(remotePeerId, {
+      reliable: true,
+      serialization: 'json',
+    });
+
+    this.setupConnection(conn);
+  }
+
+  private handleIncomingConnection(conn: DataConnection): void {
+    // Only accept one connection at a time
+    if (this.connection && this.connection.open) {
+      console.warn('Already connected, rejecting new connection');
+      conn.close();
+      return;
+    }
+
+    this.setupConnection(conn);
+  }
+
+  private setupConnection(conn: DataConnection): void {
+    this.connection = conn;
+
+    conn.on('open', () => {
+      console.log('Connection opened');
+      this.updateStatus(ConnectionStatus.CONNECTED);
+      this.reconnectAttempts = 0;
+      this.startPingTimer();
+      
+      // Send any pending messages
+      this.flushPendingMessages();
+      
+      this.emit('connected', { peerId: conn.peer });
+    });
+
+    conn.on('data', (data) => {
+      this.handleMessage(data as NetworkMessage);
+    });
+
+    conn.on('close', () => {
+      console.log('Connection closed');
+      this.handleDisconnection();
+    });
+
+    conn.on('error', (error) => {
+      console.error('Connection error:', error);
+      this.emit('error', error);
+    });
+  }
+
+  private handleDisconnection(): void {
+    this.stopPingTimer();
+    
+    if (this.reconnectAttempts < this.config.maxReconnectAttempts) {
+      this.updateStatus(ConnectionStatus.CONNECTING);
+      this.scheduleReconnection();
+    } else {
+      this.updateStatus(ConnectionStatus.ERROR);
+      this.emit('error', new Error('Max reconnection attempts reached'));
+    }
+  }
+
+  private scheduleReconnection(): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+    }
+
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectAttempts++;
+      console.log(`Reconnection attempt ${this.reconnectAttempts}/${this.config.maxReconnectAttempts}`);
+      
+      if (this.connectionInfo.isHost) {
+        // Host waits for client to reconnect
+        this.emit('reconnecting', { attempt: this.reconnectAttempts });
+      } else {
+        // Client attempts to reconnect to host
+        this.connectToPeer(this.connectionInfo.gameCode);
+      }
+    }, this.config.reconnectTimeout);
+  }
+
+  private setupMessageHandlers(): void {
+    this.messageHandlers.set(MessageType.MOVE, this.handleMoveMessage.bind(this));
+    this.messageHandlers.set(MessageType.UNDO, this.handleUndoMessage.bind(this));
+    this.messageHandlers.set(MessageType.REDO, this.handleRedoMessage.bind(this));
+    this.messageHandlers.set(MessageType.RESET, this.handleResetMessage.bind(this));
+    this.messageHandlers.set(MessageType.SYNC_REQUEST, this.handleSyncRequest.bind(this));
+    this.messageHandlers.set(MessageType.SYNC_RESPONSE, this.handleSyncResponse.bind(this));
+    this.messageHandlers.set(MessageType.PING, this.handlePing.bind(this));
+    this.messageHandlers.set(MessageType.PONG, this.handlePong.bind(this));
+  }
+
+  private handleMessage(message: NetworkMessage): void {
+    this.connectionInfo.lastActivity = Date.now();
+    
+    const handler = this.messageHandlers.get(message.type);
+    if (handler) {
+      handler(message);
+    } else {
+      console.warn('Unknown message type:', message.type);
+    }
+  }
+
+  private handleMoveMessage(message: NetworkMessage): void {
+    const moveMsg = message as MoveMessage;
+    this.emit('move', moveMsg.payload);
+  }
+
+  private handleUndoMessage(message: NetworkMessage): void {
+    const undoMsg = message as UndoMessage;
+    this.emit('undo', undoMsg.payload);
+  }
+
+  private handleRedoMessage(message: NetworkMessage): void {
+    const redoMsg = message as RedoMessage;
+    this.emit('redo', redoMsg.payload);
+  }
+
+  private handleResetMessage(message: NetworkMessage): void {
+    const resetMsg = message as ResetMessage;
+    this.emit('reset', resetMsg.payload);
+  }
+
+  private handleSyncRequest(_message: NetworkMessage): void {
+    // Send current game state
+    const response: SyncResponseMessage = {
+      type: MessageType.SYNC_RESPONSE,
+      payload: {
+        gameState: JSON.stringify(this.game.toJSON()),
+        stateHash: this.game.getCurrentState().generateHash(),
+      },
+      timestamp: Date.now(),
+      sequence: this.getNextSequence(),
+    };
+    
+    this.sendMessage(response);
+  }
+
+  private handleSyncResponse(message: NetworkMessage): void {
+    const syncResp = message as SyncResponseMessage;
+    this.emit('sync', syncResp.payload);
+  }
+
+  private handlePing(message: NetworkMessage): void {
+    const ping = message as PingMessage;
+    
+    // Respond with pong
+    const pong: PongMessage = {
+      type: MessageType.PONG,
+      payload: {
+        clientTime: ping.payload.clientTime,
+        serverTime: Date.now(),
+      },
+      timestamp: Date.now(),
+      sequence: this.getNextSequence(),
+    };
+    
+    this.sendMessage(pong);
+  }
+
+  private handlePong(message: NetworkMessage): void {
+    const pong = message as PongMessage;
+    const now = Date.now();
+    const latency = now - pong.payload.clientTime;
+    
+    this.connectionInfo.latency = latency;
+    this.emit('latency', latency);
+  }
+
+  private sendMessage(message: NetworkMessage): void {
+    if (!this.connection || !this.connection.open) {
+      // Queue message if not connected
+      this.pendingMessages.push(message);
+      return;
+    }
+
+    try {
+      this.connection.send(message);
+    } catch (error) {
+      console.error('Failed to send message:', error);
+      this.emit('error', error);
+    }
+  }
+
+  private flushPendingMessages(): void {
+    while (this.pendingMessages.length > 0) {
+      const message = this.pendingMessages.shift();
+      if (message) {
+        this.sendMessage(message);
+      }
+    }
+  }
+
+  private startPingTimer(): void {
+    this.stopPingTimer();
+    
+    this.pingTimer = setInterval(() => {
+      if (this.connection && this.connection.open) {
+        const ping: PingMessage = {
+          type: MessageType.PING,
+          payload: {
+            clientTime: Date.now(),
+          },
+          timestamp: Date.now(),
+          sequence: this.getNextSequence(),
+        };
+        
+        this.sendMessage(ping);
+      }
+    }, this.config.pingInterval);
+  }
+
+  private stopPingTimer(): void {
+    if (this.pingTimer) {
+      clearInterval(this.pingTimer);
+      this.pingTimer = null;
+    }
+  }
+
+  private updateStatus(status: ConnectionStatus): void {
+    const oldStatus = this.connectionInfo.status;
+    this.connectionInfo.status = status;
+    
+    if (oldStatus !== status) {
+      this.emit('statusChanged', { oldStatus, newStatus: status });
+    }
+  }
+
+  private generateGameCode(): string {
+    // Generate a 6-character alphanumeric code
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let code = '';
+    
+    for (let i = 0; i < 6; i++) {
+      code += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    
+    return code;
+  }
+
+  private getNextSequence(): number {
+    return ++this.messageSequence;
+  }
+
+  private cleanup(): void {
+    this.stopPingTimer();
+    
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    
+    if (this.connection) {
+      this.connection.close();
+      this.connection = null;
+    }
+    
+    if (this.peer) {
+      this.peer.destroy();
+      this.peer = null;
+    }
+    
+    this.pendingMessages = [];
+    this.messageSequence = 0;
+    this.reconnectAttempts = 0;
+  }
+}
