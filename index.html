@@ -9,6 +9,26 @@
   <body>
     <div id="app">
       <canvas id="game-canvas"></canvas>
+      <div id="game-controls">
+        <div class="control-group">
+          <button id="undo-btn" title="Undo (Ctrl+Z)">↶ Undo</button>
+          <button id="redo-btn" title="Redo (Ctrl+Y)">↷ Redo</button>
+        </div>
+        <div class="control-group">
+          <button id="reset-btn" title="Reset Game">⟲ Reset</button>
+        </div>
+        <div class="history-controls">
+          <input type="range" id="history-slider" min="0" max="0" value="0" title="Navigate History">
+          <span id="history-info">Move 0 / 0</span>
+        </div>
+      </div>
+      <div id="game-status">
+        <div id="current-player">Current: <span class="player-indicator"></span></div>
+        <div id="capture-counts">
+          <div>Black: <span id="black-captures">0</span></div>
+          <div>White: <span id="white-captures">0</span></div>
+        </div>
+      </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

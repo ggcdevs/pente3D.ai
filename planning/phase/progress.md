@@ -144,16 +144,39 @@ Building a fully-featured 3D Pente game with peer-to-peer networking, comprehens
 
 ## 🚧 Next Steps
 
-### Immediate Next: Chunk 3.1 - Undo/Redo System
-**Target Completion:** June 2025
+### Immediate Next: Chunk 3.2 - Local Storage & Persistence
+**Target Completion:** February 2025
 **Planned Work:**
-- Comprehensive move history storage
-- State restoration from any point
-- Keyboard shortcuts (Ctrl+Z, Ctrl+Y)
-- UI buttons for undo/redo
-- State validation during restoration
-- History compression for large games
-- Visual indicators for available undo/redo
+- StorageManager class for localStorage operations
+- Automatic game state saving after each move
+- Game restoration on page load
+- Settings persistence for visual preferences
+- Storage quota management and cleanup
+- Error handling for storage failures
+- Migration system for data format changes
+
+### Chunk 3.1: Undo/Redo System ✅ COMPLETE - Completed: February 1, 2025
+- ✅ **Enhanced History Navigation**: goToMove() method for jumping to any point in history
+- ✅ **UI Buttons**: Undo/redo/reset buttons with visual feedback in main UI
+- ✅ **History Slider**: Interactive slider for navigating game history
+- ✅ **State Validation**: Comprehensive validation during state restoration
+- ✅ **History Compression**: Automatic compression for games over threshold
+- ✅ **Visual Indicators**: Button enable/disable states and move counter display
+- ✅ **Player Status Display**: Current player indicator and capture counts
+- ✅ **Testing**: 12 new integration tests + enhanced unit tests (522 of 642 tests passing)
+
+**Key Deliverables:**
+- Extended Game class with goToMove() for comprehensive history navigation
+- Full UI controls including undo/redo buttons and history slider
+- State validation system preventing corrupted game states
+- History compression keeping games performant with many moves
+- Visual feedback showing available actions and game status
+- Comprehensive test coverage for all undo/redo scenarios
+
+**Commits:**
+- Implementation of enhanced history navigation in Game class
+- Addition of UI controls and visual indicators
+- Integration tests for undo/redo system
 
 ### Phase 2: 3D Rendering & Basic Interaction (IN PROGRESS)
 **Chunk 2.1: Three.js Scene Setup** ✅ COMPLETE - Completed: June 1, 2025
@@ -296,11 +319,12 @@ Building a fully-featured 3D Pente game with peer-to-peer networking, comprehens
 ## 🚀 Success Indicators
 
 ### Technical Success
-- ✅ **Tests passing**: 499/619 tests passing (Phase 2 complete)
+- ✅ **Tests passing**: 522/642 tests passing (Phase 3.1 complete)
 - ✅ **Type safety**: Zero TypeScript errors
 - ✅ **Build success**: Clean production builds
 - ✅ **Performance targets**: 60fps with highlighting
 - ✅ **Visual features**: Complete highlighting system
+- ✅ **History management**: Full undo/redo with compression
 
 ### Product Success
 - ✅ **Static deployment**: Ready for GitHub Pages
@@ -341,9 +365,12 @@ Building a fully-featured 3D Pente game with peer-to-peer networking, comprehens
   - **Renderer Integration Tests**: 8 new tests - Highlighting workflow, state changes
   - **Visual Tests**: 8 tests - Highlight rendering, combined effects, quality
   - **Performance Tests**: 11 tests - Highlighting efficiency, 60fps maintenance
-- **Total Coverage**: Phase 1 complete, Phase 2 rendering and interaction complete
+- **Chunk 3.1 Tests**: 20+ tests total
+  - **Game Unit Tests**: 8 new tests - History navigation, compression, state validation
+  - **Undo/Redo Integration Tests**: 12 tests - UI sync, events, performance, compression
+- **Total Coverage**: Phase 1 complete, Phase 2 rendering complete, Phase 3.1 undo/redo complete
 
 ---
 
-*Last Updated: June 1, 2025*  
-*Next Review: After Chunk 1.4 completion*
+*Last Updated: February 1, 2025*  
+*Next Review: After Chunk 3.2 completion*

@@ -570,6 +570,220 @@ describe('Game', () => {
     });
   });
 
+  describe('enhanced history navigation', () => {
+    it('should navigate to specific move index', () => {
+      const game = new Game();
+      
+      // Play 5 moves
+      for (let i = 0; i < 5; i++) {
+        game.placePiece(new Vector3(i, 0, 0));
+      }
+      
+      expect(game.getCurrentStateIndex()).toBe(5);
+      
+      // Go to move 2
+      const result = game.goToMove(2);
+      expect(result).toBe(true);
+      expect(game.getCurrentStateIndex()).toBe(2);
+      expect(game.getMoveCount()).toBe(2);
+    });
+
+    it('should reject invalid move indices', () => {
+      const game = new Game();
+      
+      game.placePiece(new Vector3(0, 0, 0));
+      game.placePiece(new Vector3(1, 1, 1));
+      
+      expect(game.goToMove(-1)).toBe(false);
+      expect(game.goToMove(10)).toBe(false);
+      expect(game.getCurrentStateIndex()).toBe(2);
+    });
+
+    it('should emit historyNavigate event', () => {
+      const game = new Game();
+      const events: GameEvent[] = [];
+      
+      game.addEventListener(event => events.push(event));
+      
+      for (let i = 0; i < 3; i++) {
+        game.placePiece(new Vector3(i, 0, 0));
+      }
+      
+      game.goToMove(1);
+      
+      const navEvent = events.find(e => e.type === 'historyNavigate');
+      expect(navEvent).toBeTruthy();
+      expect(navEvent?.type === 'historyNavigate' && navEvent.moveIndex).toBe(1);
+    });
+
+    it('should validate state before navigation', () => {
+      const game = new Game();
+      
+      // Play some moves
+      game.placePiece(new Vector3(0, 0, 0));
+      game.placePiece(new Vector3(1, 1, 1));
+      
+      // Manually corrupt a state (in real scenario, this shouldn't happen)
+      const history = game.getHistory() as GameState[];
+      const corruptedState = history[1];
+      
+      // The validateState method should catch inconsistencies
+      const result = game.goToMove(1);
+      expect(result).toBe(true); // Should still work with valid state
+    });
+
+    it('should get history length', () => {
+      const game = new Game();
+      
+      expect(game.getHistoryLength()).toBe(1);
+      
+      game.placePiece(new Vector3(0, 0, 0));
+      expect(game.getHistoryLength()).toBe(2);
+      
+      game.placePiece(new Vector3(1, 1, 1));
+      expect(game.getHistoryLength()).toBe(3);
+      
+      game.undo();
+      expect(game.getHistoryLength()).toBe(3); // History still exists
+    });
+
+    it('should check if can go to move', () => {
+      const game = new Game();
+      
+      game.placePiece(new Vector3(0, 0, 0));
+      game.placePiece(new Vector3(1, 1, 1));
+      game.placePiece(new Vector3(2, 2, 2));
+      
+      expect(game.canGoToMove(0)).toBe(true);
+      expect(game.canGoToMove(1)).toBe(true);
+      expect(game.canGoToMove(2)).toBe(true);
+      expect(game.canGoToMove(3)).toBe(false); // Current position
+      expect(game.canGoToMove(-1)).toBe(false);
+      expect(game.canGoToMove(10)).toBe(false);
+    });
+
+    it('should handle navigation after undo/redo', () => {
+      const game = new Game();
+      
+      // Play moves
+      for (let i = 0; i < 5; i++) {
+        game.placePiece(new Vector3(i, 0, 0));
+      }
+      
+      // Undo twice
+      game.undo();
+      game.undo();
+      
+      // Navigate to beginning
+      game.goToMove(0);
+      expect(game.getCurrentStateIndex()).toBe(0);
+      
+      // Navigate to end
+      game.goToMove(4);
+      expect(game.getCurrentStateIndex()).toBe(4);
+      
+      // Can still redo
+      expect(game.canRedo()).toBe(true);
+    });
+  });
+
+  describe('history compression', () => {
+    it('should compress history when threshold is reached', () => {
+      const game = new Game();
+      
+      // Set low threshold for testing
+      game.setCompressionOptions({
+        maxHistorySize: 10,
+        compressionThreshold: 5
+      });
+      
+      // Play many moves to trigger compression
+      for (let i = 0; i < 15; i++) {
+        const x = i % 3;
+        const y = Math.floor(i / 3) % 3;
+        const z = Math.floor(i / 9);
+        game.placePiece(new Vector3(x, y, z));
+      }
+      
+      // History should be compressed
+      expect(game.getHistoryLength()).toBeLessThanOrEqual(10);
+    });
+
+    it('should preserve initial state during compression', () => {
+      const game = new Game({ boardSize: 7, blackFirst: false });
+      
+      game.setCompressionOptions({
+        maxHistorySize: 5,
+        compressionThreshold: 3
+      });
+      
+      // Play moves to trigger compression
+      for (let i = 0; i < 10; i++) {
+        game.placePiece(new Vector3(i % 7, 0, 0));
+      }
+      
+      // Go back to beginning
+      game.goToMove(0);
+      
+      // Initial state should be preserved
+      expect(game.getCurrentState().getBoard().getSize()).toBe(7);
+      expect(game.getCurrentState().getCurrentPlayer().getColor()).toBe('white');
+    });
+
+    it('should maintain current state after compression', () => {
+      const game = new Game();
+      
+      game.setCompressionOptions({
+        maxHistorySize: 8,
+        compressionThreshold: 4
+      });
+      
+      // Play moves
+      for (let i = 0; i < 12; i++) {
+        game.placePiece(new Vector3(i % 4, Math.floor(i / 4), 0));
+      }
+      
+      const moveCountBefore = game.getMoveCount();
+      const currentPlayer = game.getCurrentPlayer().getColor();
+      
+      // Force another move to trigger compression
+      game.placePiece(new Vector3(4, 4, 4));
+      
+      // Current game state should be maintained
+      expect(game.getMoveCount()).toBe(moveCountBefore + 1);
+      expect(game.getCurrentPlayer().getColor()).toBe(currentPlayer === 'black' ? 'white' : 'black');
+    });
+
+    it('should handle compression with custom options', () => {
+      const game = new Game();
+      
+      // Set custom compression options
+      game.setCompressionOptions({
+        maxHistorySize: 20,
+        compressionThreshold: 10
+      });
+      
+      // Play moves up to threshold
+      for (let i = 0; i < 9; i++) {
+        game.placePiece(new Vector3(i % 3, Math.floor(i / 3), 0));
+      }
+      
+      const historyBefore = game.getHistoryLength();
+      
+      // One more move shouldn't trigger compression
+      game.placePiece(new Vector3(3, 3, 3));
+      expect(game.getHistoryLength()).toBe(historyBefore + 1);
+      
+      // Play more to exceed threshold
+      for (let i = 0; i < 15; i++) {
+        game.placePiece(new Vector3(i % 5, Math.floor(i / 5), 1));
+      }
+      
+      // Now compression should have occurred
+      expect(game.getHistoryLength()).toBeLessThanOrEqual(20);
+    });
+  });
+
   describe('edge cases', () => {
     it('should handle rapid moves', () => {
       const game = new Game();

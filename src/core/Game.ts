@@ -10,7 +10,8 @@ export type GameEvent =
   | { type: 'undo'; state: GameState }
   | { type: 'redo'; state: GameState }
   | { type: 'reset'; state: GameState }
-  | { type: 'gameOver'; winner: PlayerColor; winResult: WinResult };
+  | { type: 'gameOver'; winner: PlayerColor; winResult: WinResult }
+  | { type: 'historyNavigate'; state: GameState; moveIndex: number };
 
 export type GameEventHandler = (event: GameEvent) => void;
 
@@ -25,11 +26,20 @@ export interface SerializedGame {
   options: GameOptions;
 }
 
+export interface HistoryCompressionOptions {
+  maxHistorySize?: number;
+  compressionThreshold?: number;
+}
+
 export class Game {
   private history: GameState[] = [];
   private currentStateIndex: number = -1;
   private eventHandlers: Set<GameEventHandler> = new Set();
   private readonly options: Required<GameOptions>;
+  private compressionOptions: HistoryCompressionOptions = {
+    maxHistorySize: 1000,
+    compressionThreshold: 500
+  };
 
   constructor(options: GameOptions = {}) {
     this.options = {
@@ -86,49 +96,11 @@ export class Game {
   }
 
   placePiece(position: Vector3): boolean {
-    const currentState = this.getCurrentState();
-    
-    // Check if game is already over
-    if (this.isGameOver()) {
-      return false;
+    const result = this.placePieceInternal(position);
+    if (result) {
+      this.compressHistory();
     }
-
-    // Create the move
-    const move = new Move(
-      position,
-      currentState.getCurrentPlayer(),
-      [], // No captured pieces yet
-      Date.now()
-    );
-
-    // Validate the move
-    if (!currentState.isValidMove(move)) {
-      return false;
-    }
-
-    // Apply the move to create new state
-    const newState = currentState.applyMove(move);
-
-    // Truncate any states after current index (for redo history)
-    this.history = this.history.slice(0, this.currentStateIndex + 1);
-    
-    // Add the new state
-    this.history.push(newState);
-    this.currentStateIndex++;
-
-    // Emit move event
-    this.emit({ type: 'move', move, state: newState });
-
-    // Check for game over
-    if (newState.getWinner()) {
-      this.emit({ 
-        type: 'gameOver', 
-        winner: newState.getWinner()!, 
-        winResult: newState.getWinResult()! 
-      });
-    }
-
-    return true;
+    return result;
   }
 
   undo(): boolean {
@@ -229,5 +201,161 @@ export class Game {
 
   getOptions(): Readonly<Required<GameOptions>> {
     return this.options;
+  }
+
+  // Enhanced history navigation
+  goToMove(moveIndex: number): boolean {
+    if (moveIndex < 0 || moveIndex >= this.history.length) {
+      return false;
+    }
+
+    const previousIndex = this.currentStateIndex;
+    this.currentStateIndex = moveIndex;
+    const state = this.getCurrentState();
+
+    // Validate the state before applying
+    if (!this.validateState(state)) {
+      this.currentStateIndex = previousIndex;
+      return false;
+    }
+
+    this.emit({ type: 'historyNavigate', state, moveIndex });
+    return true;
+  }
+
+  getHistoryLength(): number {
+    return this.history.length;
+  }
+
+  canGoToMove(moveIndex: number): boolean {
+    return moveIndex >= 0 && moveIndex < this.history.length && moveIndex !== this.currentStateIndex;
+  }
+
+  // State validation
+  private validateState(state: GameState): boolean {
+    try {
+      // Validate board size matches
+      if (state.getBoard().getSize() !== this.options.boardSize) {
+        return false;
+      }
+
+      // Validate move count matches history position (index 0 = 0 moves, index 1 = 1 move, etc)
+      const historyIndex = this.history.indexOf(state);
+      if (historyIndex !== -1 && state.getMoveCount() !== historyIndex) {
+        return false;
+      }
+
+      // Validate player captures are non-negative
+      const players = [state.getBlackPlayer(), state.getWhitePlayer()];
+      for (const player of players) {
+        if (player.getCaptureCount() < 0) {
+          return false;
+        }
+      }
+
+      // Validate hash consistency - skip this for now as hash might change
+
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  // History compression
+  setCompressionOptions(options: HistoryCompressionOptions): void {
+    this.compressionOptions = {
+      ...this.compressionOptions,
+      ...options
+    };
+  }
+
+  private compressHistory(): void {
+    if (this.history.length <= (this.compressionOptions.compressionThreshold ?? 500)) {
+      return;
+    }
+
+    const maxSize = this.compressionOptions.maxHistorySize ?? 1000;
+    if (this.history.length <= maxSize) {
+      return;
+    }
+
+    // Keep first state and recent states
+    const keepCount = Math.floor(maxSize * 0.8); // Keep 80% of max size
+    const startOffset = Math.floor(keepCount * 0.1); // Keep 10% from start
+
+    const newHistory: GameState[] = [];
+    
+    // Always keep the initial state
+    newHistory.push(this.history[0]);
+
+    // Keep some early game states (for analysis)
+    for (let i = 1; i < startOffset && i < this.history.length; i += 2) {
+      newHistory.push(this.history[i]);
+    }
+
+    // Keep all recent states
+    const recentStart = this.history.length - (keepCount - newHistory.length);
+    for (let i = recentStart; i < this.history.length; i++) {
+      newHistory.push(this.history[i]);
+    }
+
+    // Adjust current index
+    const oldState = this.history[this.currentStateIndex];
+    const newIndex = newHistory.indexOf(oldState);
+    
+    if (newIndex !== -1) {
+      this.currentStateIndex = newIndex;
+    } else {
+      // Find closest state
+      this.currentStateIndex = newHistory.length - 1;
+    }
+
+    this.history = newHistory;
+  }
+
+  private placePieceInternal(position: Vector3): boolean {
+    const currentState = this.getCurrentState();
+    
+    // Check if game is already over
+    if (this.isGameOver()) {
+      return false;
+    }
+
+    // Create the move
+    const move = new Move(
+      position,
+      currentState.getCurrentPlayer(),
+      [], // No captured pieces yet
+      Date.now()
+    );
+
+    // Validate the move
+    if (!currentState.isValidMove(move)) {
+      return false;
+    }
+
+    // Apply the move to create new state
+    const newState = currentState.applyMove(move);
+
+    // Truncate any states after current index (for redo history)
+    this.history = this.history.slice(0, this.currentStateIndex + 1);
+    
+    // Add the new state
+    this.history.push(newState);
+    this.currentStateIndex++;
+
+    // Emit move event
+    this.emit({ type: 'move', move, state: newState });
+
+    // Check for game over
+    if (newState.getWinner()) {
+      this.emit({ 
+        type: 'gameOver', 
+        winner: newState.getWinner()!, 
+        winResult: newState.getWinResult()! 
+      });
+    }
+
+    return true;
   }
 }

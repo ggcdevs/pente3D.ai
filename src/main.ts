@@ -62,6 +62,92 @@ renderer.startRenderLoop();
 window.addEventListener('blur', () => renderer.stopRenderLoop());
 window.addEventListener('focus', () => renderer.startRenderLoop());
 
+// Get UI elements
+const undoBtn = document.getElementById('undo-btn') as HTMLButtonElement;
+const redoBtn = document.getElementById('redo-btn') as HTMLButtonElement;
+const resetBtn = document.getElementById('reset-btn') as HTMLButtonElement;
+const historySlider = document.getElementById('history-slider') as HTMLInputElement;
+const historyInfo = document.getElementById('history-info') as HTMLSpanElement;
+const playerIndicator = document.querySelector('.player-indicator') as HTMLSpanElement;
+const blackCaptures = document.getElementById('black-captures') as HTMLSpanElement;
+const whiteCaptures = document.getElementById('white-captures') as HTMLSpanElement;
+
+// Update UI function
+function updateUI() {
+  const currentState = game.getCurrentState();
+  const historyLength = game.getHistoryLength();
+  const currentIndex = game.getCurrentStateIndex();
+  
+  // Update buttons
+  undoBtn.disabled = !game.canUndo();
+  redoBtn.disabled = !game.canRedo();
+  
+  // Update history slider
+  historySlider.max = String(historyLength - 1);
+  historySlider.value = String(currentIndex);
+  historyInfo.textContent = `Move ${currentIndex} / ${historyLength - 1}`;
+  
+  // Update player indicator
+  const currentPlayer = currentState.getCurrentPlayer();
+  playerIndicator.className = `player-indicator ${currentPlayer.getColor()}`;
+  
+  // Update capture counts
+  blackCaptures.textContent = String(currentState.getBlackPlayer().getCaptureCount());
+  whiteCaptures.textContent = String(currentState.getWhitePlayer().getCaptureCount());
+}
+
+// Set up button event listeners
+undoBtn.addEventListener('click', () => {
+  if (game.undo()) {
+    renderer.updatePieces();
+    updateUI();
+  }
+});
+
+redoBtn.addEventListener('click', () => {
+  if (game.redo()) {
+    renderer.updatePieces();
+    updateUI();
+  }
+});
+
+resetBtn.addEventListener('click', () => {
+  if (confirm('Are you sure you want to reset the game?')) {
+    game.reset();
+    renderer.updatePieces();
+    updateUI();
+  }
+});
+
+// History slider
+historySlider.addEventListener('input', () => {
+  const targetIndex = parseInt(historySlider.value);
+  if (game.goToMove(targetIndex)) {
+    renderer.updatePieces();
+    updateUI();
+  }
+});
+
+// Update UI when game state changes
+game.on('move', () => {
+  updateUI();
+});
+
+game.on('undo', () => {
+  updateUI();
+});
+
+game.on('redo', () => {
+  updateUI();
+});
+
+game.on('reset', () => {
+  updateUI();
+});
+
+// Initial UI update
+updateUI();
+
 // Cleanup on page unload
 window.addEventListener('beforeunload', () => {
   inputHandler.dispose();
