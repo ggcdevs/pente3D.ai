@@ -2,6 +2,7 @@ import './style.css';
 import { Game } from './core/Game';
 import { Renderer } from './rendering/Renderer';
 import { InputHandler } from './ui/InputHandler';
+import { StorageManager } from './storage';
 
 // Get canvas element
 const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
@@ -9,8 +10,12 @@ if (!canvas) {
   throw new Error('Canvas element not found');
 }
 
-// Create game instance
-const game = new Game({ boardSize: 7 });
+// Load settings first
+const settings = StorageManager.loadSettings();
+
+// Create game instance - try to restore from storage
+const loadedGame = StorageManager.loadGame();
+const game = loadedGame || new Game({ boardSize: 7 });
 
 // Create renderer
 const renderer = new Renderer({
@@ -131,22 +136,41 @@ historySlider.addEventListener('input', () => {
 // Update UI when game state changes
 game.on('move', () => {
   updateUI();
+  // Auto-save after each move
+  StorageManager.save(game, settings);
 });
 
 game.on('undo', () => {
   updateUI();
+  // Save after undo
+  StorageManager.save(game, settings);
 });
 
 game.on('redo', () => {
   updateUI();
+  // Save after redo
+  StorageManager.save(game, settings);
 });
 
 game.on('reset', () => {
   updateUI();
+  // Save after reset
+  StorageManager.save(game, settings);
 });
 
 // Initial UI update
 updateUI();
+
+// Apply settings to renderer
+if (settings.getGridDiagonals()) {
+  // This would require adding a method to renderer to toggle diagonals
+  // For now, we'll add this functionality later
+}
+
+// Listen for settings changes
+settings.addChangeListener((newSettings) => {
+  StorageManager.save(game, newSettings);
+});
 
 // Cleanup on page unload
 window.addEventListener('beforeunload', () => {

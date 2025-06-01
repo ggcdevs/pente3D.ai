@@ -56,12 +56,6 @@ export class Game {
     this.currentStateIndex = 0;
   }
 
-  static fromJSON(json: SerializedGame): Game {
-    const game = new Game(json.options);
-    game.history = json.history;
-    game.currentStateIndex = json.currentStateIndex;
-    return game;
-  }
 
   getCurrentState(): GameState {
     return this.history[this.currentStateIndex];
@@ -137,13 +131,6 @@ export class Game {
     this.emit({ type: 'reset', state: initialState });
   }
 
-  toJSON(): SerializedGame {
-    return {
-      currentStateIndex: this.currentStateIndex,
-      history: this.history,
-      options: this.options
-    };
-  }
 
   exportGame(): string {
     return JSON.stringify(this.toJSON(), null, 2);
@@ -357,5 +344,34 @@ export class Game {
     }
 
     return true;
+  }
+
+  // Serialization
+  toJSON(): any {
+    return {
+      boardSize: this.options.boardSize,
+      blackFirst: this.options.blackFirst,
+      history: this.history.map(state => state.toJSON()),
+      currentStateIndex: this.currentStateIndex,
+      compressionOptions: this.compressionOptions
+    };
+  }
+
+  static fromJSON(json: any): Game {
+    const game = new Game({
+      boardSize: json.boardSize,
+      blackFirst: json.blackFirst
+    });
+    
+    // Restore history
+    game.history = json.history.map((stateData: any) => GameState.fromJSON(stateData));
+    game.currentStateIndex = json.currentStateIndex;
+    
+    // Restore compression options
+    if (json.compressionOptions) {
+      game.compressionOptions = json.compressionOptions;
+    }
+    
+    return game;
   }
 }
