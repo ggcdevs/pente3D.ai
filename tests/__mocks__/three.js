@@ -15,16 +15,22 @@ const THREE = {
     children: []
   })),
   PerspectiveCamera: jest.fn().mockImplementation(() => ({
-    position: { set: jest.fn() },
+    position: { 
+      set: jest.fn(),
+      distanceTo: jest.fn().mockReturnValue(10)
+    },
     lookAt: jest.fn(),
     updateProjectionMatrix: jest.fn(),
-    aspect: 1
+    aspect: 1,
+    projectionMatrix: {},
+    matrixWorldInverse: {}
   })),
   Group: jest.fn().mockImplementation(() => ({
     add: jest.fn(),
     remove: jest.fn(),
     clear: jest.fn(),
-    traverse: jest.fn()
+    traverse: jest.fn(),
+    children: []
   })),
   Mesh: jest.fn().mockImplementation(() => ({
     position: { 
@@ -32,10 +38,16 @@ const THREE = {
       copy: jest.fn().mockReturnThis(),
       x: 0,
       y: 0,
-      z: 0
+      z: 0,
+      distanceTo: jest.fn().mockReturnValue(0.1)
     },
     userData: {},
-    geometry: { dispose: jest.fn() },
+    geometry: { 
+      dispose: jest.fn(),
+      boundingSphere: null,
+      computeBoundingSphere: jest.fn(),
+      attributes: { position: { count: 50 } }
+    },
     material: { dispose: jest.fn() },
     name: '',
     add: jest.fn(),
@@ -43,7 +55,9 @@ const THREE = {
     rotation: { x: 0, y: 0, z: 0 },
     scale: { setScalar: jest.fn() },
     lookAt: jest.fn(),
-    rotateX: jest.fn()
+    rotateX: jest.fn(),
+    visible: true,
+    traverse: jest.fn()
   })),
   LineSegments: jest.fn().mockImplementation(() => ({
     position: { set: jest.fn() },
@@ -125,7 +139,22 @@ const THREE = {
   AnimationMixer: jest.fn().mockImplementation(() => ({
     update: jest.fn()
   })),
-  BackSide: 1
+  Frustum: jest.fn().mockImplementation(() => ({
+    setFromProjectionMatrix: jest.fn(),
+    intersectsObject: jest.fn().mockReturnValue(true)
+  })),
+  Matrix4: jest.fn().mockImplementation(() => ({
+    multiplyMatrices: jest.fn().mockReturnThis()
+  })),
+  BackSide: 1,
+  BasicShadowMap: 0,
+  PCFShadowMap: 1,
+  PCFSoftShadowMap: 2,
+  MOUSE: {
+    ROTATE: 0,
+    DOLLY: 1,
+    PAN: 2
+  }
 };
 
 module.exports = THREE;
