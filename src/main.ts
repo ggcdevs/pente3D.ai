@@ -123,6 +123,7 @@ inputHandler.on('temporaryModeChanged', (data) => {
 
 // Subscribe to game events
 game.on('move', () => {
+  renderer.setBoard(game.getBoard());
   renderer.updatePieces();
 });
 
@@ -183,6 +184,7 @@ function updateUI() {
 // Set up button event listeners
 undoBtn.addEventListener('click', () => {
   if (game.undo()) {
+    renderer.setBoard(game.getBoard());
     renderer.updatePieces();
     updateUI();
   }
@@ -190,6 +192,7 @@ undoBtn.addEventListener('click', () => {
 
 redoBtn.addEventListener('click', () => {
   if (game.redo()) {
+    renderer.setBoard(game.getBoard());
     renderer.updatePieces();
     updateUI();
   }
@@ -202,6 +205,7 @@ resetBtn.addEventListener('click', async () => {
   );
   if (confirmed) {
     game.reset();
+    renderer.setBoard(game.getBoard());
     renderer.updatePieces();
     updateUI();
   }
@@ -211,6 +215,7 @@ resetBtn.addEventListener('click', async () => {
 historySlider.addEventListener('input', () => {
   const targetIndex = parseInt(historySlider.value);
   if (game.goToMove(targetIndex)) {
+    renderer.setBoard(game.getBoard());
     renderer.updatePieces();
     updateUI();
   }

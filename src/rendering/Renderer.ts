@@ -132,6 +132,48 @@ export class Renderer {
     this.render();
   }
   
+  // Coordinate System Utilities
+  /**
+   * Converts an array index (0 to boardSize-1) to board coordinate (-halfSize to +halfSize)
+   * @param index Array index (0-based)
+   * @returns Board coordinate (centered)
+   */
+  private arrayIndexToBoardCoord(index: number): number {
+    return index - Math.floor(this.options.boardSize / 2);
+  }
+  
+  /**
+   * Converts a board coordinate (-halfSize to +halfSize) to array index (0 to boardSize-1)
+   * @param coord Board coordinate (centered)
+   * @returns Array index (0-based)
+   */
+  private boardCoordToArrayIndex(coord: number): number {
+    return coord + Math.floor(this.options.boardSize / 2);
+  }
+  
+  /**
+   * Converts a board coordinate to world position for Three.js rendering
+   * @param coord Board coordinate (centered)
+   * @returns World position
+   */
+  private boardCoordToWorldPos(coord: number): number {
+    const halfWorldSize = (this.options.boardSize - 1) * this.options.cellSize / 2;
+    return coord * this.options.cellSize;
+  }
+  
+  /**
+   * Converts a full Vector3 board coordinate to world position
+   * @param boardPos Board position in centered coordinates
+   * @returns World position for Three.js
+   */
+  private boardPositionToWorld(boardPos: Vector3): THREE.Vector3 {
+    return new THREE.Vector3(
+      this.boardCoordToWorldPos(boardPos.x),
+      this.boardCoordToWorldPos(boardPos.y),
+      this.boardCoordToWorldPos(boardPos.z)
+    );
+  }
+  
   private initializeScene(): void {
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(this.options.backgroundColor);
@@ -352,6 +394,10 @@ export class Renderer {
     this.updatePieces();
   }
   
+  /**
+   * Creates the visual grid for the board
+   * Internal method - uses array indices for iteration
+   */
   private createBoardGrid(): void {
     // Clear existing grid
     this.gridGroup.clear();
@@ -413,9 +459,13 @@ export class Renderer {
             z * cellSize - halfSize
           );
           // Store position data for raycasting
+          // Convert from array indices to board coordinates
+          const boardX = this.arrayIndexToBoardCoord(x);
+          const boardY = this.arrayIndexToBoardCoord(y);
+          const boardZ = this.arrayIndexToBoardCoord(z);
           node.userData = {
             type: 'intersection',
-            position: Vector3.create(x, y, z)
+            position: Vector3.create(boardX, boardY, boardZ)
           };
           this.gridGroup.add(node);
         }
@@ -437,7 +487,11 @@ export class Renderer {
     for (let x = 0; x < this.options.boardSize; x++) {
       for (let y = 0; y < this.options.boardSize; y++) {
         for (let z = 0; z < this.options.boardSize; z++) {
-          const position = Vector3.create(x, y, z);
+          // Convert from array indices to board coordinates
+          const boardX = this.arrayIndexToBoardCoord(x);
+          const boardY = this.arrayIndexToBoardCoord(y);
+          const boardZ = this.arrayIndexToBoardCoord(z);
+          const position = Vector3.create(boardX, boardY, boardZ);
           const piece = this.board.getPieceAt(position);
           
           if (piece) {
@@ -475,19 +529,19 @@ export class Renderer {
     return new THREE.Mesh(this.pieceGeometry, material);
   }
   
+  /**
+   * Adds a temporary piece to the scene
+   * @param position Board coordinates (centered, e.g., -3 to 3 for size 7)
+   * @param player Player who owns the piece
+   */
   addTemporaryPiece(position: Vector3, player: Player): void {
-    const cellSize = this.options.cellSize;
-    const halfSize = (this.options.boardSize - 1) * cellSize / 2;
-    
     // Create temporary piece
     const piece = Piece.createTemporary(position, player);
     const mesh = this.createPieceMesh(piece);
     
-    mesh.position.set(
-      position.x * cellSize - halfSize,
-      position.y * cellSize - halfSize,
-      position.z * cellSize - halfSize
-    );
+    // Position receives board coordinates, convert to world position
+    const worldPos = this.boardPositionToWorld(position);
+    mesh.position.copy(worldPos);
     
     // Store position data for later removal
     mesh.userData = { position };
@@ -518,6 +572,11 @@ export class Renderer {
     this.render();
   }
   
+  /**
+   * Highlights a board position
+   * @param position Board coordinates (centered, e.g., -3 to 3 for size 7)
+   * @param color Highlight color
+   */
   highlightPosition(position: Vector3, color: number = 0xffff00): void {
     const key = `${position.x},${position.y},${position.z}`;
     
@@ -796,6 +855,11 @@ export class Renderer {
     this.render();
   }
   
+  /**
+   * Sets a temporary piece at the specified position
+   * @param position Board coordinates (centered, e.g., -3 to 3 for size 7)
+   * @param player Player who owns the temporary piece
+   */
   setTemporaryPiece(position: Vector3, player: Player): void {
     // Clear existing temporary piece
     this.clearTemporaryPiece();
@@ -825,11 +889,9 @@ export class Renderer {
     
     // Create the main piece
     this.temporaryPiece = new THREE.Mesh(this.pieceGeometry, material);
-    this.temporaryPiece.position.set(
-      position.x * cellSize - halfSize,
-      position.y * cellSize - halfSize,
-      position.z * cellSize - halfSize
-    );
+    // Position receives board coordinates, convert to world position
+    const worldPos = this.boardPositionToWorld(position);
+    this.temporaryPiece.position.copy(worldPos);
     
     // Add outline as child
     this.temporaryPiece.add(outline);
