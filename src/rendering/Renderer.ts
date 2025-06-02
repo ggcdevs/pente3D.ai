@@ -231,12 +231,12 @@ export class Renderer {
   }
   
   private initializeLighting(): void {
-    // Ambient light for overall illumination
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    // Ambient light for overall illumination - reduced to prevent washing out colors
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
     this.scene.add(ambientLight);
     
     // Directional light for shadows and depth
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.4);
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.3);
     directionalLight.position.set(10, 10, 10);
     this.scene.add(directionalLight);
     
@@ -262,17 +262,21 @@ export class Renderer {
     });
     
     
-    // Piece materials
+    // Piece materials with enhanced contrast
     this.blackPieceMaterial = new THREE.MeshPhongMaterial({
       color: this.options.blackPieceColor,
-      specular: 0x222222,
-      shininess: 50
+      specular: 0x111111,  // Reduced specular for less grey appearance
+      shininess: 30,       // Lower shininess for matte look
+      emissive: 0x000000,  // No emissive light
+      emissiveIntensity: 0
     });
     
     this.whitePieceMaterial = new THREE.MeshPhongMaterial({
       color: this.options.whitePieceColor,
       specular: 0xffffff,
-      shininess: 80
+      shininess: 80,
+      emissive: 0x222222,  // Slight emissive to ensure visibility
+      emissiveIntensity: 0.1
     });
     
     // Temporary piece materials with enhanced transparency
@@ -517,11 +521,11 @@ export class Renderer {
     let material: THREE.Material;
     
     if (piece.isTemporary) {
-      material = piece.player.id === 'black' ? 
+      material = piece.player.color === 'black' ? 
         this.temporaryBlackMaterial : 
         this.temporaryWhiteMaterial;
     } else {
-      material = piece.player.id === 'black' ? 
+      material = piece.player.color === 'black' ? 
         this.blackPieceMaterial : 
         this.whitePieceMaterial;
     }
