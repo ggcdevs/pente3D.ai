@@ -116,6 +116,7 @@ export class InputHandler {
         
         // Temporary piece mode
         this.keyboardShortcuts.set('t', () => this.toggleTemporaryPieceMode());
+        this.keyboardShortcuts.set('enter', () => this.confirmTemporaryPiece());
         
         // Cancel operations
         this.keyboardShortcuts.set('escape', () => this.cancelCurrentOperation());
@@ -223,12 +224,14 @@ export class InputHandler {
     }
 
     private onClick(event: MouseEvent): void {
+        console.log('onClick called, button:', event.button);
         // Only process left clicks
         if (event.button !== 0) return;
         
         // Skip if this was triggered by a drag
         const wasDragging = (this as any).wasRecentDrag;
         if (wasDragging) {
+            console.log('Skipping click due to drag');
             (this as any).wasRecentDrag = false;
             return;
         }
@@ -262,10 +265,22 @@ export class InputHandler {
                     console.error('Invalid move:', error);
                 }
             } else {
-                // In temporary mode, just show the piece
-                this.state.temporaryPosition = boardPosition;
-                this.renderer.setTemporaryPiece(boardPosition, this.game.getCurrentPlayer());
-                this.emit('temporaryPiecePlaced', { position: boardPosition });
+                // In temporary mode, place a temporary piece
+                console.log('Attempting to place temporary piece at:', boardPosition);
+                try {
+                    const result = this.game.placeTemporaryPiece(boardPosition);
+                    console.log('placeTemporaryPiece result:', result);
+                    if (result) {
+                        this.state.temporaryPosition = boardPosition;
+                        this.emit('temporaryPiecePlaced', { position: boardPosition });
+                        console.log('Temporary piece placed successfully');
+                    } else {
+                        console.log('placeTemporaryPiece returned false - position invalid');
+                    }
+                } catch (error) {
+                    this.emit('invalidMove', { position: boardPosition, error });
+                    console.error('Invalid temporary move:', error);
+                }
             }
         }
     }
@@ -340,9 +355,14 @@ export class InputHandler {
     }
 
     private toggleTemporaryPieceMode(): void {
+        console.log('toggleTemporaryPieceMode called, current mode:', this.state.temporaryPieceMode);
         this.state.temporaryPieceMode = !this.state.temporaryPieceMode;
+        console.log('New temporary mode:', this.state.temporaryPieceMode);
         
         if (!this.state.temporaryPieceMode) {
+            // Clear temporary pieces from game state when exiting mode
+            console.log('Exiting temporary mode, clearing pieces');
+            this.game.clearTemporaryPieces();
             this.renderer.clearTemporaryPiece();
             this.state.temporaryPosition = null;
         }
@@ -350,9 +370,29 @@ export class InputHandler {
         this.emit('temporaryModeChanged', { enabled: this.state.temporaryPieceMode });
     }
 
+    private confirmTemporaryPiece(): void {
+        if (this.state.temporaryPieceMode && this.game.hasTemporaryPieces()) {
+            try {
+                const result = this.game.confirmTemporaryPiece();
+                if (result) {
+                    this.state.temporaryPieceMode = false;
+                    this.state.temporaryPosition = null;
+                    this.renderer.clearTemporaryPiece();
+                    this.emit('temporaryPieceConfirmed');
+                } else {
+                    console.log('confirmTemporaryPiece returned false');
+                }
+            } catch (error) {
+                this.emit('invalidMove', { error });
+                console.error('Error confirming temporary piece:', error);
+            }
+        }
+    }
+
     private cancelCurrentOperation(): void {
         if (this.state.temporaryPieceMode) {
             this.state.temporaryPieceMode = false;
+            this.game.clearTemporaryPieces();
             this.renderer.clearTemporaryPiece();
             this.state.temporaryPosition = null;
         }
