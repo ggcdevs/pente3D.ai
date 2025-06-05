@@ -3,7 +3,6 @@ import { Move } from './Move';
 import { Vector3 } from './Vector3';
 import { WinResult } from './WinResult';
 import { Player } from './Player';
-import { Piece } from './Piece';
 import type { PlayerColor } from '@/types';
 
 export type GameEvent = 
@@ -126,76 +125,6 @@ export class Game {
       this.compressHistory();
     }
     return result;
-  }
-
-  placeTemporaryPiece(position: Vector3): boolean {
-    console.log('Game.placeTemporaryPiece called with:', position);
-    const currentState = this.getCurrentState();
-    
-    // Check if game is already over
-    if (this.isGameOver()) {
-      console.log('Game is over, cannot place temporary piece');
-      return false;
-    }
-
-    // Check if position is valid (not occupied by permanent piece)
-    const existingPiece = currentState.getBoard().getPieceAt(position);
-    if (existingPiece && !existingPiece.isTemporary) {
-      console.log('Position occupied by permanent piece:', existingPiece);
-      return false;
-    }
-
-    // Remove any existing temporary pieces first
-    console.log('Clearing existing temporary pieces');
-    this.clearTemporaryPieces();
-
-    // Create temporary piece
-    const tempPiece = new Piece(position, currentState.getCurrentPlayer(), true);
-    console.log('Created temporary piece:', tempPiece);
-    
-    // Add directly to current board (without creating new state)
-    const board = currentState.getBoard();
-    const key = (board as any).coordToKey(position);
-    console.log('Adding piece with key:', key);
-    (board as any)._pieces.set(key, tempPiece);
-    
-    console.log('Total pieces after adding temporary:', board.getAllPieces().length);
-    return true;
-  }
-
-  confirmTemporaryPiece(): boolean {
-    const currentState = this.getCurrentState();
-    const tempPieces = currentState.getBoard().getAllPieces().filter(p => p.isTemporary);
-    
-    if (tempPieces.length === 0) {
-      return false;
-    }
-
-    // Get the temporary piece position
-    const tempPiece = tempPieces[0];
-    const position = tempPiece.coords;
-
-    // Clear temporary pieces
-    this.clearTemporaryPieces();
-
-    // Place permanent piece
-    return this.placePiece(position);
-  }
-
-  clearTemporaryPieces(): void {
-    const currentState = this.getCurrentState();
-    const board = currentState.getBoard();
-    const tempPieces = board.getAllPieces().filter(p => p.isTemporary);
-    
-    tempPieces.forEach(piece => {
-      const key = (board as any).coordToKey(piece.coords);
-      (board as any)._pieces.delete(key);
-    });
-  }
-
-  hasTemporaryPieces(): boolean {
-    const currentState = this.getCurrentState();
-    return currentState.getBoard().getAllPieces().some(p => p.isTemporary);
   }
 
   undo(): boolean {

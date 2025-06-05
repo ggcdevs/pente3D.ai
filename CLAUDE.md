@@ -52,10 +52,17 @@ Read .claudecontroller.d/logs/bash/20250604_235129_bash-npx-2055352.log -100 100
 ### Checking Token Usage
 Use the `tokens` command to see current context usage:
 ```bash
+# Brief status for quick checks
+./claudecontroller tokens --brief
+
+# Full detailed breakdown
 ./claudecontroller tokens
 
 # See token usage breakdown by todo items
 ./claudecontroller tokens --todos
+
+# Comprehensive task and todo analysis
+./claudecontroller tokens --all
 ```
 
 Example output:
