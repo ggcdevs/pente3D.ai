@@ -182,10 +182,14 @@ export class InputHandler {
             this.emit('hover', { position: boardPosition, previousPosition });
         }
         
-        // Update temporary piece position if in temporary mode
-        if (this.state.temporaryPieceMode && boardPosition) {
-            this.state.temporaryPosition = boardPosition;
+        // In temporary mode, show a preview piece on hover only if no temporary piece has been placed
+        if (this.state.temporaryPieceMode && boardPosition && !this.state.temporaryPosition) {
+            // Show hover preview only when no temporary piece is placed yet
             this.renderer.setTemporaryPiece(boardPosition, this.game.getCurrentPlayer());
+        } else if (this.state.temporaryPieceMode && this.state.temporaryPosition && boardPosition) {
+            // If temporary piece is already placed, don't update it with hover
+            // Keep the placed temporary piece visible at its original position
+            this.renderer.setTemporaryPiece(this.state.temporaryPosition, this.game.getCurrentPlayer());
         }
     }
 
@@ -224,7 +228,6 @@ export class InputHandler {
     }
 
     private onClick(event: MouseEvent): void {
-        console.log('onClick called!');
         // Only process left clicks
         if (event.button !== 0) return;
         
@@ -245,13 +248,9 @@ export class InputHandler {
             // Try to place a piece at this position
             if (!this.state.temporaryPieceMode) {
                 try {
-                    console.log('Calling placePiece with:', boardPosition);
                     const result = this.game.placePiece(boardPosition);
-                    console.log('placePiece returned:', result);
                     if (result) {
                         this.emit('piecePlaced', { position: boardPosition });
-                    } else {
-                        console.log('placePiece returned false - move was invalid');
                     }
                 } catch (error) {
                     this.emit('invalidMove', { position: boardPosition, error });
@@ -358,8 +357,6 @@ export class InputHandler {
                     this.state.temporaryPosition = null;
                     this.renderer.clearTemporaryPiece();
                     this.emit('temporaryPieceConfirmed');
-                } else {
-                    console.log('confirmTemporaryPiece: placePiece returned false');
                 }
             } catch (error) {
                 this.emit('invalidMove', { error });
@@ -481,7 +478,12 @@ export class InputHandler {
             case ' ':
             case 'Enter':
                 event.preventDefault();
-                this.handleKeyboardSelect();
+                // In temporary mode with a temporary position, Enter should confirm
+                if (this.state.temporaryPieceMode && this.state.temporaryPosition) {
+                    this.confirmTemporaryPiece();
+                } else {
+                    this.handleKeyboardSelect();
+                }
                 break;
         }
     }

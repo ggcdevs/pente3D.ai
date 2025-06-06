@@ -142,14 +142,6 @@ export class Renderer {
     return index - Math.floor(this.options.boardSize / 2);
   }
   
-  /**
-   * Converts a board coordinate (-halfSize to +halfSize) to array index (0 to boardSize-1)
-   * @param coord Board coordinate (centered)
-   * @returns Array index (0-based)
-   */
-  private boardCoordToArrayIndex(coord: number): number {
-    return coord + Math.floor(this.options.boardSize / 2);
-  }
   
   /**
    * Converts a board coordinate to world position for Three.js rendering
@@ -157,7 +149,6 @@ export class Renderer {
    * @returns World position
    */
   private boardCoordToWorldPos(coord: number): number {
-    const halfWorldSize = (this.options.boardSize - 1) * this.options.cellSize / 2;
     return coord * this.options.cellSize;
   }
   
@@ -868,9 +859,6 @@ export class Renderer {
     // Clear existing temporary piece
     this.clearTemporaryPiece();
     
-    const cellSize = this.options.cellSize;
-    const halfSize = (this.options.boardSize - 1) * cellSize / 2;
-    
     // Create temporary piece with enhanced material
     const material = player.id === 'black' ? 
       this.temporaryBlackMaterial.clone() : 
@@ -1027,6 +1015,11 @@ export class Renderer {
   startRenderLoop(): void {
     if (this.animationId !== null) return;
     
+    // Start performance monitoring
+    if (this.performanceMonitor) {
+      this.performanceMonitor.startMonitoring();
+    }
+    
     const animate = () => {
       this.animationId = requestAnimationFrame(animate);
       
@@ -1075,8 +1068,8 @@ export class Renderer {
       // Update animation mixers
       this.animationMixers.forEach(mixer => mixer.update(delta));
       
-      // Render scene
-      this.renderer.render(this.scene, this.camera);
+      // Render scene with performance monitoring
+      this.render();
     };
     
     animate();
@@ -1086,6 +1079,11 @@ export class Renderer {
     if (this.animationId !== null) {
       cancelAnimationFrame(this.animationId);
       this.animationId = null;
+    }
+    
+    // Stop performance monitoring
+    if (this.performanceMonitor) {
+      this.performanceMonitor.stopMonitoring();
     }
   }
   
@@ -1426,6 +1424,12 @@ export class Renderer {
     // Update renderer settings
     this.renderer.setPixelRatio(settings.pixelRatio);
     
+    // Ensure canvas display size remains consistent after pixel ratio change
+    // This prevents the canvas from jumping when quality changes
+    const canvas = this.renderer.domElement;
+    const rect = canvas.getBoundingClientRect();
+    this.renderer.setSize(rect.width, rect.height, false);
+    
     // Update shadow settings
     this.renderer.shadowMap.enabled = settings.shadowQuality !== 'none';
     if (settings.shadowQuality !== 'none') {
@@ -1459,8 +1463,9 @@ export class Renderer {
       powerPreference: 'high-performance'
     });
     
-    // Copy settings
-    this.renderer.setSize(canvas.width, canvas.height);
+    // Copy settings - use display dimensions, not buffer dimensions
+    const rect = canvas.getBoundingClientRect();
+    this.renderer.setSize(rect.width, rect.height, false);
     this.renderer.setPixelRatio(settings.pixelRatio);
     
     // Dispose old renderer
