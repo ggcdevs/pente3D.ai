@@ -53,7 +53,21 @@ export default defineConfig({
 
     {
       name: 'firefox',
-      use: { ...devices['Desktop Firefox'] },
+      use: { 
+        ...devices['Desktop Firefox'],
+        // Ensure headless mode with explicit flags to prevent dialogs
+        launchOptions: {
+          headless: true,
+          args: [
+            '--no-remote',
+            '--new-instance',
+            '--headless',
+            '--disable-dev-shm-usage',
+            '--disable-web-security',
+            '--disable-features=VizDisplayCompositor'
+          ]
+        }
+      },
     },
 
     {

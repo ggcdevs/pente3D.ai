@@ -1,3 +1,5 @@
+import { logger } from '@/utils';
+
 export interface Poolable {
   reset(): void;
 }
@@ -41,7 +43,7 @@ export class ObjectPool<T extends Poolable> {
   
   public release(obj: T): void {
     if (!this.activeObjects.has(obj)) {
-      console.warn('Attempting to release object not from this pool');
+      logger.warn('Attempting to release object not from this pool');
       return;
     }
     

@@ -1,5 +1,6 @@
 import { Game } from '@/core/Game';
 import { Settings } from './Settings';
+import { logger } from '@/utils';
 
 export interface StorageData {
   version: number;
@@ -68,7 +69,7 @@ export class StorageManager {
       
       this.checkStorageQuota();
     } catch (error) {
-      console.error('Failed to save game:', error);
+      logger.error('Failed to save game', error as Error);
       if (error instanceof DOMException && error.name === 'QuotaExceededError') {
         this.handleQuotaExceeded();
       }
@@ -86,7 +87,7 @@ export class StorageManager {
       
       return Game.fromJSON(currentGame.state);
     } catch (error) {
-      console.error('Failed to load game:', error);
+      logger.error('Failed to load game', error as Error);
       return null;
     }
   }
@@ -96,7 +97,7 @@ export class StorageManager {
       const data = this.loadData();
       return Settings.fromJSON(data.settings);
     } catch (error) {
-      console.error('Failed to load settings:', error);
+      logger.error('Failed to load settings', error as Error);
       return new Settings();
     }
   }
@@ -121,7 +122,7 @@ export class StorageManager {
       
       return id;
     } catch (error) {
-      console.error('Failed to save named game:', error);
+      logger.error('Failed to save named game', error as Error);
       throw error;
     }
   }
@@ -131,7 +132,7 @@ export class StorageManager {
       const data = this.loadData();
       return data.games.filter(g => g.id !== 'current');
     } catch (error) {
-      console.error('Failed to list saved games:', error);
+      logger.error('Failed to list saved games', error as Error);
       return [];
     }
   }
@@ -147,7 +148,7 @@ export class StorageManager {
       
       return Game.fromJSON(savedGame.state);
     } catch (error) {
-      console.error('Failed to load saved game:', error);
+      logger.error('Failed to load saved game', error as Error);
       return null;
     }
   }
@@ -160,7 +161,7 @@ export class StorageManager {
       const serialized = JSON.stringify(data);
       localStorage.setItem(this.STORAGE_KEY, serialized);
     } catch (error) {
-      console.error('Failed to delete saved game:', error);
+      logger.error('Failed to delete saved game', error as Error);
     }
   }
 
@@ -203,7 +204,7 @@ export class StorageManager {
       
       return data;
     } catch (error) {
-      console.error('Failed to parse storage data:', error);
+      logger.error('Failed to parse storage data', error as Error);
       return this.createEmptyData();
     }
   }
@@ -217,7 +218,7 @@ export class StorageManager {
   }
 
   private static migrateData(oldData: any): StorageData {
-    console.log('Migrating storage data from version', oldData.version);
+    logger.info('Migrating storage data', { fromVersion: oldData.version });
     
     const newData = this.createEmptyData();
     
@@ -235,7 +236,7 @@ export class StorageManager {
       try {
         newData.settings = Settings.fromJSON(oldData.settings).toJSON();
       } catch {
-        console.warn('Failed to migrate settings, using defaults');
+        logger.warn('Failed to migrate settings, using defaults');
       }
     }
     
@@ -257,7 +258,7 @@ export class StorageManager {
     if (quota.quota > 0) {
       const usageRatio = quota.usage / quota.quota;
       if (usageRatio > this.STORAGE_QUOTA_WARNING) {
-        console.warn(`Storage usage is at ${(usageRatio * 100).toFixed(1)}% of quota`);
+        logger.warn('Storage usage high', { usagePercent: (usageRatio * 100).toFixed(1) });
       }
     }
   }
@@ -273,9 +274,9 @@ export class StorageManager {
       try {
         const serialized = JSON.stringify(data);
         localStorage.setItem(this.STORAGE_KEY, serialized);
-        console.log('Removed oldest saved game to free up space');
+        logger.info('Removed oldest saved game to free up space');
       } catch (error) {
-        console.error('Failed to free up storage space:', error);
+        logger.error('Failed to free up storage space', error as Error);
       }
     }
   }
@@ -285,7 +286,7 @@ export class StorageManager {
     try {
       localStorage.setItem(this.CUSTOM_THEMES_KEY, JSON.stringify(themes));
     } catch (error) {
-      console.error('Failed to save custom themes:', error);
+      logger.error('Failed to save custom themes', error as Error);
       // Try to handle quota exceeded
       if (error instanceof DOMException && error.name === 'QuotaExceededError') {
         this.handleQuotaExceeded();
@@ -293,7 +294,7 @@ export class StorageManager {
         try {
           localStorage.setItem(this.CUSTOM_THEMES_KEY, JSON.stringify(themes));
         } catch (retryError) {
-          console.error('Failed to save custom themes after clearing space:', retryError);
+          logger.error('Failed to save custom themes after clearing space', retryError as Error);
         }
       }
     }
@@ -308,13 +309,13 @@ export class StorageManager {
       
       const themes = JSON.parse(themesData);
       if (!Array.isArray(themes)) {
-        console.warn('Invalid custom themes data, returning empty array');
+        logger.warn('Invalid custom themes data, returning empty array');
         return [];
       }
       
       return themes;
     } catch (error) {
-      console.error('Failed to load custom themes:', error);
+      logger.error('Failed to load custom themes', error as Error);
       return [];
     }
   }
@@ -323,7 +324,7 @@ export class StorageManager {
     try {
       localStorage.removeItem(this.CUSTOM_THEMES_KEY);
     } catch (error) {
-      console.error('Failed to clear custom themes:', error);
+      logger.error('Failed to clear custom themes', error as Error);
     }
   }
 }

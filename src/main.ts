@@ -4,7 +4,7 @@ import { Renderer, QualityManager } from './rendering';
 import { InputHandler, MenuModal, SettingsModal, DialogManager, NetworkModal, NetworkStatus, ConflictNotification, PerformanceStats, KeyboardHelpModal } from './ui';
 import { StorageManager } from './storage';
 import { downloadFile, uploadJSON } from './utils/fileIO';
-import { PerformanceMonitor, AccessibilityManager } from './utils';
+import { PerformanceMonitor, AccessibilityManager, logger } from './utils';
 
 // Get canvas element
 const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
@@ -60,7 +60,7 @@ if ((import.meta as any).env?.DEV) {
 
 // Listen for quality changes and update settings
 qualityManager.on('quality-changed', ({ preset, reason }: any) => {
-  console.log(`Quality changed to ${preset}: ${reason}`);
+  logger.info('Quality changed', { preset, reason });
   
   // Save quality preference
   (settings as any).performanceQuality = preset;
@@ -114,11 +114,11 @@ inputHandler.on('openMenu', () => {
 });
 
 inputHandler.on('invalidMove', (data) => {
-  console.warn('Invalid move:', data.error);
+  logger.warn('Invalid move', { error: data.error });
 });
 
 inputHandler.on('temporaryModeChanged', (data) => {
-  console.log('Temporary mode:', data.enabled);
+  logger.debug('Temporary mode changed', { enabled: data.enabled });
 });
 
 // Subscribe to game events
@@ -128,8 +128,10 @@ game.on('move', () => {
 });
 
 game.on('gameOver', (data: any) => {
-  console.log('Game Over! Winner:', data.winner?.id);
-  console.log('Win type:', data.winType);
+  logger.info('Game Over!', { 
+    winner: data.winner?.id, 
+    winType: data.winType 
+  });
 });
 
 // Start render loop
@@ -140,7 +142,7 @@ if ((window as any).Playwright || (import.meta as any).env?.DEV) {
   (window as any).game = game;
   (window as any).renderer = renderer;
   (window as any).inputHandler = inputHandler;
-  console.log('Game objects exposed for testing');
+  logger.debug('Game objects exposed for testing');
 }
 
 // Handle window focus/blur for performance
@@ -423,7 +425,7 @@ function setupNetworkHandlers() {
         updateUI();
       }
     } catch (error) {
-      console.error('Failed to sync game state:', error);
+      logger.error('Failed to sync game state', error as Error);
     }
   });
 

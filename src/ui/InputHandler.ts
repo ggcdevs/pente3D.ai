@@ -13,6 +13,7 @@ import { Vector3 } from '@/core/Vector3';
 import { Game } from '@/core/Game';
 import { Renderer } from '@/rendering/Renderer';
 import { AccessibilityManager } from '@/utils/AccessibilityManager';
+import { logger } from '@/utils';
 
 export interface InputHandlerOptions {
     canvas: HTMLCanvasElement;
@@ -254,7 +255,7 @@ export class InputHandler {
                     }
                 } catch (error) {
                     this.emit('invalidMove', { position: boardPosition, error });
-                    console.error('Invalid move:', error);
+                    logger.error('Invalid move', error as Error, { position: boardPosition });
                 }
             } else {
                 // In temporary mode, just show the piece visually
@@ -360,7 +361,7 @@ export class InputHandler {
                 }
             } catch (error) {
                 this.emit('invalidMove', { error });
-                console.error('Error confirming temporary piece:', error);
+                logger.error('Error confirming temporary piece', error as Error);
             }
         }
     }

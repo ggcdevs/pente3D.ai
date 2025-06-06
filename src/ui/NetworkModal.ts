@@ -1,6 +1,7 @@
 import { Modal } from './Modal';
 import { NetworkManager } from '@/network';
 import { Game } from '@/core';
+import { logger } from '@/utils';
 
 export interface NetworkModalOptions {
   game: Game;
@@ -433,7 +434,7 @@ export class NetworkModal extends Modal {
           copyBtn.textContent = '📋 Copy Code';
         }, 2000);
       } catch (err) {
-        console.error('Failed to copy:', err);
+        logger.error('Failed to copy', err as Error);
       }
     }
   }
@@ -461,7 +462,7 @@ export class NetworkModal extends Modal {
           }, 2000);
         }
       } catch (err) {
-        console.error('Failed to share:', err);
+        logger.error('Failed to share', err as Error);
       }
     }
   }

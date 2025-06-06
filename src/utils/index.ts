@@ -6,3 +6,5 @@ export { ObjectPool } from './ObjectPool';
 export type { Poolable } from './ObjectPool';
 export { AccessibilityManager } from './AccessibilityManager';
 export type { AccessibilityOptions, AccessibilityEvent } from './AccessibilityManager';
+export { logger, getLogger, setLogLevel, LogLevel } from './logger';
+export type { Logger, LogContext } from './logger';

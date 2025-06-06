@@ -2,6 +2,7 @@ import { Modal, ModalOptions } from './Modal';
 import { Settings, ColorSettings, OpacitySettings, ThemePreset } from '../storage/Settings';
 import { Renderer } from '../rendering/Renderer';
 import { downloadFile, selectFile } from '../utils/fileIO';
+import { logger } from '@/utils';
 
 export interface SettingsModalOptions extends ModalOptions {
   settings: Settings;
@@ -813,7 +814,7 @@ export class SettingsModal extends Modal {
       this.settings.setColor(key, color);
       this.schedulePreview();
     } catch (error) {
-      console.error(`Invalid color for ${key}:`, error);
+      logger.error('Invalid color setting', error as Error, { key });
     }
   }
   

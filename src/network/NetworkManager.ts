@@ -1,5 +1,5 @@
 import Peer, { DataConnection } from 'peerjs';
-import { EventEmitter } from '@/utils';
+import { EventEmitter, logger } from '@/utils';
 import { Game, Move } from '@/core';
 import {
   ConnectionStatus,
@@ -319,7 +319,7 @@ export class NetworkManager extends EventEmitter {
 
       // Set up peer event handlers
       this.peer.on('open', (id) => {
-        console.log('Peer opened with ID:', id);
+        logger.info('Peer opened', { peerId: id });
         this.connectionInfo.peerId = id;
         
         if (this.connectionInfo.isHost) {
@@ -331,12 +331,12 @@ export class NetworkManager extends EventEmitter {
       });
 
       this.peer.on('connection', (conn) => {
-        console.log('Incoming connection from:', conn.peer);
+        logger.info('Incoming connection', { from: conn.peer });
         this.handleIncomingConnection(conn);
       });
 
       this.peer.on('error', (error) => {
-        console.error('Peer error:', error);
+        logger.error('Peer error', error);
         this.emit('error', error);
         this.updateStatus(ConnectionStatus.ERROR);
         
@@ -346,14 +346,14 @@ export class NetworkManager extends EventEmitter {
       });
 
       this.peer.on('disconnected', () => {
-        console.log('Peer disconnected');
+        logger.info('Peer disconnected');
         if (this.connectionInfo.status === ConnectionStatus.CONNECTED) {
           this.handleDisconnection();
         }
       });
 
       this.peer.on('close', () => {
-        console.log('Peer closed');
+        logger.info('Peer closed');
         this.updateStatus(ConnectionStatus.DISCONNECTED);
       });
     });
@@ -375,7 +375,7 @@ export class NetworkManager extends EventEmitter {
   private handleIncomingConnection(conn: DataConnection): void {
     // Only accept one connection at a time
     if (this.connection && this.connection.open) {
-      console.warn('Already connected, rejecting new connection');
+      logger.warn('Already connected, rejecting new connection');
       conn.close();
       return;
     }
@@ -387,7 +387,7 @@ export class NetworkManager extends EventEmitter {
     this.connection = conn;
 
     conn.on('open', () => {
-      console.log('Connection opened');
+      logger.info('Connection opened');
       this.updateStatus(ConnectionStatus.CONNECTED);
       this.connectionInfo.opponentConnected = true;
       this.reconnectAttempts = 0;
@@ -413,12 +413,12 @@ export class NetworkManager extends EventEmitter {
     });
 
     conn.on('close', () => {
-      console.log('Connection closed');
+      logger.info('Connection closed');
       this.handleDisconnection();
     });
 
     conn.on('error', (error) => {
-      console.error('Connection error:', error);
+      logger.error('Connection error', error);
       this.emit('error', error);
     });
   }
@@ -442,7 +442,10 @@ export class NetworkManager extends EventEmitter {
 
     this.reconnectTimer = setTimeout(() => {
       this.reconnectAttempts++;
-      console.log(`Reconnection attempt ${this.reconnectAttempts}/${this.config.maxReconnectAttempts}`);
+      logger.info('Reconnection attempt', { 
+        attempt: this.reconnectAttempts, 
+        maxAttempts: this.config.maxReconnectAttempts 
+      });
       
       if (this.connectionInfo.isHost) {
         // Host waits for client to reconnect
@@ -480,7 +483,7 @@ export class NetworkManager extends EventEmitter {
     if (handler) {
       handler(message);
     } else {
-      console.warn('Unknown message type:', message.type);
+      logger.warn('Unknown message type', { type: message.type });
     }
   }
 
@@ -662,7 +665,7 @@ export class NetworkManager extends EventEmitter {
     try {
       this.connection.send(message);
     } catch (error) {
-      console.error('Failed to send message:', error);
+      logger.error('Failed to send message', error);
       this.emit('error', error);
     }
   }
@@ -917,7 +920,7 @@ export class NetworkManager extends EventEmitter {
     }
 
     // Also log to console for debugging
-    const logFn = type === 'error' ? console.error : type === 'warning' ? console.warn : console.log;
+    const logFn = type === 'error' ? logger.error.bind(logger) : type === 'warning' ? logger.warn.bind(logger) : logger.info.bind(logger);
     logFn(`[NetworkManager Conflict] ${message}`, data);
   }
 

@@ -1,4 +1,5 @@
 import { NetworkManager, ConnectionStatus } from '@/network';
+import { logger } from '@/utils';
 
 export class NetworkStatus {
   private container: HTMLElement;
@@ -310,7 +311,7 @@ export class NetworkStatus {
               copyBtn.style.background = 'rgba(255, 255, 255, 0.2)';
             }, 2000);
           } catch (err) {
-            console.error('Failed to copy:', err);
+            logger.error('Failed to copy', err as Error);
           }
         });
       }
@@ -464,7 +465,7 @@ export class NetworkStatus {
             }, 2000);
           }
         } catch (err) {
-          console.error('Failed to share:', err);
+          logger.error('Failed to share', err as Error);
         }
       });
       this.connectionControlsElement.appendChild(shareBtn);

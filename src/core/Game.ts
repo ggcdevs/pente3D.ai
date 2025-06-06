@@ -4,6 +4,7 @@ import { Vector3 } from './Vector3';
 import { WinResult } from './WinResult';
 import { Player } from './Player';
 import type { PlayerColor } from '@/types';
+import { logger } from '@/utils';
 
 export type GameEvent = 
   | { type: 'move'; move: Move; state: GameState }
@@ -238,7 +239,10 @@ export class Game {
       // Validate metadata matches actual game state
       const currentState = game.getCurrentState();
       if (data.metadata.moveCount !== currentState.getMoveCount()) {
-        console.warn('Metadata move count does not match actual game state');
+        logger.warn('Metadata move count does not match actual game state', {
+          metadataMoves: json.metadata?.totalMoves,
+          actualMoves: game.getState().getMoveHistory().length
+        });
       }
       
       return game;
