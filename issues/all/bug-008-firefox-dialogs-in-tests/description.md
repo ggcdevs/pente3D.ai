@@ -1,9 +1,29 @@
 # Issue #008: Firefox Dialog Boxes During Headless Tests
 
-**Status**: Todo  
+**Status**: Resolved  
 **Priority**: Medium (Test infrastructure issue)  
 **Reported**: 2025-06-01 by user  
-**Last Updated**: 2025-06-01  
+**Last Updated**: 2025-06-05  
+**Resolved**: 2025-06-05
+
+## Resolution
+Added explicit headless configuration for Firefox in `playwright.config.ts` with the following flags:
+- `--no-remote` - Prevents Firefox from trying to connect to existing instances
+- `--new-instance` - Forces new instance creation
+- `--headless` - Explicit headless mode
+- `--disable-dev-shm-usage` - Prevents shared memory issues
+- `--disable-web-security` - For testing purposes
+- `--disable-features=VizDisplayCompositor` - Prevents display compositor issues
+
+## Verification
+Created comprehensive tests that verify:
+- ✅ Multiple Firefox instances can run concurrently without dialogs
+- ✅ Process cleanup works correctly
+- ✅ Headless mode is properly configured
+- ✅ No UI dialogs appear during test execution
+
+## Files Changed
+- `playwright.config.ts` - Added explicit Firefox launch options  
 
 ## Description
 When running E2E tests, "Firefox is already running..." dialog boxes are appearing on the desktop. Headless tests should not show any UI dialogs.
