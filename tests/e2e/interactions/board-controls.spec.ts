@@ -1,22 +1,16 @@
 import { test, expect } from '@playwright/test';
-import { GamePage } from '../pages/GamePage';
+import { setupTest } from '../../helpers/e2e';
 
 test.describe('Board Controls', () => {
-  let gamePage: GamePage;
-
   test.beforeEach(async ({ page }) => {
-    gamePage = new GamePage(page);
-    await gamePage.goto();
-    await gamePage.waitForThreeJSLoad();
+    await page.setViewportSize({ width: 1280, height: 720 });
   });
 
   test('should rotate board with left-click drag', async ({ page }) => {
+    await setupTest(page);
+    
     // Get initial camera position
     const initialCameraPos = await page.evaluate(() => {
-      const canvas = document.querySelector('canvas');
-      if (!canvas || !(window as any).game) return null;
-      
-      // Access camera through renderer
       const renderer = (window as any).renderer;
       if (!renderer) return null;
       
@@ -29,7 +23,6 @@ test.describe('Board Controls', () => {
     });
 
     expect(initialCameraPos).toBeTruthy();
-    console.log('Initial camera position:', initialCameraPos);
 
     // Perform left-click drag to rotate
     const canvas = page.locator('canvas');
@@ -53,8 +46,6 @@ test.describe('Board Controls', () => {
         z: camera.position.z
       };
     });
-
-    console.log('New camera position:', newCameraPos);
     
     // Camera should have rotated (position changed)
     expect(newCameraPos).toBeTruthy();
@@ -66,6 +57,8 @@ test.describe('Board Controls', () => {
   });
 
   test('should pan board with right-click drag', async ({ page }) => {
+    await setupTest(page);
+    
     // Get initial controls target
     const initialTarget = await page.evaluate(() => {
       const renderer = (window as any).renderer;
@@ -80,7 +73,6 @@ test.describe('Board Controls', () => {
     });
 
     expect(initialTarget).toBeTruthy();
-    console.log('Initial target:', initialTarget);
 
     // Perform right-click drag to pan
     const canvas = page.locator('canvas');
@@ -104,8 +96,6 @@ test.describe('Board Controls', () => {
         z: controls.target.z
       };
     });
-
-    console.log('New target:', newTarget);
     
     expect(newTarget).toBeTruthy();
     expect(
@@ -116,6 +106,8 @@ test.describe('Board Controls', () => {
   });
 
   test('should zoom with mouse wheel', async ({ page }) => {
+    await setupTest(page);
+    
     // Get initial camera distance
     const initialDistance = await page.evaluate(() => {
       const renderer = (window as any).renderer;
@@ -131,7 +123,6 @@ test.describe('Board Controls', () => {
     });
 
     expect(initialDistance).toBeTruthy();
-    console.log('Initial distance:', initialDistance);
 
     // Zoom in with wheel
     const canvas = page.locator('canvas');
@@ -153,8 +144,6 @@ test.describe('Board Controls', () => {
         camera.position.z ** 2
       );
     });
-
-    console.log('New distance after zoom in:', newDistance);
     
     expect(newDistance).toBeTruthy();
     expect(newDistance!).toBeLessThan(initialDistance!);
@@ -175,11 +164,12 @@ test.describe('Board Controls', () => {
       );
     });
 
-    console.log('Final distance after zoom out:', finalDistance);
     expect(finalDistance!).toBeGreaterThan(newDistance!);
   });
 
   test('should not show focus outline on click', async ({ page }) => {
+    await setupTest(page);
+    
     const canvas = page.locator('canvas');
     
     // Click on canvas
@@ -195,14 +185,14 @@ test.describe('Board Controls', () => {
         outlineStyle: styles.outlineStyle
       };
     });
-
-    console.log('Canvas outline styles:', outline);
     
     // Should have no outline (or 'none')
     expect(outline.outline === 'none' || outline.outlineWidth === '0px').toBe(true);
   });
 
   test('canvas should fill viewport', async ({ page }) => {
+    await setupTest(page);
+    
     const viewport = page.viewportSize();
     expect(viewport).toBeTruthy();
 
@@ -213,11 +203,66 @@ test.describe('Board Controls', () => {
       clientHeight: el.clientHeight
     }));
 
-    console.log('Viewport:', viewport);
-    console.log('Canvas size:', canvasSize);
-
     // Canvas should match viewport size
     expect(canvasSize.width).toBe(viewport!.width);
     expect(canvasSize.height).toBe(viewport!.height);
+  });
+
+  test('should maintain smooth rotation during drag', async ({ page }) => {
+    await setupTest(page);
+    
+    const canvas = page.locator('canvas');
+    const positions: any[] = [];
+    
+    // Track camera positions during rotation
+    await page.exposeFunction('trackCameraPosition', () => {
+      const renderer = (window as any).renderer;
+      if (!renderer) return;
+      
+      const camera = renderer.getCamera();
+      positions.push({
+        x: camera.position.x,
+        y: camera.position.y,
+        z: camera.position.z,
+        time: Date.now()
+      });
+    });
+    
+    // Start tracking
+    await page.evaluate(() => {
+      let animationId: number;
+      const track = () => {
+        (window as any).trackCameraPosition();
+        animationId = requestAnimationFrame(track);
+      };
+      track();
+      
+      // Stop after 1 second
+      setTimeout(() => cancelAnimationFrame(animationId), 1000);
+    });
+    
+    // Perform smooth rotation
+    await canvas.hover({ position: { x: 640, y: 360 } });
+    await page.mouse.down({ button: 'left' });
+    await page.mouse.move(740, 360, { steps: 20 });
+    await page.mouse.up();
+    
+    await page.waitForTimeout(1100);
+    
+    // Verify smooth movement (no large jumps between frames)
+    expect(positions.length).toBeGreaterThan(10);
+    
+    for (let i = 1; i < positions.length; i++) {
+      const prev = positions[i - 1];
+      const curr = positions[i];
+      const distance = Math.sqrt(
+        (curr.x - prev.x) ** 2 +
+        (curr.y - prev.y) ** 2 +
+        (curr.z - prev.z) ** 2
+      );
+      
+      // Movement between frames should be smooth (no large jumps)
+      expect(distance).toBeLessThan(1.0);
+    }
   });
 });

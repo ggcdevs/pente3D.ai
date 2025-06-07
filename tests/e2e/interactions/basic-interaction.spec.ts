@@ -1,13 +1,16 @@
 import { test, expect } from '@playwright/test';
+import { setupTest } from '../../helpers/e2e';
 
 test.describe('Basic Interactions', () => {
+  test.beforeEach(async ({ page }) => {
+    // Ensure clean test environment
+    await page.setViewportSize({ width: 1280, height: 720 });
+  });
+
   test('should load game and expose objects', async ({ page }) => {
-    await page.goto('/');
+    await setupTest(page);
     
-    // Wait for game to initialize
-    await page.waitForTimeout(1000);
-    
-    // Check if objects are exposed
+    // Check if objects are exposed using helper
     const exposed = await page.evaluate(() => {
       const win = window as any;
       return {
@@ -17,8 +20,6 @@ test.describe('Basic Interactions', () => {
         canvasFound: !!document.querySelector('canvas')
       };
     });
-    
-    console.log('Exposed objects:', exposed);
     
     expect(exposed.hasGame).toBe(true);
     expect(exposed.hasRenderer).toBe(true);
@@ -32,24 +33,21 @@ test.describe('Basic Interactions', () => {
       consoleMessages.push(`${msg.type()}: ${msg.text()}`);
     });
 
-    await page.goto('/');
-    await page.waitForTimeout(1000);
+    await setupTest(page);
     
-    // Try a simple click
+    // Try a simple click using page coordinates
     await page.mouse.click(300, 300);
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(100);
     
-    // Try a drag
+    // Try a drag (board rotation)
     await page.mouse.move(200, 200);
     await page.mouse.down();
     await page.mouse.move(300, 200, { steps: 5 });
     await page.mouse.up();
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(100);
     
     // Check for any console errors
     const errors = consoleMessages.filter(msg => msg.startsWith('error:'));
-    console.log('Console errors:', errors);
-    
     expect(errors.length).toBe(0);
   });
 
@@ -61,18 +59,41 @@ test.describe('Basic Interactions', () => {
       }
     });
 
-    await page.goto('/');
-    await page.waitForTimeout(1000);
+    await setupTest(page);
     
     // Click on canvas
     const canvas = page.locator('canvas');
     await canvas.click({ position: { x: 300, y: 300 } });
     
-    await page.waitForTimeout(500);
-    
-    console.log('Click messages:', clickMessages);
+    await page.waitForTimeout(100);
     
     // Should have logged click detection
     expect(clickMessages.length).toBeGreaterThan(0);
+  });
+
+  test('should handle rapid interactions', async ({ page }) => {
+    await setupTest(page);
+    
+    const errors: string[] = [];
+    page.on('console', msg => {
+      if (msg.type() === 'error') errors.push(msg.text());
+    });
+    
+    // Perform rapid clicks
+    for (let i = 0; i < 5; i++) {
+      await page.mouse.click(300 + i * 50, 300);
+      // No wait between clicks to test rapid interaction
+    }
+    
+    // Perform rapid drags
+    for (let i = 0; i < 3; i++) {
+      await page.mouse.move(200, 200);
+      await page.mouse.down();
+      await page.mouse.move(300 + i * 50, 200, { steps: 2 });
+      await page.mouse.up();
+    }
+    
+    // Should handle all interactions without errors
+    expect(errors).toHaveLength(0);
   });
 });
