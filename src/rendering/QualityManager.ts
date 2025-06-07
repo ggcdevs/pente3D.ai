@@ -1,5 +1,5 @@
 import { EventEmitter } from '../utils';
-import { PerformanceMonitor } from '../utils/PerformanceMonitor';
+import type { PerformanceMonitor } from '../utils/PerformanceMonitor';
 
 export interface QualitySettings {
   shadowQuality: 'none' | 'low' | 'medium' | 'high';
@@ -125,7 +125,9 @@ export class QualityManager extends EventEmitter {
   }
 
   private handlePerformanceWarning(warning: any): void {
-    if (!this.autoAdjust) return;
+    if (!this.autoAdjust) {
+      return;
+    }
 
     if (warning.type === 'low-fps') {
       this.decreaseQuality('Low FPS detected');

@@ -1,5 +1,5 @@
 import { EventEmitter } from './EventEmitter';
-import * as THREE from 'three';
+import type * as THREE from 'three';
 
 export interface PerformanceMetrics {
   fps: number;
@@ -73,7 +73,9 @@ export class PerformanceMonitor extends EventEmitter {
   }
 
   public startMonitoring(): void {
-    if (this.isMonitoring) return;
+    if (this.isMonitoring) {
+      return;
+    }
 
     this.isMonitoring = true;
     this.startTime = performance.now();
@@ -85,20 +87,26 @@ export class PerformanceMonitor extends EventEmitter {
   }
 
   public stopMonitoring(): void {
-    if (!this.isMonitoring) return;
+    if (!this.isMonitoring) {
+      return;
+    }
 
     this.isMonitoring = false;
     this.emit('monitoring-stopped');
   }
 
   public beginFrame(): void {
-    if (!this.isMonitoring) return;
+    if (!this.isMonitoring) {
+      return;
+    }
 
     this.frameCount++;
   }
 
   public endFrame(): void {
-    if (!this.isMonitoring) return;
+    if (!this.isMonitoring) {
+      return;
+    }
 
     const currentTime = performance.now();
     const deltaTime = currentTime - this.lastFrameTime;

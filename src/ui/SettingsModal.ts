@@ -1,6 +1,7 @@
-import { Modal, ModalOptions } from './Modal';
-import { Settings, ColorSettings, OpacitySettings, ThemePreset } from '../storage/Settings';
-import { Renderer } from '../rendering/Renderer';
+import type { ModalOptions } from './Modal';
+import { Modal } from './Modal';
+import type { Settings, ColorSettings, OpacitySettings, ThemePreset } from '../storage/Settings';
+import type { Renderer } from '../rendering/Renderer';
 import { downloadFile, selectFile } from '../utils/fileIO';
 import { logger } from '@/utils';
 
@@ -837,7 +838,9 @@ export class SettingsModal extends Modal {
 
   private createCustomTheme(): void {
     const name = prompt('Enter theme name:');
-    if (!name) return;
+    if (!name) {
+      return;
+    }
 
     const description = prompt('Enter theme description:') || '';
 
@@ -865,7 +868,9 @@ export class SettingsModal extends Modal {
 
   private exportCurrentTheme(): void {
     const theme = this.settings.getActiveTheme();
-    if (!theme) return;
+    if (!theme) {
+      return;
+    }
 
     try {
       const themeData = this.settings.exportTheme(theme.id);

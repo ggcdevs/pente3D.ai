@@ -1,4 +1,5 @@
-import { Modal, ModalOptions } from './Modal';
+import type { ModalOptions } from './Modal';
+import { Modal } from './Modal';
 
 export type DialogType = 'info' | 'warning' | 'error' | 'confirm';
 

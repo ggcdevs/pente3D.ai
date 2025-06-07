@@ -393,7 +393,9 @@ document.addEventListener('keydown', (e) => {
 
 // Setup network handlers
 function setupNetworkHandlers() {
-  if (!networkManager) return;
+  if (!networkManager) {
+    return;
+  }
 
   // Handle network moves
   networkManager.on('move', (data: any) => {

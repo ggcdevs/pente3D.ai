@@ -1,4 +1,4 @@
-import { ConflictInfo } from '@/network/types';
+import type { ConflictInfo } from '@/network/types';
 
 export class ConflictNotification {
   private element: HTMLDivElement;

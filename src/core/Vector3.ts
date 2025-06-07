@@ -1,4 +1,4 @@
-import { IVector3, Coordinates } from '@/types';
+import type { IVector3, Coordinates } from '@/types';
 
 export class Vector3 implements IVector3 {
   public readonly x: number;

@@ -1,4 +1,4 @@
-import { PerformanceMonitor, PerformanceMetrics } from '../utils/PerformanceMonitor';
+import type { PerformanceMonitor, PerformanceMetrics } from '../utils/PerformanceMonitor';
 
 export class PerformanceStats {
   private container: HTMLDivElement;
@@ -59,7 +59,9 @@ export class PerformanceStats {
   }
 
   private updateDisplay(metrics: PerformanceMetrics): void {
-    if (!this.isVisible) return;
+    if (!this.isVisible) {
+      return;
+    }
 
     const now = performance.now();
     if (now - this.lastUpdateTime < this.updateInterval) {

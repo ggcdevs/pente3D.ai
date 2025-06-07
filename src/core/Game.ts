@@ -1,8 +1,8 @@
 import { GameState } from './GameState';
 import { Move } from './Move';
-import { Vector3 } from './Vector3';
-import { WinResult } from './WinResult';
-import { Player } from './Player';
+import type { Vector3 } from './Vector3';
+import type { WinResult } from './WinResult';
+import type { Player } from './Player';
 import type { PlayerColor } from '@/types';
 import { logger } from '@/utils';
 

@@ -1,13 +1,13 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
-import { Board } from '@/core/Board';
+import type { Board } from '@/core/Board';
 import { Vector3 } from '@/core/Vector3';
 import { Piece } from '@/core/Piece';
-import { Player } from '@/core/Player';
-import { Line } from '@/core/Line';
-import { PerformanceMonitor } from '@/utils/PerformanceMonitor';
-import { QualityManager, QualitySettings } from './QualityManager';
-import { ObjectPool } from '@/utils/ObjectPool';
+import type { Player } from '@/core/Player';
+import type { Line } from '@/core/Line';
+import type { PerformanceMonitor } from '@/utils/PerformanceMonitor';
+import type { QualityManager, QualitySettings } from './QualityManager';
+import type { ObjectPool } from '@/utils/ObjectPool';
 
 export interface RendererOptions {
   canvas: HTMLCanvasElement;
@@ -470,7 +470,9 @@ export class Renderer {
   }
 
   updatePieces(): void {
-    if (!this.board) return;
+    if (!this.board) {
+      return;
+    }
 
     // Clear existing pieces
     this.piecesGroup.clear();
@@ -619,7 +621,7 @@ export class Renderer {
         if (Array.isArray(meshMaterial)) {
           meshMaterial.forEach((m) => m.dispose());
         } else {
-          const mat = meshMaterial as THREE.Material;
+          const mat = meshMaterial;
           if (mat !== nodeHighlight.originalMaterial) {
             mat.dispose();
           }
@@ -671,7 +673,7 @@ export class Renderer {
         8
       );
       const material = this.lineHighlightMaterial.clone();
-      (material as THREE.MeshBasicMaterial).color = new THREE.Color(color);
+      material.color = new THREE.Color(color);
 
       const cylinder = new THREE.Mesh(geometry, material);
       cylinder.position.copy(midpoint);
@@ -687,7 +689,7 @@ export class Renderer {
     line.coords.forEach((coord) => {
       const geometry = new THREE.SphereGeometry(this.options.pieceSize * 0.25, 12, 12);
       const material = this.lineHighlightMaterial.clone();
-      (material as THREE.MeshBasicMaterial).color = new THREE.Color(color);
+      material.color = new THREE.Color(color);
 
       const sphere = new THREE.Mesh(geometry, material);
       sphere.position.set(
@@ -806,7 +808,7 @@ export class Renderer {
         if (Array.isArray(meshMaterial)) {
           meshMaterial.forEach((m) => m.dispose());
         } else {
-          const mat = meshMaterial as THREE.Material;
+          const mat = meshMaterial;
           if (mat !== highlight.originalMaterial) {
             mat.dispose();
           }
@@ -837,7 +839,7 @@ export class Renderer {
         if (Array.isArray(meshMaterial)) {
           meshMaterial.forEach((m) => m.dispose());
         } else {
-          const mat = meshMaterial as THREE.Material;
+          const mat = meshMaterial;
           if (mat !== originalMaterial) {
             mat.dispose();
           }
@@ -915,7 +917,7 @@ export class Renderer {
       if (Array.isArray(this.currentPlayerIndicator.material)) {
         this.currentPlayerIndicator.material.forEach((m) => m.dispose());
       } else {
-        (this.currentPlayerIndicator.material as THREE.Material).dispose();
+        this.currentPlayerIndicator.material.dispose();
       }
     }
 
@@ -978,12 +980,12 @@ export class Renderer {
     // Clear existing sprites
     if (this.captureCountSprites.black) {
       this.uiGroup.remove(this.captureCountSprites.black);
-      (this.captureCountSprites.black.material as THREE.SpriteMaterial).map?.dispose();
+      this.captureCountSprites.black.material.map?.dispose();
       this.captureCountSprites.black.material.dispose();
     }
     if (this.captureCountSprites.white) {
       this.uiGroup.remove(this.captureCountSprites.white);
-      (this.captureCountSprites.white.material as THREE.SpriteMaterial).map?.dispose();
+      this.captureCountSprites.white.material.map?.dispose();
       this.captureCountSprites.white.material.dispose();
     }
 
@@ -1003,7 +1005,9 @@ export class Renderer {
   }
 
   startRenderLoop(): void {
-    if (this.animationId !== null) return;
+    if (this.animationId !== null) {
+      return;
+    }
 
     // Start performance monitoring
     if (this.performanceMonitor) {
@@ -1082,7 +1086,9 @@ export class Renderer {
   }
 
   render(): void {
-    if (!this.scene || !this.camera) return;
+    if (!this.scene || !this.camera) {
+      return;
+    }
 
     if (this.performanceMonitor) {
       this.performanceMonitor.beginFrame();

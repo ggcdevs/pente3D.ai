@@ -1,4 +1,4 @@
-import { IMove, IVector3, IPlayer } from '@/types';
+import type { IMove, IVector3, IPlayer } from '@/types';
 import { Vector3 } from './Vector3';
 import { Player } from './Player';
 

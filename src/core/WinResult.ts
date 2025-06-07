@@ -1,4 +1,4 @@
-import { IWinResult, IPlayer, ILine, PlayerColor } from '@/types';
+import type { IWinResult, IPlayer, ILine, PlayerColor } from '@/types';
 import { Player } from './Player';
 import { Line } from './Line';
 
@@ -95,7 +95,9 @@ export class WinResult implements IWinResult {
   }
 
   equals(other: WinResult | null): boolean {
-    if (!other) return false;
+    if (!other) {
+      return false;
+    }
 
     const winnersEqual =
       (this.winner === null && other.winner === null) ||

@@ -1,4 +1,4 @@
-import { SettingsData } from './StorageManager';
+import type { SettingsData } from './StorageManager';
 
 export interface SettingsChangeListener {
   (settings: Settings): void;
@@ -353,8 +353,12 @@ export class Settings {
     a: { x: number; y: number; z: number } | undefined,
     b: { x: number; y: number; z: number } | undefined
   ): boolean {
-    if (!a && !b) return true;
-    if (!a || !b) return false;
+    if (!a && !b) {
+      return true;
+    }
+    if (!a || !b) {
+      return false;
+    }
     return a.x === b.x && a.y === b.y && a.z === b.z;
   }
 
@@ -511,10 +515,18 @@ export class Settings {
     }
 
     const theme = this.customThemes[themeIndex];
-    if (updates.name !== undefined) theme.name = updates.name.trim();
-    if (updates.description !== undefined) theme.description = updates.description.trim();
-    if (updates.colors) theme.colors = { ...theme.colors, ...updates.colors };
-    if (updates.opacity) theme.opacity = { ...theme.opacity, ...updates.opacity };
+    if (updates.name !== undefined) {
+      theme.name = updates.name.trim();
+    }
+    if (updates.description !== undefined) {
+      theme.description = updates.description.trim();
+    }
+    if (updates.colors) {
+      theme.colors = { ...theme.colors, ...updates.colors };
+    }
+    if (updates.opacity) {
+      theme.opacity = { ...theme.opacity, ...updates.opacity };
+    }
 
     this.notifyListeners();
   }
@@ -584,7 +596,9 @@ export class Settings {
   }
 
   applyPreview(): void {
-    if (!this.previewMode || !this.previewSettings) return;
+    if (!this.previewMode || !this.previewSettings) {
+      return;
+    }
 
     if (this.previewSettings.colors) {
       this.colors = { ...this.colors, ...this.previewSettings.colors };
@@ -621,7 +635,9 @@ export class Settings {
 
   // Validation methods
   validateColor(color: string): boolean {
-    if (!color) return false;
+    if (!color) {
+      return false;
+    }
 
     // Support hex colors with or without #
     const hexPattern = /^#?([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/;

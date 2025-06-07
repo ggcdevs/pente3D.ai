@@ -1,18 +1,10 @@
-import {
-  Raycaster,
-  Vector2,
-  Camera,
-  Scene,
-  Intersection,
-  Mesh,
-  MeshBasicMaterial,
-  RingGeometry,
-} from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { Vector3 } from '@/core/Vector3';
-import { Game } from '@/core/Game';
-import { Renderer } from '@/rendering/Renderer';
-import { AccessibilityManager } from '@/utils/AccessibilityManager';
+import type { Camera, Scene, Intersection } from 'three';
+import { Raycaster, Vector2, Mesh, MeshBasicMaterial, RingGeometry } from 'three';
+import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import type { Vector3 } from '@/core/Vector3';
+import type { Game } from '@/core/Game';
+import type { Renderer } from '@/rendering/Renderer';
+import type { AccessibilityManager } from '@/utils/AccessibilityManager';
 import { logger } from '@/utils';
 
 export interface InputHandlerOptions {
@@ -234,7 +226,9 @@ export class InputHandler {
 
   private onClick(event: MouseEvent): void {
     // Only process left clicks
-    if (event.button !== 0) return;
+    if (event.button !== 0) {
+      return;
+    }
 
     // Skip if this was triggered by a drag
     const wasDragging = (this as any).wasRecentDrag;
@@ -341,9 +335,15 @@ export class InputHandler {
 
   private getKeyString(event: KeyboardEvent): string {
     const parts: string[] = [];
-    if (event.ctrlKey || event.metaKey) parts.push('ctrl');
-    if (event.shiftKey) parts.push('shift');
-    if (event.altKey) parts.push('alt');
+    if (event.ctrlKey || event.metaKey) {
+      parts.push('ctrl');
+    }
+    if (event.shiftKey) {
+      parts.push('shift');
+    }
+    if (event.altKey) {
+      parts.push('alt');
+    }
     parts.push(event.key.toLowerCase());
     return parts.join('+');
   }
@@ -437,7 +437,9 @@ export class InputHandler {
   }
 
   private updateFocusVisuals(): void {
-    if (!this.focusIndicator) return;
+    if (!this.focusIndicator) {
+      return;
+    }
 
     if (this.state.keyboardFocus && this.state.keyboardMode) {
       const pos = this.state.keyboardFocus;
@@ -459,7 +461,9 @@ export class InputHandler {
   }
 
   private handleKeyboardNavigation(event: KeyboardEvent): void {
-    if (!this.accessibilityManager) return;
+    if (!this.accessibilityManager) {
+      return;
+    }
 
     const isShift = event.shiftKey;
     this.state.fastNavigation = isShift;
@@ -503,7 +507,9 @@ export class InputHandler {
   }
 
   private handleKeyboardSelect(): void {
-    if (!this.state.keyboardFocus || !this.accessibilityManager) return;
+    if (!this.state.keyboardFocus || !this.accessibilityManager) {
+      return;
+    }
 
     const position = this.state.keyboardFocus;
 
@@ -598,7 +604,9 @@ export class InputHandler {
     // Remove focus indicator
     if (this.focusIndicator) {
       this.scene.remove(this.focusIndicator);
-      if (this.focusIndicator.geometry) this.focusIndicator.geometry.dispose();
+      if (this.focusIndicator.geometry) {
+        this.focusIndicator.geometry.dispose();
+      }
       if (this.focusIndicator.material instanceof MeshBasicMaterial) {
         this.focusIndicator.material.dispose();
       }

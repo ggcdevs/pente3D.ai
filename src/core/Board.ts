@@ -1,4 +1,5 @@
-import { IBoard, IPiece, IVector3, BoardSize, CoordKey, DIRECTIONS_3D } from '@/types';
+import type { IBoard, IPiece, IVector3, BoardSize, CoordKey } from '@/types';
+import { DIRECTIONS_3D } from '@/types';
 import { Vector3 } from './Vector3';
 import { Piece } from './Piece';
 import { Line } from './Line';
@@ -254,7 +255,9 @@ export class Board implements IBoard {
     }
 
     // All scales must be equal
-    if (scales.length === 0) return null;
+    if (scales.length === 0) {
+      return null;
+    }
     const firstScale = scales[0];
 
     const allEqual = scales.every((s) => Math.abs(s - firstScale) < 0.0001);
@@ -311,8 +314,12 @@ export class Board implements IBoard {
   }
 
   equals(other: Board): boolean {
-    if (this.size !== other.size) return false;
-    if (this._pieces.size !== other._pieces.size) return false;
+    if (this.size !== other.size) {
+      return false;
+    }
+    if (this._pieces.size !== other._pieces.size) {
+      return false;
+    }
 
     for (const [key, piece] of this._pieces) {
       const otherPiece = other._pieces.get(key);

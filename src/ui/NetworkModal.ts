@@ -1,6 +1,6 @@
 import { Modal } from './Modal';
 import { NetworkManager } from '@/network';
-import { Game } from '@/core';
+import type { Game } from '@/core';
 import { logger } from '@/utils';
 
 export interface NetworkModalOptions {
@@ -370,7 +370,9 @@ export class NetworkModal extends Modal {
     const errorMsg = this.content.querySelector('.error-message') as HTMLElement;
     const joinBtn = this.content.querySelector('.join-game-btn') as HTMLButtonElement;
 
-    if (!input) return;
+    if (!input) {
+      return;
+    }
 
     const gameCode = input.value.trim().toUpperCase();
     if (gameCode.length !== 6) {

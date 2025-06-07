@@ -1,5 +1,6 @@
-import { Modal, ModalOptions } from './Modal';
-import { Game } from '../core/Game';
+import type { ModalOptions } from './Modal';
+import { Modal } from './Modal';
+import type { Game } from '../core/Game';
 import { StorageManager } from '../storage/StorageManager';
 
 export interface MenuModalOptions extends ModalOptions {

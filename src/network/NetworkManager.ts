@@ -1,9 +1,9 @@
-import Peer, { DataConnection } from 'peerjs';
+import type { DataConnection } from 'peerjs';
+import Peer from 'peerjs';
 import { EventEmitter, logger } from '@/utils';
-import { Game, Move } from '@/core';
-import {
-  ConnectionStatus,
-  MessageType,
+import type { Move } from '@/core';
+import { Game } from '@/core';
+import type {
   NetworkConfig,
   NetworkMessage,
   ConnectionInfo,
@@ -27,6 +27,7 @@ import {
   ConflictInfo,
   ConflictLog,
 } from './types';
+import { ConnectionStatus, MessageType } from './types';
 
 export class NetworkManager extends EventEmitter {
   private peer: Peer | null = null;

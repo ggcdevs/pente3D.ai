@@ -1,9 +1,9 @@
 import { EventEmitter } from './EventEmitter';
-import { Game } from '../core/Game';
+import type { Game } from '../core/Game';
 import { Vector3 } from '../core/Vector3';
-import { Move } from '../core/Move';
-import { Player } from '../core/Player';
-import { WinResult } from '../core/WinResult';
+import type { Move } from '../core/Move';
+import type { Player } from '../core/Player';
+import type { WinResult } from '../core/WinResult';
 
 export interface AccessibilityOptions {
   announceGameEvents: boolean;
@@ -73,7 +73,9 @@ export class AccessibilityManager extends EventEmitter {
   }
 
   private connectToGameEvents(): void {
-    if (!this.options.announceGameEvents) return;
+    if (!this.options.announceGameEvents) {
+      return;
+    }
 
     this.game.on('move', (event) => {
       this.announceMove(event.move);
@@ -108,7 +110,9 @@ export class AccessibilityManager extends EventEmitter {
   }
 
   announceGameEvent(event: string, details?: any): void {
-    if (!this.options.announceGameEvents) return;
+    if (!this.options.announceGameEvents) {
+      return;
+    }
 
     let message: string;
     if (typeof details === 'string') {
@@ -207,7 +211,9 @@ export class AccessibilityManager extends EventEmitter {
   }
 
   selectCurrentPosition(): void {
-    if (!this.currentFocus) return;
+    if (!this.currentFocus) {
+      return;
+    }
 
     // This will trigger the game to place a piece at the current focus position
     // The actual piece placement will be handled by the game/input handler
@@ -215,7 +221,9 @@ export class AccessibilityManager extends EventEmitter {
   }
 
   announceCurrentPosition(): void {
-    if (!this.currentFocus) return;
+    if (!this.currentFocus) {
+      return;
+    }
 
     const positionText = this.positionToText(this.currentFocus);
     const piece = this.game.getBoard().getPieceAt(this.currentFocus);

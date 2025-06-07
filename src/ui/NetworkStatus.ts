@@ -1,4 +1,5 @@
-import { NetworkManager, ConnectionStatus } from '@/network';
+import type { NetworkManager } from '@/network';
+import { ConnectionStatus } from '@/network';
 import { logger } from '@/utils';
 
 export class NetworkStatus {
@@ -228,7 +229,9 @@ export class NetworkStatus {
   }
 
   private setupEventListeners(): void {
-    if (!this.networkManager) return;
+    if (!this.networkManager) {
+      return;
+    }
 
     this.networkManager.on('statusChanged', () => this.updateStatus());
     this.networkManager.on('latency', () => this.updateLatency());
@@ -256,10 +259,14 @@ export class NetworkStatus {
   }
 
   private updateStatus(): void {
-    if (!this.networkManager) return;
+    if (!this.networkManager) {
+      return;
+    }
 
     const info = this.networkManager.getConnectionInfo();
-    if (!info) return;
+    if (!info) {
+      return;
+    }
 
     const statusIcon = this.getStatusIcon(info.status);
     const statusText = this.getStatusText(info.status, info.opponentConnected);
@@ -275,10 +282,14 @@ export class NetworkStatus {
   }
 
   private updateGameCode(): void {
-    if (!this.networkManager) return;
+    if (!this.networkManager) {
+      return;
+    }
 
     const info = this.networkManager.getConnectionInfo();
-    if (!info) return;
+    if (!info) {
+      return;
+    }
 
     if (info.gameCode) {
       this.gameCodeElement.innerHTML = `
@@ -323,7 +334,9 @@ export class NetworkStatus {
   }
 
   private updateLatency(): void {
-    if (!this.networkManager) return;
+    if (!this.networkManager) {
+      return;
+    }
 
     const latency = this.networkManager.getLatency();
     const latencyText = latency > 0 ? `${latency}ms` : 'measuring...';
@@ -335,7 +348,9 @@ export class NetworkStatus {
   }
 
   private updatePlayerColor(): void {
-    if (!this.networkManager) return;
+    if (!this.networkManager) {
+      return;
+    }
 
     const color = this.networkManager.getLocalPlayerColor();
     if (color) {
@@ -349,11 +364,15 @@ export class NetworkStatus {
   }
 
   private updateTurnIndicator(): void {
-    if (!this.networkManager) return;
+    if (!this.networkManager) {
+      return;
+    }
 
     const isYourTurn = this.networkManager.isLocalPlayerTurn();
     const info = this.networkManager.getConnectionInfo();
-    if (!info) return;
+    if (!info) {
+      return;
+    }
 
     if (info.opponentConnected) {
       if (isYourTurn) {
@@ -376,10 +395,14 @@ export class NetworkStatus {
   }
 
   private updateConnectionControls(): void {
-    if (!this.networkManager) return;
+    if (!this.networkManager) {
+      return;
+    }
 
     const info = this.networkManager.getConnectionInfo();
-    if (!info) return;
+    if (!info) {
+      return;
+    }
 
     this.connectionControlsElement.innerHTML = '';
 
@@ -473,7 +496,9 @@ export class NetworkStatus {
   }
 
   private updateSpectatorIndicator(): void {
-    if (!this.networkManager) return;
+    if (!this.networkManager) {
+      return;
+    }
 
     // For now, hide spectator mode as it's not implemented
     // This will be updated when spectator mode is added
@@ -523,9 +548,15 @@ export class NetworkStatus {
   }
 
   private getLatencyColor(latency: number): string {
-    if (latency === 0) return '#999';
-    if (latency < 50) return '#4CAF50';
-    if (latency < 150) return '#ff9800';
+    if (latency === 0) {
+      return '#999';
+    }
+    if (latency < 50) {
+      return '#4CAF50';
+    }
+    if (latency < 150) {
+      return '#ff9800';
+    }
     return '#f44336';
   }
 

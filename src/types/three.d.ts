@@ -1,5 +1,6 @@
 declare module 'three/examples/jsm/controls/OrbitControls' {
-  import { Camera, EventDispatcher, Vector3 } from 'three';
+  import type { Camera, Vector3 } from 'three';
+import { EventDispatcher } from 'three';
   
   export class OrbitControls extends EventDispatcher {
     constructor(camera: Camera, domElement: HTMLElement);

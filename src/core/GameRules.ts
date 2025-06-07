@@ -1,6 +1,6 @@
-import { Board } from './Board';
-import { Move } from './Move';
-import { Player } from './Player';
+import type { Board } from './Board';
+import type { Move } from './Move';
+import type { Player } from './Player';
 import { Vector3 } from './Vector3';
 import { Line } from './Line';
 import { WinResult } from './WinResult';
@@ -179,7 +179,9 @@ export class GameRules {
     for (let x = -1; x <= 1; x++) {
       for (let y = -1; y <= 1; y++) {
         for (let z = -1; z <= 1; z++) {
-          if (x === 0 && y === 0 && z === 0) continue;
+          if (x === 0 && y === 0 && z === 0) {
+            continue;
+          }
           directions.push(Vector3.create(x, y, z));
         }
       }

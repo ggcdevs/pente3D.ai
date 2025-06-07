@@ -89,7 +89,7 @@ export class GameState {
     const captures = GameRules.detectCaptures(newBoard, move);
 
     // Apply captures and update player stats
-    let updatedPlayers = [...this.players];
+    const updatedPlayers = [...this.players];
     if (captures.length > 0) {
       // Remove captured pieces
       for (const capturePos of captures) {
@@ -243,8 +243,12 @@ export class GameState {
    * @returns true if states are equal
    */
   equals(other: GameState | null | undefined): boolean {
-    if (!other) return false;
-    if (this === other) return true;
+    if (!other) {
+      return false;
+    }
+    if (this === other) {
+      return true;
+    }
 
     // Compare all properties
     return (

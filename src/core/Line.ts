@@ -1,4 +1,4 @@
-import { ILine, IVector3 } from '@/types';
+import type { ILine, IVector3 } from '@/types';
 import { Vector3 } from './Vector3';
 
 export class Line implements ILine {
@@ -49,7 +49,9 @@ export class Line implements ILine {
 
   // Validation
   private validateContinuity(): void {
-    if (this._coords.length < 2) return;
+    if (this._coords.length < 2) {
+      return;
+    }
 
     for (let i = 1; i < this._coords.length; i++) {
       const expected = this._coords[0].add(this.direction.multiply(i));
@@ -119,8 +121,12 @@ export class Line implements ILine {
   }
 
   equals(other: Line): boolean {
-    if (this._coords.length !== other._coords.length) return false;
-    if (!this.direction.equals(other.direction)) return false;
+    if (this._coords.length !== other._coords.length) {
+      return false;
+    }
+    if (!this.direction.equals(other.direction)) {
+      return false;
+    }
 
     return this._coords.every((coord, index) => coord.equals(other._coords[index]));
   }

@@ -1,4 +1,4 @@
-import { IPlayer, PlayerColor } from '@/types';
+import type { IPlayer, PlayerColor } from '@/types';
 
 export class Player implements IPlayer {
   public readonly id: string;

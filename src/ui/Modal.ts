@@ -226,7 +226,9 @@ export abstract class Modal extends EventEmitter {
   }
 
   private handleTab(event: KeyboardEvent): void {
-    if (event.key !== 'Tab' || this.focusableElements.length === 0) return;
+    if (event.key !== 'Tab' || this.focusableElements.length === 0) {
+      return;
+    }
 
     event.preventDefault();
 
@@ -253,7 +255,9 @@ export abstract class Modal extends EventEmitter {
   }
 
   public open(): void {
-    if (this.isOpen) return;
+    if (this.isOpen) {
+      return;
+    }
 
     this.previousFocus = document.activeElement;
     document.body.appendChild(this.element);
@@ -286,7 +290,9 @@ export abstract class Modal extends EventEmitter {
   }
 
   public close(): void {
-    if (!this.isOpen) return;
+    if (!this.isOpen) {
+      return;
+    }
 
     this.backdrop.style.opacity = '0';
     this.container.style.opacity = '0';

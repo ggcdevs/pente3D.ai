@@ -1,4 +1,4 @@
-import { Move } from '@/core';
+import type { Move } from '@/core';
 
 export enum MessageType {
   MOVE = 'move',
