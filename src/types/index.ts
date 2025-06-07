@@ -50,36 +50,36 @@ export interface IWinResult {
 // 3D direction vectors for all 26 directions
 export const DIRECTIONS_3D: IVector3[] = [
   // Face directions (6)
-  { x: 1, y: 0, z: 0 },   // Right
-  { x: -1, y: 0, z: 0 },  // Left
-  { x: 0, y: 1, z: 0 },   // Up
-  { x: 0, y: -1, z: 0 },  // Down
-  { x: 0, y: 0, z: 1 },   // Forward
-  { x: 0, y: 0, z: -1 },  // Backward
-  
+  { x: 1, y: 0, z: 0 }, // Right
+  { x: -1, y: 0, z: 0 }, // Left
+  { x: 0, y: 1, z: 0 }, // Up
+  { x: 0, y: -1, z: 0 }, // Down
+  { x: 0, y: 0, z: 1 }, // Forward
+  { x: 0, y: 0, z: -1 }, // Backward
+
   // Edge directions (12)
-  { x: 1, y: 1, z: 0 },   // Right-Up
-  { x: 1, y: -1, z: 0 },  // Right-Down
-  { x: -1, y: 1, z: 0 },  // Left-Up
+  { x: 1, y: 1, z: 0 }, // Right-Up
+  { x: 1, y: -1, z: 0 }, // Right-Down
+  { x: -1, y: 1, z: 0 }, // Left-Up
   { x: -1, y: -1, z: 0 }, // Left-Down
-  { x: 1, y: 0, z: 1 },   // Right-Forward
-  { x: 1, y: 0, z: -1 },  // Right-Backward
-  { x: -1, y: 0, z: 1 },  // Left-Forward
+  { x: 1, y: 0, z: 1 }, // Right-Forward
+  { x: 1, y: 0, z: -1 }, // Right-Backward
+  { x: -1, y: 0, z: 1 }, // Left-Forward
   { x: -1, y: 0, z: -1 }, // Left-Backward
-  { x: 0, y: 1, z: 1 },   // Up-Forward
-  { x: 0, y: 1, z: -1 },  // Up-Backward
-  { x: 0, y: -1, z: 1 },  // Down-Forward
+  { x: 0, y: 1, z: 1 }, // Up-Forward
+  { x: 0, y: 1, z: -1 }, // Up-Backward
+  { x: 0, y: -1, z: 1 }, // Down-Forward
   { x: 0, y: -1, z: -1 }, // Down-Backward
-  
+
   // Corner directions (8)
-  { x: 1, y: 1, z: 1 },   // Right-Up-Forward
-  { x: 1, y: 1, z: -1 },  // Right-Up-Backward
-  { x: 1, y: -1, z: 1 },  // Right-Down-Forward
+  { x: 1, y: 1, z: 1 }, // Right-Up-Forward
+  { x: 1, y: 1, z: -1 }, // Right-Up-Backward
+  { x: 1, y: -1, z: 1 }, // Right-Down-Forward
   { x: 1, y: -1, z: -1 }, // Right-Down-Backward
-  { x: -1, y: 1, z: 1 },  // Left-Up-Forward
+  { x: -1, y: 1, z: 1 }, // Left-Up-Forward
   { x: -1, y: 1, z: -1 }, // Left-Up-Backward
   { x: -1, y: -1, z: 1 }, // Left-Down-Forward
-  { x: -1, y: -1, z: -1 } // Left-Down-Backward
+  { x: -1, y: -1, z: -1 }, // Left-Down-Backward
 ];
 
 // Utility types

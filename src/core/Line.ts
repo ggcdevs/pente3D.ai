@@ -5,7 +5,7 @@ export class Line implements ILine {
   private readonly _coords: Vector3[];
   public readonly direction: Vector3;
   public readonly isComplete: boolean;
-  
+
   get coords(): Vector3[] {
     return [...this._coords]; // Return a copy to ensure immutability
   }
@@ -21,13 +21,11 @@ export class Line implements ILine {
     }
 
     // Convert to Vector3 instances
-    this._coords = coords.map(coord => 
+    this._coords = coords.map((coord) =>
       coord instanceof Vector3 ? coord : Vector3.fromObject(coord)
     );
-    
-    this.direction = direction instanceof Vector3 
-      ? direction 
-      : Vector3.fromObject(direction);
+
+    this.direction = direction instanceof Vector3 ? direction : Vector3.fromObject(direction);
 
     // A complete line has exactly 5 coordinates
     this.isComplete = this._coords.length === 5;
@@ -64,7 +62,7 @@ export class Line implements ILine {
   // Query methods
   contains(coord: Vector3 | IVector3): boolean {
     const target = coord instanceof Vector3 ? coord : Vector3.fromObject(coord);
-    return this._coords.some(c => c.equals(target));
+    return this._coords.some((c) => c.equals(target));
   }
 
   getLength(): number {
@@ -96,26 +94,26 @@ export class Line implements ILine {
     if (!this.direction.equals(other.direction)) {
       return false;
     }
-    return this.coords.every(coord => other.contains(coord));
+    return this.coords.every((coord) => other.contains(coord));
   }
 
   // Utility methods
   toString(): string {
-    const coordStr = this._coords.map(c => c.toString()).join(' -> ');
+    const coordStr = this._coords.map((c) => c.toString()).join(' -> ');
     return `Line(${coordStr})`;
   }
 
   toJSON(): ILine {
     return {
-      coords: this._coords.map(c => c.toJSON()),
+      coords: this._coords.map((c) => c.toJSON()),
       direction: this.direction.toJSON(),
-      isComplete: this.isComplete
+      isComplete: this.isComplete,
     };
   }
 
   clone(): Line {
     return new Line(
-      this._coords.map(c => c.clone()),
+      this._coords.map((c) => c.clone()),
       this.direction.clone()
     );
   }
@@ -123,7 +121,7 @@ export class Line implements ILine {
   equals(other: Line): boolean {
     if (this._coords.length !== other._coords.length) return false;
     if (!this.direction.equals(other.direction)) return false;
-    
+
     return this._coords.every((coord, index) => coord.equals(other._coords[index]));
   }
 
@@ -135,7 +133,7 @@ export class Line implements ILine {
     if (!json || typeof json !== 'object') {
       throw new Error('Invalid JSON for Line');
     }
-    
+
     return new Line(
       json.coords.map((c: any) => Vector3.fromObject(c)),
       Vector3.fromObject(json.direction)

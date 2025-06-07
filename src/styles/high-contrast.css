@@ -74,17 +74,17 @@ body.high-contrast {
   cursor: not-allowed;
 }
 
-.high-contrast input[type="range"] {
+.high-contrast input[type='range'] {
   background: #000;
   border: 2px solid #fff;
 }
 
-.high-contrast input[type="range"]::-webkit-slider-thumb {
+.high-contrast input[type='range']::-webkit-slider-thumb {
   background: #fff;
   border: 2px solid #000;
 }
 
-.high-contrast input[type="range"]::-moz-range-thumb {
+.high-contrast input[type='range']::-moz-range-thumb {
   background: #fff;
   border: 2px solid #000;
 }
@@ -95,8 +95,8 @@ body.high-contrast {
 }
 
 .high-contrast select,
-.high-contrast input[type="text"],
-.high-contrast input[type="number"] {
+.high-contrast input[type='text'],
+.high-contrast input[type='number'] {
   background: #000;
   color: #fff;
   border: 2px solid #fff;
@@ -125,7 +125,7 @@ body.high-contrast {
 }
 
 /* Tab focus indicators */
-.high-contrast .tab-button[aria-selected="true"] {
+.high-contrast .tab-button[aria-selected='true'] {
   background: #fff;
   color: #000;
   border-bottom: 3px solid #ff0;
@@ -138,17 +138,17 @@ body.high-contrast {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
-  
+
   /* Disable smooth scrolling */
   html {
     scroll-behavior: auto !important;
   }
-  
+
   /* Disable transforms */
   .modal {
     transform: none !important;
   }
-  
+
   /* Disable Three.js animations */
   .reduce-motion #game-canvas {
     /* This class will be handled in JavaScript */

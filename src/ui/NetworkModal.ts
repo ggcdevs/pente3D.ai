@@ -20,7 +20,7 @@ export class NetworkModal extends Modal {
   constructor(options: NetworkModalOptions) {
     super({
       title: '🌐 Network Game',
-      className: 'network-modal'
+      className: 'network-modal',
     });
 
     this.game = options.game;
@@ -40,7 +40,7 @@ export class NetworkModal extends Modal {
   private showMenuView(): void {
     this.currentView = 'menu';
     this.setTitle('🌐 Network Game');
-    
+
     this.content.innerHTML = `
       <div class="network-menu">
         <div style="text-align: center; margin-bottom: 20px;">
@@ -118,7 +118,7 @@ export class NetworkModal extends Modal {
   private showHostView(): void {
     this.currentView = 'host';
     this.setTitle('🏠 Host Game');
-    
+
     this.content.innerHTML = `
       <div class="network-host">
         <div class="loading-container" style="text-align: center; padding: 40px;">
@@ -199,7 +199,7 @@ export class NetworkModal extends Modal {
   private showJoinView(): void {
     this.currentView = 'join';
     this.setTitle('🔗 Join Game');
-    
+
     this.content.innerHTML = `
       <div class="network-join">
         <div style="text-align: center; padding: 20px;">
@@ -273,7 +273,7 @@ export class NetworkModal extends Modal {
         }
       </style>
     `;
-    
+
     // Focus the input
     const input = this.content.querySelector('.game-code-input') as HTMLInputElement;
     if (input) {
@@ -284,7 +284,7 @@ export class NetworkModal extends Modal {
   private setupNetworkEventListeners(): void {
     this.content.addEventListener('click', (e) => {
       const target = e.target as HTMLElement;
-      
+
       if (target.classList.contains('host-btn') || target.closest('.host-btn')) {
         this.handleHostGame();
       } else if (target.classList.contains('join-btn') || target.closest('.join-btn')) {
@@ -306,20 +306,20 @@ export class NetworkModal extends Modal {
     const input = this.content.querySelector('.game-code-input') as HTMLInputElement;
     const joinBtn = this.content.querySelector('.join-game-btn') as HTMLButtonElement;
     const errorMsg = this.content.querySelector('.error-message') as HTMLElement;
-    
+
     if (input && joinBtn) {
       input.addEventListener('input', () => {
         const code = input.value.trim().toUpperCase();
         joinBtn.disabled = code.length !== 6;
         errorMsg.textContent = '';
       });
-      
+
       input.addEventListener('keypress', (e) => {
         if (e.key === 'Enter' && !joinBtn.disabled) {
           this.handleJoinGame();
         }
       });
-      
+
       joinBtn.addEventListener('click', () => {
         this.handleJoinGame();
       });
@@ -328,24 +328,24 @@ export class NetworkModal extends Modal {
 
   private async handleHostGame(): Promise<void> {
     this.showHostView();
-    
+
     // Create network manager
     this.networkManager = new NetworkManager(this.game);
-    
+
     try {
       const gameCode = await this.networkManager.hostGame();
-      
+
       // Show game code
       const codeContainer = this.content.querySelector('.game-code-container') as HTMLElement;
       const loadingContainer = this.content.querySelector('.loading-container') as HTMLElement;
       const codeElement = this.content.querySelector('.game-code') as HTMLElement;
-      
+
       if (codeContainer && loadingContainer && codeElement) {
         loadingContainer.style.display = 'none';
         codeContainer.style.display = 'block';
         codeElement.textContent = gameCode;
       }
-      
+
       // Listen for connection
       let connectedHandler: (() => void) | null = null;
       connectedHandler = () => {
@@ -356,7 +356,7 @@ export class NetworkModal extends Modal {
         }
       };
       this.networkManager.on('connected', connectedHandler);
-      
+
       this.networkManager.on('error', (error: Error) => {
         this.showError(error.message);
       });
@@ -369,26 +369,26 @@ export class NetworkModal extends Modal {
     const input = this.content.querySelector('.game-code-input') as HTMLInputElement;
     const errorMsg = this.content.querySelector('.error-message') as HTMLElement;
     const joinBtn = this.content.querySelector('.join-game-btn') as HTMLButtonElement;
-    
+
     if (!input) return;
-    
+
     const gameCode = input.value.trim().toUpperCase();
     if (gameCode.length !== 6) {
       errorMsg.textContent = 'Please enter a valid 6-character code';
       return;
     }
-    
+
     // Disable input and button
     input.disabled = true;
     joinBtn.disabled = true;
     joinBtn.textContent = 'Connecting...';
-    
+
     // Create network manager
     this.networkManager = new NetworkManager(this.game);
-    
+
     try {
       await this.networkManager.joinGame(gameCode);
-      
+
       // Listen for connection
       let connectedHandler: (() => void) | null = null;
       connectedHandler = () => {
@@ -399,7 +399,7 @@ export class NetworkModal extends Modal {
         }
       };
       this.networkManager.on('connected', connectedHandler);
-      
+
       this.networkManager.on('error', (error: Error) => {
         this.showError(error.message);
         input.disabled = false;
@@ -424,7 +424,7 @@ export class NetworkModal extends Modal {
   private async handleCopyCode(): Promise<void> {
     const codeElement = this.content.querySelector('.game-code') as HTMLElement;
     const copyBtn = this.content.querySelector('.copy-code-btn') as HTMLButtonElement;
-    
+
     if (codeElement && copyBtn) {
       const code = codeElement.textContent || '';
       try {
@@ -442,17 +442,17 @@ export class NetworkModal extends Modal {
   private async handleShareLink(): Promise<void> {
     const codeElement = this.content.querySelector('.game-code') as HTMLElement;
     const shareBtn = this.content.querySelector('.share-link-btn') as HTMLButtonElement;
-    
+
     if (codeElement && shareBtn) {
       const code = codeElement.textContent || '';
       const shareUrl = `${window.location.origin}${window.location.pathname}?join=${code}`;
-      
+
       try {
         if (navigator.share) {
           await navigator.share({
             title: 'Join my Pente3D game!',
             text: `Game Code: ${code}`,
-            url: shareUrl
+            url: shareUrl,
           });
         } else {
           await navigator.clipboard.writeText(shareUrl);

@@ -10,7 +10,7 @@ export class Vector3 implements IVector3 {
     if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
       throw new Error('Vector3 coordinates must be finite numbers');
     }
-    
+
     this.x = Math.round(x);
     this.y = Math.round(y);
     this.z = Math.round(z);

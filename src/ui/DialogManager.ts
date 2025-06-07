@@ -21,7 +21,7 @@ class Dialog extends Modal {
       className: `dialog dialog-${options.type || 'info'}`,
       closeOnBackdrop: options.type !== 'confirm',
       closeOnEscape: options.type !== 'confirm',
-      showCloseButton: false // Dialogs don't show the X close button
+      showCloseButton: false, // Dialogs don't show the X close button
     };
 
     super(modalOptions);
@@ -30,11 +30,16 @@ class Dialog extends Modal {
 
   private static getDefaultTitle(type: DialogType): string {
     switch (type) {
-      case 'info': return 'Information';
-      case 'warning': return 'Warning';
-      case 'error': return 'Error';
-      case 'confirm': return 'Confirm';
-      default: return '';
+      case 'info':
+        return 'Information';
+      case 'warning':
+        return 'Warning';
+      case 'error':
+        return 'Error';
+      case 'confirm':
+        return 'Confirm';
+      default:
+        return '';
     }
   }
 
@@ -68,16 +73,12 @@ class Dialog extends Modal {
     footerContent.style.gap = '10px';
 
     if (this.dialogOptions.type === 'confirm') {
-      const cancelBtn = this.createButton(
-        this.dialogOptions.cancelText || 'Cancel',
-        '#666',
-        () => {
-          if (this.dialogOptions.onCancel) {
-            this.dialogOptions.onCancel();
-          }
-          this.close();
+      const cancelBtn = this.createButton(this.dialogOptions.cancelText || 'Cancel', '#666', () => {
+        if (this.dialogOptions.onCancel) {
+          this.dialogOptions.onCancel();
         }
-      );
+        this.close();
+      });
       footerContent.appendChild(cancelBtn);
 
       const confirmBtn = this.createButton(
@@ -92,16 +93,12 @@ class Dialog extends Modal {
       );
       footerContent.appendChild(confirmBtn);
     } else {
-      const okBtn = this.createButton(
-        'OK',
-        this.getButtonColor(),
-        () => {
-          if (this.dialogOptions.onConfirm) {
-            this.dialogOptions.onConfirm();
-          }
-          this.close();
+      const okBtn = this.createButton('OK', this.getButtonColor(), () => {
+        if (this.dialogOptions.onConfirm) {
+          this.dialogOptions.onConfirm();
         }
-      );
+        this.close();
+      });
       footerContent.appendChild(okBtn);
     }
 
@@ -140,9 +137,12 @@ class Dialog extends Modal {
 
   private getButtonColor(): string {
     switch (this.dialogOptions.type) {
-      case 'error': return '#f44336';
-      case 'warning': return '#FF9800';
-      default: return '#2196F3';
+      case 'error':
+        return '#f44336';
+      case 'warning':
+        return '#FF9800';
+      default:
+        return '#2196F3';
     }
   }
 
@@ -180,7 +180,7 @@ export class DialogManager {
     return this.show({
       type: 'info',
       title,
-      message
+      message,
     });
   }
 
@@ -188,7 +188,7 @@ export class DialogManager {
     return this.show({
       type: 'warning',
       title,
-      message
+      message,
     });
   }
 
@@ -196,7 +196,7 @@ export class DialogManager {
     return this.show({
       type: 'error',
       title,
-      message
+      message,
     });
   }
 
@@ -214,19 +214,16 @@ export class DialogManager {
         confirmText,
         cancelText,
         onConfirm: () => resolve(true),
-        onCancel: () => resolve(false)
+        onCancel: () => resolve(false),
       });
     });
   }
 
-  public async confirmAction(
-    action: string,
-    consequence?: string
-  ): Promise<boolean> {
-    const message = consequence 
+  public async confirmAction(action: string, consequence?: string): Promise<boolean> {
+    const message = consequence
       ? `Are you sure you want to ${action}? ${consequence}`
       : `Are you sure you want to ${action}?`;
-    
+
     return this.showConfirm(message, 'Confirm Action', 'Yes', 'No');
   }
 
@@ -249,7 +246,7 @@ export class DialogManager {
             options.onCancel();
           }
           resolve();
-        }
+        },
       });
 
       this.currentDialog = dialog;

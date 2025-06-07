@@ -7,17 +7,12 @@ export class Player implements IPlayer {
   private _captures: number;
   public readonly connectionId?: string;
 
-  constructor(
-    id: string, 
-    color: PlayerColor, 
-    isLocal: boolean = true,
-    connectionId?: string
-  ) {
+  constructor(id: string, color: PlayerColor, isLocal: boolean = true, connectionId?: string) {
     // Validation
     if (!id || typeof id !== 'string' || id.trim().length === 0) {
       throw new Error('Player ID must be a non-empty string');
     }
-    
+
     if (!['black', 'white'].includes(color)) {
       throw new Error('Player color must be "black" or "white"');
     }
@@ -60,7 +55,7 @@ export class Player implements IPlayer {
     if (amount < 0) {
       throw new Error('Capture increment must be non-negative');
     }
-    
+
     const newPlayer = this.clone();
     newPlayer._captures = this._captures + amount;
     return newPlayer;
@@ -114,7 +109,7 @@ export class Player implements IPlayer {
     if (!json || typeof json !== 'object') {
       throw new Error('Invalid JSON for Player');
     }
-    
+
     const player = new Player(json.id, json.color, json.isLocal, json.connectionId);
     if (json.captures !== undefined) {
       player._captures = json.captures;

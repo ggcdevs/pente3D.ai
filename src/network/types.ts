@@ -163,7 +163,7 @@ export interface HashChainResponseMessage extends NetworkMessage {
   };
 }
 
-export type NetworkMessageTypes = 
+export type NetworkMessageTypes =
   | MoveMessage
   | MoveAckMessage
   | MoveRejectMessage

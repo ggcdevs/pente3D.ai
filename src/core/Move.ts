@@ -18,23 +18,20 @@ export class Move implements IMove {
     if (!coords) {
       throw new Error('Move coordinates are required');
     }
-    
+
     if (!player) {
       throw new Error('Move player is required');
     }
 
     // Convert to our types
     this.coords = coords instanceof Vector3 ? coords : Vector3.fromObject(coords);
-    this.player = player instanceof Player ? player : new Player(
-      player.id, 
-      player.color, 
-      player.isLocal
-    );
-    
-    this.capturedPieces = capturedPieces.map(piece => 
+    this.player =
+      player instanceof Player ? player : new Player(player.id, player.color, player.isLocal);
+
+    this.capturedPieces = capturedPieces.map((piece) =>
       piece instanceof Vector3 ? piece : Vector3.fromObject(piece)
     );
-    
+
     this.timestamp = timestamp || Date.now();
 
     // Validate captured pieces
@@ -60,7 +57,7 @@ export class Move implements IMove {
   }
 
   static createCapture(
-    coords: Vector3 | IVector3, 
+    coords: Vector3 | IVector3,
     player: Player | IPlayer,
     capturedPieces: (Vector3 | IVector3)[]
   ): Move {
@@ -132,9 +129,7 @@ export class Move implements IMove {
       this.player.equals(other.player) &&
       this.timestamp === other.timestamp &&
       this.capturedPieces.length === other.capturedPieces.length &&
-      this.capturedPieces.every((piece, index) => 
-        piece.equals(other.capturedPieces[index])
-      )
+      this.capturedPieces.every((piece, index) => piece.equals(other.capturedPieces[index]))
     );
   }
 
@@ -148,7 +143,7 @@ export class Move implements IMove {
       coords: this.coords.toJSON(),
       player: this.player.toJSON(),
       timestamp: this.timestamp,
-      capturedPieces: this.capturedPieces.map(piece => piece.toJSON()),
+      capturedPieces: this.capturedPieces.map((piece) => piece.toJSON()),
     };
   }
 
@@ -157,7 +152,7 @@ export class Move implements IMove {
     return new Move(
       this.coords.clone(),
       this.player.clone(),
-      this.capturedPieces.map(piece => piece.clone()),
+      this.capturedPieces.map((piece) => piece.clone()),
       this.timestamp
     );
   }
@@ -167,7 +162,7 @@ export class Move implements IMove {
     if (!json || typeof json !== 'object') {
       throw new Error('Invalid JSON for Move');
     }
-    
+
     return new Move(
       Vector3.fromObject(json.coords),
       Player.fromJSON ? Player.fromJSON(json.player) : json.player,

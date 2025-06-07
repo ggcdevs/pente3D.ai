@@ -29,7 +29,7 @@ export class Board implements IBoard {
 
   static fromPieces(pieces: (Piece | IPiece)[], size: BoardSize = 7): Board {
     let board = new Board(size);
-    pieces.forEach(piece => {
+    pieces.forEach((piece) => {
       board = board.placePiece(piece);
     });
     return board;
@@ -80,11 +80,14 @@ export class Board implements IBoard {
   isInBounds(coord: Vector3 | IVector3): boolean {
     const v = coord instanceof Vector3 ? coord : Vector3.fromObject(coord);
     const halfSize = Math.floor(this.size / 2);
-    
+
     return (
-      v.x >= -halfSize && v.x <= halfSize &&
-      v.y >= -halfSize && v.y <= halfSize &&
-      v.z >= -halfSize && v.z <= halfSize
+      v.x >= -halfSize &&
+      v.x <= halfSize &&
+      v.y >= -halfSize &&
+      v.y <= halfSize &&
+      v.z >= -halfSize &&
+      v.z <= halfSize
     );
   }
 
@@ -93,7 +96,7 @@ export class Board implements IBoard {
     const center = coord instanceof Vector3 ? coord : Vector3.fromObject(coord);
     const neighbors: Vector3[] = [];
 
-    DIRECTIONS_3D.forEach(dir => {
+    DIRECTIONS_3D.forEach((dir) => {
       const neighbor = center.add(dir);
       if (this.isInBounds(neighbor)) {
         neighbors.push(neighbor);
@@ -120,9 +123,9 @@ export class Board implements IBoard {
 
     // Calculate direction
     const diff = endVec.subtract(startVec);
-    
+
     // Check if points are collinear in a valid 3D direction
-    const isValidDirection = DIRECTIONS_3D.some(dir => {
+    const isValidDirection = DIRECTIONS_3D.some((dir) => {
       const scale = this.getScaleFactor(diff, dir);
       return scale !== null && scale > 0;
     });
@@ -139,7 +142,7 @@ export class Board implements IBoard {
     while (!current.equals(endVec)) {
       coords.push(current.clone());
       current = current.add(direction);
-      
+
       // Safety check to prevent infinite loops
       if (coords.length > this.size) {
         return null;
@@ -151,8 +154,8 @@ export class Board implements IBoard {
   }
 
   generatePartialLine(
-    center: Vector3 | IVector3, 
-    direction: Vector3 | IVector3, 
+    center: Vector3 | IVector3,
+    direction: Vector3 | IVector3,
     radius: number = 2
   ): Line {
     const centerVec = center instanceof Vector3 ? center : Vector3.fromObject(center);
@@ -183,7 +186,7 @@ export class Board implements IBoard {
     const center = coord instanceof Vector3 ? coord : Vector3.fromObject(coord);
     const lines: Line[] = [];
 
-    DIRECTIONS_3D.forEach(dir => {
+    DIRECTIONS_3D.forEach((dir) => {
       // For each direction, generate all possible lines containing the coord
       for (let offset = 0; offset < length; offset++) {
         const dirVec = Vector3.fromObject(dir);
@@ -212,7 +215,7 @@ export class Board implements IBoard {
         return Vector3.fromObject(dir);
       }
     }
-    
+
     // If no exact match, normalize to unit vector
     const vec = Vector3.fromObject(direction);
     const magnitude = Math.max(Math.abs(vec.x), Math.abs(vec.y), Math.abs(vec.z));
@@ -227,7 +230,7 @@ export class Board implements IBoard {
     // Check if vector is a scalar multiple of unitVector
     const scales: number[] = [];
     let scale: number | null = null;
-    
+
     // Check each component
     if (unitVector.x !== 0) {
       scale = vector.x / unitVector.x;
@@ -235,14 +238,14 @@ export class Board implements IBoard {
     } else if (vector.x !== 0) {
       return null; // Vector has non-zero component where unit vector is zero
     }
-    
+
     if (unitVector.y !== 0) {
       scale = vector.y / unitVector.y;
       scales.push(scale);
     } else if (vector.y !== 0) {
       return null;
     }
-    
+
     if (unitVector.z !== 0) {
       scale = vector.z / unitVector.z;
       scales.push(scale);
@@ -253,32 +256,32 @@ export class Board implements IBoard {
     // All scales must be equal
     if (scales.length === 0) return null;
     const firstScale = scales[0];
-    
-    const allEqual = scales.every(s => Math.abs(s - firstScale) < 0.0001);
+
+    const allEqual = scales.every((s) => Math.abs(s - firstScale) < 0.0001);
     return allEqual ? firstScale : null;
   }
 
   private removeDuplicateLines(lines: Line[]): Line[] {
     const uniqueLines: Line[] = [];
-    
+
     for (const line of lines) {
-      const isDuplicate = uniqueLines.some(existing => 
-        existing.getStart().equals(line.getStart()) &&
-        existing.getEnd().equals(line.getEnd())
+      const isDuplicate = uniqueLines.some(
+        (existing) =>
+          existing.getStart().equals(line.getStart()) && existing.getEnd().equals(line.getEnd())
       );
-      
+
       if (!isDuplicate) {
         uniqueLines.push(line);
       }
     }
-    
+
     return uniqueLines;
   }
 
   // Board mutations (return new Board instance)
   placePiece(piece: Piece | IPiece): Board {
     const p = piece instanceof Piece ? piece : Piece.createNormal(piece.coords, piece.player);
-    
+
     if (!this.isInBounds(p.coords)) {
       throw new Error('Piece placement out of bounds');
     }
@@ -336,7 +339,7 @@ export class Board implements IBoard {
   toJSON(): IBoard {
     return {
       size: this.size,
-      pieces: this.pieces
+      pieces: this.pieces,
     };
   }
 
@@ -358,10 +361,14 @@ export class Board implements IBoard {
    * @param isTemporary Whether piece is temporary
    * @returns New board with piece placed
    */
-  placePieceByPlayer(position: Vector3 | IVector3, playerId: string, isTemporary: boolean = false): Board {
+  placePieceByPlayer(
+    position: Vector3 | IVector3,
+    playerId: string,
+    isTemporary: boolean = false
+  ): Board {
     // Create a minimal player object for the piece
     const player = Player.createLocal(playerId, 'white');
-    const piece = isTemporary 
+    const piece = isTemporary
       ? Piece.createTemporary(position, player)
       : Piece.createNormal(position, player);
     return this.placePiece(piece);
@@ -377,8 +384,8 @@ export class Board implements IBoard {
     const lines: Line[] = [];
 
     // For each of the 13 unique directions (half of 26)
-    const halfDirections = DIRECTIONS_3D.filter(dir => 
-      dir.x > 0 || (dir.x === 0 && dir.y > 0) || (dir.x === 0 && dir.y === 0 && dir.z > 0)
+    const halfDirections = DIRECTIONS_3D.filter(
+      (dir) => dir.x > 0 || (dir.x === 0 && dir.y > 0) || (dir.x === 0 && dir.y === 0 && dir.z > 0)
     );
 
     for (const dir of halfDirections) {
@@ -456,28 +463,28 @@ export class Board implements IBoard {
    */
   private buildLineAtPosition(position: Vector3, direction: Vector3): Line {
     const positions: Vector3[] = [];
-    
+
     // Go backwards first
     const negDir = direction.multiply(-1);
     let current = position.add(negDir);
     const backwardPositions: Vector3[] = [];
-    
+
     while (this.isInBounds(current)) {
       backwardPositions.unshift(current.clone());
       current = current.add(negDir);
     }
-    
+
     positions.push(...backwardPositions);
     positions.push(position);
-    
+
     // Go forwards
     current = position.add(direction);
-    
+
     while (this.isInBounds(current)) {
       positions.push(current.clone());
       current = current.add(direction);
     }
-    
+
     return new Line(positions, direction);
   }
 
@@ -492,7 +499,7 @@ export class Board implements IBoard {
     }
 
     const board = new Board(json.size);
-    
+
     if (json.pieces instanceof Map) {
       json.pieces.forEach((pieceData: any, key: string) => {
         board._pieces.set(key, Piece.fromJSON(pieceData));

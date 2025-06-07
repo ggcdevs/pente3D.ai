@@ -29,7 +29,7 @@ export abstract class Modal extends EventEmitter {
 
   constructor(options: ModalOptions = {}) {
     super();
-    
+
     this.options = {
       title: '',
       className: '',
@@ -38,7 +38,7 @@ export abstract class Modal extends EventEmitter {
       focusFirst: true,
       showCloseButton: true,
       animationDuration: 200,
-      ...options
+      ...options,
     };
 
     // Generate unique IDs for ARIA attributes
@@ -198,22 +198,22 @@ export abstract class Modal extends EventEmitter {
     this.container.setAttribute('role', 'dialog');
     this.container.setAttribute('aria-modal', 'true');
     this.container.setAttribute('id', this.modalId);
-    
+
     // Set labelledby and describedby
     if (this.options.title) {
       this.container.setAttribute('aria-labelledby', this.titleId);
     }
     this.container.setAttribute('aria-describedby', this.contentId);
-    
+
     // Make backdrop not focusable
     this.backdrop.setAttribute('aria-hidden', 'true');
-    
+
     // Ensure close button has proper ARIA
     if (this.closeButton) {
       this.closeButton.setAttribute('aria-label', 'Close dialog');
       this.closeButton.setAttribute('title', 'Close dialog (Escape)');
     }
-    
+
     // Announce modal opening to screen readers
     this.element.setAttribute('aria-live', 'assertive');
     this.element.setAttribute('aria-atomic', 'true');
@@ -247,8 +247,9 @@ export abstract class Modal extends EventEmitter {
 
   protected updateFocusableElements(): void {
     const selector = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
-    this.focusableElements = Array.from(this.element.querySelectorAll(selector))
-      .filter(el => !el.hasAttribute('disabled')) as HTMLElement[];
+    this.focusableElements = Array.from(this.element.querySelectorAll(selector)).filter(
+      (el) => !el.hasAttribute('disabled')
+    ) as HTMLElement[];
   }
 
   public open(): void {
@@ -257,7 +258,7 @@ export abstract class Modal extends EventEmitter {
     this.previousFocus = document.activeElement;
     document.body.appendChild(this.element);
     this.element.style.display = 'block';
-    
+
     this.render();
     this.updateFocusableElements();
 
@@ -270,7 +271,7 @@ export abstract class Modal extends EventEmitter {
     if (this.options.closeOnEscape) {
       document.addEventListener('keydown', this.handleEscape);
     }
-    
+
     this.handleTab = this.handleTab.bind(this);
     document.addEventListener('keydown', this.handleTab);
 

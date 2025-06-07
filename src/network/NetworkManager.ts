@@ -50,7 +50,7 @@ export class NetworkManager extends EventEmitter {
   constructor(game: Game, config: NetworkConfig = {}) {
     super();
     this.game = game;
-    
+
     // Set default configuration
     this.config = {
       host: config.host || 'peerjs.com',
@@ -102,12 +102,12 @@ export class NetworkManager extends EventEmitter {
     this.connectionInfo.isHost = true;
     const gameCode = this.generateGameCode();
     this.connectionInfo.gameCode = gameCode;
-    
+
     // Host always plays as black
     this.connectionInfo.playerColor = 'black';
     this.networkGameState.localPlayerColor = 'black';
     this.networkGameState.isNetworked = true;
-    
+
     await this.initializePeer(gameCode);
     return gameCode;
   }
@@ -118,16 +118,16 @@ export class NetworkManager extends EventEmitter {
   async joinGame(gameCode: string): Promise<void> {
     this.connectionInfo.isHost = false;
     this.connectionInfo.gameCode = gameCode;
-    
+
     // Client always plays as white
     this.connectionInfo.playerColor = 'white';
     this.networkGameState.localPlayerColor = 'white';
     this.networkGameState.isNetworked = true;
-    
+
     // Generate a unique peer ID for the client
     const clientId = `${gameCode}_client_${Math.random().toString(36).substr(2, 9)}`;
     await this.initializePeer(clientId);
-    
+
     // Connect to the host
     this.connectToPeer(gameCode);
   }
@@ -138,8 +138,10 @@ export class NetworkManager extends EventEmitter {
   sendMove(move: Move): boolean {
     // Validate it's our turn
     const currentPlayer = this.game.getCurrentState().getCurrentPlayer();
-    if (this.networkGameState.turnValidationEnabled && 
-        currentPlayer.getColor() !== this.networkGameState.localPlayerColor) {
+    if (
+      this.networkGameState.turnValidationEnabled &&
+      currentPlayer.getColor() !== this.networkGameState.localPlayerColor
+    ) {
       this.emit('error', new Error('Not your turn'));
       return false;
     }
@@ -158,20 +160,20 @@ export class NetworkManager extends EventEmitter {
       timestamp: Date.now(),
       sequence: sequence,
     };
-    
+
     // Store pending move
     this.networkGameState.pendingMoves.set(sequence, {
       message: message,
       timestamp: Date.now(),
       acknowledged: false,
     });
-    
+
     // Send the message
     this.sendMessage(message);
-    
+
     // Set timeout for acknowledgment
     this.setMoveAckTimeout(sequence);
-    
+
     return true;
   }
 
@@ -187,7 +189,7 @@ export class NetworkManager extends EventEmitter {
       timestamp: Date.now(),
       sequence: this.getNextSequence(),
     };
-    
+
     this.sendMessage(message);
   }
 
@@ -203,7 +205,7 @@ export class NetworkManager extends EventEmitter {
       timestamp: Date.now(),
       sequence: this.getNextSequence(),
     };
-    
+
     this.sendMessage(message);
   }
 
@@ -219,7 +221,7 @@ export class NetworkManager extends EventEmitter {
       timestamp: Date.now(),
       sequence: this.getNextSequence(),
     };
-    
+
     this.sendMessage(message);
   }
 
@@ -235,7 +237,7 @@ export class NetworkManager extends EventEmitter {
       timestamp: Date.now(),
       sequence: this.getNextSequence(),
     };
-    
+
     this.sendMessage(message);
   }
 
@@ -303,7 +305,7 @@ export class NetworkManager extends EventEmitter {
   private async initializePeer(peerId: string): Promise<void> {
     return new Promise((resolve, reject) => {
       this.updateStatus(ConnectionStatus.CONNECTING);
-      
+
       // Create peer with configuration
       this.peer = new Peer(peerId, {
         host: this.config.host,
@@ -321,12 +323,12 @@ export class NetworkManager extends EventEmitter {
       this.peer.on('open', (id) => {
         logger.info('Peer opened', { peerId: id });
         this.connectionInfo.peerId = id;
-        
+
         if (this.connectionInfo.isHost) {
           this.updateStatus(ConnectionStatus.CONNECTED);
           this.startPingTimer();
         }
-        
+
         resolve();
       });
 
@@ -339,7 +341,7 @@ export class NetworkManager extends EventEmitter {
         logger.error('Peer error', error);
         this.emit('error', error);
         this.updateStatus(ConnectionStatus.ERROR);
-        
+
         if (!this.peer?.open) {
           reject(error);
         }
@@ -392,19 +394,19 @@ export class NetworkManager extends EventEmitter {
       this.connectionInfo.opponentConnected = true;
       this.reconnectAttempts = 0;
       this.startPingTimer();
-      
+
       // Update last confirmed state hash
       this.networkGameState.lastConfirmedStateHash = this.game.getCurrentState().generateHash();
-      
+
       // Initialize hash chain
       this.updateHashChain();
-      
+
       // Send any pending messages
       this.flushPendingMessages();
-      
+
       // Process any queued moves
       this.processQueuedMoves();
-      
+
       this.emit('connected', { peerId: conn.peer });
     });
 
@@ -425,7 +427,7 @@ export class NetworkManager extends EventEmitter {
 
   private handleDisconnection(): void {
     this.stopPingTimer();
-    
+
     if (this.reconnectAttempts < this.config.maxReconnectAttempts) {
       this.updateStatus(ConnectionStatus.CONNECTING);
       this.scheduleReconnection();
@@ -442,11 +444,11 @@ export class NetworkManager extends EventEmitter {
 
     this.reconnectTimer = setTimeout(() => {
       this.reconnectAttempts++;
-      logger.info('Reconnection attempt', { 
-        attempt: this.reconnectAttempts, 
-        maxAttempts: this.config.maxReconnectAttempts 
+      logger.info('Reconnection attempt', {
+        attempt: this.reconnectAttempts,
+        maxAttempts: this.config.maxReconnectAttempts,
       });
-      
+
       if (this.connectionInfo.isHost) {
         // Host waits for client to reconnect
         this.emit('reconnecting', { attempt: this.reconnectAttempts });
@@ -468,17 +470,32 @@ export class NetworkManager extends EventEmitter {
     this.messageHandlers.set(MessageType.SYNC_RESPONSE, this.handleSyncResponse.bind(this));
     this.messageHandlers.set(MessageType.PING, this.handlePing.bind(this));
     this.messageHandlers.set(MessageType.PONG, this.handlePong.bind(this));
-    this.messageHandlers.set(MessageType.PLAYER_DISCONNECTED, this.handlePlayerDisconnected.bind(this));
-    this.messageHandlers.set(MessageType.PLAYER_RECONNECTED, this.handlePlayerReconnected.bind(this));
+    this.messageHandlers.set(
+      MessageType.PLAYER_DISCONNECTED,
+      this.handlePlayerDisconnected.bind(this)
+    );
+    this.messageHandlers.set(
+      MessageType.PLAYER_RECONNECTED,
+      this.handlePlayerReconnected.bind(this)
+    );
     this.messageHandlers.set(MessageType.CONFLICT_DETECTED, this.handleConflictDetected.bind(this));
-    this.messageHandlers.set(MessageType.CONFLICT_RESOLUTION, this.handleConflictResolution.bind(this));
-    this.messageHandlers.set(MessageType.HASH_CHAIN_REQUEST, this.handleHashChainRequest.bind(this));
-    this.messageHandlers.set(MessageType.HASH_CHAIN_RESPONSE, this.handleHashChainResponse.bind(this));
+    this.messageHandlers.set(
+      MessageType.CONFLICT_RESOLUTION,
+      this.handleConflictResolution.bind(this)
+    );
+    this.messageHandlers.set(
+      MessageType.HASH_CHAIN_REQUEST,
+      this.handleHashChainRequest.bind(this)
+    );
+    this.messageHandlers.set(
+      MessageType.HASH_CHAIN_RESPONSE,
+      this.handleHashChainResponse.bind(this)
+    );
   }
 
   private handleMessage(message: NetworkMessage): void {
     this.connectionInfo.lastActivity = Date.now();
-    
+
     const handler = this.messageHandlers.get(message.type);
     if (handler) {
       handler(message);
@@ -489,11 +506,11 @@ export class NetworkManager extends EventEmitter {
 
   private handleMoveMessage(message: NetworkMessage): void {
     const moveMsg = message as MoveMessage;
-    
+
     // Validate turn
     const currentState = this.game.getCurrentState();
     const expectedTurn = currentState.getCurrentPlayer().getColor();
-    
+
     if (moveMsg.payload.expectedTurn !== expectedTurn) {
       // Send rejection
       const reject: MoveRejectMessage = {
@@ -509,15 +526,17 @@ export class NetworkManager extends EventEmitter {
       this.sendMessage(reject);
       return;
     }
-    
+
     // Validate state hash if not the first move
-    if (currentState.getMoveCount() > 0 && 
-        moveMsg.payload.stateHash !== currentState.generateHash()) {
+    if (
+      currentState.getMoveCount() > 0 &&
+      moveMsg.payload.stateHash !== currentState.generateHash()
+    ) {
       // Detect conflict
       this.detectAndReportConflict(moveMsg.payload.stateHash, this.game.getCurrentStateIndex());
       return;
     }
-    
+
     // Send acknowledgment
     const ack: MoveAckMessage = {
       type: MessageType.MOVE_ACK,
@@ -529,10 +548,10 @@ export class NetworkManager extends EventEmitter {
       sequence: this.getNextSequence(),
     };
     this.sendMessage(ack);
-    
+
     // Emit the move for the game to process
     this.emit('move', moveMsg.payload);
-    
+
     // Update hash chain after move is processed
     this.updateHashChain();
   }
@@ -563,7 +582,7 @@ export class NetworkManager extends EventEmitter {
       timestamp: Date.now(),
       sequence: this.getNextSequence(),
     };
-    
+
     this.sendMessage(response);
   }
 
@@ -574,7 +593,7 @@ export class NetworkManager extends EventEmitter {
 
   private handlePing(message: NetworkMessage): void {
     const ping = message as PingMessage;
-    
+
     // Respond with pong
     const pong: PongMessage = {
       type: MessageType.PONG,
@@ -585,7 +604,7 @@ export class NetworkManager extends EventEmitter {
       timestamp: Date.now(),
       sequence: this.getNextSequence(),
     };
-    
+
     this.sendMessage(pong);
   }
 
@@ -593,49 +612,49 @@ export class NetworkManager extends EventEmitter {
     const pong = message as PongMessage;
     const now = Date.now();
     const latency = now - pong.payload.clientTime;
-    
+
     this.connectionInfo.latency = latency;
     this.emit('latency', latency);
   }
 
   private handleMoveAck(message: NetworkMessage): void {
     const ack = message as MoveAckMessage;
-    
+
     // Clear acknowledgment timeout
     if (this.moveAckTimeout) {
       clearTimeout(this.moveAckTimeout);
       this.moveAckTimeout = null;
     }
-    
+
     // Mark move as acknowledged
     const pendingMove = this.networkGameState.pendingMoves.get(ack.payload.moveSequence);
     if (pendingMove) {
       pendingMove.acknowledged = true;
       this.networkGameState.lastConfirmedStateHash = ack.payload.stateHash;
       this.networkGameState.pendingMoves.delete(ack.payload.moveSequence);
-      
+
       this.emit('moveAcknowledged', { sequence: ack.payload.moveSequence });
     }
   }
 
   private handleMoveReject(message: NetworkMessage): void {
     const reject = message as MoveRejectMessage;
-    
+
     // Clear acknowledgment timeout
     if (this.moveAckTimeout) {
       clearTimeout(this.moveAckTimeout);
       this.moveAckTimeout = null;
     }
-    
+
     // Remove rejected move
     this.networkGameState.pendingMoves.delete(reject.payload.moveSequence);
-    
+
     // Emit rejection event
     this.emit('moveRejected', {
       sequence: reject.payload.moveSequence,
       reason: reject.payload.reason,
     });
-    
+
     // Request sync to get correct state
     this.requestSync();
   }
@@ -650,7 +669,7 @@ export class NetworkManager extends EventEmitter {
     const msg = message as PlayerReconnectedMessage;
     this.connectionInfo.opponentConnected = true;
     this.emit('playerReconnected', { playerId: msg.payload.playerId });
-    
+
     // Request sync to ensure we're in sync
     this.requestSync();
   }
@@ -681,7 +700,7 @@ export class NetworkManager extends EventEmitter {
 
   private startPingTimer(): void {
     this.stopPingTimer();
-    
+
     this.pingTimer = setInterval(() => {
       if (this.connection && this.connection.open) {
         const ping: PingMessage = {
@@ -692,7 +711,7 @@ export class NetworkManager extends EventEmitter {
           timestamp: Date.now(),
           sequence: this.getNextSequence(),
         };
-        
+
         this.sendMessage(ping);
       }
     }, this.config.pingInterval);
@@ -708,7 +727,7 @@ export class NetworkManager extends EventEmitter {
   private updateStatus(status: ConnectionStatus): void {
     const oldStatus = this.connectionInfo.status;
     this.connectionInfo.status = status;
-    
+
     if (oldStatus !== status) {
       this.emit('statusChanged', { oldStatus, newStatus: status });
     }
@@ -718,11 +737,11 @@ export class NetworkManager extends EventEmitter {
     // Generate a 6-character alphanumeric code
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     let code = '';
-    
+
     for (let i = 0; i < 6; i++) {
       code += chars.charAt(Math.floor(Math.random() * chars.length));
     }
-    
+
     return code;
   }
 
@@ -734,21 +753,21 @@ export class NetworkManager extends EventEmitter {
     if (this.moveAckTimeout) {
       clearTimeout(this.moveAckTimeout);
     }
-    
+
     this.moveAckTimeout = setTimeout(() => {
       const pendingMove = this.networkGameState.pendingMoves.get(sequence);
       if (pendingMove && !pendingMove.acknowledged) {
         // Move was not acknowledged, emit timeout
         this.emit('moveTimeout', { sequence });
-        
+
         // Queue the move for retry
         if (pendingMove.message.payload.move) {
           this.queuedMoves.push(pendingMove.message.payload.move);
         }
-        
+
         // Remove from pending
         this.networkGameState.pendingMoves.delete(sequence);
-        
+
         // Request sync
         this.requestSync();
       }
@@ -766,27 +785,27 @@ export class NetworkManager extends EventEmitter {
 
   private cleanup(): void {
     this.stopPingTimer();
-    
+
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    
+
     if (this.moveAckTimeout) {
       clearTimeout(this.moveAckTimeout);
       this.moveAckTimeout = null;
     }
-    
+
     if (this.connection) {
       this.connection.close();
       this.connection = null;
     }
-    
+
     if (this.peer) {
       this.peer.destroy();
       this.peer = null;
     }
-    
+
     this.pendingMessages = [];
     this.messageSequence = 0;
     this.reconnectAttempts = 0;
@@ -809,7 +828,7 @@ export class NetworkManager extends EventEmitter {
     this.networkGameState.hashChain.push({
       index: currentIndex,
       hash: hash,
-      moveCount: moveCount
+      moveCount: moveCount,
     });
 
     // Keep only recent entries (last 50)
@@ -829,7 +848,7 @@ export class NetworkManager extends EventEmitter {
         remoteHash,
         divergencePoint: remoteMoveIndex,
         detectedAt: Date.now(),
-        resolved: false
+        resolved: false,
       };
     }
 
@@ -841,7 +860,7 @@ export class NetworkManager extends EventEmitter {
         remoteHash,
         divergencePoint: localIndex,
         detectedAt: Date.now(),
-        resolved: false
+        resolved: false,
       };
     }
 
@@ -853,22 +872,24 @@ export class NetworkManager extends EventEmitter {
         remoteHash,
         divergencePoint: Math.min(localIndex, remoteMoveIndex),
         detectedAt: Date.now(),
-        resolved: false
+        resolved: false,
       };
     }
 
     return null;
   }
 
-  private findCommonAncestor(remoteHashChain: Array<{ index: number; hash: string; moveCount: number }>): number {
+  private findCommonAncestor(
+    remoteHashChain: Array<{ index: number; hash: string; moveCount: number }>
+  ): number {
     // Find the most recent common hash
     let commonIndex = -1;
 
     for (const remoteEntry of remoteHashChain) {
       const localEntry = this.networkGameState.hashChain.find(
-        entry => entry.index === remoteEntry.index && entry.hash === remoteEntry.hash
+        (entry) => entry.index === remoteEntry.index && entry.hash === remoteEntry.hash
       );
-      
+
       if (localEntry) {
         commonIndex = Math.max(commonIndex, remoteEntry.index);
       }
@@ -879,19 +900,19 @@ export class NetworkManager extends EventEmitter {
 
   private async rollbackToState(targetIndex: number): Promise<boolean> {
     this.logConflict('info', `Rolling back to state index ${targetIndex}`);
-    
+
     try {
       // Use game's goToMove method to navigate to the target state
       const success = this.game.goToMove(targetIndex);
-      
+
       if (success) {
         // Update hash chain after rollback
         this.updateHashChain();
-        
+
         // Clear pending moves that are now invalid
         this.networkGameState.pendingMoves.clear();
         this.queuedMoves = [];
-        
+
         this.logConflict('info', 'Rollback successful');
         return true;
       } else {
@@ -899,7 +920,10 @@ export class NetworkManager extends EventEmitter {
         return false;
       }
     } catch (error) {
-      this.logConflict('error', `Rollback failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      this.logConflict(
+        'error',
+        `Rollback failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
       return false;
     }
   }
@@ -909,7 +933,7 @@ export class NetworkManager extends EventEmitter {
       timestamp: Date.now(),
       message,
       type,
-      data
+      data,
     };
 
     this.conflictLogs.push(log);
@@ -920,7 +944,12 @@ export class NetworkManager extends EventEmitter {
     }
 
     // Also log to console for debugging
-    const logFn = type === 'error' ? logger.error.bind(logger) : type === 'warning' ? logger.warn.bind(logger) : logger.info.bind(logger);
+    const logFn =
+      type === 'error'
+        ? logger.error.bind(logger)
+        : type === 'warning'
+          ? logger.warn.bind(logger)
+          : logger.info.bind(logger);
     logFn(`[NetworkManager Conflict] ${message}`, data);
   }
 
@@ -930,9 +959,9 @@ export class NetworkManager extends EventEmitter {
 
   private handleConflictDetected(message: NetworkMessage): void {
     const conflictMsg = message as ConflictDetectedMessage;
-    
+
     this.logConflict('warning', 'Conflict detected', conflictMsg.payload);
-    
+
     // Store conflict info
     this.conflictInfo = {
       type: conflictMsg.payload.conflictType,
@@ -940,7 +969,7 @@ export class NetworkManager extends EventEmitter {
       remoteHash: conflictMsg.payload.remoteStateHash,
       divergencePoint: conflictMsg.payload.moveIndex,
       detectedAt: Date.now(),
-      resolved: false
+      resolved: false,
     };
 
     // Set conflict resolution in progress
@@ -956,18 +985,21 @@ export class NetworkManager extends EventEmitter {
 
   private handleConflictResolution(message: NetworkMessage): void {
     const resolutionMsg = message as ConflictResolutionMessage;
-    
+
     this.logConflict('info', 'Received conflict resolution', resolutionMsg.payload);
 
     switch (resolutionMsg.payload.resolution) {
       case 'rollback':
-        this.rollbackToState(resolutionMsg.payload.targetMoveIndex).then(success => {
+        this.rollbackToState(resolutionMsg.payload.targetMoveIndex).then((success) => {
           if (success) {
             this.networkGameState.conflictResolutionInProgress = false;
             if (this.conflictInfo) {
               this.conflictInfo.resolved = true;
             }
-            this.emit('conflictResolved', { resolution: 'rollback', targetIndex: resolutionMsg.payload.targetMoveIndex });
+            this.emit('conflictResolved', {
+              resolution: 'rollback',
+              targetIndex: resolutionMsg.payload.targetMoveIndex,
+            });
           }
         });
         break;
@@ -979,12 +1011,12 @@ export class NetworkManager extends EventEmitter {
             // Replace our game state with the synced state
             this.game = game;
             this.updateHashChain();
-            
+
             this.networkGameState.conflictResolutionInProgress = false;
             if (this.conflictInfo) {
               this.conflictInfo.resolved = true;
             }
-            
+
             this.emit('conflictResolved', { resolution: 'sync' });
             this.emit('gameReplaced', { game });
           } catch (error) {
@@ -997,12 +1029,12 @@ export class NetworkManager extends EventEmitter {
         // Clear pending moves and retry
         this.networkGameState.pendingMoves.clear();
         this.processQueuedMoves();
-        
+
         this.networkGameState.conflictResolutionInProgress = false;
         if (this.conflictInfo) {
           this.conflictInfo.resolved = true;
         }
-        
+
         this.emit('conflictResolved', { resolution: 'retry' });
         break;
     }
@@ -1010,20 +1042,20 @@ export class NetworkManager extends EventEmitter {
 
   private handleHashChainRequest(message: NetworkMessage): void {
     const request = message as HashChainRequestMessage;
-    
+
     // Build hash chain for requested range
     const hashChain: Array<{ index: number; hash: string; moveCount: number }> = [];
     const history = this.game.getHistory();
-    
+
     const fromIndex = Math.max(0, request.payload.fromIndex);
     const toIndex = Math.min(history.length - 1, request.payload.toIndex);
-    
+
     for (let i = fromIndex; i <= toIndex; i++) {
       const state = history[i];
       hashChain.push({
         index: i,
         hash: state.generateHash(),
-        moveCount: state.getMoveCount()
+        moveCount: state.getMoveCount(),
       });
     }
 
@@ -1032,42 +1064,43 @@ export class NetworkManager extends EventEmitter {
       type: MessageType.HASH_CHAIN_RESPONSE,
       payload: { hashChain },
       timestamp: Date.now(),
-      sequence: this.getNextSequence()
+      sequence: this.getNextSequence(),
     };
-    
+
     this.sendMessage(response);
   }
 
   private handleHashChainResponse(message: NetworkMessage): void {
     const response = message as HashChainResponseMessage;
-    
+
     this.logConflict('info', 'Received hash chain', { length: response.payload.hashChain.length });
-    
+
     // Find common ancestor
     const commonAncestorIndex = this.findCommonAncestor(response.payload.hashChain);
-    
+
     if (commonAncestorIndex >= 0) {
       this.logConflict('info', `Found common ancestor at index ${commonAncestorIndex}`);
-      
+
       // Send resolution message to rollback to common ancestor
       const resolution: ConflictResolutionMessage = {
         type: MessageType.CONFLICT_RESOLUTION,
         payload: {
           resolution: 'rollback',
-          targetStateHash: response.payload.hashChain.find(h => h.index === commonAncestorIndex)?.hash || '',
-          targetMoveIndex: commonAncestorIndex
+          targetStateHash:
+            response.payload.hashChain.find((h) => h.index === commonAncestorIndex)?.hash || '',
+          targetMoveIndex: commonAncestorIndex,
         },
         timestamp: Date.now(),
-        sequence: this.getNextSequence()
+        sequence: this.getNextSequence(),
       };
-      
+
       this.sendMessage(resolution);
-      
+
       // Perform our own rollback
       this.rollbackToState(commonAncestorIndex);
     } else {
       this.logConflict('error', 'No common ancestor found, requesting full sync');
-      
+
       // Request full game sync
       this.requestSync();
     }
@@ -1078,33 +1111,33 @@ export class NetworkManager extends EventEmitter {
       type: MessageType.HASH_CHAIN_REQUEST,
       payload: { fromIndex, toIndex },
       timestamp: Date.now(),
-      sequence: this.getNextSequence()
+      sequence: this.getNextSequence(),
     };
-    
+
     this.sendMessage(request);
   }
 
   // Add conflict detection to existing methods
   detectAndReportConflict(expectedHash: string, moveIndex: number): void {
     const conflict = this.detectConflict(expectedHash, moveIndex);
-    
+
     if (conflict && !this.networkGameState.conflictResolutionInProgress) {
       this.logConflict('warning', 'Sending conflict detection', conflict);
-      
+
       const message: ConflictDetectedMessage = {
         type: MessageType.CONFLICT_DETECTED,
         payload: {
           localStateHash: conflict.localHash,
           remoteStateHash: conflict.remoteHash,
           moveIndex: conflict.divergencePoint,
-          conflictType: conflict.type
+          conflictType: conflict.type,
         },
         timestamp: Date.now(),
-        sequence: this.getNextSequence()
+        sequence: this.getNextSequence(),
       };
-      
+
       this.sendMessage(message);
-      
+
       // Also handle it locally
       this.handleConflictDetected(message);
     }

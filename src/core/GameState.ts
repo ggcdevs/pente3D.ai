@@ -49,7 +49,10 @@ export class GameState {
    * @param playersOrFirstPlayer Array of players or first player color
    * @returns New game state
    */
-  static createInitialState(boardSize: number, playersOrFirstPlayer: Player[] | 'black' | 'white'): GameState {
+  static createInitialState(
+    boardSize: number,
+    playersOrFirstPlayer: Player[] | 'black' | 'white'
+  ): GameState {
     if (typeof playersOrFirstPlayer === 'string') {
       const blackPlayer = new Player('player1', 'black');
       const whitePlayer = new Player('player2', 'white');
@@ -84,7 +87,7 @@ export class GameState {
 
     // Detect captures
     const captures = GameRules.detectCaptures(newBoard, move);
-    
+
     // Apply captures and update player stats
     let updatedPlayers = [...this.players];
     if (captures.length > 0) {
@@ -92,12 +95,12 @@ export class GameState {
       for (const capturePos of captures) {
         newBoard = newBoard.removePiece(capturePos);
       }
-      
+
       // Update capture count for the current player
       const currentPlayer = this.getCurrentPlayer();
-      const playerIndex = this.players.findIndex(p => p.id === currentPlayer.id);
+      const playerIndex = this.players.findIndex((p) => p.id === currentPlayer.id);
       updatedPlayers[playerIndex] = currentPlayer.addCaptures(captures.length / 2);
-      
+
       // Create move with captures
       move = Move.create(move.position, move.playerId, captures, move.timestamp);
     }
@@ -109,17 +112,11 @@ export class GameState {
     const winResult = GameRules.checkWinConditions(newBoard, updatedPlayers, move);
 
     // Calculate next player index
-    const nextPlayerIndex = winResult 
+    const nextPlayerIndex = winResult
       ? this.currentPlayerIndex // Game over, don't advance
       : (this.currentPlayerIndex + 1) % this.players.length;
 
-    return new GameState(
-      newBoard,
-      updatedPlayers,
-      newHistory,
-      nextPlayerIndex,
-      winResult
-    );
+    return new GameState(newBoard, updatedPlayers, newHistory, nextPlayerIndex, winResult);
   }
 
   /**
@@ -151,7 +148,7 @@ export class GameState {
    * @returns Black player
    */
   getBlackPlayer(): Player {
-    const blackPlayer = this.players.find(p => p.getColor() === 'black');
+    const blackPlayer = this.players.find((p) => p.getColor() === 'black');
     if (!blackPlayer) {
       throw new Error('Black player not found');
     }
@@ -163,7 +160,7 @@ export class GameState {
    * @returns White player
    */
   getWhitePlayer(): Player {
-    const whitePlayer = this.players.find(p => p.getColor() === 'white');
+    const whitePlayer = this.players.find((p) => p.getColor() === 'white');
     if (!whitePlayer) {
       throw new Error('White player not found');
     }
@@ -200,12 +197,7 @@ export class GameState {
    * @returns true if valid
    */
   isValidMove(move: Move): boolean {
-    return GameRules.isValidMove(
-      this.board,
-      move,
-      this.getCurrentPlayer(),
-      this.moveHistory
-    );
+    return GameRules.isValidMove(this.board, move, this.getCurrentPlayer(), this.moveHistory);
   }
 
   /**
@@ -217,31 +209,31 @@ export class GameState {
       // Board state
       this.board.toJSON(),
       // Player states (including captures)
-      this.players.map(p => ({ id: p.id, captures: p.captureCount })),
+      this.players.map((p) => ({ id: p.id, captures: p.captureCount })),
       // Move history (simplified)
-      this.moveHistory.map(m => ({
+      this.moveHistory.map((m) => ({
         pos: [m.position.x, m.position.y, m.position.z],
         player: m.playerId,
-        captures: m.capturedPositions.length
+        captures: m.capturedPositions.length,
       })),
       // Current player
       this.currentPlayerIndex,
       // Win state
-      this.winResult ? this.winResult.type : null
+      this.winResult ? this.winResult.type : null,
     ];
 
     // Simple hash using JSON stringify
     // In production, use a proper hash function like SHA-256
     const jsonString = JSON.stringify(components);
-    
+
     // Simple hash algorithm for demonstration
     let hash = 0;
     for (let i = 0; i < jsonString.length; i++) {
       const char = jsonString.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
+      hash = (hash << 5) - hash + char;
       hash = hash & hash; // Convert to 32-bit integer
     }
-    
+
     return hash.toString(16);
   }
 
@@ -255,15 +247,18 @@ export class GameState {
     if (this === other) return true;
 
     // Compare all properties
-    return this.board.equals(other.board) &&
-           this.players.length === other.players.length &&
-           this.players.every((p, i) => p.equals(other.players[i])) &&
-           this.moveHistory.length === other.moveHistory.length &&
-           this.moveHistory.every((m, i) => m.equals(other.moveHistory[i])) &&
-           this.currentPlayerIndex === other.currentPlayerIndex &&
-           ((this.winResult === null && other.winResult === null) ||
-            (this.winResult !== null && other.winResult !== null && 
-             this.winResult.equals(other.winResult)));
+    return (
+      this.board.equals(other.board) &&
+      this.players.length === other.players.length &&
+      this.players.every((p, i) => p.equals(other.players[i])) &&
+      this.moveHistory.length === other.moveHistory.length &&
+      this.moveHistory.every((m, i) => m.equals(other.moveHistory[i])) &&
+      this.currentPlayerIndex === other.currentPlayerIndex &&
+      ((this.winResult === null && other.winResult === null) ||
+        (this.winResult !== null &&
+          other.winResult !== null &&
+          this.winResult.equals(other.winResult)))
+    );
   }
 
   /**
@@ -273,8 +268,8 @@ export class GameState {
   clone(): GameState {
     return new GameState(
       this.board.clone(),
-      this.players.map(p => p.clone()),
-      this.moveHistory.map(m => m.clone()),
+      this.players.map((p) => p.clone()),
+      this.moveHistory.map((m) => m.clone()),
       this.currentPlayerIndex,
       this.winResult ? this.winResult.clone() : null
     );
@@ -287,11 +282,11 @@ export class GameState {
   toJSON(): object {
     return {
       board: this.board.toJSON(),
-      players: this.players.map(p => p.toJSON()),
-      moveHistory: this.moveHistory.map(m => m.toJSON()),
+      players: this.players.map((p) => p.toJSON()),
+      moveHistory: this.moveHistory.map((m) => m.toJSON()),
       currentPlayerIndex: this.currentPlayerIndex,
       winResult: this.winResult ? this.winResult.toJSON() : null,
-      isGameOver: this.isGameOver
+      isGameOver: this.isGameOver,
     };
   }
 
@@ -310,13 +305,7 @@ export class GameState {
     const moveHistory = json.moveHistory.map((m: any) => Move.fromJSON(m));
     const winResult = json.winResult ? WinResult.fromJSON(json.winResult) : null;
 
-    return new GameState(
-      board,
-      players,
-      moveHistory,
-      json.currentPlayerIndex,
-      winResult
-    );
+    return new GameState(board, players, moveHistory, json.currentPlayerIndex, winResult);
   }
 
   /**
@@ -337,7 +326,7 @@ export class GameState {
         for (let z = -halfSize; z <= halfSize; z++) {
           const pos = Vector3.create(x, y, z);
           const move = Move.create(pos, currentPlayer.id);
-          
+
           if (this.isValidMove(move)) {
             legalMoves.push(pos);
           }
@@ -359,7 +348,7 @@ export class GameState {
 
     // Rebuild the game from scratch up to n-1 moves
     let state = GameState.createInitialState(this.board.size, this.players);
-    
+
     for (let i = 0; i < this.moveHistory.length - 1; i++) {
       const move = this.moveHistory[i];
       state = state.applyMove(Move.create(move.position, move.playerId));

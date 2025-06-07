@@ -14,7 +14,7 @@ export class ConflictNotification {
     this.detailsElement = this.element.querySelector('.conflict-details') as HTMLDivElement;
     this.progressElement = this.element.querySelector('.conflict-progress') as HTMLDivElement;
     this.closeButton = this.element.querySelector('.conflict-close') as HTMLButtonElement;
-    
+
     this.setupEventListeners();
     document.body.appendChild(this.element);
   }
@@ -160,7 +160,7 @@ export class ConflictNotification {
 
   showConflict(conflict: ConflictInfo): void {
     this.clearAutoHide();
-    
+
     // Update message based on conflict type
     let message = '';
     switch (conflict.type) {
@@ -174,18 +174,20 @@ export class ConflictNotification {
         message = 'Move sequence is invalid. Repairing game state...';
         break;
     }
-    
+
     this.messageElement.textContent = message;
     this.detailsElement.textContent = `Divergence at move ${conflict.divergencePoint}`;
-    
+
     // Reset progress
     this.progressElement.style.display = 'block';
-    const progressBar = this.progressElement.querySelector('.conflict-progress-bar') as HTMLDivElement;
+    const progressBar = this.progressElement.querySelector(
+      '.conflict-progress-bar'
+    ) as HTMLDivElement;
     progressBar.style.width = '0%';
-    
+
     // Show notification
     this.element.className = 'conflict-notification visible resolving';
-    
+
     // Animate progress
     setTimeout(() => {
       progressBar.style.width = '30%';
@@ -193,17 +195,21 @@ export class ConflictNotification {
   }
 
   showProgress(progress: number): void {
-    const progressBar = this.progressElement.querySelector('.conflict-progress-bar') as HTMLDivElement;
+    const progressBar = this.progressElement.querySelector(
+      '.conflict-progress-bar'
+    ) as HTMLDivElement;
     progressBar.style.width = `${Math.min(90, progress * 100)}%`;
   }
 
   showResolution(resolution: 'rollback' | 'sync' | 'retry', success: boolean = true): void {
-    const progressBar = this.progressElement.querySelector('.conflict-progress-bar') as HTMLDivElement;
+    const progressBar = this.progressElement.querySelector(
+      '.conflict-progress-bar'
+    ) as HTMLDivElement;
     progressBar.style.width = '100%';
-    
+
     if (success) {
       this.element.className = 'conflict-notification visible resolved';
-      
+
       let message = '';
       switch (resolution) {
         case 'rollback':
@@ -217,7 +223,7 @@ export class ConflictNotification {
           break;
       }
       this.messageElement.textContent = message;
-      
+
       // Auto-hide after 5 seconds
       this.setAutoHide(5000);
     } else {
@@ -228,7 +234,7 @@ export class ConflictNotification {
 
   showError(message: string): void {
     this.clearAutoHide();
-    
+
     this.element.className = 'conflict-notification visible error';
     this.messageElement.textContent = message;
     this.detailsElement.textContent = '';
@@ -238,7 +244,7 @@ export class ConflictNotification {
   hide(): void {
     this.clearAutoHide();
     this.element.classList.remove('visible');
-    
+
     // Reset after animation
     setTimeout(() => {
       this.element.className = 'conflict-notification';

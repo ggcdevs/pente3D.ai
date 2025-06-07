@@ -60,7 +60,7 @@ export class GameRules {
   static detectCaptures(board: Board, move: Move): Vector3[] {
     const captures: Vector3[] = [];
     const piece = board.getPieceAt(move.position);
-    
+
     if (!piece) {
       return captures;
     }
@@ -119,14 +119,8 @@ export class GameRules {
    * @param lastMove Optional last move for optimization
    * @returns Winning line if found, null otherwise
    */
-  static checkFiveInARow(
-    board: Board,
-    player: Player,
-    lastMove: Move | null
-  ): Line | null {
-    const positions = lastMove 
-      ? [lastMove.position]
-      : this.getAllPlayerPositions(board, player.id);
+  static checkFiveInARow(board: Board, player: Player, lastMove: Move | null): Line | null {
+    const positions = lastMove ? [lastMove.position] : this.getAllPlayerPositions(board, player.id);
 
     for (const pos of positions) {
       const lines = this.getLinesFromPosition(board, pos, player.id);
@@ -181,7 +175,7 @@ export class GameRules {
    */
   private static get3DDirections(): Vector3[] {
     const directions: Vector3[] = [];
-    
+
     for (let x = -1; x <= 1; x++) {
       for (let y = -1; y <= 1; y++) {
         for (let z = -1; z <= 1; z++) {
@@ -190,7 +184,7 @@ export class GameRules {
         }
       }
     }
-    
+
     return directions;
   }
 
@@ -209,7 +203,7 @@ export class GameRules {
     playerId: string
   ): Vector3[] {
     const captures: Vector3[] = [];
-    
+
     // Check pattern: [current][opponent][opponent][player]
     const pos1 = position.add(direction);
     const pos2 = pos1.add(direction);
@@ -225,11 +219,15 @@ export class GameRules {
     const piece3 = board.getPieceAt(pos3);
 
     // Check if pattern matches
-    if (piece1 && piece2 && piece3 &&
-        piece1.player.id !== playerId &&
-        piece2.player.id !== playerId &&
-        piece2.player.id === piece1.player.id &&
-        piece3.player.id === playerId) {
+    if (
+      piece1 &&
+      piece2 &&
+      piece3 &&
+      piece1.player.id !== playerId &&
+      piece2.player.id !== playerId &&
+      piece2.player.id === piece1.player.id &&
+      piece3.player.id === playerId
+    ) {
       captures.push(pos1, pos2);
     }
 
@@ -245,7 +243,7 @@ export class GameRules {
   private static getAllPlayerPositions(board: Board, playerId: string): Vector3[] {
     const positions: Vector3[] = [];
     const halfSize = Math.floor(board.size / 2);
-    
+
     for (let x = -halfSize; x <= halfSize; x++) {
       for (let y = -halfSize; y <= halfSize; y++) {
         for (let z = -halfSize; z <= halfSize; z++) {
@@ -257,7 +255,7 @@ export class GameRules {
         }
       }
     }
-    
+
     return positions;
   }
 
@@ -268,17 +266,13 @@ export class GameRules {
    * @param playerId Player ID
    * @returns Array of lines
    */
-  private static getLinesFromPosition(
-    board: Board,
-    position: Vector3,
-    playerId: string
-  ): Line[] {
+  private static getLinesFromPosition(board: Board, position: Vector3, playerId: string): Line[] {
     const lines: Line[] = [];
     const directions = this.get3DDirections();
 
     // Only check half the directions (positive ones) to avoid duplicates
-    const halfDirections = directions.filter(dir => 
-      dir.x > 0 || (dir.x === 0 && dir.y > 0) || (dir.x === 0 && dir.y === 0 && dir.z > 0)
+    const halfDirections = directions.filter(
+      (dir) => dir.x > 0 || (dir.x === 0 && dir.y > 0) || (dir.x === 0 && dir.y === 0 && dir.z > 0)
     );
 
     for (const dir of halfDirections) {
@@ -306,11 +300,11 @@ export class GameRules {
     playerId: string
   ): Line {
     const positions: Vector3[] = [];
-    
+
     // Go backwards first
     const negDir = direction.multiply(-1);
     let currentPos = position.add(negDir);
-    
+
     while (board.isInBounds(currentPos)) {
       const piece = board.getPieceAt(currentPos);
       if (piece && piece.player.id === playerId) {
@@ -320,13 +314,13 @@ export class GameRules {
         break;
       }
     }
-    
+
     // Add the starting position
     positions.push(position);
-    
+
     // Go forwards
     currentPos = position.add(direction);
-    
+
     while (board.isInBounds(currentPos)) {
       const piece = board.getPieceAt(currentPos);
       if (piece && piece.player.id === playerId) {
@@ -336,7 +330,7 @@ export class GameRules {
         break;
       }
     }
-    
+
     return new Line(positions, direction);
   }
 }

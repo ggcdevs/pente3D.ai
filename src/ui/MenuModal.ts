@@ -22,7 +22,7 @@ export class MenuModal extends Modal {
     super({
       title: 'Game Menu',
       className: 'menu-modal',
-      ...options
+      ...options,
     });
 
     this.game = options.game;
@@ -93,7 +93,8 @@ export class MenuModal extends Modal {
 
     // Divider
     const divider = document.createElement('hr');
-    divider.style.cssText = 'width: 100%; border: none; border-top: 1px solid #333; margin: 10px 0;';
+    divider.style.cssText =
+      'width: 100%; border: none; border-top: 1px solid #333; margin: 10px 0;';
     menuContainer.appendChild(divider);
 
     // Network Game button

@@ -50,7 +50,7 @@ export class Settings {
   private soundEnabled: boolean;
   private animationSpeed: number;
   private listeners: SettingsChangeListener[] = [];
-  
+
   // New properties for theme system
   private colors: ColorSettings;
   private opacity: OpacitySettings;
@@ -62,7 +62,7 @@ export class Settings {
     opacity: OpacitySettings;
     activeTheme: string;
   }>;
-  
+
   // Theme presets
   static readonly PRESET_THEMES: ThemePreset[] = [
     {
@@ -81,16 +81,16 @@ export class Settings {
         winningLine: '#ffd700',
         background: '#1a1a1a',
         ambientLight: '#ffffff',
-        directionalLight: '#ffffff'
+        directionalLight: '#ffffff',
       },
       opacity: {
         boardGrid: 0.3,
         nodeSpheres: 0.5,
         pieces: 1.0,
         temporaryPieces: 0.7,
-        highlights: 0.8
+        highlights: 0.8,
       },
-      isCustom: false
+      isCustom: false,
     },
     {
       id: 'ocean',
@@ -108,16 +108,16 @@ export class Settings {
         winningLine: '#ffd93d',
         background: '#0d1b2a',
         ambientLight: '#e6f3ff',
-        directionalLight: '#ffffff'
+        directionalLight: '#ffffff',
       },
       opacity: {
         boardGrid: 0.4,
         nodeSpheres: 0.6,
         pieces: 1.0,
         temporaryPieces: 0.8,
-        highlights: 0.9
+        highlights: 0.9,
       },
-      isCustom: false
+      isCustom: false,
     },
     {
       id: 'forest',
@@ -135,16 +135,16 @@ export class Settings {
         winningLine: '#ffc107',
         background: '#1b1f1b',
         ambientLight: '#f4e8c1',
-        directionalLight: '#ffffff'
+        directionalLight: '#ffffff',
       },
       opacity: {
         boardGrid: 0.35,
         nodeSpheres: 0.55,
         pieces: 1.0,
         temporaryPieces: 0.75,
-        highlights: 0.85
+        highlights: 0.85,
       },
-      isCustom: false
+      isCustom: false,
     },
     {
       id: 'sunset',
@@ -162,16 +162,16 @@ export class Settings {
         winningLine: '#ffeb3b',
         background: '#1a0033',
         ambientLight: '#ffe5b4',
-        directionalLight: '#ffd54f'
+        directionalLight: '#ffd54f',
       },
       opacity: {
         boardGrid: 0.4,
         nodeSpheres: 0.6,
         pieces: 1.0,
         temporaryPieces: 0.8,
-        highlights: 0.9
+        highlights: 0.9,
       },
-      isCustom: false
+      isCustom: false,
     },
     {
       id: 'neon',
@@ -189,35 +189,35 @@ export class Settings {
         winningLine: '#00ffff',
         background: '#000000',
         ambientLight: '#666666',
-        directionalLight: '#ffffff'
+        directionalLight: '#ffffff',
       },
       opacity: {
         boardGrid: 0.6,
         nodeSpheres: 0.8,
         pieces: 1.0,
         temporaryPieces: 0.9,
-        highlights: 1.0
+        highlights: 1.0,
       },
-      isCustom: false
-    }
+      isCustom: false,
+    },
   ];
 
   constructor(data?: Partial<SettingsData>) {
     this.gridDiagonals = data?.gridDiagonals ?? false;
     this.playerColors = data?.playerColors ?? {
       player1: '#000000',
-      player2: '#FFFFFF'
+      player2: '#FFFFFF',
     };
     this.cameraPosition = data?.cameraPosition;
     this.soundEnabled = data?.soundEnabled ?? true;
     this.animationSpeed = data?.animationSpeed ?? 1.0;
-    
+
     // Initialize theme system with defaults
     const defaultTheme = Settings.PRESET_THEMES[0];
     this.colors = (data as any)?.colors ?? { ...defaultTheme.colors };
     this.opacity = (data as any)?.opacity ?? { ...defaultTheme.opacity };
     this.activeTheme = (data as any)?.activeTheme ?? 'default';
-    
+
     // Load custom themes from storage or data
     if ((data as any)?.customThemes) {
       this.customThemes = (data as any).customThemes;
@@ -230,7 +230,7 @@ export class Settings {
         this.customThemes = [];
       }
     }
-    
+
     // Update player colors from theme
     if (!data?.playerColors) {
       this.playerColors.player1 = this.colors.blackPieces;
@@ -318,11 +318,11 @@ export class Settings {
       colors: { ...this.colors },
       opacity: { ...this.opacity },
       activeTheme: this.activeTheme,
-      customThemes: this.customThemes.map(theme => ({
+      customThemes: this.customThemes.map((theme) => ({
         ...theme,
         colors: { ...theme.colors },
-        opacity: { ...theme.opacity }
-      }))
+        opacity: { ...theme.opacity },
+      })),
     };
   }
 
@@ -359,8 +359,8 @@ export class Settings {
   }
 
   private notifyListeners(): void {
-    this.listeners.forEach(listener => listener(this));
-    
+    this.listeners.forEach((listener) => listener(this));
+
     // Auto-save custom themes when they change
     try {
       const StorageManager = require('./StorageManager').StorageManager;
@@ -369,22 +369,23 @@ export class Settings {
       // Ignore errors during auto-save
     }
   }
-  
+
   // Color management methods
   getColor(element: keyof ColorSettings): string {
-    const settings = this.previewMode && this.previewSettings?.colors 
-      ? { ...this.colors, ...this.previewSettings.colors }
-      : this.colors;
+    const settings =
+      this.previewMode && this.previewSettings?.colors
+        ? { ...this.colors, ...this.previewSettings.colors }
+        : this.colors;
     return settings[element];
   }
-  
+
   setColor(element: keyof ColorSettings, color: string): void {
     if (!this.validateColor(color)) {
       throw new Error(`Invalid color format: ${color}`);
     }
-    
+
     const normalizedColor = this.normalizeColor(color);
-    
+
     if (this.previewMode && this.previewSettings) {
       if (!this.previewSettings.colors) {
         this.previewSettings.colors = { ...this.colors };
@@ -393,37 +394,38 @@ export class Settings {
     } else {
       if (this.colors[element] !== normalizedColor) {
         this.colors[element] = normalizedColor;
-        
+
         // Update player colors if piece colors changed
         if (element === 'blackPieces') {
           this.playerColors.player1 = normalizedColor;
         } else if (element === 'whitePieces') {
           this.playerColors.player2 = normalizedColor;
         }
-        
+
         this.notifyListeners();
       }
     }
   }
-  
+
   getColors(): ColorSettings {
     if (this.previewMode && this.previewSettings?.colors) {
       return { ...this.colors, ...this.previewSettings.colors };
     }
     return { ...this.colors };
   }
-  
+
   // Opacity management methods
   getOpacity(element: keyof OpacitySettings): number {
-    const settings = this.previewMode && this.previewSettings?.opacity
-      ? { ...this.opacity, ...this.previewSettings.opacity }
-      : this.opacity;
+    const settings =
+      this.previewMode && this.previewSettings?.opacity
+        ? { ...this.opacity, ...this.previewSettings.opacity }
+        : this.opacity;
     return settings[element];
   }
-  
+
   setOpacity(element: keyof OpacitySettings, value: number): void {
     const clampedValue = Math.max(0, Math.min(1, value));
-    
+
     if (this.previewMode && this.previewSettings) {
       if (!this.previewSettings.opacity) {
         this.previewSettings.opacity = { ...this.opacity };
@@ -436,32 +438,32 @@ export class Settings {
       }
     }
   }
-  
+
   getOpacitySettings(): OpacitySettings {
     if (this.previewMode && this.previewSettings?.opacity) {
       return { ...this.opacity, ...this.previewSettings.opacity };
     }
     return { ...this.opacity };
   }
-  
+
   // Theme management methods
   getActiveTheme(): ThemePreset | undefined {
-    const themeId = this.previewMode && this.previewSettings?.activeTheme
-      ? this.previewSettings.activeTheme
-      : this.activeTheme;
-      
+    const themeId =
+      this.previewMode && this.previewSettings?.activeTheme
+        ? this.previewSettings.activeTheme
+        : this.activeTheme;
+
     const allThemes = [...Settings.PRESET_THEMES, ...this.customThemes];
-    return allThemes.find(theme => theme.id === themeId);
+    return allThemes.find((theme) => theme.id === themeId);
   }
-  
+
   setActiveTheme(themeId: string): void {
-    const theme = [...Settings.PRESET_THEMES, ...this.customThemes]
-      .find(t => t.id === themeId);
-      
+    const theme = [...Settings.PRESET_THEMES, ...this.customThemes].find((t) => t.id === themeId);
+
     if (!theme) {
       throw new Error(`Theme not found: ${themeId}`);
     }
-    
+
     if (this.previewMode && this.previewSettings) {
       this.previewSettings.activeTheme = themeId;
       this.previewSettings.colors = { ...theme.colors };
@@ -470,77 +472,77 @@ export class Settings {
       this.applyTheme(theme);
     }
   }
-  
+
   applyTheme(theme: ThemePreset): void {
     this.colors = { ...theme.colors };
     this.opacity = { ...theme.opacity };
     this.activeTheme = theme.id;
-    
+
     // Update player colors
     this.playerColors.player1 = theme.colors.blackPieces;
     this.playerColors.player2 = theme.colors.whitePieces;
-    
+
     this.notifyListeners();
   }
-  
+
   createCustomTheme(name: string, description: string): ThemePreset {
     if (this.customThemes.length >= 10) {
       throw new Error('Maximum number of custom themes reached (10)');
     }
-    
+
     const theme: ThemePreset = {
       id: `custom_${Date.now()}`,
       name: name.trim(),
       description: description.trim(),
       colors: { ...this.colors },
       opacity: { ...this.opacity },
-      isCustom: true
+      isCustom: true,
     };
-    
+
     this.customThemes.push(theme);
     this.notifyListeners();
     return theme;
   }
-  
+
   updateCustomTheme(themeId: string, updates: Partial<ThemePreset>): void {
-    const themeIndex = this.customThemes.findIndex(t => t.id === themeId);
+    const themeIndex = this.customThemes.findIndex((t) => t.id === themeId);
     if (themeIndex === -1) {
       throw new Error(`Custom theme not found: ${themeId}`);
     }
-    
+
     const theme = this.customThemes[themeIndex];
     if (updates.name !== undefined) theme.name = updates.name.trim();
     if (updates.description !== undefined) theme.description = updates.description.trim();
     if (updates.colors) theme.colors = { ...theme.colors, ...updates.colors };
     if (updates.opacity) theme.opacity = { ...theme.opacity, ...updates.opacity };
-    
+
     this.notifyListeners();
   }
-  
+
   deleteCustomTheme(themeId: string): void {
-    const index = this.customThemes.findIndex(t => t.id === themeId);
+    const index = this.customThemes.findIndex((t) => t.id === themeId);
     if (index === -1) {
       throw new Error(`Custom theme not found: ${themeId}`);
     }
-    
+
     this.customThemes.splice(index, 1);
-    
+
     // If deleted theme was active, switch to default
     if (this.activeTheme === themeId) {
       this.setActiveTheme('default');
     }
-    
+
     this.notifyListeners();
   }
-  
+
   getCustomThemes(): ThemePreset[] {
     return [...this.customThemes];
   }
-  
+
   getAllThemes(): ThemePreset[] {
     return [...Settings.PRESET_THEMES, ...this.customThemes];
   }
-  
+
   // Preview mode methods
   startPreview(): void {
     if (!this.previewMode) {
@@ -548,61 +550,63 @@ export class Settings {
       this.previewSettings = {};
     }
   }
-  
-  updatePreview(changes: Partial<{
-    colors: Partial<ColorSettings>;
-    opacity: Partial<OpacitySettings>;
-    activeTheme: string;
-  }>): void {
+
+  updatePreview(
+    changes: Partial<{
+      colors: Partial<ColorSettings>;
+      opacity: Partial<OpacitySettings>;
+      activeTheme: string;
+    }>
+  ): void {
     if (!this.previewMode) {
       this.startPreview();
     }
-    
+
     if (changes.colors) {
       this.previewSettings!.colors = {
-        ...this.previewSettings!.colors || this.colors,
-        ...changes.colors
+        ...(this.previewSettings!.colors || this.colors),
+        ...changes.colors,
       };
     }
-    
+
     if (changes.opacity) {
       this.previewSettings!.opacity = {
-        ...this.previewSettings!.opacity || this.opacity,
-        ...changes.opacity
+        ...(this.previewSettings!.opacity || this.opacity),
+        ...changes.opacity,
       };
     }
-    
+
     if (changes.activeTheme !== undefined) {
       this.previewSettings!.activeTheme = changes.activeTheme;
     }
-    
+
     this.notifyListeners();
   }
-  
+
   applyPreview(): void {
     if (!this.previewMode || !this.previewSettings) return;
-    
+
     if (this.previewSettings.colors) {
       this.colors = { ...this.colors, ...this.previewSettings.colors };
     }
-    
+
     if (this.previewSettings.opacity) {
       this.opacity = { ...this.opacity, ...this.previewSettings.opacity };
     }
-    
+
     if (this.previewSettings.activeTheme !== undefined) {
       this.activeTheme = this.previewSettings.activeTheme;
     }
-    
+
     // Update player colors
     this.playerColors.player1 = this.colors.blackPieces;
     this.playerColors.player2 = this.colors.whitePieces;
-    
+
     this.previewMode = false;
     this.previewSettings = undefined;
     this.notifyListeners();
   }
-  
+
   cancelPreview(): void {
     if (this.previewMode) {
       this.previewMode = false;
@@ -610,38 +614,38 @@ export class Settings {
       this.notifyListeners();
     }
   }
-  
+
   isInPreviewMode(): boolean {
     return this.previewMode;
   }
-  
+
   // Validation methods
   validateColor(color: string): boolean {
     if (!color) return false;
-    
+
     // Support hex colors with or without #
     const hexPattern = /^#?([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/;
     return hexPattern.test(color);
   }
-  
+
   validateOpacity(value: number): boolean {
     return typeof value === 'number' && value >= 0 && value <= 1;
   }
-  
+
   private normalizeColor(color: string): string {
     // Add # if missing
     if (color && !color.startsWith('#')) {
       color = '#' + color;
     }
-    
+
     // Convert 3-digit hex to 6-digit
     if (color.length === 4) {
       color = '#' + color[1] + color[1] + color[2] + color[2] + color[3] + color[3];
     }
-    
+
     return color.toUpperCase();
   }
-  
+
   // Reset methods
   resetToDefaults(): void {
     const defaultTheme = Settings.PRESET_THEMES[0];
@@ -655,7 +659,7 @@ export class Settings {
     this.previewSettings = undefined;
     this.notifyListeners();
   }
-  
+
   resetColors(): void {
     const defaultTheme = Settings.PRESET_THEMES[0];
     this.colors = { ...defaultTheme.colors };
@@ -663,72 +667,85 @@ export class Settings {
     this.playerColors.player2 = this.colors.whitePieces;
     this.notifyListeners();
   }
-  
+
   resetOpacity(): void {
     const defaultTheme = Settings.PRESET_THEMES[0];
     this.opacity = { ...defaultTheme.opacity };
     this.notifyListeners();
   }
-  
+
   // Import/Export themes
   exportTheme(themeId: string): string {
-    const theme = [...Settings.PRESET_THEMES, ...this.customThemes]
-      .find(t => t.id === themeId);
-      
+    const theme = [...Settings.PRESET_THEMES, ...this.customThemes].find((t) => t.id === themeId);
+
     if (!theme) {
       throw new Error(`Theme not found: ${themeId}`);
     }
-    
+
     return JSON.stringify(theme, null, 2);
   }
-  
+
   importTheme(themeData: string): ThemePreset {
     try {
       const theme = JSON.parse(themeData) as ThemePreset;
-      
+
       // Validate theme structure
       if (!theme.id || !theme.name || !theme.colors || !theme.opacity) {
         throw new Error('Invalid theme structure');
       }
-      
+
       // Validate all required color fields
       const requiredColors: (keyof ColorSettings)[] = [
-        'boardGrid', 'nodeSpheres', 'blackPieces', 'whitePieces',
-        'temporaryPieces', 'highlightedNodes', 'highlightedLines',
-        'capturedPieces', 'winningLine', 'background',
-        'ambientLight', 'directionalLight'
+        'boardGrid',
+        'nodeSpheres',
+        'blackPieces',
+        'whitePieces',
+        'temporaryPieces',
+        'highlightedNodes',
+        'highlightedLines',
+        'capturedPieces',
+        'winningLine',
+        'background',
+        'ambientLight',
+        'directionalLight',
       ];
-      
+
       for (const colorKey of requiredColors) {
         if (!theme.colors[colorKey] || !this.validateColor(theme.colors[colorKey])) {
           throw new Error(`Invalid or missing color: ${colorKey}`);
         }
       }
-      
+
       // Validate all required opacity fields
       const requiredOpacity: (keyof OpacitySettings)[] = [
-        'boardGrid', 'nodeSpheres', 'pieces', 'temporaryPieces', 'highlights'
+        'boardGrid',
+        'nodeSpheres',
+        'pieces',
+        'temporaryPieces',
+        'highlights',
       ];
-      
+
       for (const opacityKey of requiredOpacity) {
         if (!this.validateOpacity(theme.opacity[opacityKey])) {
           throw new Error(`Invalid opacity: ${opacityKey}`);
         }
       }
-      
+
       // Generate new ID for imported theme
       const importedTheme: ThemePreset = {
         ...theme,
         id: `imported_${Date.now()}`,
-        isCustom: true
+        isCustom: true,
       };
-      
+
       this.customThemes.push(importedTheme);
       this.notifyListeners();
-      
+
       return importedTheme;
     } catch (error) {
-      throw new Error(`Failed to import theme: ${error instanceof Error ? error.message : 'Invalid data'}`);
+      throw new Error(
+        `Failed to import theme: ${error instanceof Error ? error.message : 'Invalid data'}`
+      );
     }
   }
 }

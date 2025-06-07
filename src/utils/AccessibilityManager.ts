@@ -33,13 +33,13 @@ export class AccessibilityManager extends EventEmitter {
     super();
     this.game = game;
     this.boardSize = game.getBoard().size;
-    
+
     this.options = {
       announceGameEvents: true,
       highContrastMode: false,
       reducedMotion: false,
       keyboardHelp: true,
-      ...options
+      ...options,
     };
 
     this.setupAnnouncements();
@@ -109,14 +109,14 @@ export class AccessibilityManager extends EventEmitter {
 
   announceGameEvent(event: string, details?: any): void {
     if (!this.options.announceGameEvents) return;
-    
+
     let message: string;
     if (typeof details === 'string') {
       message = details;
     } else {
       message = this.formatEventDetails(event, details);
     }
-    
+
     this.createAnnouncement(message);
   }
 
@@ -137,7 +137,7 @@ export class AccessibilityManager extends EventEmitter {
     this.options.highContrastMode = enabled;
     document.body.classList.toggle('high-contrast', enabled);
     this.emit('highContrastChanged', { enabled } as any);
-    
+
     if (enabled) {
       this.createAnnouncement('High contrast mode enabled');
     } else {
@@ -148,7 +148,7 @@ export class AccessibilityManager extends EventEmitter {
   setReducedMotion(enabled: boolean): void {
     this.options.reducedMotion = enabled;
     this.emit('reducedMotionChanged', { enabled } as any);
-    
+
     if (enabled) {
       this.createAnnouncement('Animations reduced');
     } else {
@@ -208,7 +208,7 @@ export class AccessibilityManager extends EventEmitter {
 
   selectCurrentPosition(): void {
     if (!this.currentFocus) return;
-    
+
     // This will trigger the game to place a piece at the current focus position
     // The actual piece placement will be handled by the game/input handler
     this.createAnnouncement(`Selected position ${this.positionToText(this.currentFocus)}`);
@@ -216,10 +216,10 @@ export class AccessibilityManager extends EventEmitter {
 
   announceCurrentPosition(): void {
     if (!this.currentFocus) return;
-    
+
     const positionText = this.positionToText(this.currentFocus);
     const piece = this.game.getBoard().getPieceAt(this.currentFocus);
-    
+
     let announcement = `Position ${positionText}`;
     if (piece) {
       const player = piece.playerId === 'player1' ? 'Black' : 'White';
@@ -227,7 +227,7 @@ export class AccessibilityManager extends EventEmitter {
     } else {
       announcement += ', empty';
     }
-    
+
     // Use position indicator for immediate feedback
     if (this.positionIndicator) {
       this.positionIndicator.textContent = announcement;
@@ -238,21 +238,22 @@ export class AccessibilityManager extends EventEmitter {
     const board = this.game.getBoard();
     const blackPieces = board.getAllPieces().filter((p: any) => p.playerId === 'player1').length;
     const whitePieces = board.getAllPieces().filter((p: any) => p.playerId === 'player2').length;
-    
+
     let announcement = `Board state: ${blackPieces} black pieces, ${whitePieces} white pieces. `;
     // We don't have direct access to both players, so we'll skip capture counts for now
     // announcement += `Black has captured ${players[0].getCaptureCount()} pieces. `;
     // announcement += `White has captured ${players[1].getCaptureCount()} pieces. `;
     announcement += `Move ${this.game.getMoveHistory().length}. `;
-    announcement += this.game.getCurrentPlayer().getColor() === 'black' ? 'Black to move.' : 'White to move.';
-    
+    announcement +=
+      this.game.getCurrentPlayer().getColor() === 'black' ? 'Black to move.' : 'White to move.';
+
     this.createAnnouncement(announcement);
   }
 
   announceGameStatus(): void {
     const winner = this.game.getWinner();
     const winResult = this.game.getWinResult();
-    
+
     if (winner) {
       const winnerName = winner === 'black' ? 'Black' : 'White';
       const reason = winResult?.winType === 'five-in-a-row' ? 'five in a row' : 'captures';
@@ -268,7 +269,7 @@ export class AccessibilityManager extends EventEmitter {
     const totalPositions = Math.pow(this.boardSize, 3);
     const occupiedPositions = board.getAllPieces().length;
     const availableMoves = totalPositions - occupiedPositions;
-    
+
     this.createAnnouncement(`${availableMoves} positions available`);
   }
 
@@ -276,13 +277,13 @@ export class AccessibilityManager extends EventEmitter {
     const position = this.positionToText(move.position);
     const player = move.playerId === 'player1' ? 'Black' : 'White';
     const isCapture = move.isCapture();
-    
+
     let announcement = `${player} placed piece at ${position}`;
     if (isCapture) {
       // We don't have capture count on Move, just that it's a capture
       announcement += `, capturing pieces`;
     }
-    
+
     this.createAnnouncement(announcement);
   }
 
@@ -294,14 +295,14 @@ export class AccessibilityManager extends EventEmitter {
   private announceWin(winner: Player, result: WinResult): void {
     const player = winner.id === 'player1' ? 'Black' : 'White';
     const reason = result.winType === 'five-in-a-row' ? 'five in a row' : 'captures';
-    
+
     this.createAnnouncement(`Game over! ${player} wins by ${reason}!`);
   }
 
   private createAnnouncement(message: string): void {
     this.announcementQueue.push(message);
     this.emit('announcement', { message } as any);
-    
+
     if (!this.isProcessingQueue) {
       this.processAnnouncementQueue();
     }
@@ -312,13 +313,13 @@ export class AccessibilityManager extends EventEmitter {
       this.isProcessingQueue = false;
       return;
     }
-    
+
     this.isProcessingQueue = true;
     const message = this.announcementQueue.shift()!;
-    
+
     // Clear previous announcement and set new one
     this.announcementContainer.textContent = message;
-    
+
     // Process next announcement after a short delay
     setTimeout(() => {
       this.processAnnouncementQueue();
@@ -338,7 +339,7 @@ export class AccessibilityManager extends EventEmitter {
     // Clear all event listeners
     (this as any).listeners = new Map();
     this.announcementQueue = [];
-    
+
     // Remove created elements
     if (this.announcementContainer && this.announcementContainer.parentNode) {
       this.announcementContainer.parentNode.removeChild(this.announcementContainer);

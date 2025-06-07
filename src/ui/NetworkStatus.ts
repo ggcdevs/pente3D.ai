@@ -23,11 +23,11 @@ export class NetworkStatus {
     this.gameCodeElement = this.createGameCodeElement();
     this.connectionControlsElement = this.createConnectionControlsElement();
     this.spectatorIndicatorElement = this.createSpectatorIndicatorElement();
-    
+
     // Create header with expand/collapse button
     const header = this.createHeader();
     this.container.appendChild(header);
-    
+
     // Create content container
     const content = document.createElement('div');
     content.className = 'network-status-content';
@@ -38,9 +38,9 @@ export class NetworkStatus {
     content.appendChild(this.spectatorIndicatorElement);
     content.appendChild(this.turnIndicatorElement);
     content.appendChild(this.connectionControlsElement);
-    
+
     this.container.appendChild(content);
-    
+
     // Initially hidden
     this.hide();
   }
@@ -77,11 +77,11 @@ export class NetworkStatus {
       border-bottom: 1px solid rgba(255, 255, 255, 0.2);
       cursor: pointer;
     `;
-    
+
     const title = document.createElement('span');
     title.textContent = '🌐 Network Game';
     title.style.fontWeight = 'bold';
-    
+
     const expandButton = document.createElement('button');
     expandButton.className = 'expand-button';
     expandButton.style.cssText = `
@@ -99,12 +99,12 @@ export class NetworkStatus {
       transition: transform 0.3s ease;
     `;
     expandButton.textContent = '▼';
-    
+
     header.appendChild(title);
     header.appendChild(expandButton);
-    
+
     header.addEventListener('click', () => this.toggleExpanded());
-    
+
     return header;
   }
 
@@ -200,7 +200,7 @@ export class NetworkStatus {
     this.isExpanded = !this.isExpanded;
     const content = this.container.querySelector('.network-status-content') as HTMLElement;
     const expandButton = this.container.querySelector('.expand-button') as HTMLElement;
-    
+
     if (this.isExpanded) {
       content.style.display = 'block';
       expandButton.style.transform = 'rotate(180deg)';
@@ -218,7 +218,7 @@ export class NetworkStatus {
     this.show();
     this.startUpdateInterval();
     this.updateAll();
-    
+
     // Expand by default when networked
     this.isExpanded = true;
     const content = this.container.querySelector('.network-status-content') as HTMLElement;
@@ -260,10 +260,10 @@ export class NetworkStatus {
 
     const info = this.networkManager.getConnectionInfo();
     if (!info) return;
-    
+
     const statusIcon = this.getStatusIcon(info.status);
     const statusText = this.getStatusText(info.status, info.opponentConnected);
-    
+
     this.statusElement.innerHTML = `
       <span style="margin-right: 8px; font-size: 16px;">${statusIcon}</span>
       <span>${statusText}</span>
@@ -279,7 +279,7 @@ export class NetworkStatus {
 
     const info = this.networkManager.getConnectionInfo();
     if (!info) return;
-    
+
     if (info.gameCode) {
       this.gameCodeElement.innerHTML = `
         <div style="font-size: 12px; opacity: 0.8; margin-bottom: 5px;">Game Code</div>
@@ -297,7 +297,7 @@ export class NetworkStatus {
           " title="Copy game code">📋 Copy</button>
         </div>
       `;
-      
+
       // Add copy functionality
       const copyBtn = this.gameCodeElement.querySelector('.copy-code-btn') as HTMLButtonElement;
       if (copyBtn) {
@@ -315,7 +315,7 @@ export class NetworkStatus {
           }
         });
       }
-      
+
       this.gameCodeElement.style.display = 'block';
     } else {
       this.gameCodeElement.style.display = 'none';
@@ -328,7 +328,7 @@ export class NetworkStatus {
     const latency = this.networkManager.getLatency();
     const latencyText = latency > 0 ? `${latency}ms` : 'measuring...';
     const latencyColor = this.getLatencyColor(latency);
-    
+
     this.latencyElement.innerHTML = `
       <span style="color: ${latencyColor}">Ping: ${latencyText}</span>
     `;
@@ -354,7 +354,7 @@ export class NetworkStatus {
     const isYourTurn = this.networkManager.isLocalPlayerTurn();
     const info = this.networkManager.getConnectionInfo();
     if (!info) return;
-    
+
     if (info.opponentConnected) {
       if (isYourTurn) {
         this.turnIndicatorElement.style.backgroundColor = '#4CAF50';
@@ -364,7 +364,7 @@ export class NetworkStatus {
       } else {
         this.turnIndicatorElement.style.backgroundColor = '#666';
         this.turnIndicatorElement.style.color = '#ccc';
-        this.turnIndicatorElement.textContent = '⏳ Opponent\'s turn';
+        this.turnIndicatorElement.textContent = "⏳ Opponent's turn";
         this.turnIndicatorElement.style.animation = 'none';
       }
     } else {
@@ -380,9 +380,9 @@ export class NetworkStatus {
 
     const info = this.networkManager.getConnectionInfo();
     if (!info) return;
-    
+
     this.connectionControlsElement.innerHTML = '';
-    
+
     // Add disconnect button if connected
     if (info.status === ConnectionStatus.CONNECTED) {
       const disconnectBtn = document.createElement('button');
@@ -404,7 +404,7 @@ export class NetworkStatus {
       });
       this.connectionControlsElement.appendChild(disconnectBtn);
     }
-    
+
     // Add reconnect button if disconnected with error
     if (info.status === ConnectionStatus.ERROR || info.status === ConnectionStatus.DISCONNECTED) {
       const reconnectBtn = document.createElement('button');
@@ -431,7 +431,7 @@ export class NetworkStatus {
       });
       this.connectionControlsElement.appendChild(reconnectBtn);
     }
-    
+
     // Add share button if host and connected
     if (info.isHost && info.gameCode && info.status === ConnectionStatus.CONNECTED) {
       const shareBtn = document.createElement('button');
@@ -455,7 +455,7 @@ export class NetworkStatus {
             await navigator.share({
               title: 'Join my Pente3D game!',
               text: `Game Code: ${info.gameCode}`,
-              url: shareUrl
+              url: shareUrl,
             });
           } else {
             await navigator.clipboard.writeText(shareUrl);
@@ -474,7 +474,7 @@ export class NetworkStatus {
 
   private updateSpectatorIndicator(): void {
     if (!this.networkManager) return;
-    
+
     // For now, hide spectator mode as it's not implemented
     // This will be updated when spectator mode is added
     this.spectatorIndicatorElement.style.display = 'none';
@@ -570,7 +570,7 @@ export class NetworkStatus {
       clearInterval(this.updateInterval);
       this.updateInterval = null;
     }
-    
+
     if (this.container.parentNode) {
       this.container.parentNode.removeChild(this.container);
     }

@@ -45,28 +45,28 @@ export class StorageManager {
   static save(game: Game, settings: Settings): void {
     try {
       const data = this.loadData();
-      
+
       const savedGame: SavedGame = {
         id: 'current',
         state: game.toJSON(),
         timestamp: Date.now(),
-        name: 'Current Game'
+        name: 'Current Game',
       };
-      
-      const existingIndex = data.games.findIndex(g => g.id === 'current');
+
+      const existingIndex = data.games.findIndex((g) => g.id === 'current');
       if (existingIndex >= 0) {
         data.games[existingIndex] = savedGame;
       } else {
         data.games.unshift(savedGame);
       }
-      
+
       this.enforceGameLimit(data);
-      
+
       data.settings = settings.toJSON();
-      
+
       const serialized = JSON.stringify(data);
       localStorage.setItem(this.STORAGE_KEY, serialized);
-      
+
       this.checkStorageQuota();
     } catch (error) {
       logger.error('Failed to save game', error as Error);
@@ -79,12 +79,12 @@ export class StorageManager {
   static loadGame(): Game | null {
     try {
       const data = this.loadData();
-      const currentGame = data.games.find(g => g.id === 'current');
-      
+      const currentGame = data.games.find((g) => g.id === 'current');
+
       if (!currentGame) {
         return null;
       }
-      
+
       return Game.fromJSON(currentGame.state);
     } catch (error) {
       logger.error('Failed to load game', error as Error);
@@ -105,21 +105,21 @@ export class StorageManager {
   static saveGame(game: Game, name: string): string {
     try {
       const data = this.loadData();
-      
+
       const id = `game_${Date.now()}`;
       const savedGame: SavedGame = {
         id,
         state: game.toJSON(),
         timestamp: Date.now(),
-        name
+        name,
       };
-      
+
       data.games.push(savedGame);
       this.enforceGameLimit(data);
-      
+
       const serialized = JSON.stringify(data);
       localStorage.setItem(this.STORAGE_KEY, serialized);
-      
+
       return id;
     } catch (error) {
       logger.error('Failed to save named game', error as Error);
@@ -130,7 +130,7 @@ export class StorageManager {
   static listSavedGames(): SavedGame[] {
     try {
       const data = this.loadData();
-      return data.games.filter(g => g.id !== 'current');
+      return data.games.filter((g) => g.id !== 'current');
     } catch (error) {
       logger.error('Failed to list saved games', error as Error);
       return [];
@@ -140,12 +140,12 @@ export class StorageManager {
   static loadSavedGame(id: string): Game | null {
     try {
       const data = this.loadData();
-      const savedGame = data.games.find(g => g.id === id);
-      
+      const savedGame = data.games.find((g) => g.id === id);
+
       if (!savedGame) {
         return null;
       }
-      
+
       return Game.fromJSON(savedGame.state);
     } catch (error) {
       logger.error('Failed to load saved game', error as Error);
@@ -156,8 +156,8 @@ export class StorageManager {
   static deleteSavedGame(id: string): void {
     try {
       const data = this.loadData();
-      data.games = data.games.filter(g => g.id !== id);
-      
+      data.games = data.games.filter((g) => g.id !== id);
+
       const serialized = JSON.stringify(data);
       localStorage.setItem(this.STORAGE_KEY, serialized);
     } catch (error) {
@@ -180,7 +180,7 @@ export class StorageManager {
         const estimate = await navigator.storage.estimate();
         return {
           usage: estimate.usage || 0,
-          quota: estimate.quota || 0
+          quota: estimate.quota || 0,
         };
       } catch {
         return { usage: 0, quota: 0 };
@@ -195,13 +195,13 @@ export class StorageManager {
       if (!stored) {
         return this.createEmptyData();
       }
-      
+
       const data = JSON.parse(stored);
-      
+
       if (data.version !== this.CURRENT_VERSION) {
         return this.migrateData(data);
       }
-      
+
       return data;
     } catch (error) {
       logger.error('Failed to parse storage data', error as Error);
@@ -213,15 +213,15 @@ export class StorageManager {
     return {
       version: this.CURRENT_VERSION,
       games: [],
-      settings: new Settings().toJSON()
+      settings: new Settings().toJSON(),
     };
   }
 
   private static migrateData(oldData: any): StorageData {
     logger.info('Migrating storage data', { fromVersion: oldData.version });
-    
+
     const newData = this.createEmptyData();
-    
+
     if (oldData.games && Array.isArray(oldData.games)) {
       newData.games = oldData.games.filter((game: any) => {
         try {
@@ -231,7 +231,7 @@ export class StorageManager {
         }
       });
     }
-    
+
     if (oldData.settings) {
       try {
         newData.settings = Settings.fromJSON(oldData.settings).toJSON();
@@ -239,16 +239,16 @@ export class StorageManager {
         logger.warn('Failed to migrate settings, using defaults');
       }
     }
-    
+
     return newData;
   }
 
   private static enforceGameLimit(data: StorageData): void {
-    const nonCurrentGames = data.games.filter(g => g.id !== 'current');
+    const nonCurrentGames = data.games.filter((g) => g.id !== 'current');
     if (nonCurrentGames.length > this.MAX_SAVED_GAMES) {
       nonCurrentGames.sort((a, b) => b.timestamp - a.timestamp);
       const toKeep = nonCurrentGames.slice(0, this.MAX_SAVED_GAMES);
-      const current = data.games.find(g => g.id === 'current');
+      const current = data.games.find((g) => g.id === 'current');
       data.games = current ? [current, ...toKeep] : toKeep;
     }
   }
@@ -265,12 +265,12 @@ export class StorageManager {
 
   private static handleQuotaExceeded(): void {
     const data = this.loadData();
-    
-    const nonCurrentGames = data.games.filter(g => g.id !== 'current');
+
+    const nonCurrentGames = data.games.filter((g) => g.id !== 'current');
     if (nonCurrentGames.length > 1) {
       nonCurrentGames.sort((a, b) => a.timestamp - b.timestamp);
-      data.games = data.games.filter(g => g.id !== nonCurrentGames[0].id);
-      
+      data.games = data.games.filter((g) => g.id !== nonCurrentGames[0].id);
+
       try {
         const serialized = JSON.stringify(data);
         localStorage.setItem(this.STORAGE_KEY, serialized);
@@ -280,7 +280,7 @@ export class StorageManager {
       }
     }
   }
-  
+
   // Custom theme storage methods
   static saveCustomThemes(themes: any[]): void {
     try {
@@ -299,27 +299,27 @@ export class StorageManager {
       }
     }
   }
-  
+
   static loadCustomThemes(): any[] {
     try {
       const themesData = localStorage.getItem(this.CUSTOM_THEMES_KEY);
       if (!themesData) {
         return [];
       }
-      
+
       const themes = JSON.parse(themesData);
       if (!Array.isArray(themes)) {
         logger.warn('Invalid custom themes data, returning empty array');
         return [];
       }
-      
+
       return themes;
     } catch (error) {
       logger.error('Failed to load custom themes', error as Error);
       return [];
     }
   }
-  
+
   static clearCustomThemes(): void {
     try {
       localStorage.removeItem(this.CUSTOM_THEMES_KEY);

@@ -18,19 +18,16 @@ export class Piece implements IPiece {
     if (!coords) {
       throw new Error('Piece coordinates are required');
     }
-    
+
     if (!player) {
       throw new Error('Piece player is required');
     }
 
     // Convert to our types
     this.coords = coords instanceof Vector3 ? coords : Vector3.fromObject(coords);
-    this.player = player instanceof Player ? player : new Player(
-      player.id, 
-      player.color, 
-      player.isLocal
-    );
-    
+    this.player =
+      player instanceof Player ? player : new Player(player.id, player.color, player.isLocal);
+
     this.isTemporary = isTemporary;
     this.placedAt = placedAt || Date.now();
   }
@@ -133,19 +130,14 @@ export class Piece implements IPiece {
 
   // Immutability
   clone(): Piece {
-    return new Piece(
-      this.coords.clone(),
-      this.player.clone(),
-      this.isTemporary,
-      this.placedAt
-    );
+    return new Piece(this.coords.clone(), this.player.clone(), this.isTemporary, this.placedAt);
   }
 
   static fromJSON(json: any): Piece {
     if (!json || typeof json !== 'object') {
       throw new Error('Invalid JSON for Piece');
     }
-    
+
     return new Piece(
       Vector3.fromObject(json.coords),
       Player.fromJSON(json.player),

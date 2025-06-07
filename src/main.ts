@@ -1,7 +1,17 @@
 import './style.css';
 import { Game } from './core/Game';
 import { Renderer, QualityManager } from './rendering';
-import { InputHandler, MenuModal, SettingsModal, DialogManager, NetworkModal, NetworkStatus, ConflictNotification, PerformanceStats, KeyboardHelpModal } from './ui';
+import {
+  InputHandler,
+  MenuModal,
+  SettingsModal,
+  DialogManager,
+  NetworkModal,
+  NetworkStatus,
+  ConflictNotification,
+  PerformanceStats,
+  KeyboardHelpModal,
+} from './ui';
 import { StorageManager } from './storage';
 import { downloadFile, uploadJSON } from './utils/fileIO';
 import { PerformanceMonitor, AccessibilityManager, logger } from './utils';
@@ -35,7 +45,7 @@ let game = loadedGame || new Game({ boardSize: 7 });
 const renderer = new Renderer({
   canvas,
   boardSize: 7,
-  antialias: true
+  antialias: true,
 });
 
 // Initialize performance monitoring
@@ -43,7 +53,7 @@ const performanceMonitor = new PerformanceMonitor({
   targetFps: 60,
   minAcceptableFps: 30,
   maxMemoryUsage: 500 * 1024 * 1024, // 500MB
-  maxDrawCalls: 1000
+  maxDrawCalls: 1000,
 });
 
 const qualityManager = new QualityManager(performanceMonitor);
@@ -61,7 +71,7 @@ if ((import.meta as any).env?.DEV) {
 // Listen for quality changes and update settings
 qualityManager.on('quality-changed', ({ preset, reason }: any) => {
   logger.info('Quality changed', { preset, reason });
-  
+
   // Save quality preference
   (settings as any).performanceQuality = preset;
   StorageManager.save(game, settings);
@@ -93,7 +103,7 @@ const inputHandler = new InputHandler({
   controls: renderer.getControls() as any, // OrbitControls type mismatch with Three.js version
   game,
   renderer,
-  accessibilityManager
+  accessibilityManager,
 });
 
 // Start focus indicator animation
@@ -128,9 +138,9 @@ game.on('move', () => {
 });
 
 game.on('gameOver', (data: any) => {
-  logger.info('Game Over!', { 
-    winner: data.winner?.id, 
-    winType: data.winType 
+  logger.info('Game Over!', {
+    winner: data.winner?.id,
+    winType: data.winType,
   });
 });
 
@@ -164,20 +174,20 @@ function updateUI() {
   const currentState = game.getCurrentState();
   const historyLength = game.getHistoryLength();
   const currentIndex = game.getCurrentStateIndex();
-  
+
   // Update buttons
   undoBtn.disabled = !game.canUndo();
   redoBtn.disabled = !game.canRedo();
-  
+
   // Update history slider
   historySlider.max = String(historyLength - 1);
   historySlider.value = String(currentIndex);
   historyInfo.textContent = `Move ${currentIndex} / ${historyLength - 1}`;
-  
+
   // Update player indicator
   const currentPlayer = currentState.getCurrentPlayer();
   playerIndicator.className = `player-indicator ${currentPlayer.getColor()}`;
-  
+
   // Update capture counts
   blackCaptures.textContent = String(currentState.getBlackPlayer().getCaptureCount());
   whiteCaptures.textContent = String(currentState.getWhitePlayer().getCaptureCount());
@@ -310,7 +320,11 @@ const menuModal = new MenuModal({
   onExportGame: () => {
     try {
       const exportData = game.exportGame();
-      downloadFile(exportData, `pente3d_${new Date().toISOString().slice(0, 10)}.json`, 'application/json');
+      downloadFile(
+        exportData,
+        `pente3d_${new Date().toISOString().slice(0, 10)}.json`,
+        'application/json'
+      );
       dialogManager.showInfo('Game exported successfully!');
     } catch (error) {
       dialogManager.showError('Failed to export game: ' + (error as Error).message);
@@ -339,7 +353,7 @@ const menuModal = new MenuModal({
         // Apply settings changes
         StorageManager.save(game, newSettings);
         dialogManager.showInfo('Settings saved!');
-      }
+      },
     });
     settingsModal.open();
   },
@@ -359,10 +373,10 @@ const menuModal = new MenuModal({
       },
       onCancel: () => {
         // User cancelled network game
-      }
+      },
     });
     networkModal.open();
-  }
+  },
 });
 
 // Menu button click handler
@@ -465,7 +479,7 @@ if (joinCode) {
         networkStatus.setNetworkManager(nm);
         setupNetworkHandlers();
         dialogManager.showInfo('Joined network game!');
-      }
+      },
     });
     networkModal.open();
     // Trigger join with the code
@@ -513,7 +527,7 @@ document.addEventListener('keydown', (e) => {
   if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') {
     return;
   }
-  
+
   if (e.key === 'h' || e.key === 'H') {
     const helpModal = new KeyboardHelpModal();
     helpModal.open();

@@ -6,7 +6,7 @@ import { Player } from './Player';
 import type { PlayerColor } from '@/types';
 import { logger } from '@/utils';
 
-export type GameEvent = 
+export type GameEvent =
   | { type: 'move'; move: Move; state: GameState }
   | { type: 'undo'; state: GameState }
   | { type: 'redo'; state: GameState }
@@ -69,24 +69,23 @@ export class Game {
   private readonly options: Required<GameOptions>;
   private compressionOptions: HistoryCompressionOptions = {
     maxHistorySize: 1000,
-    compressionThreshold: 500
+    compressionThreshold: 500,
   };
 
   constructor(options: GameOptions = {}) {
     this.options = {
       boardSize: options.boardSize ?? 9,
-      blackFirst: options.blackFirst ?? true
+      blackFirst: options.blackFirst ?? true,
     };
-    
+
     const initialState = GameState.createInitialState(
       this.options.boardSize,
       this.options.blackFirst ? 'black' : 'white'
     );
-    
+
     this.history.push(initialState);
     this.currentStateIndex = 0;
   }
-
 
   getCurrentState(): GameState {
     return this.history[this.currentStateIndex];
@@ -155,13 +154,12 @@ export class Game {
       this.options.boardSize,
       this.options.blackFirst ? 'black' : 'white'
     );
-    
+
     this.history = [initialState];
     this.currentStateIndex = 0;
-    
+
     this.emit({ type: 'reset', state: initialState });
   }
-
 
   exportGame(gameName?: string, description?: string): string {
     const currentState = this.getCurrentState();
@@ -178,15 +176,15 @@ export class Game {
         winType: currentState.getWinResult()?.type as 'five-in-a-row' | 'captures' | undefined,
         captureCount: {
           black: currentState.getBlackPlayer().getCaptureCount(),
-          white: currentState.getWhitePlayer().getCaptureCount()
-        }
+          white: currentState.getWhitePlayer().getCaptureCount(),
+        },
       },
       gameData: {
         options: this.options,
-        history: this.history.map(state => state.toJSON()),
+        history: this.history.map((state) => state.toJSON()),
         currentStateIndex: this.currentStateIndex,
-        compressionOptions: this.compressionOptions
-      }
+        compressionOptions: this.compressionOptions,
+      },
     };
     return JSON.stringify(exportData, null, 2);
   }
@@ -194,16 +192,18 @@ export class Game {
   static importGame(jsonString: string): Game {
     try {
       const data = JSON.parse(jsonString);
-      
+
       // Check if it's the new format
       if (data.version && data.metadata && data.gameData) {
         return Game.importFromExportedGame(data as ExportedGame);
       }
-      
+
       // Fallback to old format
       return Game.fromJSON(data as SerializedGame);
     } catch (error) {
-      throw new Error(`Failed to import game: ${error instanceof Error ? error.message : 'Invalid JSON'}`);
+      throw new Error(
+        `Failed to import game: ${error instanceof Error ? error.message : 'Invalid JSON'}`
+      );
     }
   }
 
@@ -211,43 +211,51 @@ export class Game {
     // Validate version compatibility
     const [major] = data.version.split('.').map(Number);
     if (major > 1) {
-      throw new Error(`Unsupported game version: ${data.version}. This version supports up to 1.x.x`);
+      throw new Error(
+        `Unsupported game version: ${data.version}. This version supports up to 1.x.x`
+      );
     }
 
     // Validate required fields
-    if (!data.gameData || !data.gameData.history || typeof data.gameData.currentStateIndex !== 'number') {
+    if (
+      !data.gameData ||
+      !data.gameData.history ||
+      typeof data.gameData.currentStateIndex !== 'number'
+    ) {
       throw new Error('Invalid game data: missing required fields');
     }
 
     const game = new Game(data.gameData.options);
-    
+
     // Restore history
     try {
       game.history = data.gameData.history.map((stateData: any) => GameState.fromJSON(stateData));
       game.currentStateIndex = data.gameData.currentStateIndex;
-      
+
       // Validate state index
       if (game.currentStateIndex < 0 || game.currentStateIndex >= game.history.length) {
         throw new Error('Invalid current state index');
       }
-      
+
       // Restore compression options
       if (data.gameData.compressionOptions) {
         game.compressionOptions = data.gameData.compressionOptions;
       }
-      
+
       // Validate metadata matches actual game state
       const currentState = game.getCurrentState();
       if (data.metadata.moveCount !== currentState.getMoveCount()) {
         logger.warn('Metadata move count does not match actual game state', {
           metadataMoves: json.metadata?.totalMoves,
-          actualMoves: game.getState().getMoveHistory().length
+          actualMoves: game.getState().getMoveHistory().length,
         });
       }
-      
+
       return game;
     } catch (error) {
-      throw new Error(`Failed to restore game state: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `Failed to restore game state: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
     }
   }
 
@@ -255,7 +263,7 @@ export class Game {
   addEventListener(handler: GameEventHandler): void {
     this.eventHandlers.add(handler);
   }
-  
+
   // Alias for addEventListener to match common event pattern
   on(event: string, handler: (data: any) => void): void {
     // Create a wrapper that filters by event type
@@ -276,7 +284,7 @@ export class Game {
   }
 
   private emit(event: GameEvent): void {
-    this.eventHandlers.forEach(handler => handler(event));
+    this.eventHandlers.forEach((handler) => handler(event));
   }
 
   // Helper methods for UI
@@ -325,7 +333,9 @@ export class Game {
   }
 
   canGoToMove(moveIndex: number): boolean {
-    return moveIndex >= 0 && moveIndex < this.history.length && moveIndex !== this.currentStateIndex;
+    return (
+      moveIndex >= 0 && moveIndex < this.history.length && moveIndex !== this.currentStateIndex
+    );
   }
 
   // State validation
@@ -362,7 +372,7 @@ export class Game {
   setCompressionOptions(options: HistoryCompressionOptions): void {
     this.compressionOptions = {
       ...this.compressionOptions,
-      ...options
+      ...options,
     };
   }
 
@@ -381,7 +391,7 @@ export class Game {
     const startOffset = Math.floor(keepCount * 0.1); // Keep 10% from start
 
     const newHistory: GameState[] = [];
-    
+
     // Always keep the initial state
     newHistory.push(this.history[0]);
 
@@ -399,7 +409,7 @@ export class Game {
     // Adjust current index
     const oldState = this.history[this.currentStateIndex];
     const newIndex = newHistory.indexOf(oldState);
-    
+
     if (newIndex !== -1) {
       this.currentStateIndex = newIndex;
     } else {
@@ -412,7 +422,7 @@ export class Game {
 
   private placePieceInternal(position: Vector3): boolean {
     const currentState = this.getCurrentState();
-    
+
     // Check if game is already over
     if (this.isGameOver()) {
       return false;
@@ -436,7 +446,7 @@ export class Game {
 
     // Truncate any states after current index (for redo history)
     this.history = this.history.slice(0, this.currentStateIndex + 1);
-    
+
     // Add the new state
     this.history.push(newState);
     this.currentStateIndex++;
@@ -446,10 +456,10 @@ export class Game {
 
     // Check for game over
     if (newState.getWinner()) {
-      this.emit({ 
-        type: 'gameOver', 
-        winner: newState.getWinner()!, 
-        winResult: newState.getWinResult()! 
+      this.emit({
+        type: 'gameOver',
+        winner: newState.getWinner()!,
+        winResult: newState.getWinResult()!,
       });
     }
 
@@ -461,27 +471,27 @@ export class Game {
     return {
       boardSize: this.options.boardSize,
       blackFirst: this.options.blackFirst,
-      history: this.history.map(state => state.toJSON()),
+      history: this.history.map((state) => state.toJSON()),
       currentStateIndex: this.currentStateIndex,
-      compressionOptions: this.compressionOptions
+      compressionOptions: this.compressionOptions,
     };
   }
 
   static fromJSON(json: any): Game {
     const game = new Game({
       boardSize: json.boardSize,
-      blackFirst: json.blackFirst
+      blackFirst: json.blackFirst,
     });
-    
+
     // Restore history
     game.history = json.history.map((stateData: any) => GameState.fromJSON(stateData));
     game.currentStateIndex = json.currentStateIndex;
-    
+
     // Restore compression options
     if (json.compressionOptions) {
       game.compressionOptions = json.compressionOptions;
     }
-    
+
     return game;
   }
 
@@ -493,7 +503,7 @@ export class Game {
       games: games.map(({ game, name, description }) => {
         const exported = JSON.parse(game.exportGame(name, description)) as ExportedGame;
         return exported;
-      })
+      }),
     };
     return JSON.stringify(collection, null, 2);
   }
@@ -501,27 +511,29 @@ export class Game {
   static importGames(jsonString: string): { game: Game; metadata: ExportedGame['metadata'] }[] {
     try {
       const data = JSON.parse(jsonString);
-      
+
       // Check if it's a collection
       if (data.version && data.games && Array.isArray(data.games)) {
         const collection = data as ExportedGameCollection;
-        
+
         // Validate version
         const [major] = collection.version.split('.').map(Number);
         if (major > 1) {
           throw new Error(`Unsupported collection version: ${collection.version}`);
         }
-        
+
         return collection.games.map((gameData, index) => {
           try {
             const game = Game.importFromExportedGame(gameData);
             return { game, metadata: gameData.metadata };
           } catch (error) {
-            throw new Error(`Failed to import game ${index + 1}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            throw new Error(
+              `Failed to import game ${index + 1}: ${error instanceof Error ? error.message : 'Unknown error'}`
+            );
           }
         });
       }
-      
+
       // Single game - try to import it
       const game = Game.importGame(jsonString);
       const metadata = data.metadata || {
@@ -532,12 +544,14 @@ export class Game {
         winner: game.getWinner(),
         captureCount: {
           black: game.getCurrentState().getBlackPlayer().getCaptureCount(),
-          white: game.getCurrentState().getWhitePlayer().getCaptureCount()
-        }
+          white: game.getCurrentState().getWhitePlayer().getCaptureCount(),
+        },
       };
       return [{ game, metadata }];
     } catch (error) {
-      throw new Error(`Failed to import games: ${error instanceof Error ? error.message : 'Invalid JSON'}`);
+      throw new Error(
+        `Failed to import games: ${error instanceof Error ? error.message : 'Invalid JSON'}`
+      );
     }
   }
 }

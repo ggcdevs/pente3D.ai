@@ -6,14 +6,14 @@ export class PerformanceStats {
   private isVisible: boolean = false;
   private updateInterval: number = 100; // Update every 100ms
   private lastUpdateTime: number = 0;
-  
+
   constructor(monitor: PerformanceMonitor) {
     this.monitor = monitor;
     this.container = this.createContainer();
-    
+
     // Listen for metrics updates
     this.monitor.on('metrics-updated', this.updateDisplay.bind(this));
-    
+
     // Toggle with F3 key
     document.addEventListener('keydown', (e) => {
       if (e.key === 'F3') {
@@ -21,7 +21,7 @@ export class PerformanceStats {
       }
     });
   }
-  
+
   private createContainer(): HTMLDivElement {
     const container = document.createElement('div');
     container.className = 'performance-stats';
@@ -50,23 +50,23 @@ export class PerformanceStats {
         </div>
       </div>
     `;
-    
+
     // Hide it initially by setting style directly
     container.style.display = 'none';
     document.body.appendChild(container);
-    
+
     return container;
   }
-  
+
   private updateDisplay(metrics: PerformanceMetrics): void {
     if (!this.isVisible) return;
-    
+
     const now = performance.now();
     if (now - this.lastUpdateTime < this.updateInterval) {
       return;
     }
     this.lastUpdateTime = now;
-    
+
     // Update FPS with color coding
     const fpsElement = this.container.querySelector('#stat-fps') as HTMLElement;
     fpsElement.textContent = metrics.fps.toFixed(1);
@@ -78,32 +78,32 @@ export class PerformanceStats {
     } else {
       fpsElement.classList.add('good');
     }
-    
+
     // Update other stats
-    (this.container.querySelector('#stat-frametime') as HTMLElement).textContent = 
+    (this.container.querySelector('#stat-frametime') as HTMLElement).textContent =
       `${metrics.frameTime.toFixed(1)}ms`;
-    
-    (this.container.querySelector('#stat-memory') as HTMLElement).textContent = 
+
+    (this.container.querySelector('#stat-memory') as HTMLElement).textContent =
       `${(metrics.memoryUsed / 1024 / 1024).toFixed(1)}MB`;
-    
-    (this.container.querySelector('#stat-drawcalls') as HTMLElement).textContent = 
+
+    (this.container.querySelector('#stat-drawcalls') as HTMLElement).textContent =
       metrics.drawCalls.toString();
-    
-    (this.container.querySelector('#stat-triangles') as HTMLElement).textContent = 
+
+    (this.container.querySelector('#stat-triangles') as HTMLElement).textContent =
       metrics.triangles.toString();
   }
-  
+
   public show(): void {
     this.container.style.display = 'block';
     this.isVisible = true;
     this.monitor.startMonitoring();
   }
-  
+
   public hide(): void {
     this.container.style.display = 'none';
     this.isVisible = false;
   }
-  
+
   public toggle(): void {
     if (this.isVisible) {
       this.hide();
@@ -111,7 +111,7 @@ export class PerformanceStats {
       this.show();
     }
   }
-  
+
   public destroy(): void {
     this.container.remove();
   }

@@ -29,14 +29,18 @@ export class WinResult implements IWinResult {
     winningLine: Line | ILine | null = null,
     winType: 'five-in-a-row' | 'captures' | null = null
   ) {
-    this.winner = winner 
-      ? (winner instanceof Player ? winner : new Player(winner.id, winner.color, winner.isLocal))
+    this.winner = winner
+      ? winner instanceof Player
+        ? winner
+        : new Player(winner.id, winner.color, winner.isLocal)
       : null;
-    
+
     this.winningLine = winningLine
-      ? (winningLine instanceof Line ? winningLine : new Line(winningLine.coords, winningLine.direction))
+      ? winningLine instanceof Line
+        ? winningLine
+        : new Line(winningLine.coords, winningLine.direction)
       : null;
-    
+
     this.winType = winType;
 
     // Validate consistency
@@ -86,19 +90,23 @@ export class WinResult implements IWinResult {
     return {
       winner: this.winner ? this.winner.toJSON() : null,
       winningLine: this.winningLine ? this.winningLine.toJSON() : null,
-      winType: this.winType
+      winType: this.winType,
     };
   }
 
   equals(other: WinResult | null): boolean {
     if (!other) return false;
-    
-    const winnersEqual = (this.winner === null && other.winner === null) ||
-                        (this.winner !== null && other.winner !== null && this.winner.equals(other.winner));
-    
-    const linesEqual = (this.winningLine === null && other.winningLine === null) ||
-                      (this.winningLine !== null && other.winningLine !== null && this.winningLine.equals(other.winningLine));
-    
+
+    const winnersEqual =
+      (this.winner === null && other.winner === null) ||
+      (this.winner !== null && other.winner !== null && this.winner.equals(other.winner));
+
+    const linesEqual =
+      (this.winningLine === null && other.winningLine === null) ||
+      (this.winningLine !== null &&
+        other.winningLine !== null &&
+        this.winningLine.equals(other.winningLine));
+
     return winnersEqual && linesEqual && this.winType === other.winType;
   }
 
@@ -114,7 +122,7 @@ export class WinResult implements IWinResult {
     if (!json || typeof json !== 'object') {
       throw new Error('Invalid JSON for WinResult');
     }
-    
+
     return new WinResult(
       json.winner ? Player.fromJSON(json.winner) : null,
       json.winningLine ? Line.fromJSON(json.winningLine) : null,

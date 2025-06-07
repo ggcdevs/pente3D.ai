@@ -13,7 +13,7 @@ export class EventEmitter {
     if (!this.events.has(event)) {
       return false;
     }
-    
+
     const listeners = this.events.get(event)!;
     for (const listener of listeners) {
       listener(...args);
@@ -25,11 +25,11 @@ export class EventEmitter {
     if (!this.events.has(event)) {
       return this;
     }
-    
+
     const listeners = this.events.get(event)!;
     this.events.set(
-      event, 
-      listeners.filter(listener => listener !== listenerToRemove)
+      event,
+      listeners.filter((listener) => listener !== listenerToRemove)
     );
     return this;
   }

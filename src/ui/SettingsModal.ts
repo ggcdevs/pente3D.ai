@@ -49,28 +49,27 @@ export class SettingsModal extends Modal {
   private activeCategory: string = 'themes';
   private contentContainer?: HTMLElement;
 
-
   private booleanSettings: BooleanSetting[] = [
     { label: 'Show Grid', key: 'showGrid', defaultValue: true },
     { label: 'Show Nodes', key: 'showNodes', defaultValue: true },
     { label: 'Enable Animations', key: 'enableAnimations', defaultValue: true },
     { label: 'Show Coordinates', key: 'showCoordinates', defaultValue: false },
     { label: 'Enable Sound', key: 'enableSound', defaultValue: true },
-    { label: 'Auto-rotate Board', key: 'autoRotate', defaultValue: false }
+    { label: 'Auto-rotate Board', key: 'autoRotate', defaultValue: false },
   ];
 
   constructor(options: SettingsModalOptions) {
     super({
       title: 'Settings',
       className: 'settings-modal',
-      ...options
+      ...options,
     });
 
     this.settings = options.settings;
     this.renderer = options.renderer;
     this.modalOptions = options;
     this.tempSettings = this.getSettingsValues();
-    
+
     // Start preview mode
     this.settings.startPreview();
   }
@@ -148,8 +147,6 @@ export class SettingsModal extends Modal {
 
     return section;
   }
-
-
 
   private createBooleanControl(setting: BooleanSetting): HTMLDivElement {
     const control = document.createElement('div');
@@ -259,7 +256,7 @@ export class SettingsModal extends Modal {
     // Apply settings to renderer for live preview
     const colors = this.settings.getColors();
     const opacity = this.settings.getOpacitySettings();
-    
+
     if (this.renderer.applyColorSettings) {
       this.renderer.applyColorSettings(colors);
     }
@@ -284,11 +281,11 @@ export class SettingsModal extends Modal {
   private apply(): void {
     // Apply preview changes permanently
     this.settings.applyPreview();
-    
+
     if (this.modalOptions.onSettingsChange) {
       this.modalOptions.onSettingsChange(this.settings);
     }
-    
+
     this.close();
   }
 
@@ -300,21 +297,21 @@ export class SettingsModal extends Modal {
     this.settings.cancelPreview();
     super.destroy();
   }
-  
+
   private createTabs(): HTMLElement {
     const tabsContainer = document.createElement('div');
     tabsContainer.className = 'settings-tabs';
     tabsContainer.style.display = 'flex';
     tabsContainer.style.borderBottom = '2px solid #444';
     tabsContainer.style.marginBottom = '0';
-    
+
     const tabs = [
       { id: 'themes', label: 'Themes' },
       { id: 'colors', label: 'Colors' },
       { id: 'opacity', label: 'Opacity' },
-      { id: 'advanced', label: 'Advanced' }
+      { id: 'advanced', label: 'Advanced' },
     ];
-    
+
     tabs.forEach((tab, index) => {
       const tabElement = document.createElement('button');
       tabElement.className = 'settings-tab';
@@ -328,7 +325,7 @@ export class SettingsModal extends Modal {
       tabElement.style.cursor = 'pointer';
       tabElement.style.fontSize = '1rem';
       tabElement.style.transition = 'all 0.2s';
-      
+
       tabElement.addEventListener('click', () => this.showTab(tab.id));
       tabElement.addEventListener('mouseenter', () => {
         if (tab.id !== this.activeCategory) {
@@ -340,19 +337,19 @@ export class SettingsModal extends Modal {
           tabElement.style.backgroundColor = 'transparent';
         }
       });
-      
+
       // Set up keyboard navigation
       tabElement.setAttribute('role', 'tab');
       tabElement.setAttribute('aria-selected', index === 0 ? 'true' : 'false');
       tabElement.setAttribute('tabindex', index === 0 ? '0' : '-1');
-      
+
       this.categoryTabs.set(tab.id, tabElement);
       tabsContainer.appendChild(tabElement);
     });
-    
+
     return tabsContainer;
   }
-  
+
   private showTab(tabId: string): void {
     // Update active tab styling
     this.categoryTabs.forEach((tab, id) => {
@@ -370,13 +367,13 @@ export class SettingsModal extends Modal {
         tab.setAttribute('tabindex', '-1');
       }
     });
-    
+
     this.activeCategory = tabId;
-    
+
     // Clear content
     if (this.contentContainer) {
       this.contentContainer.innerHTML = '';
-      
+
       // Render appropriate content
       switch (tabId) {
         case 'themes':
@@ -393,49 +390,49 @@ export class SettingsModal extends Modal {
           break;
       }
     }
-    
+
     this.updateFocusableElements();
   }
-  
+
   private createThemeTab(): HTMLElement {
     const container = document.createElement('div');
     container.className = 'theme-tab-content';
-    
+
     // Theme selector section
     const selectorSection = this.createSection('Select Theme');
-    
+
     const themeGrid = document.createElement('div');
     themeGrid.style.display = 'grid';
     themeGrid.style.gridTemplateColumns = 'repeat(auto-fill, minmax(200px, 1fr))';
     themeGrid.style.gap = '15px';
     themeGrid.style.marginTop = '15px';
-    
+
     const allThemes = this.settings.getAllThemes();
     const activeTheme = this.settings.getActiveTheme();
-    
-    allThemes.forEach(theme => {
+
+    allThemes.forEach((theme) => {
       const themeCard = this.createThemeCard(theme, theme.id === activeTheme?.id);
       themeGrid.appendChild(themeCard);
     });
-    
+
     selectorSection.appendChild(themeGrid);
     container.appendChild(selectorSection);
-    
+
     // Custom theme section
     const customSection = this.createSection('Custom Themes');
-    
+
     const createThemeBtn = this.createButton('Create Custom Theme', () => {
       this.createCustomTheme();
     });
     createThemeBtn.style.backgroundColor = '#4CAF50';
     createThemeBtn.style.marginBottom = '15px';
-    
+
     customSection.appendChild(createThemeBtn);
     container.appendChild(customSection);
-    
+
     return container;
   }
-  
+
   private createThemeCard(theme: ThemePreset, isActive: boolean): HTMLElement {
     const card = document.createElement('div');
     card.className = 'theme-card';
@@ -445,7 +442,7 @@ export class SettingsModal extends Modal {
     card.style.backgroundColor = '#2a2a2a';
     card.style.cursor = 'pointer';
     card.style.transition = 'all 0.2s';
-    
+
     // Theme preview
     const preview = document.createElement('div');
     preview.style.height = '60px';
@@ -455,10 +452,10 @@ export class SettingsModal extends Modal {
     preview.style.padding = '10px';
     preview.style.backgroundColor = theme.colors.background;
     preview.style.borderRadius = '4px';
-    
+
     // Preview elements
     const pieceColors = [theme.colors.blackPieces, theme.colors.whitePieces];
-    pieceColors.forEach(color => {
+    pieceColors.forEach((color) => {
       const piece = document.createElement('div');
       piece.style.width = '20px';
       piece.style.height = '20px';
@@ -466,28 +463,28 @@ export class SettingsModal extends Modal {
       piece.style.backgroundColor = color;
       preview.appendChild(piece);
     });
-    
+
     card.appendChild(preview);
-    
+
     // Theme info
     const name = document.createElement('h4');
     name.textContent = theme.name;
     name.style.color = '#fff';
     name.style.marginBottom = '5px';
     card.appendChild(name);
-    
+
     const description = document.createElement('p');
     description.textContent = theme.description;
     description.style.color = '#999';
     description.style.fontSize = '0.9rem';
     description.style.marginBottom = '10px';
     card.appendChild(description);
-    
+
     // Actions
     const actions = document.createElement('div');
     actions.style.display = 'flex';
     actions.style.gap = '10px';
-    
+
     const applyBtn = document.createElement('button');
     applyBtn.textContent = isActive ? 'Active' : 'Apply';
     applyBtn.style.flex = '1';
@@ -498,16 +495,16 @@ export class SettingsModal extends Modal {
     applyBtn.style.borderRadius = '4px';
     applyBtn.style.cursor = isActive ? 'default' : 'pointer';
     applyBtn.disabled = isActive;
-    
+
     if (!isActive) {
       applyBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         this.applyTheme(theme.id);
       });
     }
-    
+
     actions.appendChild(applyBtn);
-    
+
     if (theme.isCustom) {
       const deleteBtn = document.createElement('button');
       deleteBtn.textContent = 'Delete';
@@ -517,17 +514,17 @@ export class SettingsModal extends Modal {
       deleteBtn.style.border = 'none';
       deleteBtn.style.borderRadius = '4px';
       deleteBtn.style.cursor = 'pointer';
-      
+
       deleteBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         this.deleteCustomTheme(theme.id);
       });
-      
+
       actions.appendChild(deleteBtn);
     }
-    
+
     card.appendChild(actions);
-    
+
     // Hover effect
     card.addEventListener('mouseenter', () => {
       if (!isActive) {
@@ -535,60 +532,65 @@ export class SettingsModal extends Modal {
         card.style.transform = 'translateY(-2px)';
       }
     });
-    
+
     card.addEventListener('mouseleave', () => {
       if (!isActive) {
         card.style.borderColor = '#555';
         card.style.transform = 'translateY(0)';
       }
     });
-    
+
     return card;
   }
-  
+
   private createColorsTab(): HTMLElement {
     const container = document.createElement('div');
     container.className = 'colors-tab-content';
-    
+
     // Board colors
     const boardSection = this.createSection('Board');
     const boardColors: (keyof ColorSettings)[] = ['background', 'boardGrid', 'nodeSpheres'];
-    boardColors.forEach(key => {
+    boardColors.forEach((key) => {
       const control = this.createEnhancedColorControl(key);
       boardSection.appendChild(control);
     });
     container.appendChild(boardSection);
-    
+
     // Piece colors
     const pieceSection = this.createSection('Pieces');
     const pieceColors: (keyof ColorSettings)[] = ['blackPieces', 'whitePieces', 'temporaryPieces'];
-    pieceColors.forEach(key => {
+    pieceColors.forEach((key) => {
       const control = this.createEnhancedColorControl(key);
       pieceSection.appendChild(control);
     });
     container.appendChild(pieceSection);
-    
+
     // Highlight colors
     const highlightSection = this.createSection('Highlights');
-    const highlightColors: (keyof ColorSettings)[] = ['highlightedNodes', 'highlightedLines', 'capturedPieces', 'winningLine'];
-    highlightColors.forEach(key => {
+    const highlightColors: (keyof ColorSettings)[] = [
+      'highlightedNodes',
+      'highlightedLines',
+      'capturedPieces',
+      'winningLine',
+    ];
+    highlightColors.forEach((key) => {
       const control = this.createEnhancedColorControl(key);
       highlightSection.appendChild(control);
     });
     container.appendChild(highlightSection);
-    
+
     // Lighting colors
     const lightingSection = this.createSection('Lighting');
     const lightingColors: (keyof ColorSettings)[] = ['ambientLight', 'directionalLight'];
-    lightingColors.forEach(key => {
+    lightingColors.forEach((key) => {
       const control = this.createEnhancedColorControl(key);
       lightingSection.appendChild(control);
     });
     container.appendChild(lightingSection);
-    
+
     return container;
   }
-  
+
   private createEnhancedColorControl(key: keyof ColorSettings): HTMLElement {
     const control = document.createElement('div');
     control.className = 'color-control';
@@ -596,17 +598,17 @@ export class SettingsModal extends Modal {
     control.style.alignItems = 'center';
     control.style.justifyContent = 'space-between';
     control.style.marginBottom = '15px';
-    
+
     const label = document.createElement('label');
     label.textContent = this.formatLabel(key);
     label.style.color = '#ccc';
     label.style.flex = '1';
-    
+
     const inputWrapper = document.createElement('div');
     inputWrapper.style.display = 'flex';
     inputWrapper.style.alignItems = 'center';
     inputWrapper.style.gap = '10px';
-    
+
     const colorInput = document.createElement('input');
     colorInput.type = 'color';
     colorInput.value = this.settings.getColor(key);
@@ -615,7 +617,7 @@ export class SettingsModal extends Modal {
     colorInput.style.border = 'none';
     colorInput.style.borderRadius = '4px';
     colorInput.style.cursor = 'pointer';
-    
+
     const hexInput = document.createElement('input');
     hexInput.type = 'text';
     hexInput.value = colorInput.value;
@@ -626,50 +628,54 @@ export class SettingsModal extends Modal {
     hexInput.style.border = '1px solid #555';
     hexInput.style.borderRadius = '4px';
     hexInput.pattern = '^#[0-9A-Fa-f]{6}$';
-    
+
     colorInput.addEventListener('input', () => {
       hexInput.value = colorInput.value;
       this.updateColor(key, colorInput.value);
     });
-    
+
     hexInput.addEventListener('input', () => {
       if (this.settings.validateColor(hexInput.value)) {
         colorInput.value = hexInput.value;
         this.updateColor(key, hexInput.value);
       }
     });
-    
+
     this.colorPickers.set(key, colorInput);
-    
+
     inputWrapper.appendChild(colorInput);
     inputWrapper.appendChild(hexInput);
-    
+
     control.appendChild(label);
     control.appendChild(inputWrapper);
-    
+
     return control;
   }
-  
+
   private createOpacityTab(): HTMLElement {
     const container = document.createElement('div');
     container.className = 'opacity-tab-content';
-    
+
     const section = this.createSection('Transparency Settings');
-    
+
     const opacitySettings: (keyof OpacitySettings)[] = [
-      'boardGrid', 'nodeSpheres', 'pieces', 'temporaryPieces', 'highlights'
+      'boardGrid',
+      'nodeSpheres',
+      'pieces',
+      'temporaryPieces',
+      'highlights',
     ];
-    
-    opacitySettings.forEach(key => {
+
+    opacitySettings.forEach((key) => {
       const control = this.createOpacityControl(key);
       section.appendChild(control);
     });
-    
+
     container.appendChild(section);
-    
+
     return container;
   }
-  
+
   private createOpacityControl(key: keyof OpacitySettings): HTMLElement {
     const control = document.createElement('div');
     control.className = 'opacity-control';
@@ -677,17 +683,17 @@ export class SettingsModal extends Modal {
     control.style.alignItems = 'center';
     control.style.justifyContent = 'space-between';
     control.style.marginBottom = '15px';
-    
+
     const label = document.createElement('label');
     label.textContent = this.formatLabel(key);
     label.style.color = '#ccc';
     label.style.flex = '1';
-    
+
     const inputWrapper = document.createElement('div');
     inputWrapper.style.display = 'flex';
     inputWrapper.style.alignItems = 'center';
     inputWrapper.style.gap = '10px';
-    
+
     const slider = document.createElement('input');
     slider.type = 'range';
     slider.min = '0';
@@ -695,13 +701,13 @@ export class SettingsModal extends Modal {
     slider.step = '5';
     slider.value = (this.settings.getOpacity(key) * 100).toString();
     slider.style.width = '150px';
-    
+
     const valueDisplay = document.createElement('span');
     valueDisplay.textContent = `${slider.value}%`;
     valueDisplay.style.color = '#fff';
     valueDisplay.style.width = '50px';
     valueDisplay.style.textAlign = 'right';
-    
+
     // Visual preview bar
     const previewBar = document.createElement('div');
     previewBar.style.width = '50px';
@@ -710,105 +716,105 @@ export class SettingsModal extends Modal {
     previewBar.style.opacity = (parseInt(slider.value) / 100).toString();
     previewBar.style.border = '1px solid #555';
     previewBar.style.borderRadius = '2px';
-    
+
     slider.addEventListener('input', () => {
       const opacity = parseInt(slider.value) / 100;
       valueDisplay.textContent = `${slider.value}%`;
       previewBar.style.opacity = opacity.toString();
       this.updateOpacity(key, opacity);
     });
-    
+
     this.opacitySliders.set(key, slider);
-    
+
     inputWrapper.appendChild(slider);
     inputWrapper.appendChild(valueDisplay);
     inputWrapper.appendChild(previewBar);
-    
+
     control.appendChild(label);
     control.appendChild(inputWrapper);
-    
+
     return control;
   }
-  
+
   private createAdvancedTab(): HTMLElement {
     const container = document.createElement('div');
     container.className = 'advanced-tab-content';
-    
+
     // Display options
     const displaySection = this.createSection('Display Options');
-    this.booleanSettings.forEach(setting => {
+    this.booleanSettings.forEach((setting) => {
       const control = this.createBooleanControl(setting);
       displaySection.appendChild(control);
     });
     container.appendChild(displaySection);
-    
+
     // Import/Export section
     const importExportSection = this.createSection('Theme Management');
-    
+
     const buttonContainer = document.createElement('div');
     buttonContainer.style.display = 'flex';
     buttonContainer.style.gap = '10px';
     buttonContainer.style.marginBottom = '15px';
-    
+
     const exportBtn = this.createButton('Export Current Theme', () => {
       this.exportCurrentTheme();
     });
     exportBtn.style.backgroundColor = '#2196F3';
-    
+
     const importBtn = this.createButton('Import Theme', () => {
       this.importTheme();
     });
     importBtn.style.backgroundColor = '#2196F3';
-    
+
     buttonContainer.appendChild(exportBtn);
     buttonContainer.appendChild(importBtn);
     importExportSection.appendChild(buttonContainer);
-    
+
     container.appendChild(importExportSection);
-    
+
     // Reset section
     const resetSection = this.createSection('Reset Options');
-    
+
     const resetContainer = document.createElement('div');
     resetContainer.style.display = 'flex';
     resetContainer.style.gap = '10px';
-    
+
     const resetColorsBtn = this.createButton('Reset Colors', () => {
       this.settings.resetColors();
       this.showTab('colors');
     });
     resetColorsBtn.style.backgroundColor = '#ff9800';
-    
+
     const resetOpacityBtn = this.createButton('Reset Opacity', () => {
       this.settings.resetOpacity();
       this.showTab('opacity');
     });
     resetOpacityBtn.style.backgroundColor = '#ff9800';
-    
+
     const resetAllBtn = this.createButton('Reset All Settings', () => {
       if (confirm('Are you sure you want to reset all settings to defaults?')) {
         this.resetToDefaults();
       }
     });
     resetAllBtn.style.backgroundColor = '#f44336';
-    
+
     resetContainer.appendChild(resetColorsBtn);
     resetContainer.appendChild(resetOpacityBtn);
     resetContainer.appendChild(resetAllBtn);
     resetSection.appendChild(resetContainer);
-    
+
     container.appendChild(resetSection);
-    
+
     return container;
   }
-  
+
   private formatLabel(key: string): string {
     return key
       .replace(/([A-Z])/g, ' $1')
-      .replace(/^./, str => str.toUpperCase())
+      .replace(/^./, (str) => str.toUpperCase())
       .trim();
   }
-  
+
   private updateColor(key: keyof ColorSettings, color: string): void {
     try {
       this.settings.setColor(key, color);
@@ -817,24 +823,24 @@ export class SettingsModal extends Modal {
       logger.error('Invalid color setting', error as Error, { key });
     }
   }
-  
+
   private updateOpacity(key: keyof OpacitySettings, opacity: number): void {
     this.settings.setOpacity(key, opacity);
     this.schedulePreview();
   }
-  
+
   private applyTheme(themeId: string): void {
     this.settings.setActiveTheme(themeId);
     this.schedulePreview();
     this.showTab('themes');
   }
-  
+
   private createCustomTheme(): void {
     const name = prompt('Enter theme name:');
     if (!name) return;
-    
+
     const description = prompt('Enter theme description:') || '';
-    
+
     try {
       const theme = this.settings.createCustomTheme(name, description);
       this.showTab('themes');
@@ -843,22 +849,24 @@ export class SettingsModal extends Modal {
       alert(`Failed to create theme: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
-  
+
   private deleteCustomTheme(themeId: string): void {
     if (confirm('Are you sure you want to delete this theme?')) {
       try {
         this.settings.deleteCustomTheme(themeId);
         this.showTab('themes');
       } catch (error) {
-        alert(`Failed to delete theme: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        alert(
+          `Failed to delete theme: ${error instanceof Error ? error.message : 'Unknown error'}`
+        );
       }
     }
   }
-  
+
   private exportCurrentTheme(): void {
     const theme = this.settings.getActiveTheme();
     if (!theme) return;
-    
+
     try {
       const themeData = this.settings.exportTheme(theme.id);
       const filename = `pente3d-theme-${theme.name.toLowerCase().replace(/\s+/g, '-')}.json`;
@@ -867,7 +875,7 @@ export class SettingsModal extends Modal {
       alert(`Failed to export theme: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
-  
+
   private async importTheme(): Promise<void> {
     try {
       const file = await selectFile('.json');
@@ -905,8 +913,7 @@ export class SettingsModal extends Modal {
       enableAnimations: true,
       showCoordinates: false,
       enableSound: true,
-      autoRotate: false
+      autoRotate: false,
     };
   }
-
 }

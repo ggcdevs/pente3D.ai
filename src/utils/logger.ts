@@ -8,7 +8,7 @@ export enum LogLevel {
   INFO = 1,
   WARN = 2,
   ERROR = 3,
-  NONE = 4
+  NONE = 4,
 }
 
 export interface LogContext {
@@ -75,8 +75,8 @@ class ConsoleLogger implements Logger {
         ...(error && {
           errorName: error.name,
           errorMessage: error.message,
-          errorStack: error.stack
-        })
+          errorStack: error.stack,
+        }),
       };
       // eslint-disable-next-line no-console
       console.error(this.formatMessage('ERROR', message, errorContext));
@@ -90,9 +90,7 @@ let loggerInstance: ConsoleLogger | null = null;
 export function getLogger(): Logger {
   if (!loggerInstance) {
     const isDev = process.env.NODE_ENV !== 'production';
-    loggerInstance = new ConsoleLogger(
-      isDev ? LogLevel.DEBUG : LogLevel.WARN
-    );
+    loggerInstance = new ConsoleLogger(isDev ? LogLevel.DEBUG : LogLevel.WARN);
   }
   return loggerInstance;
 }
