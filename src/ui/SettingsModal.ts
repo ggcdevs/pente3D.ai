@@ -763,7 +763,7 @@ export class SettingsModal extends Modal {
     exportBtn.style.backgroundColor = '#2196F3';
 
     const importBtn = this.createButton('Import Theme', () => {
-      this.importTheme();
+      void this.importTheme();
     });
     importBtn.style.backgroundColor = '#2196F3';
 

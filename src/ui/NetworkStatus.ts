@@ -1,5 +1,4 @@
-import type { NetworkManager } from '@/network';
-import { ConnectionStatus } from '@/network';
+import { ConnectionStatus, type NetworkManager } from '@/network';
 import { logger } from '@/utils';
 
 export class NetworkStatus {

@@ -117,7 +117,7 @@ export class Move implements IMove {
       }
 
       return true;
-    } catch (error) {
+    } catch {
       return false;
     }
   }

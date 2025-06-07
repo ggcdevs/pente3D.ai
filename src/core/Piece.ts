@@ -101,7 +101,7 @@ export class Piece implements IPiece {
       }
 
       return true;
-    } catch (error) {
+    } catch {
       return false;
     }
   }

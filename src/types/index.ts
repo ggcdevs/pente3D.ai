@@ -86,3 +86,63 @@ export const DIRECTIONS_3D: IVector3[] = [
 export type Coordinates = [number, number, number];
 export type Direction = IVector3;
 export type CoordKey = string; // Format: "x,y,z"
+
+// JSON serialization types
+export interface BoardJSON {
+  size: BoardSize;
+  pieces: Record<string, unknown>;
+}
+
+export interface PieceJSON {
+  coords: IVector3;
+  player: unknown;
+  isTemporary: boolean;
+}
+
+export interface PlayerJSON {
+  id: string;
+  color: PlayerColor;
+  isLocal: boolean;
+  connectionId?: string;
+  captures: number;
+}
+
+export interface MoveJSON {
+  coords: IVector3;
+  player: unknown;
+  timestamp?: number;
+  capturedPieces: IVector3[];
+}
+
+export interface GameStateJSON {
+  board: unknown;
+  currentPlayerIndex: number;
+  players: unknown[];
+  moveHistory: unknown[];
+  capturedPieces: Record<string, IVector3[]>;
+  rules: unknown;
+}
+
+export interface GameJSON {
+  version: string;
+  metadata: {
+    createdAt: string;
+    boardSize: BoardSize;
+    blackFirst: boolean;
+  };
+  gameData: {
+    states: unknown[];
+    currentIndex: number;
+  };
+}
+
+export interface LineJSON {
+  coords: IVector3[];
+  direction: IVector3;
+}
+
+export interface WinResultJSON {
+  winner: unknown;
+  winningLine: unknown;
+  winType: 'five-in-a-row' | 'captures' | null;
+}

@@ -1,5 +1,4 @@
-import type { IBoard, IPiece, IVector3, BoardSize, CoordKey } from '@/types';
-import { DIRECTIONS_3D } from '@/types';
+import { DIRECTIONS_3D, type IBoard, type IPiece, type IVector3, type BoardSize, type CoordKey } from '@/types';
 import { Vector3 } from './Vector3';
 import { Piece } from './Piece';
 import { Line } from './Line';
@@ -500,19 +499,25 @@ export class Board implements IBoard {
    * @param json JSON object
    * @returns New board
    */
-  static fromJSON(json: any): Board {
-    if (!json || typeof json !== 'object') {
+  static fromJSON(json: unknown): Board {
+    if (!json || typeof json !== 'object' || json === null) {
       throw new Error('Invalid JSON for Board');
     }
 
-    const board = new Board(json.size);
+    const boardData = json as { size?: unknown; pieces?: unknown };
+    
+    if (typeof boardData.size !== 'number' || ![7, 9, 11].includes(boardData.size)) {
+      throw new Error('Invalid board size in JSON');
+    }
 
-    if (json.pieces instanceof Map) {
-      json.pieces.forEach((pieceData: any, key: string) => {
+    const board = new Board(boardData.size as BoardSize);
+
+    if (boardData.pieces instanceof Map) {
+      boardData.pieces.forEach((pieceData: unknown, key: string) => {
         board._pieces.set(key, Piece.fromJSON(pieceData));
       });
-    } else if (json.pieces && typeof json.pieces === 'object') {
-      Object.entries(json.pieces).forEach(([key, pieceData]: [string, any]) => {
+    } else if (boardData.pieces && typeof boardData.pieces === 'object') {
+      Object.entries(boardData.pieces).forEach(([key, pieceData]) => {
         board._pieces.set(key, Piece.fromJSON(pieceData));
       });
     }
