@@ -14,12 +14,18 @@ import {
 } from './ui';
 import { StorageManager } from './storage';
 import { downloadFile, uploadJSON } from './utils/fileIO';
-import { PerformanceMonitor, AccessibilityManager, logger } from './utils';
+import { 
+  PerformanceMonitor, 
+  AccessibilityManager, 
+  logger,
+  RenderingError,
+  getErrorMessage 
+} from './utils';
 
 // Get canvas element
 const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
 if (!canvas) {
-  throw new Error('Canvas element not found');
+  throw new RenderingError('Canvas element not found', { elementId: 'game-canvas' });
 }
 
 // Load settings first

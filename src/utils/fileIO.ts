@@ -1,3 +1,5 @@
+import { FileOperationError } from './errors';
+
 export function downloadFile(
   content: string,
   filename: string,
@@ -47,15 +49,17 @@ export function uploadFile(
         resolve({ content, filename: file.name });
       } catch (error) {
         reject(
-          new Error(
-            `Failed to read file: ${error instanceof Error ? error.message : 'Unknown error'}`
+          new FileOperationError(
+            `Failed to read file: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            'read',
+            file.name
           )
         );
       }
     };
 
     input.oncancel = () => {
-      reject(new Error('File selection cancelled'));
+      reject(new FileOperationError('File selection cancelled', 'read'));
     };
 
     // Trigger file selection
@@ -99,7 +103,7 @@ export async function uploadMultipleFiles(
     };
 
     input.oncancel = () => {
-      reject(new Error('File selection cancelled'));
+      reject(new FileOperationError('File selection cancelled', 'read'));
     };
 
     // Trigger file selection
@@ -142,7 +146,7 @@ export function selectFile(accept: string = '.json'): Promise<File> {
     };
 
     input.oncancel = () => {
-      reject(new Error('File selection cancelled'));
+      reject(new FileOperationError('File selection cancelled', 'read'));
     };
 
     // Trigger file selection

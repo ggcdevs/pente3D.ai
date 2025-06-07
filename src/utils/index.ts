@@ -8,3 +8,20 @@ export { AccessibilityManager } from './AccessibilityManager';
 export type { AccessibilityOptions, AccessibilityEvent } from './AccessibilityManager';
 export { logger, getLogger, setLogLevel, LogLevel } from './logger';
 export type { Logger, LogContext } from './logger';
+export {
+  Pente3DError,
+  GameRuleError,
+  InvalidMoveError,
+  InvalidStateError,
+  NetworkError,
+  ConnectionError,
+  FileOperationError,
+  SerializationError,
+  ValidationError,
+  RenderingError,
+  isPente3DError,
+  hasErrorMessage,
+  getErrorMessage,
+  createErrorResponse,
+  type ErrorResponse,
+} from './errors';

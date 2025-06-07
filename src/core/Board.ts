@@ -3,6 +3,7 @@ import { Vector3 } from './Vector3';
 import { Piece } from './Piece';
 import { Line } from './Line';
 import { Player } from './Player';
+import { SerializationError } from '@/utils';
 
 export class Board implements IBoard {
   public readonly size: BoardSize;
@@ -501,13 +502,13 @@ export class Board implements IBoard {
    */
   static fromJSON(json: unknown): Board {
     if (!json || typeof json !== 'object' || json === null) {
-      throw new Error('Invalid JSON for Board');
+      throw new SerializationError('Invalid JSON for Board', 'Board');
     }
 
     const boardData = json as { size?: unknown; pieces?: unknown };
     
     if (typeof boardData.size !== 'number' || ![7, 9, 11].includes(boardData.size)) {
-      throw new Error('Invalid board size in JSON');
+      throw new SerializationError('Invalid board size in JSON', 'Board', { size: boardData.size });
     }
 
     const board = new Board(boardData.size as BoardSize);
