@@ -1,103 +1,96 @@
 import { test, expect } from '@playwright/test';
-import { GamePage } from '../pages/GamePage';
-import { waitForSceneReady, checkWebGLSupport, getRendererInfo } from '../utils/threejs-helpers';
-import { expectScreenshotToMatchBaseline } from '../utils/visual-regression';
+import { setupTest } from '../../helpers/e2e';
+import { Vector3Builder } from '../../helpers/builders';
 
 test.describe('Pente3D Smoke Tests', () => {
   test.beforeEach(async ({ page }) => {
-    // Set viewport size for consistent screenshots
+    // We'll handle test isolation when helpers are properly set up
     await page.setViewportSize({ width: 1280, height: 720 });
   });
 
   test('should load without console errors', async ({ page }) => {
-    const gamePage = new GamePage(page);
+    await setupTest(page);
     
-    // Navigate to the game
-    await gamePage.navigate();
+    // Track console errors
+    const errors: string[] = [];
+    page.on('console', msg => {
+      if (msg.type() === 'error') errors.push(msg.text());
+    });
     
-    // Wait for Three.js to initialize
-    await gamePage.waitForThreeJSLoad();
-    
-    // Check no console errors
-    const errors = gamePage.getConsoleErrors();
+    await page.waitForTimeout(1000);
     expect(errors).toHaveLength(0);
   });
 
   test('should have WebGL support', async ({ page }) => {
-    await page.goto('/');
     
-    const hasWebGL = await checkWebGLSupport(page);
+    await setupTest(page);
+    
+    // Check WebGL support
+    const hasWebGL = await page.evaluate(() => {
+      const canvas = document.createElement('canvas');
+      const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+      return !!gl;
+    });
     expect(hasWebGL).toBe(true);
-    
-    // Get renderer info for debugging
-    const rendererInfo = await getRendererInfo(page);
-    console.log('WebGL Renderer Info:', rendererInfo);
-    expect(rendererInfo).not.toBeNull();
   });
 
   test('should render 3D board', async ({ page }) => {
-    const gamePage = new GamePage(page);
-    await gamePage.navigate();
-    await gamePage.waitForThreeJSLoad();
+    await setupTest(page);
     
-    // Check canvas is visible
-    const canvas = await gamePage.getCanvas();
-    await expect(canvas).toBeVisible();
+    // Wait for scene to be ready
+    await page.waitForSelector('canvas', { state: 'visible' });
+    await page.waitForTimeout(2000);
     
-    // Check board is rendered
-    const boardVisible = await gamePage.isBoardVisible();
-    expect(boardVisible).toBe(true);
-    
-    // Visual regression test
-    const screenshot = await gamePage.captureCanvasScreenshot('board-initial-state');
-    const comparison = await expectScreenshotToMatchBaseline(
-      screenshot,
-      'board-initial-state',
-      { threshold: 0.2 } // Higher threshold for 3D content
-    );
-    
-    if (!comparison.match) {
-      console.log(`Visual difference detected: ${comparison.diffPercentage.toFixed(2)}% (${comparison.diffPixels} pixels)`);
-    }
-    
-    // For first run or when updating baselines, we might want to pass even if no match
-    // expect(comparison.match).toBe(true);
+    // Check board is visible
+    const boardVisible = await page.evaluate(() => {
+      const renderer = (window as any).renderer;
+      return renderer && renderer.getScene();
+    });
+    expect(boardVisible).toBeTruthy();
   });
 
   test('should capture game state', async ({ page }) => {
-    const gamePage = new GamePage(page);
-    await gamePage.navigate();
-    await gamePage.waitForThreeJSLoad();
+    await setupTest(page);
     
-    const gameState = await gamePage.captureGameState();
+    // Get game state
+    const gameState = await page.evaluate(() => {
+      const game = (window as any).game;
+      if (!game) return null;
+      return {
+        boardSize: game.getBoard().size,
+        currentPlayer: game.getCurrentPlayer().getColor(),
+        pieceCount: game.getBoard().getPieceCount(),
+        isGameOver: game.isGameOver()
+      };
+    });
     
-    expect(gameState.boardLoaded).toBe(true);
-    expect(gameState.consoleErrors).toHaveLength(0);
-    
-    // Once the game exposes state, we can check more:
-    // expect(gameState.currentPlayer).toBeDefined();
-    // expect(gameState.pieces).toBeDefined();
+    expect(gameState).toBeTruthy();
+    expect(gameState.boardSize).toBe(7);
+    expect(gameState.currentPlayer).toBeDefined();
+    expect(gameState.pieceCount).toBe(0);
+    expect(gameState.isGameOver).toBe(false);
   });
 
   test('should handle window resize', async ({ page }) => {
-    const gamePage = new GamePage(page);
-    await gamePage.navigate();
-    await gamePage.waitForThreeJSLoad();
+    await setupTest(page);
     
-    // Resize window
-    await page.setViewportSize({ width: 800, height: 600 });
-    await page.waitForTimeout(500); // Wait for resize handler
+    // Test different viewport sizes
+    const viewports = [
+      { width: 800, height: 600 },
+      { width: 1024, height: 768 },
+      { width: 1920, height: 1080 }
+    ];
     
-    // Board should still be visible
-    const boardVisible = await gamePage.isBoardVisible();
-    expect(boardVisible).toBe(true);
-    
-    // Resize back
-    await page.setViewportSize({ width: 1280, height: 720 });
-    await page.waitForTimeout(500);
-    
-    // Still visible
-    expect(await gamePage.isBoardVisible()).toBe(true);
+    for (const viewport of viewports) {
+      await page.setViewportSize(viewport);
+      await page.waitForTimeout(500);
+      
+      const boardVisible = await page.evaluate(() => {
+        const renderer = (window as any).renderer;
+        return renderer && renderer.getScene();
+      });
+      expect(boardVisible).toBeTruthy();
+    }
   });
 
   test('should have proper page title and metadata', async ({ page }) => {

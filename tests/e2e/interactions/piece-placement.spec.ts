@@ -1,233 +1,147 @@
-import { test, expect } from '@playwright/test';
-import { GamePage } from '../pages/GamePage';
+import { test, expect, setupTest } from '@/tests/helpers/e2e';
+import { Vector3Builder } from '@/tests/helpers/builders';
 
 test.describe('Piece Placement', () => {
-  let gamePage: GamePage;
-
-  test.beforeEach(async ({ page }) => {
-    gamePage = new GamePage(page);
-    await gamePage.goto();
-    await gamePage.waitForThreeJSLoad();
-    
-    // Expose game and renderer to window for testing
-    await page.evaluate(() => {
-      // These should already be exposed by main.ts, but let's ensure they're accessible
-      (window as any).testHelpers = {
-        getIntersectionNodes: () => {
-          const scene = (window as any).renderer?.getScene();
-          if (!scene) return [];
-          
-          const nodes: any[] = [];
-          scene.traverse((obj: any) => {
-            if (obj.userData && obj.userData.type === 'intersection') {
-              nodes.push({
-                position: obj.position,
-                userData: obj.userData
-              });
-            }
-          });
-          return nodes;
-        },
-        getRaycasterInfo: () => {
-          const inputHandler = (window as any).inputHandler;
-          if (!inputHandler) return null;
-          
-          // We'll check state after click
-          return inputHandler.getState();
-        }
-      };
-    });
+  test.beforeEach(async ({ testEnv }) => {
+    await testEnv.isolateTest();
   });
 
-  test('should detect intersection nodes', async ({ page }) => {
-    const nodes = await page.evaluate(() => {
-      return (window as any).testHelpers.getIntersectionNodes();
-    });
-
-    console.log(`Found ${nodes.length} intersection nodes`);
-    expect(nodes.length).toBeGreaterThan(0);
+  test('should detect intersection nodes', async ({ page, game }) => {
+    await setupTest(page);
     
+    // The new helpers automatically expose necessary APIs
+    const nodes = await game.getIntersectionNodes();
+    
+    expect(nodes.length).toBeGreaterThan(0);
     // For a 7x7x7 board, should have 343 nodes
     expect(nodes.length).toBe(343);
   });
 
-  test('should place piece on click', async ({ page }) => {
-    // Get initial piece count
-    const initialPieces = await page.evaluate(() => {
-      const game = (window as any).game;
-      if (!game) return 0;
-      
-      const board = game.getBoard();
-      let count = 0;
-      for (let x = 0; x < 7; x++) {
-        for (let y = 0; y < 7; y++) {
-          for (let z = 0; z < 7; z++) {
-            if (board.getPieceAt({ x, y, z })) count++;
-          }
-        }
-      }
-      return count;
-    });
-
-    console.log('Initial pieces:', initialPieces);
-
-    // Listen for console logs to debug
-    page.on('console', msg => {
-      if (msg.text().includes('Click detected') || msg.text().includes('Invalid move')) {
-        console.log('Browser console:', msg.text());
-      }
-    });
-
-    // Get the first node position in screen coordinates
-    const nodeScreenPos = await page.evaluate(() => {
-      const renderer = (window as any).renderer;
-      const camera = renderer.getCamera();
-      const nodes = (window as any).testHelpers.getIntersectionNodes();
-      
-      if (nodes.length === 0) return null;
-      
-      // Find a node near the center of the board
-      const centerNode = nodes.find((n: any) => 
-        n.userData.position.x === 3 && 
-        n.userData.position.y === 3 && 
-        n.userData.position.z === 3
-      ) || nodes[Math.floor(nodes.length / 2)];
-      
-      // Project 3D position to screen coordinates
-      const vector = centerNode.position.clone();
-      vector.project(camera);
-      
-      const canvas = document.querySelector('canvas')!;
-      const x = (vector.x + 1) / 2 * canvas.width;
-      const y = -(vector.y - 1) / 2 * canvas.height;
-      
-      return { x: Math.round(x), y: Math.round(y), node: centerNode.userData.position };
-    });
-
-    expect(nodeScreenPos).toBeTruthy();
-    console.log('Clicking at screen position:', nodeScreenPos);
-
-    // Click on the node
-    await page.mouse.click(nodeScreenPos!.x, nodeScreenPos!.y);
-
-    // Wait for piece placement
-    await page.waitForTimeout(100);
-
-    // Check if piece was placed
-    const newPieces = await page.evaluate(() => {
-      const game = (window as any).game;
-      if (!game) return 0;
-      
-      const board = game.getBoard();
-      let count = 0;
-      for (let x = 0; x < 7; x++) {
-        for (let y = 0; y < 7; y++) {
-          for (let z = 0; z < 7; z++) {
-            if (board.getPieceAt({ x, y, z })) count++;
-          }
-        }
-      }
-      return count;
-    });
-
-    console.log('New pieces:', newPieces);
-    expect(newPieces).toBe(initialPieces + 1);
+  test('should place piece on click', async ({ page, game }) => {
+    await setupTest(page);
+    
+    // Get initial state
+    const initialState = await game.getGameState();
+    expect(initialState.pieces).toHaveLength(0);
+    
+    // Place a piece at the center using the new helper
+    const centerPos = new Vector3Builder().withCoords(3, 3, 3).build();
+    await game.placePiece(centerPos);
+    
+    // Verify piece was placed
+    const newState = await game.getGameState();
+    expect(newState.pieces).toHaveLength(1);
+    expect(newState.history).toHaveLength(1);
+    
+    // Verify piece is at correct position
+    const hasP = await game.hasPieceAt(centerPos);
+    expect(hasP).toBe(true);
   });
 
-  test('should not place piece when dragging', async ({ page }) => {
-    // Get initial piece count
-    const initialPieces = await page.evaluate(() => {
-      const game = (window as any).game;
-      const board = game.getBoard();
-      let count = 0;
-      for (let x = 0; x < 7; x++) {
-        for (let y = 0; y < 7; y++) {
-          for (let z = 0; z < 7; z++) {
-            if (board.getPieceAt({ x, y, z })) count++;
-          }
-        }
-      }
-      return count;
-    });
-
-    // Perform a drag (rotation)
-    const canvas = page.locator('canvas');
-    await canvas.hover({ position: { x: 300, y: 300 } });
-    await page.mouse.down({ button: 'left' });
-    await page.mouse.move(400, 300, { steps: 10 });
-    await page.mouse.up();
-
-    await page.waitForTimeout(100);
-
+  test('should not place piece when dragging', async ({ page, game }) => {
+    await setupTest(page);
+    
+    const initialState = await game.getGameState();
+    const initialPieceCount = initialState.pieces.length;
+    
+    // Perform a drag (rotation) using new helpers
+    await game.rotateBoard(100, 0);
+    
     // Check piece count hasn't changed
-    const newPieces = await page.evaluate(() => {
-      const game = (window as any).game;
-      const board = game.getBoard();
-      let count = 0;
-      for (let x = 0; x < 7; x++) {
-        for (let y = 0; y < 7; y++) {
-          for (let z = 0; z < 7; z++) {
-            if (board.getPieceAt({ x, y, z })) count++;
-          }
-        }
-      }
-      return count;
-    });
-
-    expect(newPieces).toBe(initialPieces);
+    const newState = await game.getGameState();
+    expect(newState.pieces.length).toBe(initialPieceCount);
   });
 
-  test('should alternate between black and white pieces', async ({ page }) => {
+  test('should alternate between black and white pieces', async ({ page, game }) => {
+    await setupTest(page);
+    
     // Place first piece (should be black)
-    await page.mouse.click(300, 300);
-    await page.waitForTimeout(100);
-
-    const firstPlayer = await page.evaluate(() => {
-      const game = (window as any).game;
-      // Get the last move's player
-      const history = game.getHistory();
-      if (history.length === 0) return null;
-      const lastMove = history[history.length - 1];
-      return lastMove.getPlayer().getColor();
-    });
-
-    expect(firstPlayer).toBe('black');
-
+    const pos1 = new Vector3Builder().withCoords(3, 3, 3).build();
+    await game.placePiece(pos1);
+    
+    let state = await game.getGameState();
+    expect(state.history[0].player.color).toBe('black');
+    
     // Place second piece (should be white)
-    await page.mouse.click(350, 350);
-    await page.waitForTimeout(100);
-
-    const secondPlayer = await page.evaluate(() => {
-      const game = (window as any).game;
-      const history = game.getHistory();
-      if (history.length < 2) return null;
-      const lastMove = history[history.length - 1];
-      return lastMove.getPlayer().getColor();
-    });
-
-    expect(secondPlayer).toBe('white');
+    const pos2 = new Vector3Builder().withCoords(4, 3, 3).build();
+    await game.placePiece(pos2);
+    
+    state = await game.getGameState();
+    expect(state.history[1].player.color).toBe('white');
   });
 
-  test('should show invalid move in console for occupied position', async ({ page }) => {
-    const messages: string[] = [];
-    page.on('console', msg => {
-      if (msg.type() === 'error' || msg.text().includes('Invalid move')) {
-        messages.push(msg.text());
-      }
-    });
-
+  test('should show invalid move for occupied position', async ({ page, game }) => {
+    await setupTest(page);
+    
+    // Track console errors using new helper
+    const errorsBefore = await game.getConsoleErrors();
+    
     // Place a piece
-    await page.mouse.click(300, 300);
-    await page.waitForTimeout(100);
-
+    const pos = new Vector3Builder().withCoords(3, 3, 3).build();
+    await game.placePiece(pos);
+    
     // Try to place another piece at the same position
-    await page.mouse.click(300, 300);
-    await page.waitForTimeout(100);
-
-    // Should have logged an invalid move error
-    const hasInvalidMoveError = messages.some(msg => 
-      msg.includes('Invalid move') || msg.includes('occupied')
+    await game.placePiece(pos);
+    
+    // Should have logged an error
+    const errorsAfter = await game.getConsoleErrors();
+    const newErrors = errorsAfter.slice(errorsBefore.length);
+    
+    const hasInvalidMoveError = newErrors.some(error => 
+      error.includes('Invalid move') || error.includes('occupied')
     );
     expect(hasInvalidMoveError).toBe(true);
+  });
+
+  test('should validate piece placement at all positions', async ({ page, game, perf }) => {
+    await setupTest(page);
+    
+    // Use performance helper to ensure operations are fast
+    await perf.assertCompleteWithin(async () => {
+      // Test placing pieces at various positions
+      const testPositions = [
+        { x: 0, y: 0, z: 0 }, // Corner
+        { x: 6, y: 6, z: 6 }, // Opposite corner
+        { x: 3, y: 3, z: 3 }, // Center
+        { x: 0, y: 6, z: 3 }, // Edge center
+      ];
+      
+      for (const coords of testPositions) {
+        const pos = new Vector3Builder().withCoords(coords.x, coords.y, coords.z).build();
+        const canPlace = await game.canPlacePieceAt(pos);
+        expect(canPlace).toBe(true);
+      }
+    }, 100); // Should complete within 100ms
+  });
+
+  test('should handle rapid piece placement', async ({ page, game }) => {
+    await setupTest(page);
+    
+    // Place pieces rapidly without waiting
+    const positions = [
+      { x: 0, y: 0, z: 0 },
+      { x: 1, y: 0, z: 0 },
+      { x: 2, y: 0, z: 0 },
+      { x: 3, y: 0, z: 0 },
+    ];
+    
+    // Place all pieces as fast as possible
+    await Promise.all(
+      positions.map(coords => {
+        const pos = new Vector3Builder().withCoords(coords.x, coords.y, coords.z).build();
+        return game.placePiece(pos);
+      })
+    );
+    
+    // Verify all pieces were placed in order
+    const state = await game.getGameState();
+    expect(state.pieces).toHaveLength(4);
+    expect(state.history).toHaveLength(4);
+    
+    // Verify alternating colors
+    expect(state.history[0].player.color).toBe('black');
+    expect(state.history[1].player.color).toBe('white');
+    expect(state.history[2].player.color).toBe('black');
+    expect(state.history[3].player.color).toBe('white');
   });
 });
