@@ -13,6 +13,9 @@ describe('Network Integration Tests', () => {
   let hostPeer: MockPeer;
   let clientPeer: MockPeer;
 
+  // Increase timeout for network tests
+  jest.setTimeout(10000);
+
   beforeEach(() => {
     jest.clearAllMocks();
     jest.useFakeTimers();

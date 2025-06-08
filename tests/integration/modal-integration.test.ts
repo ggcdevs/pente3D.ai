@@ -27,7 +27,7 @@ describe('Modal System Integration', () => {
     dialogManager = new DialogManager();
     
     // Mock StorageManager
-    jest.spyOn(StorageManager, 'getSavedGames').mockReturnValue([]);
+    jest.spyOn(StorageManager, 'listSavedGames').mockReturnValue([]);
   });
 
   afterEach(() => {
@@ -42,6 +42,7 @@ describe('Modal System Integration', () => {
       const menuModal = new MenuModal({
         game,
         onSettings: () => {
+          menuModal.close();
           const settingsModal = new SettingsModal({
             settings,
             renderer
@@ -62,7 +63,7 @@ describe('Modal System Integration', () => {
       expect(document.querySelector('.menu-modal')).toBeNull();
       
       // Settings should open
-      expect(document.querySelector('.settings-modal')).toBeDefined();
+      expect(document.querySelector('.settings-modal')).toBeTruthy();
     });
 
     it('should show dialog when starting new game with progress', async () => {

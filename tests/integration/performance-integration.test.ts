@@ -15,7 +15,7 @@ describe('Performance System Integration', () => {
     canvas = document.createElement('canvas');
     document.body.appendChild(canvas);
     
-    game = Game.create({ boardSize: 9 });
+    game = new Game({ boardSize: 9 });
     renderer = new Renderer(canvas);
     performanceMonitor = new PerformanceMonitor();
     qualityManager = new QualityManager(performanceMonitor);

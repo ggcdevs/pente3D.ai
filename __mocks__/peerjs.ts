@@ -52,12 +52,13 @@ export class MockPeer extends EventEmitter {
     this.id = id || `mock-peer-${Math.random().toString(36).substr(2, 9)}`;
     
     // Simulate peer opening
-    setImmediate(() => {
+    // Use setTimeout to work with fake timers
+    setTimeout(() => {
       if (!this.destroyed) {
         this.open = true;
         this.emit('open', this.id);
       }
-    });
+    }, 0);
   }
 
   connect(peer: string, options?: any): MockDataConnection {
@@ -69,9 +70,10 @@ export class MockPeer extends EventEmitter {
     this.connections.set(peer, conn);
     
     // Simulate connection opening
-    setImmediate(() => {
+    // Use setTimeout to work with fake timers
+    setTimeout(() => {
       conn._simulateOpen();
-    });
+    }, 0);
     
     return conn;
   }

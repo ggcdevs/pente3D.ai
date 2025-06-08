@@ -136,6 +136,9 @@ const THREE = {
   CylinderGeometry: jest.fn().mockImplementation(() => ({
     dispose: jest.fn()
   })),
+  RingGeometry: jest.fn().mockImplementation(() => ({
+    dispose: jest.fn()
+  })),
   AnimationMixer: jest.fn().mockImplementation(() => ({
     update: jest.fn()
   })),
