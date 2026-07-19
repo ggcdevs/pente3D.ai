@@ -51,6 +51,7 @@ test-results/
 playwright-report/
 tests/e2e/fixtures/screenshots/
 tests/e2e/fixtures/diff-screenshots/
+e2e/artifacts/
 
 # Claude Controller
 .claudecontroller.d/logs/
