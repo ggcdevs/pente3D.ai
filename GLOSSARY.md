@@ -66,6 +66,23 @@ the tie-breaker.
   through (`blocking: true`). Modals (settings, menu) block; modes (temp placement)
   usually don't, so e.g. camera controls still work during a preview.
 
+## History & sync
+
+- **Event log** — the append-only canonical history of a game: `place` / `undo` / `redo`
+  events. State is derived by folding it. Same object the network syncs and the archive
+  stores.
+- **Hash chain** — each log entry stores `hash = H(prevHash + entryData)`; the latest
+  **headHash** fingerprints the whole history. Enables O(1) "identical history?" checks and
+  pinpoints divergence.
+- **Conflict** — two players' logs fork (neither is a prefix of the other). v1 response:
+  stop the game, error, save the conflicted game (both forks) for possible future
+  resolution.
+- **Game archive** — persistent store (IndexedDB) of every game (event log + metadata),
+  including conflicted ones, for later review/resume.
+- **History slider** — a **read-only, local** cursor over derived states for reviewing past
+  plies. Removes pieces after the cursor *for the local viewer only*; emits/syncs/mutates
+  nothing. Distinct from **undo** (a real, restricted, synced game action).
+
 ## Networking (see `planning/2026-07-18-networking-poc-design.md`)
 
 - **Transport** — the swappable networking interface the game codes against
