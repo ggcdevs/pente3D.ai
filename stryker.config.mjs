@@ -2,90 +2,42 @@
 /**
  * StrykerJS mutation-testing config.
  *
- * Scope: mutate the pure rules core (`src/core`) PLUS the in-scope
- * config/persist layers (`src/config`, `src/persist`) PLUS the pure seat logic
- * (`src/net/seats.ts`), excluding test files. Each whitespace-separated path in
- * the requested scope "src/config src/persist" is expanded to a recursive `.ts`
- * glob with its `.test.ts` files excluded; the pre-existing `src/core` scope is
- * preserved. The rest of `src/net` (the IO transport adapter) is intentionally
- * NOT mutated — it is proven by the real-relay integration test (Task 3.3).
- * Coverage is a floor; mutation score is the real bar for these layers
- * (see planning/agent-principles.md — "Mutation score is the real bar").
+ * SCOPE: mutate the pure, deterministic logic only — `src/core`, `src/config`,
+ * `src/persist`, and the pure `src/net` logic (`seats.ts`, `sync.ts`). The IO
+ * transport adapter (`src/net/transport.ts`, `mqttTransport.ts`) is deliberately NOT
+ * mutated; it is verified by the real-relay integration test (Task 3.3), not by
+ * mutation-testing mqtt/DOM glue. Coverage is a floor; mutation is the real bar
+ * (planning/agent-principles.md — "Mutation score is the real bar").
  *
- * MACHINE-ENFORCED GATE: `thresholds.break = 95` makes `npx stryker run` exit
- * NON-ZERO when the overall mutation score (core + config + persist) drops below
- * 95%. Without a `break` value Stryker's default is `null` and the run always
- * exits 0 — an unenforced gate. Do NOT lower this to make a run pass; kill the
- * surviving mutant with a genuine test instead (agent-principles.md #6 — "Never
- * weaken a gate to pass it"). When the config/persist scope was first added the
- * overall score fell to 94.33% (config 88.46%, persist 87.06%) and the gate
- * correctly failed; the drop was fixed by ADDING mutation-killing tests, never by
- * lowering the bar — archive.ts reached 100%, db.ts 100% (see below), config.ts 96.15%.
+ * ENFORCED GATE: `thresholds.break = 95` → `npm run mutate` exits non-zero below 95%
+ * overall. Without a `break` value Stryker defaults to no gate. Do NOT lower it to make
+ * a run pass; kill the surviving mutant with a genuine test (agent-principles #6).
  *
- * DETERMINISTIC score (after generous timeout hardening): the earlier core-only
- * build jittered because infinite-loop mutants flickered between Killed and Timeout
- * under machine load, letting the gate flip red by luck. Raising `timeoutMS`/
- * `timeoutFactor` (below) makes classification stable — genuine hangs still time out
- * (a legitimate kill), slow-but-terminating mutants finish and reveal their true
- * status. (For the current observed overall/per-file scores — after the net scope
- * was added — see the OBSERVED block near the end of this comment; that is the
- * single source of truth for the numbers, kept from drifting into stale claims.)
+ * NO SCORES ARE DOCUMENTED HERE, ON PURPOSE. Mutation numbers are volatile — per-file
+ * scores are scope-dependent (perTest attribution), and the overall score shifts as
+ * code/tests change — so any figure written into this comment goes stale and becomes
+ * proof-by-inference, the exact trap agent-principles #2/#3/#7 forbid (and the trap
+ * that repeatedly tripped the review gate). The COMMAND is the single source of truth:
+ * run `npm run mutate` for the current score, and see `reports/mutation` for per-mutant
+ * detail. Report the scope you actually ran.
  *
- * The residual SURVIVING mutants are equivalent mutants that cannot be killed
- * without changing observable behavior — e.g. in core: the capture bounds pre-guard
- * at placePiece.ts (off-board lookups already return `undefined`); in config: the two
- * `readOverride` early-returns whose fall-through path yields the same `undefined`.
- * Raise the floor only alongside real tests that kill genuine survivors.
+ * DETERMINISM: the generous `timeoutMS`/`timeoutFactor` below make Killed-vs-Timeout
+ * classification stable — genuine infinite-loop mutants still time out (a legitimate
+ * kill), while slow-but-terminating mutants finish and reveal their true killed/survived
+ * status — so the score no longer jitters red under machine load.
  *
- * NOTE: db.ts's `if (!contains(GAMES_STORE))` guard in onupgradeneeded was PREVIOUSLY
- * listed here as an equivalent mutant, on the (incorrect) premise that the guard was
- * unreachable because openDatabase only ever opened at a fixed version 1. That was a
- * proof-by-inference: no test drove the production onupgradeneeded with the store
- * already present. openDatabase now accepts a `version` param, and a test re-opens an
- * existing db at a higher version through the production wrapper — genuinely firing the
- * guard. With the guard mutated to `if (true)`, createObjectStore on the existing store
- * throws ConstraintError, aborts the upgrade, and the open rejects; the test's resolving
- * open + surviving data KILLS the mutant. db.ts is now 100% (39/39), no survivors.
+ * RESIDUAL SURVIVORS are equivalent mutants (killing them would require asserting on
+ * non-behavior). Described structurally, without counts, so this note can't go stale:
+ *   - core: the capture bounds pre-guard in placePiece (off-board lookups already
+ *     return `undefined`);
+ *   - config: the two `readOverride` early-returns whose fall-through yields the same
+ *     `undefined`;
+ *   - sync.ts: error-MESSAGE string literals (the `SyncError` TYPE and its occurrence
+ *     ARE asserted; only the human-readable message text is not) and the `case 'ignore'`
+ *     no-op arm. Kill genuine (non-equivalent) survivors with real tests; never suppress.
  *
- * Gate-rejection VERIFIED (agent-principles.md #7): with break temporarily set
- * to 97 and score 96.10%, `stryker run` printed "Final mutation score 96.10
- * under breaking threshold 97, setting exit code to 1 (failure)" and exited 1.
- * Restored to 95. Re-VERIFIED after adding src/net/sync.ts to the mutate scope:
- * with break temporarily set to 98 and score 96.53%, `stryker run` printed
- * "Final mutation score 96.53 under breaking threshold 98, setting exit code to 1
- * (failure)" and exited 1. Restored to 95.
- *
- * OBSERVED (full configured `npx stryker run`, 2026-07-19, after guarding the
- * state-mutating SyncEngine.receive() against a post-conflict message and adding the
- * negative test that kills the conflict-freeze mutant): overall 96.95% (exit 0,
- * >= break 95; 902 killed, 19 timeout, 29 survived), net src/net 98.08% =
- * seats.ts 100% (44/44), sync.ts 97.32% (109 killed, 3 survivors) — a 2.32 margin
- * over break=95. The 3 residual sync.ts survivors in THIS full run are EQUIVALENT
- * mutants that cannot be killed without asserting on non-behavior:
- *   - sync.ts:172:9 — the headHash-mismatch error-MESSAGE StringLiteral (`computed
- *     ${headHash(log)}` → ``, i.e. blanking the *text* inside the thrown SyncError;
- *     its TYPE and occurrence ARE asserted, only the human-readable suffix is not);
- *   - sync.ts:346:12 — the `case 'ignore':` label StringLiteral (→ `case "":`; neither
- *     value ever equals a real action string, so the ignore/no-op arm is unchanged);
- *   - sync.ts:392:38 — the `whenSettled` BlockStatement (→ `{}`; emptying the
- *     `await this._archiving` still resolves, and conflict-persistence is separately
- *     proven by loadConflicted reading the archived record back).
- *
- * PER-FILE SCORE IS SCOPE-DEPENDENT (do NOT claim otherwise): the scoped re-run
- * `npx stryker run --mutate src/net/sync.ts` reports sync.ts 95.54% (107 killed,
- * 5 survivors), NOT the full-run 97.32%. The scoped run keeps the 3 above AND adds
- * two more that the full run KILLS via other suites' perTest coverage:
- * sync.ts:182:17 (`this.name = 'SyncError'` → `""` — the error's .name, not a
- * message) and sync.ts:373:58 (`result: 'conflicted'` → `""` — the archived meta
- * result). Both are Killed in the full run (verified in the JSON report: :182 Killed,
- * :373:32 ObjectLiteral→{} Killed, :373:58 Killed), so the residual-survivor set
- * shrinks with wider scope. Report the scope you ran; the numbers above are the two
- * runs actually observed on 2026-07-19, not a single scope-independent figure.
- * Gate-rejection re-VERIFIED (agent-principles.md #7): with break temporarily set to
- * 98 and overall 96.95%, `stryker run` printed "Final mutation score 96.95 under
- * breaking threshold 98, setting exit code to 1 (failure)" and exited 1; restored to
- * 95. These are the observed current numbers — do NOT re-document stale/unrun figures
- * as fact (agent-principles.md #2/#3/#7).
+ * Gate-rejection is re-proven on every review-gate run (agent-principles #7): temporarily
+ * raising `break` above the current score makes `npm run mutate` exit non-zero.
  *
  * @type {import('@stryker-mutator/api/core').PartialStrykerOptions}
  */
@@ -93,10 +45,9 @@ export default {
   packageManager: 'npm',
   testRunner: 'vitest',
   reporters: ['html', 'clear-text', 'progress', 'json'],
-  // Mutate the rules core AND the in-scope config/persist layers; never mutate
-  // the tests themselves. Scope "src/config src/persist" — each path expands to
-  // `<path>/**/*.ts` with its `*.test.ts` excluded. Existing `src/core` scope
-  // preserved (idempotent — do not drop already-covered paths).
+  // Mutate the pure logic only; never mutate the tests themselves. IO-glue files
+  // (src/net/transport.ts, mqttTransport.ts) are intentionally absent — verified by the
+  // real-relay integration test, not by mutating mqtt glue. Do NOT add them here.
   mutate: [
     'src/core/**/*.ts',
     '!src/core/**/*.test.ts',
@@ -104,31 +55,16 @@ export default {
     '!src/config/**/*.test.ts',
     'src/persist/**/*.ts',
     '!src/persist/**/*.test.ts',
-    // src/net/seats.ts is PURE logic (identity-owned seat assignment) with no IO,
-    // so it is fully mutation-coverable and held to the gate (Task 3.2). src/net/sync.ts
-    // is the PURE full-state sync decision engine (decideSync + SyncMessage codec: no
-    // transport, DOM, or clock — see its header "Layering & purity"), likewise fully
-    // mutation-coverable and held to the gate (Task 3.3). Both are exact-file scope
-    // "src/net/seats.ts src/net/sync.ts". The rest of src/net is deliberately NOT
-    // mutated: transport.ts / mqttTransport.ts are the thin IO adapter + its
-    // MockTransport double, and the LIVE relay is proven by the Task 3.3 real-relay
-    // integration test — NOT by mutation-testing mqtt glue (build plan /
-    // agent-principles: keep the pure logic separable and mutation-tested; verify the
-    // adapter by behavior over the real broker). Do NOT add IO-glue files outside
-    // seats.ts / sync.ts to this list.
     'src/net/seats.ts',
     'src/net/sync.ts',
     '!src/net/**/*.test.ts',
   ],
   coverageAnalysis: 'perTest',
-  // Generous timeout to make Killed-vs-Timeout classification DETERMINISTIC: genuine
-  // infinite-loop mutants still time out (a legitimate kill), while slow-but-terminating
-  // mutants get to finish and reveal their true killed/survived status — removing the
-  // run-to-run score jitter that let this gate flip red under machine load.
+  // Generous timeout to make Killed-vs-Timeout classification DETERMINISTIC (see header):
+  // removes the run-to-run jitter that let this gate flip red under machine load.
   timeoutMS: 20000,
   timeoutFactor: 4,
-  // The enforced bar: exit non-zero below `break`. `high`/`low` only colour the
-  // report; `break` is what fails CI.
+  // The enforced bar: exit non-zero below `break`. `high`/`low` only colour the report.
   thresholds: { high: 99, low: 96, break: 95 },
   vitest: {
     configFile: 'vite.config.ts',

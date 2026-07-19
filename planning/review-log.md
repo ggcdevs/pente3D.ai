@@ -200,3 +200,34 @@ config/persist 100% coverage (enforced), full-scope mutation **96.22%** determin
 
 Also: the `args` mis-scope fix (fail-loud) worked — this run correctly resolved scope to
 `src/config src/persist`.
+
+## Stage 3 — networking — ESCALATED (fix loop hit 3 rounds), then resolved by oversight
+
+The review-gate broke out to human review (`escalate:true`, reviewers never fully approved) —
+the designed max-3-rounds behavior. What happened:
+- **Substantive findings WERE fixed by the fix loop** (verified by main-loop): the critical
+  `sync.ts` conflict-detection logic was hiding at ~90% mutation behind the strong core/persist
+  aggregate; the `!Array.isArray(msg.log)` guard was deletable with no test failure and a
+  malformed message surfaced as a **misleading "headHash mismatch"**. Fixed with typed
+  `toThrow(SyncError)` + `/array of events/` message assertions (sync.test.ts:116-154); sync.ts
+  now 96.43% per-file (verified independently).
+- **Why it couldn't converge (recurring):** the `stryker.config.mjs` comment hardcoded ~30
+  specific mutation percentages; every round changed the code, the numbers went stale, and the
+  reviewers correctly re-flagged them as proof-by-inference. `gate-gaming/proof-by-inference`
+  recurred a 4th time.
+
+**Consolidation (nip the pattern, structural):**
+- Added principle **#8 "Don't hardcode volatile facts"** — state the mechanism + the command
+  (`npm run mutate`), never a frozen number.
+- **Rewrote stryker.config.mjs comment number-free** — the command is the single source of
+  truth; residual equivalent survivors described structurally (no counts) so the note can't go
+  stale.
+- **Fixed a workflow bug the escalation exposed:** the review-gate's Gate phase pushed on
+  mechanical-pass even when reviewers didn't approve. Now it pushes only if `passed AND
+  reviewers approved`; on escalation it does NOT push.
+- **Noted limitation:** the mutation gate enforces an *overall* break=95, so a weak file can
+  hide behind strong ones (this is how sync.ts hid). Watch item for a per-file floor on
+  safety-critical files; for now the gate lists survivors so weak files are visible.
+
+**Verdict:** substantive code is solid (sync.ts 96.43% per-file, net 100% coverage, real-relay
+proven, error contract genuinely tested). Stage 3 complete after the oversight cleanup above.

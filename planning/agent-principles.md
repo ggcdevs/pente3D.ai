@@ -35,6 +35,12 @@ instructions — not just to fix the instance.
    `break` and see exit 1; inject an uncovered branch and see coverage fail), then restore.
    A threshold that never rejects anything, reported as a "gate," is proof-by-inference — the
    exact trap that shipped an unenforced 95% mutation "gate" in Stage 1.
+8. **Don't hardcode volatile facts.** Mutation scores, coverage %, timings, counts — anything
+   that changes run-to-run or as code evolves — must NOT be written into code, comments, or
+   docs as a documented "fact." It goes stale the moment it's written and becomes
+   proof-by-inference. State the *mechanism* and point to the command that yields the current
+   truth ("run `npm run mutate`"), never a frozen number. (This repeatedly tripped the review
+   gate on stale mutation figures in `stryker.config.mjs`.)
 
 ## Tests must be genuine
 

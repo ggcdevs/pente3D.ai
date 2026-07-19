@@ -135,7 +135,8 @@ const gate = await agent(
     `3. \`npm run coverage\` -> ${SCOPE} must be 100% on all four metrics.\n` +
     `4. \`npm run mutate\` (Stryker, mutates "${MUTATE_SCOPE}") -> overall mutation score must be >= ${MUT_MIN}%. List EVERY surviving mutant with a justification; a survivor is only acceptable if genuinely equivalent/unreachable and explained.\n` +
     `passed = lint(0) AND all tests pass AND coverage 100% AND mutation >= ${MUT_MIN}% (survivors justified).\n` +
-    `If passed: \`git push origin rewrite2\` and report the range. Else: DO NOT push; report exactly what failed.\n` +
+    `REVIEWERS APPROVED = ${approved}. Push ONLY if passed AND reviewers approved. If reviewers did NOT approve (this run escalates to a human), DO NOT push regardless of the mechanical result — a human must resolve the outstanding review findings first.\n` +
+    `If (passed AND reviewers approved): \`git push origin rewrite2\` and report the range. Else: DO NOT push; report exactly what blocks it.\n` +
     `Return structured evidence.`,
   { schema: GATE_SCHEMA, phase: 'Gate', label: 'gate:mutation' }
 )
