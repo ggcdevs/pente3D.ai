@@ -140,6 +140,19 @@ describe('generateFullLine', () => {
     expect(res.warning).toBeTruthy();
   });
 
+  it('rejects when an endpoint is out of bounds', () => {
+    // (9,0,0) is off-board for N=9 (valid components are 0..8).
+    const res = generateFullLine([0, 0, 0], [9, 0, 0], N, []);
+    expect(res.ok).toBe(false);
+    expect(res.warning).toMatch(/bounds/i);
+  });
+
+  it('rejects when the first endpoint is out of bounds (either order)', () => {
+    const res = generateFullLine([-1, 0, 0], [8, 0, 0], N, []);
+    expect(res.ok).toBe(false);
+    expect(res.warning).toMatch(/bounds/i);
+  });
+
   it('rejects when an endpoint is not on a face', () => {
     // (4,4,4) is interior (not on any face).
     const res = generateFullLine([4, 4, 4], [8, 4, 4], N, []);
@@ -208,6 +221,12 @@ describe('generatePartialLine', () => {
 
   it('rejects a non-collinear pair', () => {
     const res = generatePartialLine([0, 0, 0], [2, 1, 0], N, []);
+    expect(res.ok).toBe(false);
+    expect(res.warning).toMatch(/collinear/i);
+  });
+
+  it('rejects identical endpoints (a === b is not collinear along any axis)', () => {
+    const res = generatePartialLine([3, 3, 3], [3, 3, 3], N, []);
     expect(res.ok).toBe(false);
     expect(res.warning).toMatch(/collinear/i);
   });

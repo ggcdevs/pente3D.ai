@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import fc from 'fast-check';
 import { Game } from './game';
 import { headHash } from './eventLog';
@@ -98,6 +98,21 @@ describe('importGame / deserializeGame — corrupt input throws a clear error', 
     expect(() => deserializeGame('{not json')).toThrow(ExportError);
   });
 
+  it('wraps a non-Error JSON.parse fault in ExportError, stringifying the thrown value', () => {
+    // JSON.parse normally throws a SyntaxError, but the error formatter must also
+    // handle a thrown non-Error value by String()-ing it rather than reading
+    // `.message`. Force that path and assert the message still comes through.
+    const spy = vi.spyOn(JSON, 'parse').mockImplementation(() => {
+      throw 'raw string fault';
+    });
+    try {
+      expect(() => deserializeGame('{}')).toThrow(ExportError);
+      expect(() => deserializeGame('{}')).toThrow(/raw string fault/);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('rejects a non-object payload', () => {
     expect(() => importGame(42 as unknown as GameExport)).toThrow(ExportError);
     expect(() => importGame(null as unknown as GameExport)).toThrow(ExportError);
@@ -142,6 +157,93 @@ describe('importGame / deserializeGame — corrupt input throws a clear error', 
         log: [{ type: 'place', node: 'x,y,z' }],
       } as unknown as GameExport),
     ).toThrow(ExportError);
+  });
+
+  it('rejects a log entry that is not an object', () => {
+    expect(() =>
+      importGame({
+        size: 9,
+        settings: {},
+        log: [42],
+      } as unknown as GameExport),
+    ).toThrow(/not an object/i);
+    expect(() =>
+      importGame({
+        size: 9,
+        settings: {},
+        log: [null],
+      } as unknown as GameExport),
+    ).toThrow(ExportError);
+  });
+
+  it('rejects a place event whose node is not a string', () => {
+    expect(() =>
+      importGame({
+        size: 9,
+        settings: {},
+        log: [{ type: 'place', node: 123 }],
+      } as unknown as GameExport),
+    ).toThrow(/node must be a string/i);
+    expect(() =>
+      importGame({
+        size: 9,
+        settings: {},
+        log: [{ type: 'place' }],
+      } as unknown as GameExport),
+    ).toThrow(/node must be a string/i);
+  });
+
+  it('rejects a place event whose node key has the wrong number of parts', () => {
+    // "1,2" has only two components — not a valid "x,y,z" triple.
+    expect(() =>
+      importGame({
+        size: 9,
+        settings: {},
+        log: [{ type: 'place', node: '1,2' }],
+      } as unknown as GameExport),
+    ).toThrow(/invalid node key/i);
+  });
+
+  it('rejects a place event whose node key is out of bounds', () => {
+    // "9,0,0" parses to a valid integer triple but is off-board for N=9.
+    expect(() =>
+      importGame({
+        size: 9,
+        settings: {},
+        log: [{ type: 'place', node: '9,0,0' }],
+      } as unknown as GameExport),
+    ).toThrow(/invalid node key/i);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('re-throws an unexpected (non-IllegalMove) error from the fold unwrapped', () => {
+    // The fold only ever throws IllegalMove for a bad move sequence; any *other*
+    // error is an unexpected fault and must propagate verbatim, never masked as
+    // an ExportError. Force such a fault and assert the original error escapes.
+    const boom = new RangeError('unexpected fold fault');
+    const spy = vi.spyOn(Game, 'fromLog').mockImplementation(() => {
+      throw boom;
+    });
+    expect(() =>
+      importGame({
+        size: 9,
+        settings: {},
+        log: [{ type: 'place', node: '0,0,0' }],
+      } as unknown as GameExport),
+    ).toThrow(boom);
+    // It is the raw error, not wrapped in ExportError.
+    let caught: unknown;
+    try {
+      importGame({ size: 9, settings: {}, log: [] } as unknown as GameExport);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBe(boom);
+    expect(caught).not.toBeInstanceOf(ExportError);
+    expect(spy).toHaveBeenCalled();
   });
 
   it('rejects a log whose events describe an illegal game', () => {

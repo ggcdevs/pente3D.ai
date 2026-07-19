@@ -168,11 +168,9 @@ function collinearAxis(
           break;
         }
       } else {
-        const ki = di / vi;
-        if (!Number.isInteger(ki)) {
-          consistent = false;
-          break;
-        }
+        // Every axis component is ±1 (unit-step vectors), so di/vi is exactly
+        // di*vi — always an integer. `ki` is the signed step count along axis i.
+        const ki = di * vi;
         if (k === undefined) k = ki;
         else if (k !== ki) {
           consistent = false;
