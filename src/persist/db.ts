@@ -21,7 +21,7 @@
  */
 
 /** The current schema version for the games database. */
-const DB_VERSION = 1;
+export const DB_VERSION = 1;
 
 /** The single object store this wrapper manages. */
 export const GAMES_STORE = 'games';
@@ -94,12 +94,28 @@ function transactionToPromise(tx: IDBTransaction): Promise<void> {
  * is created keyed by `id`. Callers pass the handle back into the operations below;
  * they own closing it.
  *
+ * The `games` store is created idempotently: `onupgradeneeded` fires on first open
+ * AND on every version bump, but the store is only ever created once. The
+ * `if (!contains(GAMES_STORE))` guard makes a bump that carries no new store a safe
+ * no-op — WITHOUT it, `createObjectStore('games')` on an already-present store throws
+ * `ConstraintError`, aborts the upgrade transaction, and rejects the open (losing the
+ * live handle and leaving prior data unreachable). The `version` parameter exists so
+ * this guard is reachable and testable: a test can re-open an existing db at a higher
+ * version and assert the open still succeeds with the store — and its data — intact.
+ *
  * @param name Database name (defaults to {@link DEFAULT_DB_NAME}). Tests pass a
  *   unique name per case for isolation.
+ * @param version Schema version to open at (defaults to {@link DB_VERSION}). Opening
+ *   at a version higher than the stored one triggers `onupgradeneeded`; opening below
+ *   it rejects with a `VersionError`. Callers should normally use the default; the
+ *   parameter chiefly lets tests drive a real upgrade through this same code path.
  */
-export function openDatabase(name: string = DEFAULT_DB_NAME): Promise<IDBDatabase> {
+export function openDatabase(
+  name: string = DEFAULT_DB_NAME,
+  version: number = DB_VERSION,
+): Promise<IDBDatabase> {
   return new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDB.open(name, DB_VERSION);
+    const request = indexedDB.open(name, version);
     request.onupgradeneeded = () => {
       const db = request.result;
       if (!db.objectStoreNames.contains(GAMES_STORE)) {

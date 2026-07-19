@@ -99,32 +99,27 @@ describe('store schema constants and creation', () => {
     });
   });
 
-  it('re-running the upgrade with the store already present does NOT recreate it (guard holds)', async () => {
-    // Genuinely exercises the `if (!contains(GAMES_STORE))` guard in onupgradeneeded:
-    // open at v1 (store created + data written), close, then force a v2 upgrade so
-    // onupgradeneeded fires again WITH the store already present. The guard must skip
-    // re-creation; without it, createObjectStore('games') would throw ConstraintError,
-    // abort the upgrade transaction, and reject the open — and the prior data would be
-    // unreachable. We assert the open succeeds AND the v1 data survives.
+  it('re-opening at a higher version replays the PRODUCTION onupgradeneeded and its guard skips re-creating the store', async () => {
+    // Drives the real `if (!contains(GAMES_STORE))` guard in the PRODUCTION
+    // openDatabase (db.ts) — no hand-inlined copy. openDatabase now takes a version
+    // param, so we open at v1 (store created + data written), close, then re-open at
+    // v2 THROUGH openDatabase itself. That fires the production onupgradeneeded again
+    // WITH the store already present. The guard must skip createObjectStore; without
+    // it (mutant `if (true)`), createObjectStore('games') throws ConstraintError,
+    // aborts the upgrade transaction, and openDatabase REJECTS — so this resolving
+    // open + surviving data kills that mutant. We assert the open succeeds AND the v1
+    // data survives the upgrade.
     const name = freshDbName();
     const db1 = await openDatabase(name);
     await putGame(db1, sampleRecord('survives-upgrade'));
     db1.close();
 
-    // Force a version bump to 2, replaying onupgradeneeded against the SAME guard.
-    const upgraded = await new Promise<IDBDatabase>((resolve, reject) => {
-      const req = indexedDB.open(name, 2);
-      req.onupgradeneeded = () => {
-        const db = req.result;
-        if (!db.objectStoreNames.contains(GAMES_STORE)) {
-          db.createObjectStore(GAMES_STORE, { keyPath: 'id' });
-        }
-      };
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-    });
+    // Real version bump through the production wrapper — replays its own guard.
+    const upgraded = await openDatabase(name, 2);
     opened.push(upgraded);
 
+    // The db opened at the new version (proving onupgradeneeded ran, not a plain open).
+    expect(upgraded.version).toBe(2);
     // The store still exists and the record written at v1 is intact after the upgrade.
     expect(upgraded.objectStoreNames.contains('games')).toBe(true);
     const loaded = await getGame(upgraded, 'survives-upgrade');

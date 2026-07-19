@@ -18,23 +18,31 @@
  * weaken a gate to pass it"). When the config/persist scope was first added the
  * overall score fell to 94.33% (config 88.46%, persist 87.06%) and the gate
  * correctly failed; the drop was fixed by ADDING mutation-killing tests, never by
- * lowering the bar — archive.ts reached 100%, db.ts 97.44%, config.ts 96.15%.
+ * lowering the bar — archive.ts reached 100%, db.ts 100% (see below), config.ts 96.15%.
  *
  * DETERMINISTIC score (after generous timeout hardening): the earlier core-only
  * build jittered because infinite-loop mutants flickered between Killed and Timeout
  * under machine load, letting the gate flip red by luck. Raising `timeoutMS`/
  * `timeoutFactor` (below) makes classification stable — genuine hangs still time out
  * (a legitimate kill), slow-but-terminating mutants finish and reveal their true
- * status. With the config/persist scope added, the overall score is 96.10% (core
- * 95.74%, config 96.15%, persist 98.82%) — a ~1.1 margin over break=95.
+ * status. With the config/persist scope added, the overall score is 96.22% (core
+ * 95.74%, config 96.15%, persist 100%) — a ~1.2 margin over break=95.
  *
  * The residual SURVIVING mutants are equivalent mutants that cannot be killed
  * without changing observable behavior — e.g. in core: the capture bounds pre-guard
- * at placePiece.ts (off-board lookups already return `undefined`); in persist:
- * db.ts's `if (!contains(GAMES_STORE))` in onupgradeneeded (creating an already-
- * present store is a no-op under a fresh v1 db); in config: the two `readOverride`
- * early-returns whose fall-through path yields the same `undefined`. Raise the
- * floor only alongside real tests that kill genuine survivors.
+ * at placePiece.ts (off-board lookups already return `undefined`); in config: the two
+ * `readOverride` early-returns whose fall-through path yields the same `undefined`.
+ * Raise the floor only alongside real tests that kill genuine survivors.
+ *
+ * NOTE: db.ts's `if (!contains(GAMES_STORE))` guard in onupgradeneeded was PREVIOUSLY
+ * listed here as an equivalent mutant, on the (incorrect) premise that the guard was
+ * unreachable because openDatabase only ever opened at a fixed version 1. That was a
+ * proof-by-inference: no test drove the production onupgradeneeded with the store
+ * already present. openDatabase now accepts a `version` param, and a test re-opens an
+ * existing db at a higher version through the production wrapper — genuinely firing the
+ * guard. With the guard mutated to `if (true)`, createObjectStore on the existing store
+ * throws ConstraintError, aborts the upgrade, and the open rejects; the test's resolving
+ * open + surviving data KILLS the mutant. db.ts is now 100% (39/39), no survivors.
  *
  * Gate-rejection VERIFIED (agent-principles.md #7): with break temporarily set
  * to 97 and score 96.10%, `stryker run` printed "Final mutation score 96.10
