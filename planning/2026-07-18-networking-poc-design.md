@@ -257,6 +257,35 @@ non-breaking if the seams below exist:
    (black/white) plus spectators, derived from presence. v1: everyone's a player. Future:
    seat assignment + "room full" rejection is a policy on top, not a data-model rewrite.
 
+### Seat & reconnection model (raised 2026-07-18)
+
+**v1 direction — identity-owned sticky seats.** Chosen over pure positional slots because
+it makes network drops/refreshes a non-event (the stated goal). Base rules:
+
+- Two seats, **white / black**. First joiner → white; second → black (first-available,
+  white-preferred).
+- Seats are **owned by a persistent `playerId`** (localStorage, survives refresh +
+  reconnect), not by position. On join: if your `playerId` already owns a seat → **reclaim
+  it** (same seat, same color); else take the first free seat; else **reject**.
+- A player leaving frees their seat for a new owner; a **3rd distinct player is rejected**
+  (spectator is a trivial future toggle the model already affords).
+- Seat map lives in the **shared retained state** (dumb relay stays dumb).
+
+**Deferred flex points (handle as need arises — user: "we'll handle those cases later as
+need arises ... add those as design flex points"):**
+
+- **Grace window** — mark a dropped seat *vacant-but-reserved* for its owner for ~30–60s
+  before it opens to a new joiner (prevents seat theft during a wifi blip).
+- **Color-swap protection** on double-rejoin (both players drop, rejoin in swapped order) —
+  falls out of identity ownership once grace/reclaim exists.
+- **Simultaneous-claim tiebreaker** — two clients grabbing the same free seat at once:
+  deterministic resolution (earlier timestamp, then lower `playerId`; loser re-evaluates).
+  Rare with 2 players.
+- **Spectator mode** — admit extra joiners as read-only instead of rejecting.
+
+v1 builds the base rules; the deferred items must remain drop-in (they all sit on the
+`playerId` + seat-map-in-shared-state foundation, so no rewrite).
+
 ## Open items for the next design pass (non-POC)
 
 Flagged during review of the planning docs; to discuss when we move past networking
