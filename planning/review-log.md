@@ -178,3 +178,25 @@ structural fixes (self-proving + now deterministic gates) make it enforceable. A
 lesson for the main loop: **verify flaky metrics with ≥2 runs, never 1** — I declared Stage 1
 done on a single green mutation run; that was the exact over-confidence the reviewers exist to
 catch, and they did.
+
+## Stage 2 — persistence (correctly scoped re-gate) — DONE
+
+Adversarial reviewers caught TWO real issues the mechanical gates could NOT:
+1. **Silent correctness bug** — `saveGame` never stored the board `size`, so `loadGame`
+   always rebuilt at size-9; any non-9 game was silently corrupted. **100% coverage missed
+   it** (code was executed; no test used a non-9 board) and **mutation testing would also miss
+   it** (mutation perturbs existing code — it cannot invent a missing field). Only reading the
+   code against its own contract found it (saveGame's docstring promised round-trip fidelity;
+   flagConflicted + serialize stored size; saveGame didn't). **Key lesson: the adversarial
+   reviewer is a DISTINCT layer — missing-behavior / spec-deviation is invisible to coverage
+   and mutation.** Fixed + tested (size-5 round-trip asserts size===5).
+2. **Misleading test** — a db.test claimed to drive the production `onupgradeneeded` guard but
+   hand-inlined a copy. Fixed: db.ts takes a `version` param; a real test fires the guard.
+
+Gate correctly bit mid-run (adding scope dropped mutation to 94.33% → exit 1; fixed by ADDING
+tests: archive 100%, db 100%, config 96.15%). Final (main-loop verified): 248 tests, core/
+config/persist 100% coverage (enforced), full-scope mutation **96.22%** deterministic (enforced
+≥95), lint clean, pushed. **Verdict: Stage 2 complete.**
+
+Also: the `args` mis-scope fix (fail-loud) worked — this run correctly resolved scope to
+`src/config src/persist`.
