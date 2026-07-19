@@ -13,8 +13,12 @@
  */
 
 import { keyOf, inBounds, type Coord } from './coords';
-import { DIRECTIONS } from './axes';
+import { AXES, DIRECTIONS } from './axes';
 import { IllegalMove, opponent, type GameState, type Player } from './gameState';
+
+/** Pieces to win by a line (five-in-a-row) or by capture pairs. */
+const WIN_RUN = 5;
+const WIN_PAIRS = 5;
 
 /**
  * Resolve custodian captures triggered by `player` placing at `placed` on a
@@ -71,11 +75,20 @@ function resolveCaptures(
 }
 
 /**
- * Determine whether `player` has won after placing at `placed`.
+ * Determine whether `player` has won after placing at `placed` (Task 1.6).
  *
- * Stub for Task 1.6. Reports no win; Task 1.6 will detect a run of ≥5 through the
- * placed node along any of the 13 axes, and 5 capture pairs, populating
- * `winningLine`.
+ * Two winning conditions (game-core design, Part 2 — always evaluated across all
+ * 13 axes, independent of any view state, per the GLOSSARY "Ruleset invariant"):
+ *
+ *   - **Five capture pairs** — `captures >= 5` pairs. Checked first; a capture win
+ *     records no `winningLine`.
+ *   - **Five-in-a-row** — a maximal run of ≥5 same-colour pieces through the just-
+ *     placed node along any axis. For each of the 13 axes we extend from `placed`
+ *     in both directions counting contiguous same-colour pieces; if the run
+ *     reaches `WIN_RUN`, we record its node keys as `winningLine`.
+ *
+ * "≥5" (rather than exactly 5) is a defensive guard against an over-count bug
+ * (design note: "5 or more [was] a soft catch").
  */
 function checkWin(
   pieces: Record<string, Player>,
@@ -83,10 +96,43 @@ function checkWin(
   player: Player,
   captures: number,
 ): { winner: Player | null; winningLine?: readonly string[] } {
-  void pieces;
-  void placed;
-  void player;
-  void captures;
+  // Capture-pair win.
+  if (captures >= WIN_PAIRS) {
+    return { winner: player };
+  }
+
+  // Five-in-a-row: for each axis, walk both ways from the placed node.
+  for (const { vec } of AXES) {
+    const run: Coord[] = [placed];
+
+    // Forward along +axis. Off-board nodes are simply absent from `pieces`, so
+    // the same-colour check terminates the walk without a bounds test.
+    for (let step = 1; ; step++) {
+      const n: Coord = [
+        placed[0] + step * vec[0],
+        placed[1] + step * vec[1],
+        placed[2] + step * vec[2],
+      ];
+      if (pieces[keyOf(n)] !== player) break;
+      run.push(n);
+    }
+
+    // Backward along −axis.
+    for (let step = 1; ; step++) {
+      const n: Coord = [
+        placed[0] - step * vec[0],
+        placed[1] - step * vec[1],
+        placed[2] - step * vec[2],
+      ];
+      if (pieces[keyOf(n)] !== player) break;
+      run.unshift(n);
+    }
+
+    if (run.length >= WIN_RUN) {
+      return { winner: player, winningLine: run.map((c) => keyOf(c)) };
+    }
+  }
+
   return { winner: null };
 }
 
