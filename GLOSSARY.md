@@ -58,7 +58,13 @@ the tie-breaker.
 - **Control preset** — a named set of camera controls (e.g. Fusion 360, web-friendly).
   Selectable and customizable via the same config system.
 - **Context / scope** — an input layer that determines which command a key triggers *right
-  now* (e.g. `game`, `settingsModal`, `tempPlacement`). (Model TBD — under design.)
+  now*. The app maintains a **stack** of active scopes (e.g. `global` → `game` →
+  `tempPlacement`); opening a modal or mode pushes a scope, closing pops it. Each scope is
+  its own `key → commandID` map. A keypress **resolves top-down**: the topmost scope that
+  binds the key wins, else it falls through to the scope below.
+- **Blocking scope** — a scope that *swallows* unhandled keys instead of letting them fall
+  through (`blocking: true`). Modals (settings, menu) block; modes (temp placement)
+  usually don't, so e.g. camera controls still work during a preview.
 
 ## Networking (see `planning/2026-07-18-networking-poc-design.md`)
 
