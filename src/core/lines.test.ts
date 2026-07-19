@@ -83,8 +83,44 @@ describe('generateAllLines — dedup-free enumeration', () => {
 
 describe('linesThroughNode index', () => {
   const N = 9;
-  const lines = generateAllLines(N);
-  const index = buildLinesThroughNode(lines);
+
+  it('first insertion of a key creates a fresh one-element list (not an append to undefined)', () => {
+    // Build the index over a SINGLE known line so its every node key is inserted
+    // for the first time (index.get(key) === undefined at that point). This runs
+    // inside an it() so any collection-time throw IS attributed to this test.
+    // Kills `if (ids) ids.push(...)` mutated to always-push (`if (true)`), which
+    // would call `undefined.push(...)` on the first node and throw, and the
+    // ObjectLiteral/entry mutations that would leave the map empty.
+    // The orthogonal x-line through y=0,z=0 is the 9 nodes (0,0,0)..(8,0,0).
+    const oneLine = generateFullLine([0, 0, 0], [8, 0, 0], N, []).line!;
+    expect(oneLine.nodes.length).toBe(9);
+    const solo = buildLinesThroughNode([oneLine]);
+    // Exactly the line's own 9 nodes are keyed; each maps to exactly its one id.
+    expect(solo.size).toBe(9);
+    for (let x = 0; x < N; x++) {
+      expect(solo.get(keyOf([x, 0, 0]))).toEqual([oneLine.id]);
+    }
+    // Nodes off this line are absent (not silently keyed).
+    expect(solo.has(keyOf([0, 1, 0]))).toBe(false);
+    expect(solo.has(keyOf([4, 4, 4]))).toBe(false);
+  });
+
+  it('appends a second id when a later line revisits an already-keyed node', () => {
+    // Two lines sharing exactly one node: that node's list must hold BOTH ids in
+    // insertion order (first line, then second). This exercises the append arm
+    // (`ids.push`) after the create arm, so neither arm can be dropped without a
+    // failure: create-only would miss the 2nd id; append-only would throw on the
+    // 1st. Space diagonal (0,0,0)->(8,8,8) and orthogonal x through (4,4,4)
+    // meet only at (4,4,4).
+    const diag = generateFullLine([0, 0, 0], [8, 8, 8], N, []).line!;
+    const orth = generateFullLine([0, 4, 4], [8, 4, 4], N, []).line!;
+    expect(diag.id).not.toBe(orth.id);
+    const idx = buildLinesThroughNode([diag, orth]);
+    expect(idx.get(keyOf([4, 4, 4]))).toEqual([diag.id, orth.id]);
+    // Nodes unique to each line still map to just that line.
+    expect(idx.get(keyOf([0, 0, 0]))).toEqual([diag.id]);
+    expect(idx.get(keyOf([0, 4, 4]))).toEqual([orth.id]);
+  });
 
   const cases: Array<[string, Coord]> = [
     ['corner', [0, 0, 0]],
@@ -94,6 +130,8 @@ describe('linesThroughNode index', () => {
 
   for (const [label, node] of cases) {
     it(`lists exactly the lines containing the ${label} node, and each truly contains it`, () => {
+      const lines = generateAllLines(N);
+      const index = buildLinesThroughNode(lines);
       const key = keyOf(node);
       const ids = index.get(key) ?? [];
       // Independent brute-force set of lines that contain the node.
@@ -115,6 +153,7 @@ describe('linesThroughNode index', () => {
   }
 
   it('center node lies on exactly 13 lines (one per axis)', () => {
+    const index = buildLinesThroughNode(generateAllLines(N));
     const ids = index.get(keyOf([4, 4, 4])) ?? [];
     expect(ids.length).toBe(13);
   });

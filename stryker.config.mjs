@@ -12,12 +12,15 @@
  * Do NOT lower this to make a run pass; kill the surviving mutant with a genuine
  * test instead (agent-principles.md #6 — "Never weaken a gate to pass it").
  *
- * The residual ~4% of surviving mutants are equivalent / redundant-guard mutants
- * (e.g. the capture bounds pre-guard at placePiece.ts:54, whose off-board lookups
- * already return `undefined`; the `stateAt` clamp boundary in game.ts:99; the
- * arity guard redundant with the round-trip guard in serialize.ts:166) that
+ * Current measured score is ~96.7% (reproducible across runs; `npm run mutate`
+ * exits 0). The residual surviving mutants are equivalent / redundant-guard
+ * mutants (e.g. the capture bounds pre-guard at placePiece.ts:54, whose off-board
+ * lookups already return `undefined`; the `stateAt` clamp boundary in game.ts:99;
+ * the arity guard redundant with the round-trip guard in serialize.ts:166) that
  * cannot be killed without changing observable behavior. 95 is the honest,
- * sustainable floor for the current suite; raise it only alongside real tests.
+ * sustainable floor for the current suite — kept below the measured score so
+ * timeout-classification jitter cannot flip the gate red; raise it only alongside
+ * real tests that widen the margin.
  *
  * @type {import('@stryker-mutator/api/core').PartialStrykerOptions}
  */
