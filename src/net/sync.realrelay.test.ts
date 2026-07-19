@@ -110,9 +110,13 @@ describe('real relay: two SyncEngines over the LIVE MQTT broker', () => {
   let db: IDBDatabase;
 
   /** Build a SyncEngine on a real MqttTransport with a stable peer id. */
-  function makeEngine(peerId: string, size = 9): SyncEngine {
+  function makeEngine(
+    peerId: string,
+    myColor: 'white' | 'black' = 'white',
+    size = 9,
+  ): SyncEngine {
     const transport = new MqttTransport(relay, { connect: realConnect, peerId });
-    const engine = new SyncEngine(new Game(size), transport, db, () => meta);
+    const engine = new SyncEngine(new Game(size), transport, db, () => meta, myColor);
     engines.push(engine);
     return engine;
   }

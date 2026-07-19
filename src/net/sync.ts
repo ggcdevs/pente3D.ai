@@ -44,6 +44,7 @@ import {
   type EventLog,
 } from '../core/eventLog';
 import type { Coord } from '../core/coords';
+import { opponent, type GameState, type Player } from '../core/gameState';
 import { flagConflicted, type ArchivedMeta } from '../persist/archive';
 import type { Transport, TransportMessage } from './transport';
 
@@ -92,6 +93,45 @@ export function decideSync(local: EventLog, remote: EventLog): SyncDecision {
   if (isPrefix(local, remote)) return { action: 'adopt' };
   // Neither is a prefix → the histories fork.
   return { action: 'conflict', divergePly: firstDivergence(local, remote) };
+}
+
+/**
+ * The result of asking whether a player may emit an `undo`: permitted, or refused
+ * with a machine-readable reason.
+ */
+export type UndoDecision =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly reason: UndoRejection };
+
+/** Why a networked undo was refused (design: restricted undo — option 2). */
+export type UndoRejection = 'nothing-to-undo' | 'not-your-move';
+
+/**
+ * Decide whether the player seated as `myColor` may `undo` from the given live
+ * `state` at ply `ply` (pure — no side effects). This is the **restricted**
+ * networked-undo rule (game-core design Part 3: "a client only emits an `undo`
+ * event for its **own last move**"):
+ *
+ *   - `nothing-to-undo` — `ply === 0`: no committed move exists to step back.
+ *   - `not-your-move`   — the last committed move was the *opponent's*, so this
+ *                         client may not undo it.
+ *   - `ok`              — there is a move and its mover is `myColor`.
+ *
+ * The last mover's color is derived from `state.turn`: a normal `place` flips the
+ * turn, so the just-moved player is `opponent(state.turn)`. On a **winning** move
+ * the turn does *not* flip, and `state.turn` stays the winner — who is exactly the
+ * last mover — so the rule still correctly attributes a winning move to its player
+ * (a player may undo its own winning move; the opponent may not).
+ */
+export function decideUndo(
+  state: GameState,
+  ply: number,
+  myColor: Player,
+): UndoDecision {
+  if (ply === 0) return { ok: false, reason: 'nothing-to-undo' };
+  const lastMover = state.winner === null ? opponent(state.turn) : state.turn;
+  if (lastMover !== myColor) return { ok: false, reason: 'not-your-move' };
+  return { ok: true };
 }
 
 /** Build a {@link SyncMessage} carrying `log`'s full history and head hash. */
@@ -170,6 +210,8 @@ export class SyncEngine {
   private readonly db: IDBDatabase;
   private readonly meta: MetaProvider;
   private readonly size: number;
+  /** This client's own seat color — the basis of the restricted-undo rule. */
+  private readonly myColor: Player;
   private _status: SyncStatus = { kind: 'ok' };
   private _conflict: { mine: EventLog; theirs: EventLog } | null = null;
   /** The in-flight conflict-archival write, if any (for {@link whenSettled}). */
@@ -181,18 +223,23 @@ export class SyncEngine {
    *   by {@link connect}).
    * @param db The IndexedDB handle used to archive a conflicted game.
    * @param meta Supplies archive metadata lazily, only if a conflict occurs.
+   * @param myColor This client's own seat color (from the seat manager). It gates
+   *   the restricted networked undo: only the player who made the last move may
+   *   undo it.
    */
   constructor(
     game: Game,
     transport: Transport,
     db: IDBDatabase,
     meta: MetaProvider,
+    myColor: Player,
   ) {
     this._game = game;
     this.transport = transport;
     this.db = db;
     this.meta = meta;
     this.size = game.state().size;
+    this.myColor = myColor;
   }
 
   /** The live game (its log is the canonical, syncable source of truth). */
@@ -226,6 +273,40 @@ export class SyncEngine {
   place(coords: Coord): void {
     this.assertLive();
     this._game.place(coords);
+    this.publishState();
+  }
+
+  /**
+   * Undo this client's **own last move** as a real, synced action, then publish
+   * the extended log so the peer adopts it and steps back too.
+   *
+   * The restriction is enforced by the pure {@link decideUndo}: undo is refused
+   * (a {@link SyncError} is thrown, and **no** `undo` event is appended or
+   * published) unless there is a committed move to undo *and* the player who made
+   * it is this client (`myColor`). This is the restricted networked-undo rule
+   * (game-core design Part 3): a client only emits `undo` for its own last move;
+   * shared cooperative undo is the deferred alternative.
+   *
+   * On success the `undo` is an appended event (never a truncation): the log
+   * grows, the peer sees a strict extension of its history and adopts it, and both
+   * sides fold the `undo` to step their cursor back — convergence by the same
+   * prefix/hash path as any move.
+   *
+   * @throws {SyncError} if the game is stopped by a conflict, or if the undo is
+   *   not permitted (nothing to undo / not this client's move). The reason is in
+   *   the message. Refused undos leave the game and log untouched.
+   */
+  undo(): void {
+    this.assertLive();
+    const decision = decideUndo(this._game.state(), this._game.ply(), this.myColor);
+    if (!decision.ok) {
+      throw new SyncError(
+        decision.reason === 'nothing-to-undo'
+          ? 'cannot undo: nothing-to-undo'
+          : 'cannot undo: not-your-move (a client may only undo its own last move)',
+      );
+    }
+    this._game.undo();
     this.publishState();
   }
 
