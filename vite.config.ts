@@ -47,6 +47,17 @@ export default defineConfig({
           functions: 100,
           lines: 100,
         },
+        // The networking seam (Transport + MqttTransport) is fully unit-coverable:
+        // the pure routing/topic/presence logic and the MockTransport are exercised
+        // directly, and the mqtt adapter's client is injected so its glue is driven
+        // by a fake client (the LIVE broker is proven separately by Task 3.3, not by
+        // padding this gate). Held to the same hard 100% floor. Do not weaken.
+        'src/net/**/*.ts': {
+          statements: 100,
+          branches: 100,
+          functions: 100,
+          lines: 100,
+        },
       },
     },
   },

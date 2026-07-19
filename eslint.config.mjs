@@ -75,6 +75,17 @@ export default tseslint.config(
       ecmaVersion: 2022,
       sourceType: 'module',
     },
+    rules: {
+      // Allow a leading-underscore to mark an intentionally-unused binding —
+      // e.g. a reserved-but-ignored interface param (`connect(room, _opts?)`,
+      // the v1 room-password seam). This is the idiomatic ESLint signal for
+      // "deliberately unused", not a relaxation of unused-var detection: any
+      // non-underscore unused binding still errors.
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
+      ],
+    },
   },
   coreForbiddenImports,
   vitestTestIntegrity,
