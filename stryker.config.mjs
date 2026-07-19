@@ -58,23 +58,34 @@
  * OBSERVED (full configured `npx stryker run`, 2026-07-19, after guarding the
  * state-mutating SyncEngine.receive() against a post-conflict message and adding the
  * negative test that kills the conflict-freeze mutant): overall 96.95% (exit 0,
- * >= break 95; 900 killed, 21 timeout, 29 survived), net src/net 97.44% =
- * seats.ts 100% (44/44), sync.ts 96.43% (108 killed, 4 survivors) — a 1.95 margin
- * over break=95. The 4 residual sync.ts survivors are EQUIVALENT mutants that cannot
- * be killed without asserting on non-behavior: two error-MESSAGE StringLiterals
- * (sync.ts:172, :182 — the *text* inside a thrown SyncError, not its type/occurrence,
- * both of which ARE asserted), the `case 'ignore'` label StringLiteral (:346 — `case
- * ''` behaves identically because neither value ever equals a real action string, so
- * the ignore/no-op path is unchanged), and the `whenSettled` BlockStatement (:392 —
- * emptying `await this._archiving` still resolves, and the conflict-persistence is
- * already proven by loadConflicted reading the record back). Scoped re-run
- * `npx stryker run --mutate src/net/sync.ts` independently reports sync.ts 96.43%
- * (108/112), same 4 survivors — the per-file score is scope-independent. Gate-rejection
- * re-VERIFIED (agent-principles.md #7): with break temporarily set to 98, `stryker run`
- * printed "Final mutation score 97.16 under breaking threshold 98, setting exit code to 1
- * (failure)" and exited 1 (the 96.95↔97.16 delta is the documented timeout-classification
- * jitter, well inside the 95 bar); restored to 95. These are the observed current numbers —
- * do NOT re-document stale/unrun figures as fact (agent-principles.md #2/#3/#7).
+ * >= break 95; 902 killed, 19 timeout, 29 survived), net src/net 98.08% =
+ * seats.ts 100% (44/44), sync.ts 97.32% (109 killed, 3 survivors) — a 2.32 margin
+ * over break=95. The 3 residual sync.ts survivors in THIS full run are EQUIVALENT
+ * mutants that cannot be killed without asserting on non-behavior:
+ *   - sync.ts:172:9 — the headHash-mismatch error-MESSAGE StringLiteral (`computed
+ *     ${headHash(log)}` → ``, i.e. blanking the *text* inside the thrown SyncError;
+ *     its TYPE and occurrence ARE asserted, only the human-readable suffix is not);
+ *   - sync.ts:346:12 — the `case 'ignore':` label StringLiteral (→ `case "":`; neither
+ *     value ever equals a real action string, so the ignore/no-op arm is unchanged);
+ *   - sync.ts:392:38 — the `whenSettled` BlockStatement (→ `{}`; emptying the
+ *     `await this._archiving` still resolves, and conflict-persistence is separately
+ *     proven by loadConflicted reading the archived record back).
+ *
+ * PER-FILE SCORE IS SCOPE-DEPENDENT (do NOT claim otherwise): the scoped re-run
+ * `npx stryker run --mutate src/net/sync.ts` reports sync.ts 95.54% (107 killed,
+ * 5 survivors), NOT the full-run 97.32%. The scoped run keeps the 3 above AND adds
+ * two more that the full run KILLS via other suites' perTest coverage:
+ * sync.ts:182:17 (`this.name = 'SyncError'` → `""` — the error's .name, not a
+ * message) and sync.ts:373:58 (`result: 'conflicted'` → `""` — the archived meta
+ * result). Both are Killed in the full run (verified in the JSON report: :182 Killed,
+ * :373:32 ObjectLiteral→{} Killed, :373:58 Killed), so the residual-survivor set
+ * shrinks with wider scope. Report the scope you ran; the numbers above are the two
+ * runs actually observed on 2026-07-19, not a single scope-independent figure.
+ * Gate-rejection re-VERIFIED (agent-principles.md #7): with break temporarily set to
+ * 98 and overall 96.95%, `stryker run` printed "Final mutation score 96.95 under
+ * breaking threshold 98, setting exit code to 1 (failure)" and exited 1; restored to
+ * 95. These are the observed current numbers — do NOT re-document stale/unrun figures
+ * as fact (agent-principles.md #2/#3/#7).
  *
  * @type {import('@stryker-mutator/api/core').PartialStrykerOptions}
  */
