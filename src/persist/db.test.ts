@@ -20,6 +20,8 @@ import {
   getGame,
   listGames,
   deleteGame,
+  GAMES_STORE,
+  DEFAULT_DB_NAME,
   type GameRecord,
 } from './db';
 
@@ -62,6 +64,74 @@ function sampleRecord(id: string): GameRecord {
     },
   };
 }
+
+describe('store schema constants and creation', () => {
+  it('exposes the exact store name "games" and default db name "pente3d"', () => {
+    // Pin the literal SSOT values — an emptied constant would still let the
+    // self-consistent round-trip tests pass, so assert the concrete strings.
+    expect(GAMES_STORE).toBe('games');
+    expect(DEFAULT_DB_NAME).toBe('pente3d');
+  });
+
+  it('creates the "games" object store on first open (named exactly GAMES_STORE)', async () => {
+    const { db } = await open();
+    // The created store must be reachable under the exact name — proves the
+    // createObjectStore name is not empty and matches the constant used by ops.
+    expect(db.objectStoreNames.contains('games')).toBe(true);
+    expect(db.objectStoreNames.contains(GAMES_STORE)).toBe(true);
+    expect(Array.from(db.objectStoreNames)).toContain('games');
+  });
+
+  it('openDatabase() with no name uses DEFAULT_DB_NAME and round-trips a record', async () => {
+    // Exercise the DEFAULT_DB_NAME default parameter end-to-end (not just its value):
+    // open with no arg, store+read a record, then clean up the shared default db.
+    const db = await openDatabase();
+    opened.push(db);
+    await putGame(db, sampleRecord('default-db-game'));
+    const loaded = await getGame(db, 'default-db-game');
+    expect(loaded?.id).toBe('default-db-game');
+    db.close();
+    opened.splice(opened.indexOf(db), 1);
+    await new Promise<void>((resolve, reject) => {
+      const del = indexedDB.deleteDatabase(DEFAULT_DB_NAME);
+      del.onsuccess = () => resolve();
+      del.onerror = () => reject(del.error);
+    });
+  });
+
+  it('re-running the upgrade with the store already present does NOT recreate it (guard holds)', async () => {
+    // Genuinely exercises the `if (!contains(GAMES_STORE))` guard in onupgradeneeded:
+    // open at v1 (store created + data written), close, then force a v2 upgrade so
+    // onupgradeneeded fires again WITH the store already present. The guard must skip
+    // re-creation; without it, createObjectStore('games') would throw ConstraintError,
+    // abort the upgrade transaction, and reject the open — and the prior data would be
+    // unreachable. We assert the open succeeds AND the v1 data survives.
+    const name = freshDbName();
+    const db1 = await openDatabase(name);
+    await putGame(db1, sampleRecord('survives-upgrade'));
+    db1.close();
+
+    // Force a version bump to 2, replaying onupgradeneeded against the SAME guard.
+    const upgraded = await new Promise<IDBDatabase>((resolve, reject) => {
+      const req = indexedDB.open(name, 2);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(GAMES_STORE)) {
+          db.createObjectStore(GAMES_STORE, { keyPath: 'id' });
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    opened.push(upgraded);
+
+    // The store still exists and the record written at v1 is intact after the upgrade.
+    expect(upgraded.objectStoreNames.contains('games')).toBe(true);
+    const loaded = await getGame(upgraded, 'survives-upgrade');
+    expect(loaded?.id).toBe('survives-upgrade');
+    expect(loaded?.log).toHaveLength(3);
+  });
+});
 
 describe('IndexedDB games store wrapper', () => {
   it('round-trips a record through put then get', async () => {

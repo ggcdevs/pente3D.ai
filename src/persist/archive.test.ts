@@ -15,10 +15,11 @@
  */
 
 import 'fake-indexeddb/auto';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import fc from 'fast-check';
 import { Game } from '../core/game';
 import { headHash } from '../core/eventLog';
+import * as serialize from '../core/serialize';
 import {
   openDatabase,
   getGame,
@@ -178,8 +179,12 @@ describe('game archive', () => {
       await putGame(db, corrupt);
 
       await expect(loadGame(db, 'bad')).rejects.toBeInstanceOf(ArchiveError);
-      // The error names the id so a caller can report which game failed.
-      await expect(loadGame(db, 'bad')).rejects.toThrow(/bad/);
+      // The error names the id so a caller can report which game failed, and its
+      // `.name` is exactly 'ArchiveError' (pins the constructor's name assignment).
+      await expect(loadGame(db, 'bad')).rejects.toThrow(/archived game "bad"/);
+      const err = await loadGame(db, 'bad').catch((e) => e);
+      expect(err).toBeInstanceOf(ArchiveError);
+      expect((err as Error).name).toBe('ArchiveError');
     });
 
     it('loadGame throws ArchiveError when the stored log describes an illegal game', async () => {
@@ -271,6 +276,32 @@ describe('game archive', () => {
       ]);
     });
 
+    it('flagConflicted stores the caller-provided size verbatim (not the default)', async () => {
+      const { db } = await open();
+      // Provide an explicit size of 5 (≠ the default 9). It must be stored as-is;
+      // with `input.size && DEFAULT_SIZE` the truthy 5 would be discarded for 9.
+      await flagConflicted(db, 'sized', {
+        mineLog: new Game(5).log,
+        theirsLog: new Game(5).log,
+        meta: sampleMeta,
+        size: 5,
+      });
+      const record = (await getGame(db, 'sized')) as unknown as { size: number };
+      expect(record.size).toBe(5);
+    });
+
+    it('flagConflicted falls back to the default size (9) when none is provided', async () => {
+      const { db } = await open();
+      // No size given → the `?? DEFAULT_SIZE` fallback must store 9.
+      await flagConflicted(db, 'unsized', {
+        mineLog: sampleGame().log,
+        theirsLog: forkedGame().log,
+        meta: sampleMeta,
+      });
+      const record = (await getGame(db, 'unsized')) as unknown as { size: number };
+      expect(record.size).toBe(9);
+    });
+
     it('a conflicted game reconstructs BOTH forks as identical Games on load', async () => {
       const { db } = await open();
       const mine = sampleGame();
@@ -317,6 +348,147 @@ describe('game archive', () => {
       await saveGame(db, 'ordinary', sampleGame(), sampleMeta);
 
       await expect(loadConflicted(db, 'ordinary')).rejects.toBeInstanceOf(ArchiveError);
+      // The message names the id and the reason — proves it is the "not conflicted"
+      // path (not some other failure) and that the id is interpolated, not empty.
+      await expect(loadConflicted(db, 'ordinary')).rejects.toThrow(
+        /archived game "ordinary" is not a conflicted game/,
+      );
+    });
+
+    it('loadConflicted throws when result IS "conflicted" but the forks are missing', async () => {
+      const { db } = await open();
+      // A record flagged conflicted but with NO `forks` field (corrupt/partial write).
+      // This isolates the `record.forks === undefined` half of the guard: the result
+      // check alone passes, so only the forks check can reject here.
+      const noForks = {
+        id: 'flagged-no-forks',
+        log: [{ type: 'place', node: '4,4,4' }],
+        meta: {
+          players: {},
+          result: 'conflicted',
+          startedAt: 0,
+          headHash: 'x',
+        },
+      };
+      await putGame(db, noForks as unknown as GameRecord);
+
+      await expect(loadConflicted(db, 'flagged-no-forks')).rejects.toBeInstanceOf(
+        ArchiveError,
+      );
+      await expect(loadConflicted(db, 'flagged-no-forks')).rejects.toThrow(
+        /archived game "flagged-no-forks" is not a conflicted game/,
+      );
+    });
+
+    it('loadConflicted throws when forks ARE present but result is not "conflicted"', async () => {
+      const { db } = await open();
+      // The mirror case: forks exist, but result is some other status. This isolates
+      // the `result !== 'conflicted'` half of the guard (so the `||` cannot collapse
+      // to `&&` and still pass): forks-present alone must not admit the record.
+      const forkLog = [{ type: 'place', node: '4,4,4' }];
+      const wrongResult = {
+        id: 'forks-wrong-result',
+        log: forkLog,
+        size: 9,
+        forks: { mine: forkLog, theirs: forkLog },
+        meta: {
+          players: {},
+          result: 'in-progress',
+          startedAt: 0,
+          headHash: 'x',
+        },
+      };
+      await putGame(db, wrongResult as unknown as GameRecord);
+
+      await expect(loadConflicted(db, 'forks-wrong-result')).rejects.toBeInstanceOf(
+        ArchiveError,
+      );
+    });
+
+    it('loadConflicted names the offending fork ("(mine)" / "(theirs)") when a fork log is corrupt', async () => {
+      const { db } = await open();
+      const goodLog = [{ type: 'place', node: '4,4,4' }];
+      const badLog = [{ type: 'teleport', node: '4,4,4' }]; // unknown event → illegal
+
+      // Corrupt MINE fork: the error must name "(mine)".
+      await putGame(db, {
+        id: 'bad-mine',
+        log: badLog,
+        size: 9,
+        forks: { mine: badLog, theirs: goodLog },
+        meta: { players: {}, result: 'conflicted', startedAt: 0, headHash: 'x' },
+      } as unknown as GameRecord);
+      await expect(loadConflicted(db, 'bad-mine')).rejects.toThrow(/bad-mine \(mine\)/);
+
+      // Corrupt THEIRS fork (mine good): the error must name "(theirs)".
+      await putGame(db, {
+        id: 'bad-theirs',
+        log: goodLog,
+        size: 9,
+        forks: { mine: goodLog, theirs: badLog },
+        meta: { players: {}, result: 'conflicted', startedAt: 0, headHash: 'x' },
+      } as unknown as GameRecord);
+      await expect(loadConflicted(db, 'bad-theirs')).rejects.toThrow(
+        /bad-theirs \(theirs\)/,
+      );
+    });
+
+    it('loadConflicted falls back to the default board size when the record omits size', async () => {
+      const { db } = await open();
+      // A legacy/hand-written conflicted record with NO `size` field: the loader
+      // must fall back to DEFAULT_SIZE (9) rather than reconstruct with `undefined`.
+      // Use a coord (8,8,8) that is only in-bounds on a 9-board — proving the
+      // fallback size is genuinely 9, not some smaller/other value.
+      const forkLog = [
+        { type: 'place', node: '8,8,8' },
+        { type: 'place', node: '0,0,0' },
+      ];
+      const record = {
+        id: 'legacy-conflict',
+        log: forkLog,
+        // NOTE: intentionally no `size` key on this record.
+        forks: { mine: forkLog, theirs: forkLog },
+        meta: {
+          players: { white: 'a', black: 'b' },
+          result: 'conflicted',
+          startedAt: 42,
+          headHash: 'h',
+        },
+      };
+      await putGame(db, record as unknown as GameRecord);
+
+      const loaded = await loadConflicted(db, 'legacy-conflict');
+      expect(loaded).toBeDefined();
+      // (8,8,8) placed legally proves the board was sized 9 (the default); on a
+      // smaller board this coord would be off-board and reconstruction would throw.
+      expect(loaded!.mine.state().pieces['8,8,8']).toBe('white');
+      expect(loaded!.theirs.state().pieces['8,8,8']).toBe('white');
+      expect(loaded!.mine.ply()).toBe(2);
+    });
+  });
+
+  describe('error translation (defensive)', () => {
+    it('wraps a non-Error thrown by importGame via String(e), never masking it', async () => {
+      const { db } = await open();
+      await saveGame(db, 'g1', sampleGame(), sampleMeta);
+      // Fault-injection to reach the genuinely-defensive `String(e)` branch:
+      // importGame's own contract only throws ExportError (an Error), so a
+      // non-Error escapee is otherwise unreachable. Make it throw a bare string
+      // and assert the ArchiveError carries that exact string verbatim (the error
+      // is propagated honestly, not swallowed or mislabeled — agent-principles #3).
+      const spy = vi
+        .spyOn(serialize, 'importGame')
+        .mockImplementation(() => {
+          throw 'raw-string-fault';
+        });
+      try {
+        await expect(loadGame(db, 'g1')).rejects.toBeInstanceOf(ArchiveError);
+        await expect(loadGame(db, 'g1')).rejects.toThrow(/raw-string-fault/);
+        // The id is still named, and the stringified fault is the message tail.
+        await expect(loadGame(db, 'g1')).rejects.toThrow(/archived game "g1"/);
+      } finally {
+        spy.mockRestore();
+      }
     });
   });
 

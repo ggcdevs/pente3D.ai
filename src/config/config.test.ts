@@ -22,6 +22,7 @@ import {
   resetConfig,
   getDefault,
   overrideStorageKey,
+  OVERRIDE_KEY_PREFIX,
   CONFIG_SECTIONS,
   type ConfigSection,
 } from './config';
@@ -222,6 +223,59 @@ describe('invalid / corrupt overrides fall back to default (never throw)', () =>
   it('works with no Storage at all (undefined) — returns the plain default', () => {
     expect(getConfig('lineVisibility', undefined).orthogonal).toBe(true);
     expect(() => getConfig('lineVisibility', undefined)).not.toThrow();
+  });
+});
+
+describe('overrideStorageKey — exact namespaced key', () => {
+  it('exposes the namespace prefix "pente:config:" verbatim', () => {
+    // Pins the literal SSOT prefix so it cannot silently change (or be emptied).
+    expect(OVERRIDE_KEY_PREFIX).toBe('pente:config:');
+  });
+
+  it('builds the key as `<prefix><section>` for every section (exact string)', () => {
+    // Assert the concrete composed key, not just `startsWith` — an empty prefix or
+    // an empty template body would both change these exact strings.
+    expect(overrideStorageKey('relay')).toBe('pente:config:relay');
+    expect(overrideStorageKey('lineVisibility')).toBe('pente:config:lineVisibility');
+    expect(overrideStorageKey('colors')).toBe('pente:config:colors');
+    for (const section of CONFIG_SECTIONS) {
+      expect(overrideStorageKey(section)).toBe(`pente:config:${section}`);
+    }
+  });
+});
+
+describe('deep merge — a scalar override replaces an object-valued default wholesale', () => {
+  it('overriding an object-valued key with a scalar replaces it (not a no-op merge)', () => {
+    // `controls.presets` is an object in the default. Overriding it with a STRING
+    // must replace it wholesale. This distinguishes the merge guard `&&` from `||`:
+    // with `||`, deepMerge would recurse into a scalar (Object.entries('x') === [])
+    // and silently keep the object default, dropping the caller's scalar. Assert the
+    // scalar actually wins.
+    storage.setItem(
+      overrideStorageKey('controls'),
+      JSON.stringify({ presets: 'replaced-by-scalar' }),
+    );
+    const controls = getConfig('controls', storage) as unknown as {
+      presets: unknown;
+      preset: string;
+    };
+    expect(controls.presets).toBe('replaced-by-scalar');
+    // A sibling scalar key at the same level is untouched by the object→scalar swap.
+    expect(controls.preset).toBe('fusion360');
+  });
+
+  it('overriding a scalar-valued default key with an object replaces it wholesale too', () => {
+    // The mirror direction: `preset` is a string default; an object override at that
+    // key must replace it wholesale (base scalar is not a plain object, so `&&`/`||`
+    // both take the else-branch here — this pins the wholesale-replace behavior).
+    storage.setItem(
+      overrideStorageKey('controls'),
+      JSON.stringify({ preset: { nowAn: 'object' } }),
+    );
+    const controls = getConfig('controls', storage) as unknown as {
+      preset: unknown;
+    };
+    expect(controls.preset).toEqual({ nowAn: 'object' });
   });
 });
 
