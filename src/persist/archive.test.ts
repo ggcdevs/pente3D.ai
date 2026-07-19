@@ -155,6 +155,59 @@ describe('game archive', () => {
       expect(loaded!.state()).toEqual(game.state());
     });
 
+    it('round-trips a non-default board size (reconstructs on the SAME board, not size-9)', async () => {
+      const { db } = await open();
+      // A size-5 game. `Game`'s constructor takes an arbitrary size with no default,
+      // so a saved game on any board must reconstruct on that same board. Use a coord
+      // (4,4,4) that is in-bounds on a 5-board (indices 0..4) but occupies its far
+      // corner — if the loader defaulted to 9 the size would silently be wrong.
+      const game = new Game(5);
+      game.place([0, 0, 0]);
+      game.place([4, 4, 4]);
+
+      await saveGame(db, 's5', game, sampleMeta);
+      const loaded = await loadGame(db, 's5');
+
+      // The board size survived the round-trip (the bug: it was always 9).
+      expect(loaded!.state().size).toBe(5);
+      expect(game.state().size).toBe(5);
+      // …and the full game is identical, not merely the size.
+      expect(headHash(loaded!.log)).toBe(headHash(game.log));
+      expect(loaded!.state()).toEqual(game.state());
+      expect(loaded!.ply()).toBe(game.ply());
+      expect(loaded!.state().pieces['4,4,4']).toBe('black');
+    });
+
+    it('stores the board size on the record so load reconstructs on the same board', async () => {
+      const { db } = await open();
+      await saveGame(db, 's7', new Game(7), sampleMeta);
+
+      // Read the raw stored record: `size` is present and is the game's board size.
+      const record = (await getGame(db, 's7')) as unknown as { size: number };
+      expect(record.size).toBe(7);
+    });
+
+    it('loadGame falls back to the default board size (9) when a record omits size', async () => {
+      const { db } = await open();
+      // A legacy/hand-written record with NO `size` field: the loader must fall back
+      // to DEFAULT_SIZE (9), not reconstruct with `undefined`. Place at (8,8,8),
+      // in-bounds ONLY on a 9-board — proving the fallback size is genuinely 9.
+      const legacy = {
+        id: 'legacy',
+        log: [{ type: 'place', node: '8,8,8' }],
+        // NOTE: intentionally no `size` key.
+        meta: { players: {}, result: 'in-progress', startedAt: 0, headHash: 'x' },
+      };
+      await putGame(db, legacy as unknown as GameRecord);
+
+      const loaded = await loadGame(db, 'legacy');
+      expect(loaded!.state().size).toBe(9);
+      // (8,8,8) placed legally proves the board is 9; on a smaller board this coord
+      // would be off-board and reconstruction would throw.
+      expect(loaded!.state().pieces['8,8,8']).toBe('white');
+      expect(loaded!.ply()).toBe(1);
+    });
+
     it('loadGame returns undefined for a missing id (negative case)', async () => {
       const { db } = await open();
 

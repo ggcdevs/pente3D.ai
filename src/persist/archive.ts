@@ -118,9 +118,11 @@ function gameFromStoredLog(id: string, size: number, log: readonly unknown[]): G
 
 /**
  * Save (insert or overwrite) a game under `id` as its plain event log plus
- * metadata. The `headHash` is derived from the game and stored in the metadata for
- * O(1) identity in the listing. Overwriting the same id is how autosave keeps the
- * archive current as a game grows.
+ * metadata. The board `size` is stored on the record so {@link loadGame} can
+ * reconstruct on the *same* board — the module's round-trip contract holds for any
+ * board size, not just the default. The `headHash` is derived from the game and
+ * stored in the metadata for O(1) identity in the listing. Overwriting the same id
+ * is how autosave keeps the archive current as a game grows.
  */
 export async function saveGame(
   db: IDBDatabase,
@@ -128,9 +130,10 @@ export async function saveGame(
   game: Game,
   meta: ArchivedMeta,
 ): Promise<void> {
-  const record: GameRecord = {
+  const record: GameRecord & { readonly size: number } = {
     id,
     log: toPlainLog(game.log),
+    size: game.state().size,
     meta: {
       players: meta.players,
       result: meta.result,
