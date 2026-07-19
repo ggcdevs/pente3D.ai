@@ -49,7 +49,11 @@
  * Gate-rejection VERIFIED (agent-principles.md #7): with break temporarily set
  * to 97 and score 96.10%, `stryker run` printed "Final mutation score 96.10
  * under breaking threshold 97, setting exit code to 1 (failure)" and exited 1.
- * Restored to 95.
+ * Restored to 95. Re-VERIFIED after adding src/net/sync.ts to the mutate scope:
+ * with break temporarily set to 98 and score 96.53%, `stryker run` printed
+ * "Final mutation score 96.53 under breaking threshold 98, setting exit code to 1
+ * (failure)" and exited 1. Restored to 95; the green run scored 96.74% overall
+ * (net 95.51% = seats.ts 100%, sync.ts 93.75%) — a 1.74 margin over break=95.
  *
  * @type {import('@stryker-mutator/api/core').PartialStrykerOptions}
  */
@@ -69,13 +73,19 @@ export default {
     'src/persist/**/*.ts',
     '!src/persist/**/*.test.ts',
     // src/net/seats.ts is PURE logic (identity-owned seat assignment) with no IO,
-    // so it is fully mutation-coverable and held to the gate (Task 3.2). The rest
-    // of src/net is deliberately NOT mutated: transport.ts / mqttTransport.ts are
-    // the thin IO adapter + its MockTransport double, and the LIVE relay is proven
-    // by the Task 3.3 real-relay integration test — NOT by mutation-testing mqtt
-    // glue (build plan / agent-principles: keep the pure logic separable and
-    // mutation-tested; verify the adapter by behavior over the real broker).
+    // so it is fully mutation-coverable and held to the gate (Task 3.2). src/net/sync.ts
+    // is the PURE full-state sync decision engine (decideSync + SyncMessage codec: no
+    // transport, DOM, or clock — see its header "Layering & purity"), likewise fully
+    // mutation-coverable and held to the gate (Task 3.3). Both are exact-file scope
+    // "src/net/seats.ts src/net/sync.ts". The rest of src/net is deliberately NOT
+    // mutated: transport.ts / mqttTransport.ts are the thin IO adapter + its
+    // MockTransport double, and the LIVE relay is proven by the Task 3.3 real-relay
+    // integration test — NOT by mutation-testing mqtt glue (build plan /
+    // agent-principles: keep the pure logic separable and mutation-tested; verify the
+    // adapter by behavior over the real broker). Do NOT add IO-glue files outside
+    // seats.ts / sync.ts to this list.
     'src/net/seats.ts',
+    'src/net/sync.ts',
     '!src/net/**/*.test.ts',
   ],
   coverageAnalysis: 'perTest',
