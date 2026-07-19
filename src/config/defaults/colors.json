@@ -3,6 +3,7 @@
   "emptySphere": "#5a5a66",
   "whitePiece": "#f0f0f0",
   "blackPiece": "#1a1a1a",
+  "tempPiece": "#4a90d9",
   "lineOrthogonal": "#3a6ea5",
   "lineFaceDiagonal": "#a5843a",
   "lineSpaceDiagonal": "#8a3aa5",

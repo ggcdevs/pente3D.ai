@@ -5,7 +5,9 @@
  * A section is resolved by **deep-merging** a localStorage override over its tracked
  * JSON default. The defaults in `./defaults/*.json` are the single source of truth
  * for every configurable subsystem — colors, keybindings, control presets, layout,
- * line visibility — and `relay.json` is the SSOT for the relay endpoint/creds
+ * line visibility, and the render layer (`rendering`, `materials`, `lighting`,
+ * `geometry`, `blending`; render-ui design Part 4) — and `relay.json` is the SSOT
+ * for the relay endpoint/creds
  * consumed by both the client transport (Task 3.1) and the real-relay networking
  * tests (Task 3.3). No magic values live in code.
  *
@@ -28,6 +30,11 @@ import colorsDefault from './defaults/colors.json';
 import layoutDefault from './defaults/layout.json';
 import lineVisibilityDefault from './defaults/lineVisibility.json';
 import relayDefault from './defaults/relay.json';
+import renderingDefault from './defaults/rendering.json';
+import materialsDefault from './defaults/materials.json';
+import lightingDefault from './defaults/lighting.json';
+import geometryDefault from './defaults/geometry.json';
+import blendingDefault from './defaults/blending.json';
 
 /**
  * The relay SSOT shape: the single record consumed by both `MqttTransport` and the
@@ -53,6 +60,11 @@ const DEFAULTS = {
   layout: layoutDefault,
   lineVisibility: lineVisibilityDefault,
   relay: relayDefault,
+  rendering: renderingDefault,
+  materials: materialsDefault,
+  lighting: lightingDefault,
+  geometry: geometryDefault,
+  blending: blendingDefault,
 } as const;
 
 /** A configurable section name (`'keybindings' | 'controls' | …`). */

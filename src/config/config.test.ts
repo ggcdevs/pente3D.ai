@@ -279,10 +279,111 @@ describe('deep merge — a scalar override replaces an object-valued default who
   });
 });
 
+describe('render config sections (Task 4.2)', () => {
+  // These sections back the Three.js render layer (render-ui design Part 4). They are
+  // resolved through the same layered store, so the assertions below drive the real
+  // getConfig/deep-merge/fallback path — the section values are observed, not inferred.
+
+  it('colors gains a tempPiece entry alongside the existing palette', () => {
+    // The temporary translucent piece (game-core: temp placement mode) needs its own
+    // color; the render-ui design Part 4 lists it explicitly in the `colors` surface.
+    const colors = getConfig('colors', storage);
+    expect(colors.tempPiece).toBe('#4a90d9');
+    // Existing palette entries must survive the expansion (no regression).
+    expect(colors.background).toBe('#101014');
+    expect(colors.emptySphere).toBe('#5a5a66');
+    expect(colors.whitePiece).toBe('#f0f0f0');
+    expect(colors.blackPiece).toBe('#1a1a1a');
+    expect(colors.hoverHighlight).toBe('#ffd24a');
+    expect(colors.winningLine).toBe('#4aff7a');
+  });
+
+  it('rendering exposes per-element roughness/metalness and an emissive boost', () => {
+    const r = getConfig('rendering', storage);
+    expect(r.piece.roughness).toBe(0.35);
+    expect(r.piece.metalness).toBe(0.1);
+    expect(r.marker.roughness).toBe(0.8);
+    expect(r.marker.metalness).toBe(0);
+    expect(r.emissiveBoost).toBe(0.6);
+  });
+
+  it('materials exposes marker/line opacity and depthWrite toggles', () => {
+    const m = getConfig('materials', storage);
+    expect(m.markerOpacity).toBe(0.55);
+    expect(m.markerDepthWrite).toBe(false);
+    expect(m.pieceOpacity).toBe(1);
+    expect(m.tempPieceOpacity).toBe(0.4);
+  });
+
+  it('lighting exposes ambient + directional color/intensity/position', () => {
+    const l = getConfig('lighting', storage);
+    expect(l.ambient.color).toBe('#ffffff');
+    expect(l.ambient.intensity).toBe(0.6);
+    expect(l.directional.color).toBe('#ffffff');
+    expect(l.directional.intensity).toBe(0.8);
+    expect(l.directional.position).toEqual({ x: 5, y: 10, z: 7 });
+  });
+
+  it('geometry exposes marker/piece radius, line thickness and sphere segments', () => {
+    const g = getConfig('geometry', storage);
+    expect(g.spacing).toBe(2);
+    expect(g.markerRadius).toBe(0.14);
+    expect(g.pieceRadius).toBe(0.42);
+    expect(g.lineThickness).toBe(0.02);
+    expect(g.sphereSegments).toEqual({ width: 16, height: 12 });
+  });
+
+  it('blending exposes additive-vs-normal per line category', () => {
+    const b = getConfig('blending', storage);
+    expect(b.orthogonal).toBe('additive');
+    expect(b.faceDiagonal).toBe('additive');
+    expect(b.spaceDiagonal).toBe('additive');
+  });
+
+  it('deep-merges a partial override into a nested render section (real store path)', () => {
+    // Overriding only rendering.piece.roughness must keep the sibling metalness and the
+    // marker sub-object intact — the same deep-merge contract as every other section.
+    storage.setItem(
+      overrideStorageKey('rendering'),
+      JSON.stringify({ piece: { roughness: 0.99 } }),
+    );
+    const r = getConfig('rendering', storage);
+    expect(r.piece.roughness).toBe(0.99); // overridden
+    expect(r.piece.metalness).toBe(0.1); // sibling untouched
+    expect(r.marker.roughness).toBe(0.8); // sibling sub-object untouched
+    expect(r.emissiveBoost).toBe(0.6); // untouched
+  });
+
+  it('a corrupt override on a render section falls back to the pristine default', () => {
+    storage.setItem(overrideStorageKey('lighting'), '{ not json');
+    expect(() => getConfig('lighting', storage)).not.toThrow();
+    expect(getConfig('lighting', storage).ambient.intensity).toBe(0.6);
+  });
+
+  it('resetConfig restores a render section to its tracked default', () => {
+    setConfig('geometry', { markerRadius: 0.99 }, storage);
+    expect(getConfig('geometry', storage).markerRadius).toBe(0.99);
+    resetConfig('geometry', storage);
+    expect(getConfig('geometry', storage).markerRadius).toBe(0.14);
+  });
+});
+
 describe('sections registry', () => {
-  it('exposes exactly the six required sections', () => {
+  it('exposes exactly the eleven required sections', () => {
     expect([...CONFIG_SECTIONS].sort()).toEqual(
-      ['colors', 'controls', 'keybindings', 'layout', 'lineVisibility', 'relay'].sort(),
+      [
+        'blending',
+        'colors',
+        'controls',
+        'geometry',
+        'keybindings',
+        'layout',
+        'lighting',
+        'lineVisibility',
+        'materials',
+        'relay',
+        'rendering',
+      ].sort(),
     );
   });
 

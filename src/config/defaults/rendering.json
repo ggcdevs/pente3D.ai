@@ -1,0 +1,11 @@
+{
+  "piece": {
+    "roughness": 0.35,
+    "metalness": 0.1
+  },
+  "marker": {
+    "roughness": 0.8,
+    "metalness": 0
+  },
+  "emissiveBoost": 0.6
+}

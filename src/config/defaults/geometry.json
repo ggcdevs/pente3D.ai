@@ -1,0 +1,7 @@
+{
+  "spacing": 2,
+  "markerRadius": 0.14,
+  "pieceRadius": 0.42,
+  "lineThickness": 0.02,
+  "sphereSegments": { "width": 16, "height": 12 }
+}

@@ -1,0 +1,5 @@
+{
+  "orthogonal": "additive",
+  "faceDiagonal": "additive",
+  "spaceDiagonal": "additive"
+}
