@@ -20,10 +20,10 @@ const DOCTRINE =
 
 const SETUP_SCHEMA = {
   type: 'object', additionalProperties: false,
-  required: ['toolingInstalled', 'lintPasses', 'strykerRuns', 'defensiveGuardReadded', 'committed'],
+  required: ['toolingInstalled', 'lintPasses', 'strykerRuns', 'gatesBiteProven', 'committed'],
   properties: {
     toolingInstalled: { type: 'boolean' }, lintPasses: { type: 'boolean' },
-    strykerRuns: { type: 'boolean' }, defensiveGuardReadded: { type: 'boolean' },
+    strykerRuns: { type: 'boolean' }, gatesBiteProven: { type: 'boolean' },
     committed: { type: 'boolean' }, commitSha: { type: 'string' }, notes: { type: 'string' },
   },
 }
@@ -69,14 +69,16 @@ const GATE_SCHEMA = {
 
 phase('Harden')
 const setup = await agent(
-  `Set up test-integrity tooling for Pente3D (repo ${REPO}, branch rewrite2). ${DOCTRINE}\n` +
-    `1. Install & configure StrykerJS for the Vitest runner (@stryker-mutator/core + @stryker-mutator/vitest-runner), mutating ONLY ${SCOPE}/**/*.ts (exclude *.test.ts). Add an npm script \`mutate\`. Prove it runs with a baseline \`npx stryker run\` (paste the score).\n` +
-    `2. Add eslint-plugin-vitest with rules: expect-expect (error), valid-expect (error), no-disabled-tests (error), no-focused-tests (error). Run \`npm run lint\` — must be 0 (fix any test it flags for real).\n` +
-    `3. REQUIRED FIX (assert-over-delete, per ${PRINCIPLES}): in src/core/lines.ts a defensive guard was previously DELETED (the \`!Number.isInteger\` check in the collinearAxis helper). Re-add it as an explicit assertion that the axis component is +/-1 before computing the step count, so the invariant tripwire exists again WITHOUT reintroducing an uncovered branch (an assertion that never throws is covered by existing tests; if not, add one test that documents the invariant). Keep behavior identical; all tests still green.\n` +
-    `Commit (message + trailer \`${TRAILER}\`). Do NOT push. Return structured evidence.`,
-  { schema: SETUP_SCHEMA, phase: 'Harden', label: 'harden:tooling' }
+  `Ensure the test-integrity gates ENFORCE the scope "${SCOPE}" for Pente3D (repo ${REPO}, branch rewrite2). ${DOCTRINE}\n` +
+    `Tooling may already exist from a prior stage — be IDEMPOTENT and never drop paths already covered:\n` +
+    `1. StrykerJS (@stryker-mutator/core + @stryker-mutator/vitest-runner): ensure installed; ensure stryker.config.mjs \`mutate\` includes every whitespace-separated path in "${SCOPE}" as \`<path>/**/*.ts\` (excluding \`*.test.ts\`), keeping any existing paths. Ensure \`thresholds.break = ${MUT_MIN}\` and an npm \`mutate\` script. Run \`npx stryker run\` and paste the score.\n` +
+    `2. eslint-plugin-vitest rules (expect-expect, valid-expect, no-disabled-tests, no-focused-tests) active as errors on *.test.ts; \`npm run lint\` exits 0.\n` +
+    `3. vite coverage \`thresholds\` pins every path in "${SCOPE}" (\`<path>/**/*.ts\`) to 100% on statements/branches/functions/lines, keeping existing pins.\n` +
+    `PROVE each gate BITES (${PRINCIPLES} #7): show it exit non-zero on a deliberate regression (raise stryker \`break\` above the current score -> exit 1; inject an uncovered branch into an in-scope file -> \`npm run coverage\` exit 1), then RESTORE to green.\n` +
+    `Commit any config changes (message + trailer \`${TRAILER}\`). Do NOT push. Return structured evidence (gatesBiteProven=true only if you actually observed the non-zero exits).`,
+  { schema: SETUP_SCHEMA, phase: 'Harden', label: 'harden:gates' }
 )
-log(`Harden: stryker=${setup?.strykerRuns} lint=${setup?.lintPasses} guardReadded=${setup?.defensiveGuardReadded}`)
+log(`Harden: stryker=${setup?.strykerRuns} lint=${setup?.lintPasses} gatesBite=${setup?.gatesBiteProven}`)
 
 let round = 0
 let approved = false
