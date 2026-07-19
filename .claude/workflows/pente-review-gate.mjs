@@ -18,7 +18,11 @@ const STAGE = A.stage
 if (!SCOPE || typeof SCOPE !== 'string') {
   throw new Error('pente-review-gate: args.scope (a whitespace-separated path string, e.g. "src/config src/persist") is REQUIRED — refusing to run with a silent default that could gate the wrong code.')
 }
-log(`review-gate resolved scope="${SCOPE}" stage=${STAGE}`)
+// Coverage is pinned to SCOPE (all of it). Mutation defaults to SCOPE too, but an IO-heavy
+// layer can pass a narrower MUTATE_SCOPE (pure logic only) so mqtt.js/DOM glue — verified by
+// integration tests instead — is not mutation-tested. Coverage stays 100% on everything.
+const MUTATE_SCOPE = (A.mutateScope && typeof A.mutateScope === 'string') ? A.mutateScope : SCOPE
+log(`review-gate resolved coverage-scope="${SCOPE}" mutate-scope="${MUTATE_SCOPE}" stage=${STAGE}`)
 const PRINCIPLES = 'planning/agent-principles.md'
 const MUT_MIN = 95
 const TRAILER = 'Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>'
@@ -78,9 +82,9 @@ phase('Harden')
 const setup = await agent(
   `Ensure the test-integrity gates ENFORCE the scope "${SCOPE}" for Pente3D (repo ${REPO}, branch rewrite2). ${DOCTRINE}\n` +
     `Tooling may already exist from a prior stage — be IDEMPOTENT and never drop paths already covered:\n` +
-    `1. StrykerJS (@stryker-mutator/core + @stryker-mutator/vitest-runner): ensure installed; ensure stryker.config.mjs \`mutate\` includes every whitespace-separated path in "${SCOPE}" as \`<path>/**/*.ts\` (excluding \`*.test.ts\`), keeping any existing paths. Ensure \`thresholds.break = ${MUT_MIN}\` and an npm \`mutate\` script. Run \`npx stryker run\` and paste the score.\n` +
+    `1. StrykerJS (@stryker-mutator/core + @stryker-mutator/vitest-runner): ensure installed; ensure stryker.config.mjs \`mutate\` includes the MUTATION scope "${MUTATE_SCOPE}" — each entry may be a dir (expand to \`<dir>/**/*.ts\`) or an exact \`.ts\` file — excluding \`*.test.ts\`, keeping existing paths. Do NOT add IO-glue files that are outside "${MUTATE_SCOPE}". Ensure \`thresholds.break = ${MUT_MIN}\` and an npm \`mutate\` script. Run \`npx stryker run\` and paste the score.\n` +
     `2. eslint-plugin-vitest rules (expect-expect, valid-expect, no-disabled-tests, no-focused-tests) active as errors on *.test.ts; \`npm run lint\` exits 0.\n` +
-    `3. vite coverage \`thresholds\` pins every path in "${SCOPE}" (\`<path>/**/*.ts\`) to 100% on statements/branches/functions/lines, keeping existing pins.\n` +
+    `3. vite coverage \`thresholds\` pins every path in the COVERAGE scope "${SCOPE}" (\`<path>/**/*.ts\`) to 100% on statements/branches/functions/lines, keeping existing pins.\n` +
     `PROVE each gate BITES (${PRINCIPLES} #7): show it exit non-zero on a deliberate regression (raise stryker \`break\` above the current score -> exit 1; inject an uncovered branch into an in-scope file -> \`npm run coverage\` exit 1), then RESTORE to green.\n` +
     `Commit any config changes (message + trailer \`${TRAILER}\`). Do NOT push. Return structured evidence (gatesBiteProven=true only if you actually observed the non-zero exits).`,
   { schema: SETUP_SCHEMA, phase: 'Harden', label: 'harden:gates' }
@@ -129,7 +133,7 @@ const gate = await agent(
     `1. \`npm run lint\` -> exit 0 (incl. assertion-lint rules).\n` +
     `2. \`npm test\` -> all pass (note count).\n` +
     `3. \`npm run coverage\` -> ${SCOPE} must be 100% on all four metrics.\n` +
-    `4. \`npm run mutate\` (Stryker) -> mutation score on ${SCOPE} must be >= ${MUT_MIN}%. List EVERY surviving mutant with a justification; a survivor is only acceptable if genuinely equivalent/unreachable and explained.\n` +
+    `4. \`npm run mutate\` (Stryker, mutates "${MUTATE_SCOPE}") -> overall mutation score must be >= ${MUT_MIN}%. List EVERY surviving mutant with a justification; a survivor is only acceptable if genuinely equivalent/unreachable and explained.\n` +
     `passed = lint(0) AND all tests pass AND coverage 100% AND mutation >= ${MUT_MIN}% (survivors justified).\n` +
     `If passed: \`git push origin rewrite2\` and report the range. Else: DO NOT push; report exactly what failed.\n` +
     `Return structured evidence.`,
