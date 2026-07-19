@@ -119,6 +119,7 @@ describe('Game — undo / redo', () => {
     const g = new Game(9);
     const head = headHash(g.log);
     expect(() => g.undo()).toThrow(IllegalMove);
+    expect(() => g.undo()).toThrow(/nothing to undo/);
     expect(headHash(g.log)).toBe(head);
   });
 
@@ -127,6 +128,7 @@ describe('Game — undo / redo', () => {
     g.place([4, 4, 4]);
     const head = headHash(g.log);
     expect(() => g.redo()).toThrow(IllegalMove);
+    expect(() => g.redo()).toThrow(/nothing to redo/);
     expect(headHash(g.log)).toBe(head);
   });
 });

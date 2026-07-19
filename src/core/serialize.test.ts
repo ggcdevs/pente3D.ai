@@ -113,15 +113,27 @@ describe('importGame / deserializeGame — corrupt input throws a clear error', 
     }
   });
 
+  it('ExportError is named and carries its message', () => {
+    // `name` and message text are the diagnostic surface callers/logs read.
+    const e = new ExportError('boom');
+    expect(e).toBeInstanceOf(Error);
+    expect(e.name).toBe('ExportError');
+    expect(e.message).toBe('boom');
+  });
+
   it('rejects a non-object payload', () => {
     expect(() => importGame(42 as unknown as GameExport)).toThrow(ExportError);
     expect(() => importGame(null as unknown as GameExport)).toThrow(ExportError);
+    // The message must name the object guard, not a generic failure.
+    expect(() => importGame(42 as unknown as GameExport)).toThrow(
+      /export must be an object/,
+    );
   });
 
   it('rejects a missing / invalid size', () => {
     expect(() =>
       importGame({ settings: {}, log: [] } as unknown as GameExport),
-    ).toThrow(ExportError);
+    ).toThrow(/invalid size: expected a positive integer/);
     expect(() =>
       importGame({ size: 0, settings: {}, log: [] } as unknown as GameExport),
     ).toThrow(ExportError);
@@ -133,10 +145,22 @@ describe('importGame / deserializeGame — corrupt input throws a clear error', 
     ).toThrow(ExportError);
   });
 
+  it('accepts the minimal valid board size (size: 1)', () => {
+    // size >= 1 is the boundary: a 1x1x1 board is legal. This pins size < 1 (not
+    // <= 1): the sole node 0,0,0 must import cleanly rather than being rejected.
+    const g = importGame({
+      size: 1,
+      settings: {},
+      log: [{ type: 'place', node: '0,0,0' }],
+    });
+    expect(g.state().size).toBe(1);
+    expect(g.state().pieces['0,0,0']).toBe('white');
+  });
+
   it('rejects a non-array log', () => {
     expect(() =>
       importGame({ size: 9, settings: {}, log: 'nope' } as unknown as GameExport),
-    ).toThrow(ExportError);
+    ).toThrow(/invalid log: expected an array/);
   });
 
   it('rejects an unknown event type in the log', () => {
@@ -146,7 +170,7 @@ describe('importGame / deserializeGame — corrupt input throws a clear error', 
         settings: {},
         log: [{ type: 'teleport', node: '0,0,0' }],
       } as unknown as GameExport),
-    ).toThrow(ExportError);
+    ).toThrow(/unknown event type at index 0: teleport/);
   });
 
   it('rejects a place event with a malformed node key', () => {
@@ -215,6 +239,57 @@ describe('importGame / deserializeGame — corrupt input throws a clear error', 
     ).toThrow(/invalid node key/i);
   });
 
+  it('rejects a non-canonical key with a leading zero ("01,2,3")', () => {
+    // Number("01") === 1 and is in bounds, so this passes the integer + bounds
+    // checks — only the round-trip guard (keyOf(coord) !== node) rejects it. This
+    // isolates that guard: without it, "01,2,3" would import as the coord (1,2,3),
+    // giving two distinct keys that fold to the same node.
+    expect(() =>
+      importGame({
+        size: 9,
+        settings: {},
+        log: [{ type: 'place', node: '01,2,3' }],
+      } as unknown as GameExport),
+    ).toThrow(/invalid node key/i);
+  });
+
+  it('rejects a non-canonical key with leading whitespace (" 1,2,3")', () => {
+    // Number(" 1") === 1 (JS trims), in bounds and integer — again only the
+    // round-trip guard catches the non-canonical form.
+    expect(() =>
+      importGame({
+        size: 9,
+        settings: {},
+        log: [{ type: 'place', node: ' 1,2,3' }],
+      } as unknown as GameExport),
+    ).toThrow(/invalid node key/i);
+  });
+
+  it('rejects a non-integer coordinate ("1.5,2,3")', () => {
+    // Number("1.5") === 1.5 is finite and in bounds but not an integer — this
+    // isolates the integer guard (coord.every(Number.isInteger)). Without it a
+    // fractional coordinate would slip past into an off-lattice node.
+    expect(() =>
+      importGame({
+        size: 9,
+        settings: {},
+        log: [{ type: 'place', node: '1.5,2,3' }],
+      } as unknown as GameExport),
+    ).toThrow(/invalid node key/i);
+  });
+
+  it('rejects a key with too many components ("1,2,3,4")', () => {
+    // Four components — coordsOf reads the first three, which round-trip and are
+    // in bounds, so this isolates the parts.length !== 3 arity guard.
+    expect(() =>
+      importGame({
+        size: 9,
+        settings: {},
+        log: [{ type: 'place', node: '1,2,3,4' }],
+      } as unknown as GameExport),
+    ).toThrow(/invalid node key/i);
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -258,6 +333,18 @@ describe('importGame / deserializeGame — corrupt input throws a clear error', 
         ],
       } as unknown as GameExport),
     ).toThrow(ExportError);
+    // The wrapper message must name the illegal-game cause and carry the
+    // underlying IllegalMove text, not swallow it into a blank string.
+    expect(() =>
+      importGame({
+        size: 9,
+        settings: {},
+        log: [
+          { type: 'place', node: '4,4,4' },
+          { type: 'place', node: '4,4,4' },
+        ],
+      } as unknown as GameExport),
+    ).toThrow(/log describes an illegal game: .*already occupied/);
   });
 });
 

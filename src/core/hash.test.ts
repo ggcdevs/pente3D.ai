@@ -32,6 +32,16 @@ describe('hashStep', () => {
     expect(hashStep('ab', 'c')).not.toBe(hashStep('a', 'bc'));
   });
 
+  it('emits a fixed 8-char zero-padded lowercase hex digest', () => {
+    // The chain contract is a fixed-width, deterministic digest. Pin a value whose
+    // raw hash has a leading zero so the zero-padding is load-bearing: without
+    // padStart(8, '0') this would be 7 chars and the assertion fails.
+    const h = hashStep('s', '420');
+    expect(h).toBe('08603254');
+    expect(h).toHaveLength(8);
+    expect(h).toMatch(/^[0-9a-f]{8}$/);
+  });
+
   it('property: deterministic for any two strings', () => {
     fc.assert(
       fc.property(fc.string(), fc.string(), (prev, data) => {

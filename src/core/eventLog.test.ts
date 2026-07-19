@@ -31,6 +31,14 @@ describe('emptyLog', () => {
   it('has a stable, deterministic head hash for the empty history', () => {
     expect(headHash(emptyLog())).toBe(headHash(emptyLog()));
   });
+
+  it('the empty history hashes to a fixed, non-empty genesis seed', () => {
+    // A non-empty seed so a single-entry log mixes a stable prefix and the empty
+    // log has a well-defined headHash. Pin the exact value: if the seed were
+    // blanked to "", this fails and the whole chain shifts silently.
+    expect(headHash(emptyLog())).toBe('pente3d:genesis');
+    expect(headHash(emptyLog()).length).toBeGreaterThan(0);
+  });
 });
 
 describe('append', () => {
@@ -72,6 +80,37 @@ describe('headHash — deterministic hash chain', () => {
     const a = logOf([place('0,0,0'), place('1,1,1')]);
     const b = logOf([place('1,1,1'), place('0,0,0')]);
     expect(headHash(a)).not.toBe(headHash(b));
+  });
+
+  it('undo and redo events hash differently (and differ from empty/genesis)', () => {
+    // serializeEvent must map 'undo' and 'redo' to distinct byte sequences, or a
+    // [undo]-log and a [redo]-log would share a headHash — silently collapsing
+    // firstDivergence / isPrefix / conflict detection, which Part-3 sync rests on.
+    const empty = headHash(emptyLog());
+    const undoHead = headHash(logOf([undo]));
+    const redoHead = headHash(logOf([redo]));
+    expect(undoHead).not.toBe(redoHead);
+    expect(undoHead).not.toBe(empty);
+    expect(redoHead).not.toBe(empty);
+  });
+
+  it('pins the exact headHash for each single-event serialization', () => {
+    // Pin the deterministic fingerprint of each event type. The hash-chain
+    // contract (hash.ts) is cross-run/machine reproducibility, so these constants
+    // are stable. Pinning them means if serializeEvent's per-arm byte sequence
+    // changed (e.g. an arm collapsed to "" or 'undo'/'redo'/'place:' were swapped),
+    // the fingerprint would shift and this fails — each arm is individually nailed.
+    expect(headHash(logOf([place('0,0,0')]))).toBe('608cf025');
+    expect(headHash(logOf([undo]))).toBe('6a75070a');
+    expect(headHash(logOf([redo]))).toBe('144a745c');
+  });
+
+  it('a place event hashes differently from undo and redo', () => {
+    // Guards serializeEvent's 'place' arm against collapsing into the undo/redo
+    // strings (or into a bare node with no discriminant prefix).
+    const placeHead = headHash(logOf([place('0,0,0')]));
+    expect(placeHead).not.toBe(headHash(logOf([undo])));
+    expect(placeHead).not.toBe(headHash(logOf([redo])));
   });
 });
 

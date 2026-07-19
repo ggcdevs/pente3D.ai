@@ -83,6 +83,37 @@ describe('captures — safe to move into a bracket', () => {
     expect(s.pieces[keyOf([4, 4, 4])]).toBe('black');
     expect(s.captures.white).toBe(0);
   });
+
+  it('does NOT capture when the NEAR flank is not an opponent (self,opp,self)', () => {
+    // Pattern from the placed node along +x: near flank [1] is SELF (white), far
+    // flank [2] is opp, anchor [3] is self. The custodian rule requires BOTH
+    // flanked nodes to be opponents; the near one is not, so nothing is captured.
+    // (Mutating the near-flank check to always-true would wrongly capture here.)
+    const pieces: Record<string, Player> = {
+      [keyOf([1, 4, 4])]: 'white', // near flank — SELF, not opp
+      [keyOf([2, 4, 4])]: 'black', // far flank — opp
+      [keyOf([3, 4, 4])]: 'white', // anchor — self
+    };
+    const s = placePiece(stateWith(pieces, 'white'), [0, 4, 4]);
+    expect(s.pieces[keyOf([1, 4, 4])]).toBe('white');
+    expect(s.pieces[keyOf([2, 4, 4])]).toBe('black');
+    expect(s.captures.white).toBe(0);
+  });
+
+  it('does NOT capture when the FAR flank is not an opponent (opp,self,self)', () => {
+    // Near flank [1] is opp, but far flank [2] is SELF, not opp. The custodian
+    // rule needs two adjacent opponents; only one is present, so no capture.
+    // (Mutating the far-flank check to always-true would wrongly capture here.)
+    const pieces: Record<string, Player> = {
+      [keyOf([1, 4, 4])]: 'black', // near flank — opp
+      [keyOf([2, 4, 4])]: 'white', // far flank — SELF, not opp
+      [keyOf([3, 4, 4])]: 'white', // anchor — self
+    };
+    const s = placePiece(stateWith(pieces, 'white'), [0, 4, 4]);
+    expect(s.pieces[keyOf([1, 4, 4])]).toBe('black');
+    expect(s.pieces[keyOf([2, 4, 4])]).toBe('white');
+    expect(s.captures.white).toBe(0);
+  });
 });
 
 describe('captures — all direction categories', () => {

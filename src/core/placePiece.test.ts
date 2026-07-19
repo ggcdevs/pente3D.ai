@@ -34,20 +34,30 @@ describe('placePiece — placement', () => {
 describe('placePiece — validation', () => {
   it('throws IllegalMove when the node is already occupied', () => {
     const s = placePiece(initialState(9), [4, 4, 4]);
+    // The message must name the occupied-node guard specifically (and the key),
+    // so it is diagnosable and distinct from the bounds / already-won errors.
     expect(() => placePiece(s, [4, 4, 4])).toThrow(IllegalMove);
+    expect(() => placePiece(s, [4, 4, 4])).toThrow(/already occupied: 4,4,4/);
   });
 
   it('throws IllegalMove when placing out of bounds (>= size)', () => {
     expect(() => placePiece(initialState(9), [9, 0, 0])).toThrow(IllegalMove);
+    expect(() => placePiece(initialState(9), [9, 0, 0])).toThrow(
+      /out of bounds: 9,0,0/,
+    );
   });
 
   it('throws IllegalMove when placing out of bounds (negative)', () => {
     expect(() => placePiece(initialState(9), [-1, 0, 0])).toThrow(IllegalMove);
+    expect(() => placePiece(initialState(9), [-1, 0, 0])).toThrow(
+      /out of bounds: -1,0,0/,
+    );
   });
 
   it('throws IllegalMove when the game already has a winner', () => {
     const won: GameState = { ...initialState(9), winner: 'white' };
     expect(() => placePiece(won, [4, 4, 4])).toThrow(IllegalMove);
+    expect(() => placePiece(won, [4, 4, 4])).toThrow(/already won/);
   });
 });
 

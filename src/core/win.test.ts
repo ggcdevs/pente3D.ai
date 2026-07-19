@@ -149,6 +149,9 @@ describe('win — not yet', () => {
     const s = placePiece(stateWith(pieces, 'white'), [3, 4, 4]);
     expect(s.winner).toBeNull();
     expect(s.winningLine).toBeUndefined();
+    // The key must be ABSENT, not present-with-undefined — the state omits
+    // winningLine on non-line results rather than carrying an undefined field.
+    expect(s).not.toHaveProperty('winningLine');
     // Turn flips normally when no win.
     expect(s.turn).toBe('black');
   });
@@ -182,8 +185,9 @@ describe('win — five capture pairs', () => {
     );
     expect(s.captures.white).toBe(5);
     expect(s.winner).toBe('white');
-    // Capture win has no winning line.
+    // Capture win has no winning line — the key is omitted, not undefined.
     expect(s.winningLine).toBeUndefined();
+    expect(s).not.toHaveProperty('winningLine');
     expect(s.turn).toBe('white');
   });
 

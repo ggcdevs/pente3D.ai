@@ -173,6 +173,21 @@ describe('generateFullLine', () => {
     expect(res.warning).toMatch(/already/i);
   });
 
+  it('accepts when the registry holds only OTHER lines (the id must actually match)', () => {
+    // The dedup check must compare ids, not merely observe that the registry is
+    // non-empty. Register an UNRELATED line, then request a different one: it must
+    // be accepted. (Guards `registered.some(l => l.id === line.id)` against being
+    // collapsed to always-true or an inverted id comparison.)
+    const other = generateFullLine([0, 0, 0], [0, 0, 8], N, [])!.line!;
+    const target = generateFullLine([0, 0, 0], [8, 0, 0], N, [other]);
+    expect(other.id).not.toBe(
+      generateFullLine([0, 0, 0], [8, 0, 0], N, [])!.line!.id,
+    );
+    expect(target.ok).toBe(true);
+    expect(target.line!.nodes[0]).toEqual([0, 0, 0]);
+    expect(target.line!.nodes[8]).toEqual([8, 0, 0]);
+  });
+
   it('accepts and returns the canonical full line when valid and not registered', () => {
     // With an empty registry the same span is valid; result must be the
     // canonical full line spanning face-to-face.
@@ -239,9 +254,43 @@ describe('generatePartialLine', () => {
     expect(res.warning).toMatch(/already/i);
   });
 
+  it('accepts a subsegment when only an UNRELATED segment is already drawn', () => {
+    // The dedup check must match ids, not just see a non-empty drawn set.
+    const other = generatePartialLine([1, 0, 0], [4, 0, 0], N, []).line!;
+    const res = generatePartialLine([1, 1, 0], [4, 1, 0], N, [other]);
+    expect(other.id).not.toBe(res.line!.id);
+    expect(res.ok).toBe(true);
+  });
+
+  it('orders nodes a→b even when b is the lower endpoint (negative step)', () => {
+    // Endpoints given high→low: the returned segment must still run from the
+    // first argument to the second, exercising the k<0 step-orientation branch
+    // (`step = [-v[0],-v[1],-v[2]]`). Guards the unary-negation of the step.
+    const res = generatePartialLine([4, 0, 0], [1, 0, 0], N, []);
+    expect(res.ok).toBe(true);
+    expect(res.line!.nodes).toEqual([
+      [4, 0, 0],
+      [3, 0, 0],
+      [2, 0, 0],
+      [1, 0, 0],
+    ]);
+  });
+
+  it('orders a descending space-diagonal segment a→b (negative step, all axes)', () => {
+    const res = generatePartialLine([5, 5, 5], [2, 2, 2], N, []);
+    expect(res.ok).toBe(true);
+    expect(res.line!.nodes).toEqual([
+      [5, 5, 5],
+      [4, 4, 4],
+      [3, 3, 3],
+      [2, 2, 2],
+    ]);
+  });
+
   it('rejects endpoints that are out of bounds', () => {
     const res = generatePartialLine([0, 0, 0], [9, 0, 0], N, []);
     expect(res.ok).toBe(false);
+    expect(res.warning).toMatch(/bounds/i);
   });
 
   it('property: any two distinct collinear in-bounds endpoints yield an ordered in-bounds segment', () => {

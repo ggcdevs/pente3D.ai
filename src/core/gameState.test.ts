@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { initialState, IllegalMove } from './gameState';
+import { initialState, IllegalMove, opponent } from './gameState';
 
 describe('initialState', () => {
   it('has the requested size', () => {
@@ -29,5 +29,19 @@ describe('initialState', () => {
 
   it('exports IllegalMove as an Error subclass', () => {
     expect(new IllegalMove('x')).toBeInstanceOf(Error);
+  });
+
+  it('names IllegalMove and preserves its message', () => {
+    // The `name` is load-bearing: error handling / logs discriminate on it.
+    const e = new IllegalMove('bad move');
+    expect(e.name).toBe('IllegalMove');
+    expect(e.message).toBe('bad move');
+  });
+});
+
+describe('opponent', () => {
+  it('maps each colour to the other, both directions', () => {
+    expect(opponent('white')).toBe('black');
+    expect(opponent('black')).toBe('white');
   });
 });
