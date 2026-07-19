@@ -67,3 +67,15 @@ function buildAxes(): Axis[] {
 
 /** The 13 canonical line-axes, sign-canonicalized and categorized. */
 export const AXES: readonly Axis[] = buildAxes();
+
+/**
+ * The 26 Moore-neighborhood directions — every axis and its negation.
+ *
+ * Rules-stepping that must consider *both* ways along each line (custodian
+ * captures scan `[opp, opp, self]` from the placed node) uses these directions.
+ * Derived from {@link AXES} so the axis table stays the single source of truth.
+ */
+export const DIRECTIONS: readonly Coord[] = AXES.flatMap(({ vec }): Coord[] => [
+  [vec[0], vec[1], vec[2]],
+  [-vec[0], -vec[1], -vec[2]],
+]);

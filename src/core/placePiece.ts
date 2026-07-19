@@ -6,29 +6,68 @@
  * turn, and returns a **new** state (see the game-core design, Part 2). It never
  * mutates its input. Illegal moves throw `IllegalMove`.
  *
- * This task (1.4) implements **placement + validation** only; captures (Task 1.5)
- * and win detection (Task 1.6) are stubbed with clearly marked seams so later
- * tasks slot in without touching the placement/validation core. Pure rules layer:
- * no rendering, network, or DOM imports.
+ * This task implements **placement + validation** (Task 1.4) and **custodian
+ * captures** (Task 1.5); win detection (Task 1.6) remains a clearly marked seam so
+ * it slots in without touching the placement core. Pure rules layer: no rendering,
+ * network, or DOM imports.
  */
 
 import { keyOf, inBounds, type Coord } from './coords';
-import { IllegalMove, type GameState, type Player } from './gameState';
+import { DIRECTIONS } from './axes';
+import { IllegalMove, opponent, type GameState, type Player } from './gameState';
 
 /**
- * Resolve custodian captures triggered by `player` placing at `placed`.
+ * Resolve custodian captures triggered by `player` placing at `placed` on a
+ * board of edge length `size`.
  *
- * Stub for Task 1.5. Returns the pieces map and this player's new capture-pair
- * count unchanged; Task 1.5 will scan the 26 directions for `[opp, opp, self]`
- * brackets, remove the flanked pairs, and increment the count.
+ * Standard Pente custodian rule (game-core design, Part 2): for each of the **26
+ * directions** from the placed node, if the pattern is exactly `[opp, opp, self]`
+ * — two adjacent opponent pieces immediately followed by one of the current
+ * player's own pieces — those two opponents are removed and one capture **pair**
+ * is scored. Exactly two: `[opp, opp, opp, self]` is not a capture, since the
+ * third step is an opponent, not `self`. Placing between two opponents is safe,
+ * because the just-placed node is `self`, never a flanked `opp`.
+ *
+ * Returns a **new** pieces map (the input is never mutated) and this player's
+ * updated capture-pair count. Multiple simultaneous captures from one placement
+ * are all counted.
  */
 function resolveCaptures(
   pieces: Record<string, Player>,
-  _placed: Coord,
-  _player: Player,
+  placed: Coord,
+  player: Player,
   currentCaptures: number,
+  size: number,
 ): { pieces: Record<string, Player>; captures: number } {
-  return { pieces, captures: currentCaptures };
+  const opp = opponent(player);
+  const toRemove: string[] = [];
+
+  for (const d of DIRECTIONS) {
+    const a: Coord = [placed[0] + d[0], placed[1] + d[1], placed[2] + d[2]];
+    const b: Coord = [placed[0] + 2 * d[0], placed[1] + 2 * d[1], placed[2] + 2 * d[2]];
+    const c: Coord = [placed[0] + 3 * d[0], placed[1] + 3 * d[1], placed[2] + 3 * d[2]];
+    // All three flank nodes must be on the board.
+    if (!inBounds(a, size) || !inBounds(b, size) || !inBounds(c, size)) continue;
+    if (
+      pieces[keyOf(a)] === opp &&
+      pieces[keyOf(b)] === opp &&
+      pieces[keyOf(c)] === player
+    ) {
+      toRemove.push(keyOf(a), keyOf(b));
+    }
+  }
+
+  if (toRemove.length === 0) {
+    return { pieces, captures: currentCaptures };
+  }
+
+  // Copy and remove the flanked opponents — never mutate the input map.
+  const next: Record<string, Player> = { ...pieces };
+  for (const k of toRemove) {
+    delete next[k];
+  }
+  // Each removed pair is one capture; toRemove holds two keys per pair.
+  return { pieces: next, captures: currentCaptures + toRemove.length / 2 };
 }
 
 /**
@@ -87,6 +126,7 @@ export function placePiece(state: GameState, coords: Coord): GameState {
     coords,
     player,
     state.captures[player],
+    state.size,
   );
   pieces = captured.pieces;
   const captures: Record<Player, number> = {
