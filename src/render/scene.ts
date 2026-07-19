@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { createLogger } from '../debug/log.ts';
+import { getConfig } from '../config/config.ts';
+import { resolveSceneConfig, type ResolvedSceneConfig, type Vec3 } from './sceneConfig.ts';
 
 const log = createLogger('render:scene');
 
@@ -8,6 +10,24 @@ const log = createLogger('render:scene');
 export interface CameraReadout {
   position: { x: number; y: number; z: number };
   target: { x: number; y: number; z: number };
+}
+
+/**
+ * A plain-number readout of the lights actually installed in the scene. Lets Playwright
+ * prove the ambient+directional lights were built FROM config (observable behavior),
+ * not merely that a "lights configured" log line was emitted (agent-principles #3).
+ */
+export interface LightingReadout {
+  background: number;
+  ambient: { color: number; intensity: number };
+  directional: { color: number; intensity: number; position: Vec3 };
+}
+
+/** A plain-number readout of the renderer's current drawing-buffer size (for resize proof). */
+export interface ViewportReadout {
+  width: number;
+  height: number;
+  aspect: number;
 }
 
 /** The live scene handle exposed to the app and (via window.__pente) to tests. */
@@ -18,20 +38,33 @@ export interface SceneHandle {
   controls: OrbitControls;
   /** Camera position + orbit target as plain numbers. */
   getCamera(): CameraReadout;
+  /** The ambient+directional lights + background actually installed, as plain numbers. */
+  getLighting(): LightingReadout;
+  /** The renderer's current size + camera aspect, as plain numbers. */
+  getViewportSize(): ViewportReadout;
   dispose(): void;
 }
 
 /**
- * Build a minimal orbitable placeholder scene: a 3x3x3 lattice of spheres (a stand-in
- * for the eventual board) plus orbit/pan/zoom controls. This is the walking skeleton
- * that de-risks agent-driven 3D testing — it renders something a drag visibly moves.
+ * Build the orbitable scene: a Three.js renderer, a perspective camera with orbit
+ * controls, ambient + directional lights resolved FROM config (`lighting` + `colors`
+ * sections via `resolveSceneConfig`), a placeholder lattice, a resize handler, and the
+ * render loop. This is the Stage 4 scene bootstrap (Task 4.1) — the IO boundary the
+ * board renderer (markers/lines/pieces) later attaches to. Verified by Playwright
+ * against `window.__pente` readouts (getCamera/getLighting/getViewportSize).
  */
 export function createScene(container: HTMLElement): SceneHandle {
   const width = container.clientWidth || window.innerWidth;
   const height = container.clientHeight || window.innerHeight;
 
+  // Resolve lights + background from the layered config store (no magic values).
+  const resolved: ResolvedSceneConfig = resolveSceneConfig(
+    getConfig('lighting'),
+    getConfig('colors'),
+  );
+
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x101014);
+  scene.background = new THREE.Color(resolved.background);
 
   const camera = new THREE.PerspectiveCamera(50, width / height, 0.1, 1000);
   camera.position.set(6, 5, 8);
@@ -45,13 +78,23 @@ export function createScene(container: HTMLElement): SceneHandle {
   controls.enableDamping = false;
   controls.target.set(0, 0, 0);
 
-  // Lights.
-  scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-  const dir = new THREE.DirectionalLight(0xffffff, 0.8);
-  dir.position.set(5, 10, 7);
+  // Ambient + directional lights, both from config (render-ui design Part 2:
+  // low-contrast lighting for depth legibility).
+  const ambient = new THREE.AmbientLight(resolved.ambient.color, resolved.ambient.intensity);
+  scene.add(ambient);
+  const dir = new THREE.DirectionalLight(
+    resolved.directional.color,
+    resolved.directional.intensity,
+  );
+  dir.position.set(
+    resolved.directional.position.x,
+    resolved.directional.position.y,
+    resolved.directional.position.z,
+  );
   scene.add(dir);
 
-  // Placeholder lattice: a small grid of spheres centered on the origin.
+  // Placeholder lattice: a small grid of spheres centered on the origin. Replaced by
+  // the instanced board (markers/lines) in Tasks 4.3–4.4.
   const N = 3;
   const spacing = 2;
   const offset = ((N - 1) * spacing) / 2;
@@ -72,6 +115,25 @@ export function createScene(container: HTMLElement): SceneHandle {
       position: { x: camera.position.x, y: camera.position.y, z: camera.position.z },
       target: { x: controls.target.x, y: controls.target.y, z: controls.target.z },
     };
+  }
+
+  function getLighting(): LightingReadout {
+    const bg = scene.background as THREE.Color;
+    return {
+      background: bg.getHex(),
+      ambient: { color: ambient.color.getHex(), intensity: ambient.intensity },
+      directional: {
+        color: dir.color.getHex(),
+        intensity: dir.intensity,
+        position: { x: dir.position.x, y: dir.position.y, z: dir.position.z },
+      },
+    };
+  }
+
+  function getViewportSize(): ViewportReadout {
+    const size = new THREE.Vector2();
+    renderer.getSize(size);
+    return { width: size.x, height: size.y, aspect: camera.aspect };
   }
 
   let running = true;
@@ -105,8 +167,18 @@ export function createScene(container: HTMLElement): SceneHandle {
   log.info('scene initialized', {
     spheres: N * N * N,
     camera: getCamera(),
-    size: { width, height },
+    lighting: getLighting(),
+    size: getViewportSize(),
   });
 
-  return { scene, camera, renderer, controls, getCamera, dispose };
+  return {
+    scene,
+    camera,
+    renderer,
+    controls,
+    getCamera,
+    getLighting,
+    getViewportSize,
+    dispose,
+  };
 }

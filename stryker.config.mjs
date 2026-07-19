@@ -58,6 +58,10 @@ export default {
     'src/net/seats.ts',
     'src/net/sync.ts',
     '!src/net/**/*.test.ts',
+    // Pure render resolvers only (THREE-free). The Three.js scene GLUE (`scene.ts`) is
+    // NOT mutated — it is an IO boundary verified by Playwright (build plan Task 4.1).
+    'src/render/sceneConfig.ts',
+    '!src/render/**/*.test.ts',
   ],
   coverageAnalysis: 'perTest',
   // Generous timeout to make Killed-vs-Timeout classification DETERMINISTIC (see header):

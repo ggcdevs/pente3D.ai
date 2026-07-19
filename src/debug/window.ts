@@ -1,4 +1,9 @@
-import type { SceneHandle, CameraReadout } from '../render/scene.ts';
+import type {
+  SceneHandle,
+  CameraReadout,
+  LightingReadout,
+  ViewportReadout,
+} from '../render/scene.ts';
 import { createLogger } from './log.ts';
 
 const log = createLogger('debug:window');
@@ -13,6 +18,10 @@ const log = createLogger('debug:window');
 export interface PenteInspect {
   /** Camera position + orbit target as plain numbers. */
   getCamera(): CameraReadout | null;
+  /** The ambient+directional lights + background actually installed, as plain numbers. */
+  getLighting(): LightingReadout | null;
+  /** The renderer's current drawing-buffer size + camera aspect, as plain numbers. */
+  getViewportSize(): ViewportReadout | null;
   /** Game state accessor — stub until the rules core lands (Stage 1). */
   getState(): { stub: true; note: string };
 }
@@ -27,6 +36,8 @@ declare global {
 export function installInspectApi(scene: SceneHandle): PenteInspect {
   const api: PenteInspect = {
     getCamera: () => scene.getCamera(),
+    getLighting: () => scene.getLighting(),
+    getViewportSize: () => scene.getViewportSize(),
     getState: () => ({ stub: true, note: 'rules core not yet implemented (Stage 1)' }),
   };
   window.__pente = api;

@@ -19,7 +19,16 @@ export default defineConfig({
       // Core is the pure rules engine held to a 100% floor (see testing-strategy).
       // The rest is pragmatic; boundaries added per-stage.
       include: ['src/**/*.ts'],
-      exclude: ['src/**/*.test.ts', 'src/main.ts', 'src/render/**', 'src/debug/window.ts'],
+      // `src/render/**` is the Three.js IO glue (verified by Playwright, not unit
+      // coverage) EXCEPT the pure, THREE-free resolvers (`sceneConfig.ts`, …), which
+      // are held to the strict pure-logic gate below. Excluding the glue file-by-file
+      // (not the whole dir) keeps the pure files measured.
+      exclude: [
+        'src/**/*.test.ts',
+        'src/main.ts',
+        'src/render/scene.ts',
+        'src/debug/window.ts',
+      ],
       // MACHINE-ENFORCED GATE (not documentation): the pure rules engine AND the
       // in-scope config/persist layers are held to a hard 100% floor
       // (testing-strategy.md — "hard 100% threshold on src/core"; scope
@@ -53,6 +62,15 @@ export default defineConfig({
         // by a fake client (the LIVE broker is proven separately by Task 3.3, not by
         // padding this gate). Held to the same hard 100% floor. Do not weaken.
         'src/net/**/*.ts': {
+          statements: 100,
+          branches: 100,
+          functions: 100,
+          lines: 100,
+        },
+        // Pure render resolvers (THREE-free scene-config parsing/validation, Task 4.1+).
+        // The Three.js scene GLUE (`scene.ts`) is Playwright-verified and excluded above;
+        // these pure files carry the strict pure-logic gate. Held to the hard 100% floor.
+        'src/render/sceneConfig.ts': {
           statements: 100,
           branches: 100,
           functions: 100,
