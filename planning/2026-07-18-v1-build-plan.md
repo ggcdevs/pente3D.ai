@@ -194,7 +194,12 @@ All under `src/core/`. No rendering, no network, no DOM.
   override deep-merges over it; `resetConfig(section)` restores default; invalid override is
   ignored (falls back to default), never throws.
 - **Implement:** generic layered config with sections (`keybindings`, `controls`, `colors`,
-  `layout`, `lineVisibility`). This backs every configurable subsystem.
+  `layout`, `lineVisibility`, `relay`). This backs every configurable subsystem.
+- **Relay config is SSOT:** `src/config/defaults/relay.json` (`wssUrl`, `username`, `password`,
+  `topicRoot`) is the single source consumed by **both** the client's `MqttTransport`
+  (Task 3.1) **and** the real-relay networking integration tests (Task 3.3). No hardcoded
+  endpoints/creds anywhere — switch servers by editing one file. (Not a secret: creds are
+  necessarily public on a static client; this is about SSOT + portability, not hiding.)
 - **Commit:** `feat(config): layered config (json defaults + localstorage overrides)`
 
 ---
@@ -288,6 +293,12 @@ Reuse the proven `MqttTransport` (from `poc/transport.js`, ported to `src/net/mq
 ## Deferred (post-v1) — tracked in the design docs
 Sync optimization (hash-only normal path), conflict *resolution* UI, shared cooperative undo,
 seat grace-window/tiebreaker/spectator, room 2-player cap + room password, touch/mobile controls.
+
+**Relay-config portability (low priority, NOT security):** deploy to GitHub Pages via a CI
+pipeline that injects the relay config from a pipeline/secret variable at build time, shipping
+`relay.json` as an empty/placeholder so cloners configure their own server. This is purely a
+portability/cleanliness nicety — the creds are inherently public on a static client, so it
+hides nothing. No rush (no one cloning this soon); the SSOT `relay.json` (tracked) is fine.
 
 ## Sequencing note
 Stages 0→3 are strictly ordered and fully specified — build them first, they're the tested

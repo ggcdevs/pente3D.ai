@@ -81,3 +81,20 @@ round 1, then *claiming a gate exists without running it* here). Response is str
 regression), so "the gate exists" is verifiable by running one command rather than by reading
 a doc claim. No new prose rule added — the structural fix makes the existing principle #6
 enforceable.
+
+**Oversight verification (main-loop, independent — not trusting the report):**
+- Confirmed configs actually enforce: `stryker.config.mjs` has `thresholds.break = 95`;
+  `vite.config.ts` pins `src/core/**/*.ts` to 100% on all four metrics.
+- Re-ran `npm run mutate` myself: *"Final mutation score of 95.89 is greater than or equal to
+  break threshold 95"*, exit 0. Re-ran suite (172 pass), coverage (core 100%, exit 0), lint (0).
+- Caveat: one round-2 reviewer (test-integrity lens) died on a `403 / please run /login`
+  environment auth blip, so round-2 approval leaned on the correctness reviewer + the
+  mechanical gate. Acceptable here because **mutation testing is self-validating against
+  hollow tests** (a test that kills no mutants can't raise the score), so 95.89% is stronger
+  evidence than a reviewer. Noted for process: reviewer death should ideally re-spawn, not
+  silently reduce the panel.
+- Consolidation tweak (general, not symptom-specific): added principle #7 "a gate you haven't
+  watched reject something isn't a gate" — applies to every future gate, complements the
+  structural self-proving-gates fix.
+
+**Verdict: Stage 1 genuinely complete.**

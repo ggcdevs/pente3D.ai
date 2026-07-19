@@ -29,6 +29,12 @@ instructions — not just to fix the instance.
 6. **Never weaken a gate to pass it.** Do not lower coverage/mutation thresholds, disable
    tests, add blanket ignores, or relax lint to get green. That is a firing offense for a
    reviewer to catch.
+7. **A gate you haven't watched reject something isn't a gate.** When you add or configure a
+   gate/threshold, prove it *fails when it should* — not merely that it currently passes.
+   Show the command exiting non-zero on a deliberate regression (e.g. raise the mutation
+   `break` and see exit 1; inject an uncovered branch and see coverage fail), then restore.
+   A threshold that never rejects anything, reported as a "gate," is proof-by-inference — the
+   exact trap that shipped an unenforced 95% mutation "gate" in Stage 1.
 
 ## Tests must be genuine
 
