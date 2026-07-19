@@ -1,0 +1,6 @@
+{
+  "wssUrl": "wss://api.shitchell.com/289d700bfbd3-mqtt",
+  "username": "pente",
+  "password": "01cdb6fbbccb8a5d149027a14e37ef7bec9f76a66f7f1e58",
+  "topicRoot": "pente/v1"
+}

@@ -1,0 +1,17 @@
+{
+  "preset": "fusion360",
+  "presets": {
+    "fusion360": {
+      "orbitButton": "middle",
+      "panModifier": "shift",
+      "zoomToCursor": true,
+      "invertY": false
+    },
+    "web": {
+      "orbitButton": "left",
+      "panModifier": "ctrl",
+      "zoomToCursor": false,
+      "invertY": false
+    }
+  }
+}

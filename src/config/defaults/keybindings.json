@@ -1,0 +1,12 @@
+{
+  "d": "showAllDiagonals",
+  "o": "toggleOrthogonal",
+  "f": "toggleFaceDiagonals",
+  "s": "toggleSpaceDiagonals",
+  "t": "enterTempMode",
+  "Enter": "confirmTempPiece",
+  "u": "undo",
+  "r": "redo",
+  "?": "showHelp",
+  "Escape": "closeModal"
+}

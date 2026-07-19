@@ -1,0 +1,9 @@
+{
+  "widgets": {
+    "statusBanner": { "slot": "top", "order": 0, "visible": true },
+    "menuButton": { "slot": "top-right", "order": 0, "visible": true },
+    "lineVisibilityPanel": { "slot": "left", "order": 0, "visible": true },
+    "historySlider": { "slot": "bottom", "order": 0, "visible": true },
+    "connectionStatus": { "slot": "top-left", "order": 0, "visible": true }
+  }
+}

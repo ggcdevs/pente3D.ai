@@ -1,0 +1,12 @@
+{
+  "background": "#101014",
+  "emptySphere": "#5a5a66",
+  "whitePiece": "#f0f0f0",
+  "blackPiece": "#1a1a1a",
+  "lineOrthogonal": "#3a6ea5",
+  "lineFaceDiagonal": "#a5843a",
+  "lineSpaceDiagonal": "#8a3aa5",
+  "hoverHighlight": "#ffd24a",
+  "winningLine": "#4aff7a",
+  "lineOpacity": 0.35
+}
