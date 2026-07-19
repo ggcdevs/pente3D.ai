@@ -6,6 +6,7 @@ import {
   linesThroughNode,
   generateFullLine,
   generatePartialLine,
+  assertUnitStep,
   type Line,
 } from './lines';
 import { AXES } from './axes';
@@ -276,6 +277,26 @@ describe('line ids round-trip to (entryNode, axisIndex)', () => {
       const [entryKey, axisStr] = l.id.split('|');
       expect(coordsOf(entryKey!)).toEqual(l.entryNode);
       expect(Number(axisStr)).toBe(l.axisIndex);
+    }
+  });
+});
+
+describe('assertUnitStep — collinearAxis ±1 invariant tripwire', () => {
+  it('passes for unit steps (+1 and -1): the invariant every canonical axis holds', () => {
+    expect(() => assertUnitStep(1)).not.toThrow();
+    expect(() => assertUnitStep(-1)).not.toThrow();
+  });
+
+  it('throws for a non-unit axis component (documents why the di*vi step-count trick is sound)', () => {
+    expect(() => assertUnitStep(2)).toThrow(/must be ±1, got 2/);
+    expect(() => assertUnitStep(0)).toThrow(/must be ±1, got 0/);
+  });
+
+  it('every non-zero component of every canonical axis satisfies the invariant', () => {
+    for (const axis of AXES) {
+      for (const c of axis.vec) {
+        if (c !== 0) expect(() => assertUnitStep(c)).not.toThrow();
+      }
     }
   });
 });

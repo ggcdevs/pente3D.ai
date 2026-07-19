@@ -1,4 +1,23 @@
 import tseslint from 'typescript-eslint';
+import vitest from 'eslint-plugin-vitest';
+
+/**
+ * Test-integrity rules for the Vitest suites.
+ *
+ * These enforce that tests actually assert (no coverage-padding shells) and that
+ * no test is silently disabled or focused — matching planning/agent-principles.md
+ * ("Never weaken a gate", "Tests must be genuine"). Applied only to *.test.ts.
+ */
+const vitestTestIntegrity = {
+  files: ['src/**/*.test.ts'],
+  plugins: { vitest },
+  rules: {
+    'vitest/expect-expect': 'error',
+    'vitest/valid-expect': 'error',
+    'vitest/no-disabled-tests': 'error',
+    'vitest/no-focused-tests': 'error',
+  },
+};
 
 /**
  * The core import-boundary guard.
@@ -58,4 +77,5 @@ export default tseslint.config(
     },
   },
   coreForbiddenImports,
+  vitestTestIntegrity,
 );

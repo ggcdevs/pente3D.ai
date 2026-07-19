@@ -58,6 +58,22 @@ function lineId(entryNode: Coord, axisIndex: number): LineId {
 }
 
 /**
+ * Invariant tripwire for `collinearAxis`: assert a non-zero axis component is a
+ * unit step (`±1`). The whole `di * vi` step-count trick is only exact because
+ * every non-zero component of a canonical axis is `±1`. This makes that
+ * assumption an explicit, self-documenting tripwire rather than a silent one, so
+ * a future non-unit axis vector fails loudly instead of computing a wrong count.
+ * @throws {Error} if `component` is neither `+1` nor `-1`.
+ */
+export function assertUnitStep(component: number): void {
+  if (component !== 1 && component !== -1) {
+    throw new Error(
+      `collinearAxis invariant violated: axis component must be ±1, got ${component}`,
+    );
+  }
+}
+
+/**
  * Walk from `entryNode` along `+axis` collecting nodes until stepping off-board.
  * The caller guarantees `entryNode` is in-bounds and is a genuine entry
  * (`entryNode − axis` off-board), so the result is the maximal ordered run.
@@ -170,6 +186,9 @@ function collinearAxis(
       } else {
         // Every axis component is ±1 (unit-step vectors), so di/vi is exactly
         // di*vi — always an integer. `ki` is the signed step count along axis i.
+        // Assert the ±1 invariant explicitly so the step-count trick can never
+        // silently produce a wrong count if the axis table ever changes.
+        assertUnitStep(vi);
         const ki = di * vi;
         if (k === undefined) k = ki;
         else if (k !== ki) {

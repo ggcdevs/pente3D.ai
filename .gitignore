@@ -43,6 +43,10 @@ lerna-debug.log*
 coverage/
 *.lcov
 
+# Stryker mutation testing (transient reports + sandbox)
+reports/
+.stryker-tmp/
+
 # Vite
 .vite/
 
