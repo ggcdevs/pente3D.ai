@@ -3,20 +3,96 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Pente3D — POC deploy target</title>
+  <title>Pente3D — MQTT relay POC</title>
   <style>
-    body { font: 16px/1.5 system-ui, sans-serif; max-width: 40rem; margin: 4rem auto; padding: 0 1rem; }
-    code { background: #eee; padding: 0 .25rem; border-radius: .2rem; }
+    :root { color-scheme: light dark; }
+    body { font: 16px/1.5 system-ui, sans-serif; max-width: 34rem; margin: 1.5rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.3rem; }
+    .row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin: .75rem 0; }
+    input { font: inherit; padding: .5rem; flex: 1; min-width: 8rem; }
+    button { font: inherit; padding: .6rem 1rem; cursor: pointer; }
+    #plus { font-size: 1.4rem; padding: 1rem; width: 100%; }
+    .dot { display: inline-block; width: .8rem; height: .8rem; border-radius: 50%; background: #bbb; vertical-align: middle; }
+    .dot.on { background: #2ecc40; } .dot.off { background: #ff4136; }
+    .counter { font-size: 3rem; font-weight: 700; text-align: center; margin: .5rem 0; }
+    pre { background: #8881; padding: .5rem; border-radius: .3rem; max-height: 12rem; overflow: auto; font-size: .8rem; }
+    .muted { color: #888; font-size: .85rem; }
   </style>
 </head>
 <body>
-  <h1>Pente3D — GitHub Pages is live ✅</h1>
-  <p>
-    Placeholder served from <code>rewrite2</code> → <code>/docs</code>.
-    This is the deploy target for the MQTT networking POC
-    (see <code>planning/2026-07-18-networking-poc-design.md</code>).
-  </p>
-  <p>Loaded at: <span id="t"></span></p>
-  <script>document.getElementById('t').textContent = new Date().toISOString();</script>
+  <h1>Pente3D — MQTT relay POC</h1>
+  <p class="muted">Proves two devices on separate networks sync a shared JSON log via the
+  relay. Enter the same room code on both, then tap <b>+1</b>.</p>
+
+  <div class="row">
+    <input id="room" placeholder="room code (e.g. abc)" value="test" />
+    <button id="connect">Connect</button>
+  </div>
+
+  <div class="row">
+    <span class="dot" id="selfdot"></span> me: <code id="self">—</code>
+    &nbsp; <span class="dot" id="peerdot"></span> opponent: <span id="peer">—</span>
+  </div>
+
+  <div class="counter" id="counter">—</div>
+  <button id="plus" disabled>+1</button>
+
+  <p class="muted">shared log (append-only, replayed to derive the counter):</p>
+  <pre id="log">—</pre>
+  <p class="muted" id="status">idle</p>
+
+  <script type="module">
+    import { MqttTransport } from './transport.js'
+
+    const $ = (id) => document.getElementById(id)
+    const cfg = await fetch('./relay-config.json').then(r => r.json())
+    const t = new MqttTransport(cfg)
+    $('self').textContent = t.peerId
+    $('selfdot').className = 'dot on'
+
+    // --- client-side append-only log (the real game's model) ---
+    let log = []
+    const seen = new Set()
+    const key = (e) => `${e.by}:${e.seq}`
+    function apply(e) {
+      if (seen.has(key(e))) return
+      seen.add(key(e)); log.push(e)
+      log.sort((a, b) => a.ts - b.ts)
+      render()
+    }
+    function render() {
+      $('counter').textContent = log.length
+      $('log').textContent = JSON.stringify(log, null, 1)
+    }
+
+    t.onState((state) => { (state.log || []).forEach(apply) })   // state-on-join
+    t.onMessage(apply)                                           // live events
+    t.onPresence((peers) => {
+      const others = peers.filter((p) => p !== t.peerId)
+      $('peerdot').className = 'dot ' + (others.length ? 'on' : 'off')
+      $('peer').textContent = others.length ? others.join(', ') : 'offline'
+    })
+
+    $('connect').onclick = async () => {
+      $('status').textContent = 'connecting…'
+      try {
+        await t.connect($('room').value.trim() || 'test')
+        $('status').textContent = 'connected to room "' + t.room + '"'
+        $('plus').disabled = false
+        $('connect').disabled = true
+        render()
+      } catch (e) { $('status').textContent = 'ERROR: ' + e.message }
+    }
+
+    let seq = 0
+    $('plus').onclick = () => {
+      const e = { by: t.peerId, seq: seq++, ts: Date.now() }
+      apply(e)
+      t.publish(e)                 // broadcast the event
+      t.publishState({ log })      // retained snapshot for late joiners
+    }
+
+    window.addEventListener('beforeunload', () => t.disconnect())
+  </script>
 </body>
 </html>
