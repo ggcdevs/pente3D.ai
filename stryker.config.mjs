@@ -3,10 +3,12 @@
  * StrykerJS mutation-testing config.
  *
  * Scope: mutate the pure rules core (`src/core`) PLUS the in-scope
- * config/persist layers (`src/config`, `src/persist`), excluding test files.
- * Each whitespace-separated path in the requested scope "src/config src/persist"
- * is expanded to a recursive `.ts` glob with its `.test.ts` files excluded; the
- * pre-existing `src/core` scope is preserved.
+ * config/persist layers (`src/config`, `src/persist`) PLUS the pure seat logic
+ * (`src/net/seats.ts`), excluding test files. Each whitespace-separated path in
+ * the requested scope "src/config src/persist" is expanded to a recursive `.ts`
+ * glob with its `.test.ts` files excluded; the pre-existing `src/core` scope is
+ * preserved. The rest of `src/net` (the IO transport adapter) is intentionally
+ * NOT mutated — it is proven by the real-relay integration test (Task 3.3).
  * Coverage is a floor; mutation score is the real bar for these layers
  * (see planning/agent-principles.md — "Mutation score is the real bar").
  *
@@ -66,6 +68,15 @@ export default {
     '!src/config/**/*.test.ts',
     'src/persist/**/*.ts',
     '!src/persist/**/*.test.ts',
+    // src/net/seats.ts is PURE logic (identity-owned seat assignment) with no IO,
+    // so it is fully mutation-coverable and held to the gate (Task 3.2). The rest
+    // of src/net is deliberately NOT mutated: transport.ts / mqttTransport.ts are
+    // the thin IO adapter + its MockTransport double, and the LIVE relay is proven
+    // by the Task 3.3 real-relay integration test — NOT by mutation-testing mqtt
+    // glue (build plan / agent-principles: keep the pure logic separable and
+    // mutation-tested; verify the adapter by behavior over the real broker).
+    'src/net/seats.ts',
+    '!src/net/**/*.test.ts',
   ],
   coverageAnalysis: 'perTest',
   // Generous timeout to make Killed-vs-Timeout classification DETERMINISTIC: genuine
