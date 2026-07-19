@@ -10,8 +10,15 @@ export const meta = {
 }
 
 const REPO = '/home/guy/code/git/github.com/ggcdevs/pente3D.ai'
-const SCOPE = (args && args.scope) || 'src/core'
-const STAGE = (args && args.stage) || 1
+// args may arrive as an object OR a JSON string depending on the caller — handle both,
+// and FAIL LOUD if scope is missing rather than silently gating the wrong code.
+const A = typeof args === 'string' ? JSON.parse(args) : (args || {})
+const SCOPE = A.scope
+const STAGE = A.stage
+if (!SCOPE || typeof SCOPE !== 'string') {
+  throw new Error('pente-review-gate: args.scope (a whitespace-separated path string, e.g. "src/config src/persist") is REQUIRED — refusing to run with a silent default that could gate the wrong code.')
+}
+log(`review-gate resolved scope="${SCOPE}" stage=${STAGE}`)
 const PRINCIPLES = 'planning/agent-principles.md'
 const MUT_MIN = 95
 const TRAILER = 'Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>'
