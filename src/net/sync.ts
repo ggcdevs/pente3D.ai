@@ -329,8 +329,17 @@ export class SyncEngine {
    * Apply a received {@link SyncMessage} through the pure decision. Public so tests
    * (and out-of-order replay scenarios) can inject messages directly; the transport
    * handler routes through here too.
+   *
+   * Once a conflict has stopped the game the inbound path is **frozen**: a stopped
+   * game neither adopts a strict extension nor re-conflicts — the fork is already
+   * archived and the game is over, so a later message (from the transport pump OR a
+   * direct caller) must NOT mutate the supposedly-frozen game. This guard lives here,
+   * on the single state-mutating entry point, rather than only at the transport pump,
+   * so the invariant holds for every caller (agent-principles: keep the tripwire;
+   * errors/invariants must not be bypassed via a public seam).
    */
   receive(msg: SyncMessage): void {
+    if (this._status.kind === 'conflict') return;
     const remote = parseSyncMessage(msg);
     const decision = decideSync(this._game.log, remote);
     switch (decision.action) {
@@ -345,10 +354,8 @@ export class SyncEngine {
     }
   }
 
-  /** Transport message pump: parse-and-apply, ignoring anything that isn't ours. */
+  /** Transport message pump: parse-and-apply through the guarded {@link receive}. */
   private onTransportMessage(raw: TransportMessage): void {
-    // Once stopped, we neither adopt nor re-conflict — the fork is already archived.
-    if (this._status.kind === 'conflict') return;
     this.receive(raw as SyncMessage);
   }
 

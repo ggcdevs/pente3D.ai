@@ -66,7 +66,13 @@ const coreForbiddenImports = {
 
 export default tseslint.config(
   {
-    ignores: ['docs/**', 'poc/**', 'node_modules/**', 'coverage/**', 'playwright-report/**', 'test-results/**'],
+    // Build artifacts / generated output — never source. `.stryker-tmp` is Stryker's
+    // transient sandbox (a copy of src/ with `@ts-nocheck` prepended for mutation
+    // runs); it is gitignored and machine-generated, and Stryker occasionally leaves
+    // it behind on an interrupted run. Linting that copy floods `npm run lint` with
+    // hundreds of spurious errors on code we didn't write, so it is ignored like the
+    // other build-output dirs — this is not a relaxation of any rule on real source.
+    ignores: ['docs/**', 'poc/**', 'node_modules/**', 'coverage/**', 'playwright-report/**', 'test-results/**', '.stryker-tmp/**'],
   },
   ...tseslint.configs.recommended,
   {

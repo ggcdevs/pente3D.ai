@@ -24,8 +24,15 @@
  * leaves no retained state behind on the broker.
  *
  * If the relay is unreachable (offline / CI without egress) the whole suite is
- * **skipped with a clear reason** rather than failing — a live-network test must not
- * turn a network outage into a red build. When it runs, every assertion is real.
+ * **skipped** via {@link describe.skipIf} rather than failing — a live-network test
+ * must not turn a network outage into a red build. Crucially it is a *real* vitest
+ * SKIP (reported as skipped, never a green pass): an unreachable relay used to be a
+ * silent `if (!reachable) return` early-return, which vitest counts as PASSED with
+ * zero assertions — a false-green that would hide a live-connectivity regression on
+ * any host without egress. The reachability probe runs at module-collection time
+ * (top-level await, below) so `describe.skipIf` sees the real answer. When it runs,
+ * every assertion is real (agent-principles #2/#3: proof = observable behavior, and
+ * an unproven path must not report green).
  */
 
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
@@ -92,19 +99,22 @@ async function relayReachable(): Promise<boolean> {
   });
 }
 
-let reachable = false;
+/**
+ * Probe the live relay ONCE at module-collection time. `describe.skipIf` is
+ * evaluated when the suite is registered (before any `beforeAll` runs), so the probe
+ * must resolve here, at the top level, for the skip decision to see the real answer.
+ * An unreachable relay therefore yields a genuine vitest SKIP for every test in the
+ * suite — never a zero-assertion green pass (agent-principles #2/#3).
+ */
+const reachable = await relayReachable();
+if (!reachable) {
+  console.warn(
+    `[sync.realrelay] SKIPPED (vitest skip): relay ${relay.wssUrl} unreachable — ` +
+      `run again with network egress to the broker to exercise the live path.`,
+  );
+}
 
-beforeAll(async () => {
-  reachable = await relayReachable();
-  if (!reachable) {
-    console.warn(
-      `[sync.realrelay] SKIPPED: relay ${relay.wssUrl} unreachable — ` +
-        `run again with network egress to the broker to exercise the live path.`,
-    );
-  }
-}, CONNECT_PROBE_MS + 2_000);
-
-describe('real relay: two SyncEngines over the LIVE MQTT broker', () => {
+describe.skipIf(!reachable)('real relay: two SyncEngines over the LIVE MQTT broker', () => {
   const meta = { players: { white: 'w', black: 'b' }, startedAt: 2000 };
   const engines: SyncEngine[] = [];
   let db: IDBDatabase;
@@ -137,10 +147,9 @@ describe('real relay: two SyncEngines over the LIVE MQTT broker', () => {
     }
   });
 
-  it.runIf(true)(
+  it(
     'converges BIDIRECTIONALLY: a move on each client reaches the other',
     async () => {
-      if (!reachable) return;
       const room = `it-conv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const a = makeEngine('rr-a');
       const b = makeEngine('rr-b');
@@ -178,7 +187,6 @@ describe('real relay: two SyncEngines over the LIVE MQTT broker', () => {
   it(
     'is REPLAY-idempotent over the live relay: re-publishing a stale log is a no-op',
     async () => {
-      if (!reachable) return;
       const room = `it-replay-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const a = makeEngine('rr-a2');
       const b = makeEngine('rr-b2');
@@ -208,7 +216,6 @@ describe('real relay: two SyncEngines over the LIVE MQTT broker', () => {
   it(
     'tolerates OUT-OF-ORDER live delivery: converges to the longest valid log',
     async () => {
-      if (!reachable) return;
       const room = `it-ooo-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const a = makeEngine('rr-a3');
       const b = makeEngine('rr-b3');
@@ -248,7 +255,6 @@ describe('real relay: two SyncEngines over the LIVE MQTT broker', () => {
   it(
     'detects a CONFLICT over the live relay: forked histories stop the game',
     async () => {
-      if (!reachable) return;
       const room = `it-conflict-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const a = makeEngine('rr-a4');
       const b = makeEngine('rr-b4');

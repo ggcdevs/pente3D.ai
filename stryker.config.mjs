@@ -55,15 +55,26 @@
  * "Final mutation score 96.53 under breaking threshold 98, setting exit code to 1
  * (failure)" and exited 1. Restored to 95.
  *
- * OBSERVED (full configured `npx stryker run`, 2026-07-19, after hardening the
- * parseSyncMessage malformed-log tests): overall 96.95% (exit 0, >= break 95),
- * net src/net 98.08% = seats.ts 100% (44/44), sync.ts 97.32% (109 killed, 3
- * survivors) — a 1.95 margin over break=95. Gate-rejection re-VERIFIED same run:
- * with break temporarily set to 98, `stryker run` printed "Final mutation score
- * 97.05 under breaking threshold 98, setting exit code to 1 (failure)" and exited
- * 1 (the 96.95↔97.05 delta is the documented timeout-classification jitter, well
- * inside the 95 bar); restored to 95. These are the observed current numbers — do
- * NOT re-document stale/unrun figures as fact (agent-principles.md #2/#3/#7).
+ * OBSERVED (full configured `npx stryker run`, 2026-07-19, after guarding the
+ * state-mutating SyncEngine.receive() against a post-conflict message and adding the
+ * negative test that kills the conflict-freeze mutant): overall 96.95% (exit 0,
+ * >= break 95; 900 killed, 21 timeout, 29 survived), net src/net 97.44% =
+ * seats.ts 100% (44/44), sync.ts 96.43% (108 killed, 4 survivors) — a 1.95 margin
+ * over break=95. The 4 residual sync.ts survivors are EQUIVALENT mutants that cannot
+ * be killed without asserting on non-behavior: two error-MESSAGE StringLiterals
+ * (sync.ts:172, :182 — the *text* inside a thrown SyncError, not its type/occurrence,
+ * both of which ARE asserted), the `case 'ignore'` label StringLiteral (:346 — `case
+ * ''` behaves identically because neither value ever equals a real action string, so
+ * the ignore/no-op path is unchanged), and the `whenSettled` BlockStatement (:392 —
+ * emptying `await this._archiving` still resolves, and the conflict-persistence is
+ * already proven by loadConflicted reading the record back). Scoped re-run
+ * `npx stryker run --mutate src/net/sync.ts` independently reports sync.ts 96.43%
+ * (108/112), same 4 survivors — the per-file score is scope-independent. Gate-rejection
+ * re-VERIFIED (agent-principles.md #7): with break temporarily set to 98, `stryker run`
+ * printed "Final mutation score 97.16 under breaking threshold 98, setting exit code to 1
+ * (failure)" and exited 1 (the 96.95↔97.16 delta is the documented timeout-classification
+ * jitter, well inside the 95 bar); restored to 95. These are the observed current numbers —
+ * do NOT re-document stale/unrun figures as fact (agent-principles.md #2/#3/#7).
  *
  * @type {import('@stryker-mutator/api/core').PartialStrykerOptions}
  */

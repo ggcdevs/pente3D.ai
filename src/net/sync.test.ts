@@ -302,6 +302,41 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
     expect(eb.status().kind).toBe('conflict');
     expect(headHash(eb.game().log)).toBe(stoppedHead);
   });
+
+  it('freezes the state-mutating receive() once stopped: a strict-extension (adopt-shaped) message is dropped, not adopted', async () => {
+    const hub = new MockRelayHub();
+    const ta = new MockTransport(hub, 'pa3');
+    const tb = new MockTransport(hub, 'pb3');
+    const ea = new SyncEngine(new Game(9), ta, db, () => meta, 'white');
+    const eb = new SyncEngine(new Game(9), tb, db, () => meta, 'black');
+    // Fork B onto history [3,3,3]; A forks onto [0,0,0] → conflict stops B.
+    ea.placeLocalOnly([0, 0, 0]);
+    eb.placeLocalOnly([3, 3, 3]);
+    await ea.connect('freeze-room');
+    await eb.connect('freeze-room');
+    ea.publishState();
+    expect(eb.status().kind).toBe('conflict');
+
+    const frozenHead = headHash(eb.game().log);
+    const frozenPly = eb.game().ply();
+    expect(frozenPly).toBe(1); // B is stopped on its own 1-move fork.
+
+    // Craft a STRICT EXTENSION of B's frozen log ([3,3,3] followed by another move).
+    // If receive() were NOT guarded, decideSync would return `adopt` and REPLACE B's
+    // game with this longer log — mutating the supposedly-frozen game. Deliver it
+    // straight through the PUBLIC receive() seam (the transport pump routes here too).
+    const strictExtension = logOf('3,3,3', '4,4,4');
+    // Sanity: this really is an adopt-shaped message for B's current log (proves the
+    // negative test would fail the guard — not a message decideSync would ignore).
+    expect(decideSync(eb.game().log, strictExtension)).toEqual({ action: 'adopt' });
+    eb.receive(toSyncMessage(strictExtension));
+
+    // The stopped game did NOT move forward: head and ply are unchanged.
+    expect(eb.status().kind).toBe('conflict');
+    expect(headHash(eb.game().log)).toBe(frozenHead);
+    expect(eb.game().ply()).toBe(frozenPly);
+    expect(eb.game().state().pieces['4,4,4']).toBeUndefined();
+  });
 });
 
 describe('decideUndo — pure restricted-undo permission', () => {
