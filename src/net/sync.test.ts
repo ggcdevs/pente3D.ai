@@ -112,10 +112,46 @@ describe('SyncMessage — wire format {version, headHash, log}', () => {
     expect(() => parseSyncMessage(wrong)).toThrow(/version/);
   });
 
-  it('rejects a non-object / malformed message', () => {
-    expect(() => parseSyncMessage(null as unknown as SyncMessage)).toThrow();
-    expect(() => parseSyncMessage(42 as unknown as SyncMessage)).toThrow();
-    expect(() => parseSyncMessage({ version: SYNC_VERSION } as SyncMessage)).toThrow();
+  it('rejects a non-object / malformed message with a typed SyncError', () => {
+    expect(() => parseSyncMessage(null as unknown as SyncMessage)).toThrow(SyncError);
+    expect(() => parseSyncMessage(null as unknown as SyncMessage)).toThrow(
+      /must be an object/,
+    );
+    expect(() => parseSyncMessage(42 as unknown as SyncMessage)).toThrow(SyncError);
+    expect(() => parseSyncMessage(42 as unknown as SyncMessage)).toThrow(
+      /must be an object/,
+    );
+  });
+
+  it('rejects a message whose `log` is missing (undefined) — not iterable, must be an array', () => {
+    // A SyncError with the array-of-events message, NOT a generic TypeError from
+    // the downstream `for (const event of msg.log)` iteration. This pins the
+    // defensive `!Array.isArray(msg.log)` guard so it cannot be silently deleted.
+    const badMsg = { version: SYNC_VERSION, headHash: 'x' } as unknown as SyncMessage;
+    expect(() => parseSyncMessage(badMsg)).toThrow(SyncError);
+    expect(() => parseSyncMessage(badMsg)).toThrow(/array of events/);
+  });
+
+  it('rejects a message whose `log` is a non-array truthy value (string / object)', () => {
+    // A STRING log is truthy and iterable, so WITHOUT the guard it would silently
+    // iterate characters into append() and fail later with a misleading headHash
+    // mismatch. The guard must reject it up front as a malformed shape.
+    const stringLog = {
+      version: SYNC_VERSION,
+      headHash: 'x',
+      log: 'not-an-array',
+    } as unknown as SyncMessage;
+    expect(() => parseSyncMessage(stringLog)).toThrow(SyncError);
+    expect(() => parseSyncMessage(stringLog)).toThrow(/array of events/);
+
+    // A plain object is truthy but NOT an array — likewise rejected up front.
+    const objLog = {
+      version: SYNC_VERSION,
+      headHash: 'x',
+      log: { 0: { type: 'place', node: '0,0,0' } },
+    } as unknown as SyncMessage;
+    expect(() => parseSyncMessage(objLog)).toThrow(SyncError);
+    expect(() => parseSyncMessage(objLog)).toThrow(/array of events/);
   });
 });
 

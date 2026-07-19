@@ -27,8 +27,9 @@
  * under machine load, letting the gate flip red by luck. Raising `timeoutMS`/
  * `timeoutFactor` (below) makes classification stable — genuine hangs still time out
  * (a legitimate kill), slow-but-terminating mutants finish and reveal their true
- * status. With the config/persist scope added, the overall score is 96.22% (core
- * 95.74%, config 96.15%, persist 100%) — a ~1.2 margin over break=95.
+ * status. (For the current observed overall/per-file scores — after the net scope
+ * was added — see the OBSERVED block near the end of this comment; that is the
+ * single source of truth for the numbers, kept from drifting into stale claims.)
  *
  * The residual SURVIVING mutants are equivalent mutants that cannot be killed
  * without changing observable behavior — e.g. in core: the capture bounds pre-guard
@@ -52,8 +53,17 @@
  * Restored to 95. Re-VERIFIED after adding src/net/sync.ts to the mutate scope:
  * with break temporarily set to 98 and score 96.53%, `stryker run` printed
  * "Final mutation score 96.53 under breaking threshold 98, setting exit code to 1
- * (failure)" and exited 1. Restored to 95; the green run scored 96.74% overall
- * (net 95.51% = seats.ts 100%, sync.ts 93.75%) — a 1.74 margin over break=95.
+ * (failure)" and exited 1. Restored to 95.
+ *
+ * OBSERVED (full configured `npx stryker run`, 2026-07-19, after hardening the
+ * parseSyncMessage malformed-log tests): overall 96.95% (exit 0, >= break 95),
+ * net src/net 98.08% = seats.ts 100% (44/44), sync.ts 97.32% (109 killed, 3
+ * survivors) — a 1.95 margin over break=95. Gate-rejection re-VERIFIED same run:
+ * with break temporarily set to 98, `stryker run` printed "Final mutation score
+ * 97.05 under breaking threshold 98, setting exit code to 1 (failure)" and exited
+ * 1 (the 96.95↔97.05 delta is the documented timeout-classification jitter, well
+ * inside the 95 bar); restored to 95. These are the observed current numbers — do
+ * NOT re-document stale/unrun figures as fact (agent-principles.md #2/#3/#7).
  *
  * @type {import('@stryker-mutator/api/core').PartialStrykerOptions}
  */
