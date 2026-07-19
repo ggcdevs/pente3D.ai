@@ -221,6 +221,42 @@ Captured per the user's rationale-capture preference; quotes are the user's own 
 - **Decision:** Drop the "chat or communication features" line from Story 20.
 - **Rationale (user):** "we can nix chat".
 
+## Future flex points — v1 designs around these, does not build them
+
+Raised 2026-07-18: eventually each room should be **limited to 2 players**, possibly
+gated by a **room password**. Not a v1 feature, but **v1 must be architected so these drop
+in with zero heavy refactoring** (consistent with the earlier conflict-resolution
+constraint and the general modularity principle).
+
+The relay stays **dumb**, so enforcement lives above it. Two escalating levels, both
+non-breaking if the seams below exist:
+
+- **Level 1 — cooperative, relay stays dumb (likely enough for friends):**
+  - **Room password via topic derivation** — fold the password into the room identity:
+    `topic = f(roomCode, password)` (e.g. a hash). Without the password you can't even
+    *derive* the topic, so you can't join. No broker change.
+  - **2-player cap via presence policy** — the app already tracks room presence; a small
+    `RoomPolicy` layer rejects a 3rd joiner (client refuses to start / marks them
+    spectator). Cooperative (a hostile client could ignore it), which is fine for the
+    friendly-play threat model.
+
+- **Level 2 — enforced, swap the transport (if we ever need real enforcement):**
+  - Replace `MqttTransport` with a `RelayTransport` that first calls a tiny matchmaking
+    service (capacity check, password auth, issues a short-lived token). **No game-logic
+    change** — it's all behind the `Transport` seam.
+
+### Seams v1 MUST reserve now (cheap, non-functional in v1)
+
+1. **All networking behind `Transport`** — game code never sees topics/broker (already true
+   in the POC). This is the master seam that makes Level 2 a swap.
+2. **`connect(roomCode, opts?)`** — widen the signature to accept `{ password? }` now, even
+   though v1 ignores it. Callers won't change when it starts mattering.
+3. **`roomTopic(roomCode, opts?)`** — a single function that maps room identity → topic, so
+   password-into-topic (Level 1) is a one-function change, not a caller sweep.
+4. **Explicit room membership / seat model** — represent players as up to 2 **seats**
+   (black/white) plus spectators, derived from presence. v1: everyone's a player. Future:
+   seat assignment + "room full" rejection is a policy on top, not a data-model rewrite.
+
 ## Open items for the next design pass (non-POC)
 
 Flagged during review of the planning docs; to discuss when we move past networking
