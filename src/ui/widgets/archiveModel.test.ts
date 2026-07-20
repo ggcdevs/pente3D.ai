@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   deriveArchive,
   playersLabel,
+  resolveArchiveActions,
   CONFLICTED_RESULT,
+  IN_PROGRESS_RESULT,
   PLAYER_SEAT_ORDER,
   UNKNOWN_PLAYER,
   PLAYERS_LABEL_SEPARATOR,
@@ -97,6 +99,9 @@ describe('deriveArchive — projection', () => {
       playersLabel: 'Ann vs Bo',
       result: 'in-progress',
       conflicted: false,
+      // An in-progress game can be reviewed OR resumed (Task 6.6): both action flags ride the row.
+      canReview: true,
+      canResume: true,
       headHash: 'abc123',
       startedAt: 4242,
     });
@@ -150,9 +155,67 @@ describe('deriveArchive — empty archive', () => {
   });
 });
 
+describe('resolveArchiveActions — review vs resume (Task 6.6)', () => {
+  it('an in-progress game can be reviewed AND resumed', () => {
+    // Only a genuinely-unfinished game (no winner, not forked) can be continued.
+    expect(resolveArchiveActions('in-progress')).toEqual({ canReview: true, canResume: true });
+    // Pin the SSOT the widget/glue also read (the only resumable marker).
+    expect(IN_PROGRESS_RESULT).toBe('in-progress');
+  });
+
+  it('a FINISHED game (white-wins) is review-only — NOT resumable (negative case)', () => {
+    // A won game rejects further moves (game over), so Resume must be withheld: review-only.
+    expect(resolveArchiveActions('white-wins')).toEqual({ canReview: true, canResume: false });
+  });
+
+  it('a FINISHED game (black-wins) is review-only — NOT resumable (negative case)', () => {
+    expect(resolveArchiveActions('black-wins')).toEqual({ canReview: true, canResume: false });
+  });
+
+  it('a CONFLICTED game is review-only — NOT resumable (negative case)', () => {
+    // A fork has two divergent logs and no single continuable game — review-only until resolution.
+    expect(resolveArchiveActions(CONFLICTED_RESULT)).toEqual({
+      canReview: true,
+      canResume: false,
+    });
+  });
+
+  it('an UNKNOWN/other result string is review-only — NOT resumable (defensive default)', () => {
+    // Any marker that is not exactly the in-progress SSOT is treated as non-resumable: resuming an
+    // unrecognized state is unsafe, so only review is offered. Proves the decision is not a mere
+    // "not conflicted" check (that would wrongly resume a `white-wins` game — killed above too).
+    expect(resolveArchiveActions('abandoned')).toEqual({ canReview: true, canResume: false });
+    expect(resolveArchiveActions('')).toEqual({ canReview: true, canResume: false });
+  });
+
+  it('review is ALWAYS available regardless of result (every archived game is browsable)', () => {
+    for (const result of ['in-progress', 'white-wins', 'black-wins', 'conflicted', 'weird']) {
+      expect(resolveArchiveActions(result).canReview).toBe(true);
+    }
+  });
+});
+
+describe('deriveArchive — action flags thread onto each row (Task 6.6)', () => {
+  it('flags an in-progress row resumable and a finished row review-only', () => {
+    const model = deriveArchive([
+      listing('live', { result: 'in-progress', startedAt: 300 }),
+      listing('won', { result: 'white-wins', startedAt: 200 }),
+      listing('forked', { result: CONFLICTED_RESULT, startedAt: 100 }),
+    ]);
+    const byId = Object.fromEntries(model.items.map((i) => [i.id, i]));
+    expect(byId['live']).toMatchObject({ canReview: true, canResume: true });
+    expect(byId['won']).toMatchObject({ canReview: true, canResume: false });
+    expect(byId['forked']).toMatchObject({ canReview: true, canResume: false });
+  });
+});
+
 describe('archiveModel — constants', () => {
   it('CONFLICTED_RESULT matches the archive layer marker', () => {
     expect(CONFLICTED_RESULT).toBe('conflicted');
+  });
+
+  it('IN_PROGRESS_RESULT is the archive layer in-progress marker (the only resumable one)', () => {
+    expect(IN_PROGRESS_RESULT).toBe('in-progress');
   });
 
   it('PLAYER_SEAT_ORDER is white then black', () => {

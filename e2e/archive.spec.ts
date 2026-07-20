@@ -268,7 +268,7 @@ test('the loadGame COMMAND opens the browser and pushes the blocking archive sco
   await page.screenshot({ path: shot });
 });
 
-test('choosing a row LOADS that archived game into the scene (getState changes)', async ({
+test('REVIEWING a row LOADS that archived game into the scene (getState changes)', async ({
   page,
 }) => {
   await isolate(page);
@@ -281,7 +281,7 @@ test('choosing a row LOADS that archived game into the scene (getState changes)'
   const savedId = (await getAsync(page, (p) => p.getArchive()))[0]!.id;
 
   // Scrub the LOCAL view back to ply 0 (read-only — this does NOT touch the archive) so the board
-  // shows an EMPTY state distinct from the archived 3-ply game. The row→load must re-render the
+  // shows an EMPTY state distinct from the archived 3-ply game. The Review→load must re-render the
   // archived game, making the load observable rather than a no-op against an already-matching board.
   await get(page, (p) => p.scrubTo(0));
   expect(Object.keys((await get(page, (p) => p.getState()!)).pieces).length).toBe(0);
@@ -291,7 +291,8 @@ test('choosing a row LOADS that archived game into the scene (getState changes)'
 
   const row = widget(page).locator(`[data-testid="archive-row-${savedId}"]`);
   await expect(row).toHaveCount(1);
-  await row.click();
+  // The Review button loads read-only (Task 6.6). It is always present (every game is browsable).
+  await widget(page).locator(`[data-testid="archive-review-${savedId}"]`).click();
 
   // The modal closes SYNCHRONOUSLY on click, but the archive→scene load is ASYNC (an IndexedDB read
   // then `scene.loadGame`; see archive.ts row handler: `close(); void loadArchived(id)`). Reading

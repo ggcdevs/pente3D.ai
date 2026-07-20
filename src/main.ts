@@ -133,6 +133,14 @@ function autosaveMeta(): ArchivedMeta {
 // pattern the net session uses). Restore folds any autosaved log back into a Game on boot.
 let archiveDb: IDBDatabase | null = null;
 
+// REVIEW suspends autosave (Task 6.6). Reviewing an archived game loads it into the scene READ-ONLY:
+// the player is just looking (and may scrub the slider), so the browsed game must NOT be persisted and
+// the current autosave record must NOT be disturbed. While suspended, `autosaveTick` no-ops entirely —
+// no mint, no save. A genuinely-new-game action clears it: RESUME (continue the browsed game as a fresh
+// accumulating record), or dispatching reset / host / join (which start a new authoritative game). This
+// is the honest read-only guarantee — a review can never mutate the archive (agent-principles #1).
+let autosaveSuspended = false;
+
 /**
  * Autosave the authoritative game so past games ACCUMULATE (Task 6.3, issue #4). Each call asks the
  * PURE `nextLifecycle` — from the game's generation (bumped when a new `Game` is swapped in) + ply +
@@ -150,6 +158,10 @@ let archiveDb: IDBDatabase | null = null;
  */
 async function autosaveTick(): Promise<void> {
   if (archiveDb === null) return;
+  // While a REVIEW is in effect (Task 6.6) autosave is fully suspended: the browsed game is read-only,
+  // so we neither mint nor save — the archive is left exactly as the review found it. Resume/reset/host
+  // clears the suspension before starting a real game, so accumulation continues normally after.
+  if (autosaveSuspended) return;
   const generation = currentGeneration();
   const game = authoritativeGame();
   const decision = nextLifecycle(lifecycle, observeLifecycle(generation, game.ply(), game.state()));
@@ -210,26 +222,64 @@ async function listArchive(): Promise<readonly ArchiveListing[]> {
 }
 
 /**
- * Reconstruct the archived game `id` and swap it into the scene for review (Task 5.8). A conflicted
- * record has no single game — we load its LOCAL fork (`mine`) so the browser can review the fork the
- * player was on (GLOSSARY "conflict": both forks are stored; resolution is a future feature). An
- * ordinary record reconstructs directly. An absent/corrupt record surfaces honestly (logged), never
- * a silent no-op masquerading as success.
+ * Reconstruct the archived game `id` and swap it into the scene, returning the loaded `Game` (or
+ * `undefined` on an absent/corrupt record — surfaced honestly, never a silent no-op masquerading as
+ * success). Shared by REVIEW and RESUME (Task 6.6): both fold the stored log into a live `Game` and
+ * render it; they differ only in what happens to the AUTOSAVE record afterward (see below). A
+ * conflicted record has no single game — we load its LOCAL fork (`mine`) so the player can inspect
+ * the fork they were on (GLOSSARY "conflict": both forks are stored; resolution is a future feature).
  */
-async function loadArchived(id: string): Promise<void> {
+async function loadArchivedIntoScene(id: string): Promise<Game | undefined> {
+  const conflicted = await loadConflictedIfAny(archiveDb!, id);
+  const game = conflicted ?? (await loadArchivedGame(archiveDb!, id));
+  if (game === undefined) {
+    log.error('archive load: no such game', { id });
+    return undefined;
+  }
+  scene.loadGame(game);
+  refreshUi();
+  return game;
+}
+
+/**
+ * REVIEW an archived game (Task 6.6): load it read-only for browsing via the history slider. The game
+ * is swapped into the scene, but autosave is SUSPENDED — so the browsed game is never persisted and the
+ * current autosave record is left exactly as the review found it (the user is just looking; scrubbing
+ * the slider is a read-only local feature, `scene.scrubTo`). The suspension ends when the user starts a
+ * real game (reset / host / join) or RESUMES the browsed game — a real move only happens via RESUME.
+ */
+async function reviewArchived(id: string): Promise<void> {
   if (archiveDb === null) return;
   try {
-    const conflicted = await loadConflictedIfAny(archiveDb, id);
-    const game = conflicted ?? (await loadArchivedGame(archiveDb, id));
-    if (game === undefined) {
-      log.error('archive load: no such game', { id });
-      return;
-    }
-    scene.loadGame(game);
-    refreshUi();
-    log.info('archived game loaded', { id, ply: game.ply() });
+    // Suspend BEFORE the swap so the load's own onStateChange tick is a no-op (never mints/overwrites).
+    autosaveSuspended = true;
+    const game = await loadArchivedIntoScene(id);
+    if (game === undefined) return;
+    log.info('archived game loaded for review (autosave suspended)', { id, ply: game.ply() });
   } catch (err: unknown) {
-    log.error('archive load failed', { id, err });
+    log.error('archive review failed', { id, err });
+  }
+}
+
+/**
+ * RESUME an archived game (Task 6.6): load it and make it the live CONTINUABLE game. Same swap as
+ * review, but autosave stays ACTIVE — swapping in the loaded `Game` bumps the generation, so the pure
+ * Task 6.3 lifecycle detects a boundary over the just-abandoned live game and MINTS A FRESH record for
+ * the resumed game (exactly as reset / host do). Continued play then accumulates under that fresh id and
+ * the original archived record stays intact — no bespoke minting here (DRY: the one accumulation path in
+ * `autosaveTick` owns id-minting). A networked game is resumed the same way: the user then Hosts from
+ * the resumed board (reusing 6.4's played-board path), which archives + restarts as a fresh net game.
+ */
+async function resumeArchived(id: string): Promise<void> {
+  if (archiveDb === null) return;
+  try {
+    // Ensure autosave is active (a prior review may have suspended it) so the load's boundary mints.
+    autosaveSuspended = false;
+    const game = await loadArchivedIntoScene(id);
+    if (game === undefined) return;
+    log.info('archived game resumed (continues under a fresh record)', { id, ply: game.ply() });
+  } catch (err: unknown) {
+    log.error('archive resume failed', { id, err });
   }
 }
 
@@ -382,8 +432,17 @@ void createAppNetSession(scene.getState().size)
 // command ids through the scene's registry — the SAME path a keybinding uses (design Principle
 // 3) — so a button and a hotkey fire the identical command. Kept in sync with live state so its
 // widgets (Task 5.2 status banner) read the current game + history (design Part 6).
+/** Command ids that START a genuinely new authoritative game — each ends any REVIEW (Task 6.6). */
+const NEW_GAME_COMMANDS = new Set(['reset', 'hostGame', 'joinGame']);
+
 const ui = createUi(container, {
-  dispatch: (id) => scene.dispatch(id),
+  dispatch: (id) => {
+    // A review suspends autosave (read-only browse). Starting a real game — reset / host / join,
+    // whatever the source (button, menu, or keybinding all route through this one dispatch choke
+    // point) — ends the review so the fresh game is tracked and accumulated normally again (6.6).
+    if (NEW_GAME_COMMANDS.has(id)) autosaveSuspended = false;
+    return scene.dispatch(id);
+  },
   // Modal/mode widgets (Task 5.3: the menu modal) push/pop input scopes on the scene's stack —
   // a blocking scope while a modal is open, popped when it closes (design Part 5 / GLOSSARY).
   pushScope: (scope) => scene.pushScope(scope),
@@ -400,7 +459,10 @@ const ui = createUi(container, {
   // archive via listArchive and loads a chosen game via loadArchived (both over IndexedDB).
   registerOpenArchive: (open) => scene.setOpenArchive(open),
   listArchive: () => listArchive(),
-  loadArchived: (id) => loadArchived(id),
+  // Task 6.6 review vs resume: Review loads read-only (browse the slider); Resume loads + continues
+  // playing under a fresh accumulating record. Two DISTINCT app seams the widget's two buttons call.
+  reviewArchived: (id) => reviewArchived(id),
+  resumeArchived: (id) => resumeArchived(id),
   getHelpSources: () => scene.getHelpSources(),
   // Live colour preview: the settings modal drives the scene's applyColors seam so a colour /
   // opacity edit updates the rendered scene immediately (background + line opacity + line colours).

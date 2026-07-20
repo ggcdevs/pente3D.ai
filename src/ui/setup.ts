@@ -77,11 +77,18 @@ export interface UiDeps {
    */
   listArchive(): Promise<readonly ArchiveListing[]>;
   /**
-   * Reconstruct the archived game `id` and swap it into the scene for review (Task 5.8) — the app's
-   * archive→scene load path (fold the stored log into a `Game`, then `scene.loadGame`). Supplied by
-   * the app so the UI shell never imports `src/persist` / `src/render`.
+   * REVIEW an archived game (Task 6.6): reconstruct game `id` and swap it into the scene READ-ONLY —
+   * the app's archive→scene load path (fold the stored log into a `Game`, then `scene.loadGame`),
+   * without re-minting the autosave id. Supplied by the app so the UI shell never imports
+   * `src/persist` / `src/render`.
    */
-  loadArchived(id: string): Promise<void>;
+  reviewArchived(id: string): Promise<void>;
+  /**
+   * RESUME an archived game (Task 6.6): reconstruct game `id`, swap it into the scene, and make it the
+   * live CONTINUABLE game — the app mints a fresh autosave record so continued play accumulates and the
+   * original archived record stays intact. Only invoked for a resumable (in-progress) row.
+   */
+  resumeArchived(id: string): Promise<void>;
   /**
    * The LIVE sources the help overlay generates its shortcut list from (Task 5.7) — the scene's
    * `getHelpSources` (registered command ids + current bindings). Supplied by the app so the UI
@@ -180,7 +187,8 @@ export function createUi(container: HTMLElement, deps: UiDeps): UiHandle {
       registerOpenHelp: deps.registerOpenHelp,
       registerOpenArchive: deps.registerOpenArchive,
       listArchive: deps.listArchive,
-      loadArchived: deps.loadArchived,
+      reviewArchived: deps.reviewArchived,
+      resumeArchived: deps.resumeArchived,
       getHelpSources: deps.getHelpSources,
       applyColors: deps.applyColors,
       getNet: deps.getNet,

@@ -13,10 +13,14 @@
  *
  * The list is READ FROM THE ARCHIVE, never hardcoded: on every open the widget awaits
  * `deps.listArchive()` (the app's `listArchivedGames` over IndexedDB) and paints `deriveArchive(...)`'s
- * newest-first rows. Choosing a row calls `deps.loadArchived(id)` (the app's archive→scene load path),
- * which reconstructs the stored game (folding its event log) and swaps it into the scene for review —
- * observable via `window.__pente` getState/getHistory (agent-principles #3: behavior, not a log line).
- * A conflicted row is marked (GLOSSARY "conflict") so the user sees a forked game is special.
+ * newest-first rows. Each row offers up to two actions (Task 6.6, review vs resume), driven by the pure
+ * model's `canReview`/`canResume` flags: REVIEW (`deps.reviewArchived(id)`) reconstructs the stored game
+ * and swaps it into the scene READ-ONLY (browse via the history slider), and RESUME
+ * (`deps.resumeArchived(id)`) swaps it in and makes it the live CONTINUABLE game (a fresh autosave record
+ * accumulates so the original stays intact). Resume is offered ONLY for a resumable (in-progress) game;
+ * a finished or conflicted row shows Review only — both observable via `window.__pente` getState/getHistory
+ * + the rendered buttons (agent-principles #3: behavior, not a log line). A conflicted row is marked
+ * (GLOSSARY "conflict") so the user sees a forked game is special.
  *
  * The open modal is a MODE change in the input layer: opening PUSHES a `blocking` scope
  * (GLOSSARY "Blocking scope") and closing POPS it — every close path (Escape, outside-click, the ✕
@@ -47,9 +51,11 @@ export interface ArchiveScope {
  * The deps an archive-browser needs: a document to build in (injected for testability), the
  * scope-stack `pushScope`/`popScope` (the open modal pushes/pops the blocking `archive` scope),
  * `registerOpenArchive` (the widget hands its `open()` back so the `loadGame` command can call it),
- * and the two archive IO seams the app supplies (so the widget never opens IndexedDB itself):
- * `listArchive()` (the app's `listArchivedGames`) and `loadArchived(id)` (reconstruct + swap into
- * the scene). Both are async — reading/loading an archive is a promise (IndexedDB).
+ * and the archive IO seams the app supplies (so the widget never opens IndexedDB itself):
+ * `listArchive()` (the app's `listArchivedGames`) plus the two DISTINCT load paths (Task 6.6):
+ * `reviewArchived(id)` loads a game read-only (browse via the history slider) and `resumeArchived(id)`
+ * loads it to CONTINUE PLAYING (a fresh record accumulates so the original stays intact). All async —
+ * reading/loading an archive is a promise (IndexedDB).
  */
 export interface ArchiveDeps {
   readonly doc: Document;
@@ -61,8 +67,18 @@ export interface ArchiveDeps {
   registerOpenArchive(open: () => void): void;
   /** List every archived game as `{ id, meta }` (no logs), newest-first is the model's job. */
   listArchive(): Promise<readonly ArchiveListing[]>;
-  /** Reconstruct the archived game `id` and swap it into the scene for review. */
-  loadArchived(id: string): Promise<void>;
+  /**
+   * REVIEW (Task 6.6): reconstruct the archived game `id` and swap it into the scene read-only, so the
+   * user can browse its history via the slider. Does not re-mint the autosave id — reviewing an old
+   * game must not disturb the current autosave record.
+   */
+  reviewArchived(id: string): Promise<void>;
+  /**
+   * RESUME (Task 6.6): reconstruct the archived game `id`, swap it into the scene, and make it the
+   * live continuable game — a fresh autosave record is minted so continued play accumulates as its own
+   * game and the original archived record stays intact. Only offered for a resumable (in-progress) row.
+   */
+  resumeArchived(id: string): Promise<void>;
 }
 
 /** Build the blocking `archive` scope the open modal pushes (id `archive`, no bindings). */
@@ -134,7 +150,7 @@ export function archiveWidget(): WidgetFactory {
         element.setAttribute('data-count', String(model.items.length));
 
         for (const item of model.items) {
-          const row = doc.createElement('button');
+          const row = doc.createElement('div');
           row.className = 'pente-archive-row';
           row.setAttribute('data-testid', `archive-row-${item.id}`);
           row.setAttribute('data-id', item.id);
@@ -142,6 +158,10 @@ export function archiveWidget(): WidgetFactory {
           row.setAttribute('data-result', item.result);
           row.setAttribute('data-head-hash', item.headHash);
           row.setAttribute('data-started-at', String(item.startedAt));
+          // Expose the action affordances so Playwright can prove a finished/conflicted row offers
+          // NO resume (observable, not a log line — agent-principles #3), from the pure model flags.
+          row.setAttribute('data-can-review', String(item.canReview));
+          row.setAttribute('data-can-resume', String(item.canResume));
 
           const players = doc.createElement('span');
           players.className = 'pente-archive-players';
@@ -157,14 +177,41 @@ export function archiveWidget(): WidgetFactory {
             : `${item.result} · ${formatDate(item.startedAt)}`;
           row.appendChild(meta);
 
-          // Choosing a row loads that game into the scene for review, then closes the modal (which
-          // pops the blocking scope exactly once). We close FIRST so the scope is popped before the
-          // async load resolves — the review happens against the game/camera scopes, not under a
-          // stale blocking modal scope.
-          row.addEventListener('click', () => {
-            close();
-            void deps.loadArchived(item.id);
-          });
+          const actions = doc.createElement('span');
+          actions.className = 'pente-archive-actions';
+
+          // REVIEW (Task 6.6): load the game read-only to browse via the history slider. Always
+          // offered (`item.canReview` is always true). We close FIRST so the blocking archive scope
+          // is popped before the async load resolves — the review happens against the game/camera
+          // scopes, not under a stale modal scope.
+          if (item.canReview) {
+            const reviewButton = doc.createElement('button');
+            reviewButton.className = 'pente-archive-review';
+            reviewButton.setAttribute('data-testid', `archive-review-${item.id}`);
+            reviewButton.textContent = 'Review';
+            reviewButton.addEventListener('click', () => {
+              close();
+              void deps.reviewArchived(item.id);
+            });
+            actions.appendChild(reviewButton);
+          }
+
+          // RESUME (Task 6.6): load the game and CONTINUE PLAYING. Offered only for a resumable
+          // (in-progress) game — a finished or conflicted row has no Resume button, so the DOM itself
+          // proves review-vs-resume from the pure `canResume` flag (never a hardcoded per-result rule).
+          if (item.canResume) {
+            const resumeButton = doc.createElement('button');
+            resumeButton.className = 'pente-archive-resume';
+            resumeButton.setAttribute('data-testid', `archive-resume-${item.id}`);
+            resumeButton.textContent = 'Resume';
+            resumeButton.addEventListener('click', () => {
+              close();
+              void deps.resumeArchived(item.id);
+            });
+            actions.appendChild(resumeButton);
+          }
+
+          row.appendChild(actions);
           body.appendChild(row);
         }
       }

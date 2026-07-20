@@ -30,6 +30,15 @@
 /** The `result` marker the archive stores for a conflicted (forked) game (mirrors `archive.ts`). */
 export const CONFLICTED_RESULT = 'conflicted';
 
+/**
+ * The `result` marker the archive stores for an unfinished, still-playable game (mirrors the
+ * `'in-progress'` marker `main.ts` writes when `winner === null`). This is the ONLY result a game
+ * can be RESUMED from (Task 6.6): a finished (`*-wins`) game is over and rejects further moves, and a
+ * conflicted (forked) game has no single continuable log — both are review-only. Kept as an exported
+ * SSOT so the widget/glue and this decision can never drift on what "resumable" means.
+ */
+export const IN_PROGRESS_RESULT = 'in-progress';
+
 /** The seats projected into a players label, in fixed display order (white first). */
 export const PLAYER_SEAT_ORDER = ['white', 'black'] as const;
 
@@ -73,6 +82,16 @@ export interface ArchiveItem {
   readonly result: string;
   /** True iff this is a conflicted (forked) game — routes to `loadConflicted`, not `loadGame`. */
   readonly conflicted: boolean;
+  /**
+   * True iff this row offers REVIEW (Task 6.6): load the game into the scene read-only to browse via
+   * the history slider. Always `true` — every archived game is browsable, finished or not.
+   */
+  readonly canReview: boolean;
+  /**
+   * True iff this row offers RESUME (Task 6.6): load the game into the scene and CONTINUE PLAYING. Only
+   * an {@link IN_PROGRESS_RESULT} game is resumable; a finished or conflicted game is review-only.
+   */
+  readonly canResume: boolean;
   /** The whole-history fingerprint (`headHash`), surfaced for identity/debugging. */
   readonly headHash: string;
   /** Epoch millis the game began (the row's sort key; the widget formats it for display). */
@@ -85,6 +104,26 @@ export interface ArchiveModel {
   readonly items: readonly ArchiveItem[];
   /** True iff there are no archived games — lets the widget show an explicit empty state. */
   readonly isEmpty: boolean;
+}
+
+/** The two actions an archive row can offer (Task 6.6): review (read-only) and/or resume (continue). */
+export interface ArchiveActions {
+  /** Whether the row offers REVIEW — load read-only + browse the history slider. Always true. */
+  readonly canReview: boolean;
+  /** Whether the row offers RESUME — load + continue playing. Only for an in-progress game. */
+  readonly canResume: boolean;
+}
+
+/**
+ * Decide which actions an archived game with `result` offers (Task 6.6, review vs resume). REVIEW is
+ * ALWAYS available — every archived game can be loaded read-only and browsed via the history slider.
+ * RESUME is available ONLY for an {@link IN_PROGRESS_RESULT} game: a finished (`*-wins`) game is over
+ * and rejects further moves, and a conflicted (forked) game has no single continuable log, so both are
+ * review-only. The check is an exact match on the in-progress SSOT (not a mere "not conflicted"),
+ * so an unrecognized/other marker is treated conservatively as non-resumable (review-only).
+ */
+export function resolveArchiveActions(result: string): ArchiveActions {
+  return { canReview: true, canResume: result === IN_PROGRESS_RESULT };
 }
 
 /**
@@ -120,14 +159,21 @@ export function deriveArchive(listings: readonly ArchiveListing[]): ArchiveModel
     // `localeCompare` has no `<`-vs-`<=` boundary that would leave an equivalent (unkillable)
     // mutant — every ordering mutant is killed by a real reorder test (agent-principles #7).
     .sort((a, b) => b.meta.startedAt - a.meta.startedAt || a.id.localeCompare(b.id))
-    .map((listing) => ({
-      id: listing.id,
-      playersLabel: playersLabel(listing.meta.players),
-      result: listing.meta.result,
-      conflicted: listing.meta.result === CONFLICTED_RESULT,
-      headHash: listing.meta.headHash,
-      startedAt: listing.meta.startedAt,
-    }));
+    .map((listing) => {
+      // Review is always offered; resume only for an in-progress game (Task 6.6). Derived here so the
+      // action flags ride each row and the widget never re-decides (single source of the decision).
+      const actions = resolveArchiveActions(listing.meta.result);
+      return {
+        id: listing.id,
+        playersLabel: playersLabel(listing.meta.players),
+        result: listing.meta.result,
+        conflicted: listing.meta.result === CONFLICTED_RESULT,
+        canReview: actions.canReview,
+        canResume: actions.canResume,
+        headHash: listing.meta.headHash,
+        startedAt: listing.meta.startedAt,
+      };
+    });
 
   return { items, isEmpty: items.length === 0 };
 }

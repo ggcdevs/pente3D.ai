@@ -117,12 +117,16 @@ const UI_STYLESHEET = `
 .pente-archive-body { display: flex; flex-direction: column; gap: 6px; }
 .pente-archive-empty[hidden] { display: none; }
 .pente-archive-empty { opacity: 0.7; font-size: 14px; padding: 8px 0; }
-.pente-archive-row { display: flex; flex-direction: column; gap: 2px; text-align: left; cursor: pointer; padding: 10px 12px; border-radius: 6px; border: none; background: rgba(255,255,255,0.06); color: #e6e6ea; font-size: 14px; }
-.pente-archive-row:hover { background: rgba(255,255,255,0.14); }
+.pente-archive-row { display: flex; flex-direction: column; gap: 4px; text-align: left; padding: 10px 12px; border-radius: 6px; background: rgba(255,255,255,0.06); color: #e6e6ea; font-size: 14px; }
 .pente-archive-row[data-conflicted="true"] { background: rgba(255,80,80,0.16); }
-.pente-archive-row[data-conflicted="true"]:hover { background: rgba(255,80,80,0.26); }
 .pente-archive-players { font-weight: 600; }
 .pente-archive-meta { font-size: 12px; opacity: 0.8; }
+.pente-archive-actions { display: flex; gap: 8px; margin-top: 4px; }
+.pente-archive-review, .pente-archive-resume { cursor: pointer; padding: 4px 12px; border-radius: 4px; border: none; font-size: 13px; color: #e6e6ea; }
+.pente-archive-review { background: rgba(255,255,255,0.12); }
+.pente-archive-review:hover { background: rgba(255,255,255,0.22); }
+.pente-archive-resume { background: rgba(90,170,120,0.28); }
+.pente-archive-resume:hover { background: rgba(90,170,120,0.42); }
 `;
 
 /** Install the overlay stylesheet once per document (idempotent, keyed by {@link UI_STYLE_ID}). */
