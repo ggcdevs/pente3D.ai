@@ -23,7 +23,7 @@
 import mqtt from 'mqtt';
 import { getConfig } from '../config/config';
 import type { RelayConfig } from '../config/config';
-import { openDatabase } from '../persist/db';
+import { openDatabase, resolveDbName } from '../persist/db';
 import type { Transport } from './transport';
 import { MqttTransport, type MqttConnectFn } from './mqttTransport';
 import { NetSession } from './session';
@@ -80,7 +80,7 @@ export function resolveTransportFactory(): () => Transport {
  * @param size The board edge length the networked game is built at (the scene's live board size).
  */
 export async function createAppNetSession(size: number): Promise<NetSession> {
-  const db = await openDatabase();
+  const db = await openDatabase(resolveDbName());
   const session = new NetSession({
     createTransport: resolveTransportFactory(),
     db,

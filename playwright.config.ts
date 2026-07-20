@@ -10,6 +10,13 @@ import { defineConfig, devices } from '@playwright/test';
 export default defineConfig({
   testDir: './e2e',
   timeout: 60_000,
+  // Tests within a file run serially; separate spec files still run on parallel WORKERS (each a
+  // separate browser process, and each test a fresh context → isolated localStorage + IndexedDB).
+  // Cross-file parallelism is deliberately kept: specs that touch persistence isolate their own
+  // state (settings/net clear localStorage per test; archive additionally opens a per-test DB via
+  // the `__penteDbName` seam), so no two workers contend on the shared-origin `pente3d` store. Do
+  // NOT "fix" a persistence flake by pinning `workers:1` — that only masks a race under lighter
+  // load (agent-principles #7). Fix the isolation/durability at the source, as the archive spec does.
   fullyParallel: false,
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {

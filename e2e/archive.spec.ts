@@ -58,11 +58,34 @@ type Pente = {
   getHistory(): HistoryReadout | null;
   getInput(): InputReadout | null;
   getArchive(): Promise<ArchiveListing[]>;
+  getHeadHash(): string | null;
   dispatch(id: string): boolean | null;
   pressKey(chord: string): KeyResolution | null;
   place(coords: [number, number, number]): GameStateReadout | null;
   scrubTo(k: number): void;
 };
+
+/**
+ * Give this test its OWN archive database + a clean localStorage BEFORE the app boots, so the archive
+ * assertions never contend with another page's autosave on the shared-origin `pente3d` store. The DB
+ * name is unique per test (a random id, stable for the life of the test so a `page.reload()` in the
+ * restore test re-opens the SAME store) and is injected via the `__penteDbName` seam that `main.ts` /
+ * `appSession.ts` route through. localStorage is cleared only on the very first navigation (a counter
+ * flag persisted in localStorage itself) so the RESTORE test's reload keeps the autosave id it wrote
+ * — clearing on every nav would wipe the id and defeat restore-on-load. Mirrors settings/net which
+ * already clean localStorage per test (agent-principles #3: a deterministic, isolated observable).
+ */
+async function isolate(page: import('@playwright/test').Page): Promise<void> {
+  const dbName = `pente3d-e2e-${crypto.randomUUID()}`;
+  await page.addInitScript((name: string) => {
+    (window as unknown as { __penteDbName: string }).__penteDbName = name;
+    // Clear once, on first load only: mark a sentinel AFTER clearing so a reload preserves state.
+    if (window.localStorage.getItem('__e2e_booted') === null) {
+      window.localStorage.clear();
+      window.localStorage.setItem('__e2e_booted', '1');
+    }
+  }, dbName);
+}
 
 async function ready(page: import('@playwright/test').Page) {
   await page.goto('/');
@@ -73,6 +96,7 @@ async function ready(page: import('@playwright/test').Page) {
       typeof p.getState === 'function' &&
       typeof p.getHistory === 'function' &&
       typeof p.getArchive === 'function' &&
+      typeof p.getHeadHash === 'function' &&
       typeof p.dispatch === 'function' &&
       typeof p.place === 'function' &&
       !!document.querySelector('[data-widget-id="archiveBrowser"]')
@@ -84,6 +108,25 @@ async function ready(page: import('@playwright/test').Page) {
     const p = (window as unknown as { __pente?: { getArchive(): Promise<unknown[]> } }).__pente;
     if (!p) return false;
     return (await p.getArchive()).length >= 1;
+  });
+}
+
+/**
+ * Wait until the autosave of the CURRENT live game is DURABLE: an archive record whose `meta.headHash`
+ * equals the live game's `getHeadHash()`. Autosave overwrites one record asynchronously on every move,
+ * so a record can exist at an EARLIER ply while later writes are still in flight — waiting only on the
+ * record COUNT (as before) let a test capture/load a pre-ply-3 record under parallel CPU load, which
+ * is the concrete race behind the `Received: 0` archive-load flake. Matching the head-hash is the
+ * deterministic proof the persisted record is THIS game at THIS ply (agent-principles #3, #7).
+ */
+async function waitForAutosaved(page: import('@playwright/test').Page): Promise<void> {
+  await page.waitForFunction(async () => {
+    const p = (window as unknown as { __pente?: Pente }).__pente;
+    if (!p) return false;
+    const head = p.getHeadHash();
+    if (head === null) return false;
+    const games = await p.getArchive();
+    return games.some((g) => g.meta.headHash === head);
   });
 }
 
@@ -128,6 +171,7 @@ async function placeThree(page: import('@playwright/test').Page): Promise<void> 
 test('the archive browser mounts in its configured zone (bottom-right per the tracked layout)', async ({
   page,
 }) => {
+  await isolate(page);
   await ready(page);
   // Placement is pure config — assert the browser lands in the zone the tracked layout names.
   expect(layoutDefault.widgets.archiveBrowser.zone).toBe('bottom-right');
@@ -142,6 +186,7 @@ test('the archive browser mounts in its configured zone (bottom-right per the tr
 test('placing pieces AUTOSAVES the current game (a record with the live headHash + ply)', async ({
   page,
 }) => {
+  await isolate(page);
   await ready(page);
   await placeThree(page);
 
@@ -150,33 +195,29 @@ test('placing pieces AUTOSAVES the current game (a record with the live headHash
   const live = await get(page, (p) => p.getHistory()!);
   expect(live.maxPly).toBe(3);
 
-  await page.waitForFunction(async () => {
-    const p = (window as unknown as { __pente: { getArchive(): Promise<ArchiveListing[]> } }).__pente;
-    const games = await p.getArchive();
-    return games.length === 1;
-  });
+  // Wait for the DURABLE ply-3 autosave (record whose headHash == the live head), not just any record.
+  await waitForAutosaved(page);
+  const liveHead = await get(page, (p) => p.getHeadHash()!);
   const games = await getAsync(page, (p) => p.getArchive());
   expect(games).toHaveLength(1);
-  // The persisted record's headHash is a NON-EMPTY fingerprint (a real hash chain over 3 plies),
-  // and it is flagged in-progress (no winner yet) — observable proof the write happened (#3).
+  // The persisted record's headHash equals the LIVE game's — observable proof THIS game at THIS ply
+  // was written (#3) — and it is flagged in-progress (no winner yet). The head is a non-empty chain.
+  expect(games[0]!.meta.headHash).toBe(liveHead);
   expect(games[0]!.meta.result).toBe('in-progress');
-  expect(typeof games[0]!.meta.headHash).toBe('string');
   expect(games[0]!.meta.headHash.length).toBeGreaterThan(0);
 });
 
 test('reloading the page RESTORES the autosaved game (pieces + ply come back)', async ({ page }) => {
+  await isolate(page);
   await ready(page);
   await placeThree(page);
   const before = await get(page, (p) => p.getState()!);
   expect(Object.keys(before.pieces).length).toBe(3);
   expect(before.pieces['0,0,0']).toBe('white');
 
-  // Wait until the ply-3 game is autosaved, then RELOAD — the app restores it on boot.
-  await page.waitForFunction(async () => {
-    const p = (window as unknown as { __pente: { getArchive(): Promise<ArchiveListing[]> } }).__pente;
-    const g = await p.getArchive();
-    return g.length === 1 && g[0]!.meta.headHash.length > 0;
-  });
+  // Wait until the ply-3 game is DURABLY autosaved (record head == live head), then RELOAD — the app
+  // restores it on boot. Reloading before the ply-3 write commits would restore an earlier ply.
+  await waitForAutosaved(page);
   await page.reload();
   await ready(page);
 
@@ -198,8 +239,10 @@ test('reloading the page RESTORES the autosaved game (pieces + ply come back)', 
 test('the loadGame COMMAND opens the browser and pushes the blocking archive scope', async ({
   page,
 }) => {
+  await isolate(page);
   await ready(page);
   await placeThree(page);
+  await waitForAutosaved(page);
   await expect(modal(page)).toBeHidden();
 
   // The menu "Load" entry and any keybinding dispatch this identical id (design Principle 3).
@@ -228,13 +271,13 @@ test('the loadGame COMMAND opens the browser and pushes the blocking archive sco
 test('choosing a row LOADS that archived game into the scene (getState changes)', async ({
   page,
 }) => {
+  await isolate(page);
   await ready(page);
-  // Build and autosave a 3-ply game, capture its id from the archive.
+  // Build and DURABLY autosave a 3-ply game (wait for the record head == the live head, NOT merely a
+  // record to exist — an earlier-ply autosave still overwriting toward the head is the concrete race
+  // that loaded a 0-piece board here under parallel load), then capture its id.
   await placeThree(page);
-  await page.waitForFunction(async () => {
-    const p = (window as unknown as { __pente: { getArchive(): Promise<ArchiveListing[]> } }).__pente;
-    return (await p.getArchive()).length === 1;
-  });
+  await waitForAutosaved(page);
   const savedId = (await getAsync(page, (p) => p.getArchive()))[0]!.id;
 
   // Scrub the LOCAL view back to ply 0 (read-only — this does NOT touch the archive) so the board
@@ -250,10 +293,19 @@ test('choosing a row LOADS that archived game into the scene (getState changes)'
   await expect(row).toHaveCount(1);
   await row.click();
 
-  // The modal closed (a choose is a close path) and the scene LOADED the archived game: the board
-  // went from 0 pieces (scrubbed away) back to the archived 3 pieces at the live head — observable
-  // proof the row drove the archive→scene load end to end (agent-principles #3).
+  // The modal closes SYNCHRONOUSLY on click, but the archive→scene load is ASYNC (an IndexedDB read
+  // then `scene.loadGame`; see archive.ts row handler: `close(); void loadArchived(id)`). Reading
+  // getState the instant the modal hides races that load — under parallel CPU load the read can land
+  // BEFORE loadGame runs, observing the still-scrubbed 0-piece board (the concrete `Received: 0`
+  // flake). Wait for the load to be OBSERVABLE (board back to 3 pieces at the live head) before
+  // asserting — the wait proves the end-to-end load happened; the asserts then pin the exact state.
   await expect(modal(page)).toBeHidden();
+  await page.waitForFunction(() => {
+    const p = (window as unknown as { __pente?: Pente }).__pente;
+    const s = p?.getState();
+    const h = p?.getHistory();
+    return !!s && Object.keys(s.pieces).length === 3 && !!h && !h.scrubbing;
+  });
   const state = await get(page, (p) => p.getState()!);
   expect(Object.keys(state.pieces).length).toBe(3);
   expect(state.pieces['0,0,0']).toBe('white');
@@ -269,6 +321,7 @@ test('the browser row count tracks the REAL archive, with the empty state hidden
   // The pristine game is autosaved at boot, so the archive is non-empty. Prove the DOM reflects the
   // REAL archive: one row per listed game, and the explicit empty-state element hidden (its shown
   // branch is exercised by the unit/mutation suite — here we assert the non-empty negative).
+  await isolate(page);
   await ready(page);
   await dispatchLoad(page);
   await expect(modal(page)).toBeVisible();

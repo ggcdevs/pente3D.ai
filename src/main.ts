@@ -3,7 +3,7 @@ import { createUi } from './ui/setup.ts';
 import { installInspectApi } from './debug/window.ts';
 import { createLogger } from './debug/log.ts';
 import { createAppNetSession } from './net/appSession.ts';
-import { openDatabase } from './persist/db.ts';
+import { openDatabase, resolveDbName } from './persist/db.ts';
 import {
   saveGame,
   loadGame as loadArchivedGame,
@@ -62,7 +62,7 @@ function autosaveMeta(): ArchivedMeta {
 // pattern the net session uses). Restore folds any autosaved log back into a Game on boot.
 let archiveDb: IDBDatabase | null = null;
 
-void openDatabase()
+void openDatabase(resolveDbName())
   .then(async (db) => {
     archiveDb = db;
     // RESTORE ON LOAD: if a game was autosaved under our id, reconstruct it (fold its event log)

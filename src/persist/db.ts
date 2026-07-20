@@ -30,6 +30,31 @@ export const GAMES_STORE = 'games';
 export const DEFAULT_DB_NAME = 'pente3d';
 
 /**
+ * The window seam a Playwright test sets (via `addInitScript`, BEFORE boot) to give each test its
+ * OWN archive database, mirroring the `__penteNetTransportFactory` seam. Playwright partitions
+ * IndexedDB per browser context, so tests are already isolated from each other; this seam is the
+ * belt-and-braces guarantee that no two app boots on the same origin (e.g. across parallel workers)
+ * can ever contend on the single `pente3d` store, keeping the archive e2e gate scheduling-independent.
+ */
+declare global {
+  interface Window {
+    /** Test-only: overrides the archive DB name so each e2e test opens an isolated store. */
+    __penteDbName?: string;
+  }
+}
+
+/**
+ * Resolve the archive database name the app should open: the test-injected {@link Window.__penteDbName}
+ * if present (isolated per-test store), else {@link DEFAULT_DB_NAME}. App boot paths ({@link openDatabase}
+ * callers in `main.ts` / `appSession.ts`) route through this so a single override isolates BOTH the
+ * autosave/archive DB and the net-session DB for one page — they legitimately share one store in prod.
+ */
+export function resolveDbName(): string {
+  const injected = typeof window !== 'undefined' ? window.__penteDbName : undefined;
+  return injected !== undefined && injected.length > 0 ? injected : DEFAULT_DB_NAME;
+}
+
+/**
  * Metadata stored alongside a game's log — everything the archive browser needs to
  * list a game *without* loading its full event log. The shape is intentionally
  * open (`players`/`result` are opaque strings the persist layer round-trips) so it

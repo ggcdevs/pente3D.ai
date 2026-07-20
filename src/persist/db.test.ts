@@ -22,6 +22,7 @@ import {
   deleteGame,
   GAMES_STORE,
   DEFAULT_DB_NAME,
+  resolveDbName,
   type GameRecord,
 } from './db';
 
@@ -64,6 +65,41 @@ function sampleRecord(id: string): GameRecord {
     },
   };
 }
+
+describe('resolveDbName — the per-page archive DB name (test-isolation seam)', () => {
+  // The app resolves its DB name through this so a Playwright test can inject an isolated store via
+  // window.__penteDbName. The unit env is `node` (no window); we stub globalThis.window to drive the
+  // injected branches and assert the EXACT resolved name (agent-principles #3: observable return).
+  const stubWindow = (value: unknown): void => {
+    (globalThis as unknown as { window?: unknown }).window = { __penteDbName: value };
+  };
+  afterEach(() => {
+    delete (globalThis as unknown as { window?: unknown }).window;
+  });
+
+  it('returns DEFAULT_DB_NAME when no window exists (node/SSR: the typeof-window guard)', () => {
+    expect((globalThis as { window?: unknown }).window).toBeUndefined();
+    expect(resolveDbName()).toBe(DEFAULT_DB_NAME);
+    expect(resolveDbName()).toBe('pente3d');
+  });
+
+  it('returns the injected __penteDbName verbatim when a non-empty override is present', () => {
+    stubWindow('pente3d-e2e-abc123');
+    expect(resolveDbName()).toBe('pente3d-e2e-abc123');
+  });
+
+  it('falls back to DEFAULT_DB_NAME when the override is undefined on the window', () => {
+    stubWindow(undefined);
+    expect(resolveDbName()).toBe(DEFAULT_DB_NAME);
+  });
+
+  it('falls back to DEFAULT_DB_NAME when the override is the empty string (length guard)', () => {
+    // The empty-string branch is distinct from undefined: a `!== undefined` check alone would return
+    // '' here. Assert the length guard rejects it so the app never opens a nameless DB.
+    stubWindow('');
+    expect(resolveDbName()).toBe(DEFAULT_DB_NAME);
+  });
+});
 
 describe('store schema constants and creation', () => {
   it('exposes the exact store name "games" and default db name "pente3d"', () => {

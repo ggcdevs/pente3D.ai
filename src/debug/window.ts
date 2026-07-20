@@ -17,6 +17,7 @@ import type { KeyResolution } from '../input/scopes.ts';
 import type { RaycastHit, HoverTarget } from '../render/hover.ts';
 import type { GameState } from '../core/gameState.ts';
 import type { Coord } from '../core/coords.ts';
+import { headHash } from '../core/eventLog.ts';
 import type { UiHandle } from '../ui/setup.ts';
 import type { LayoutReadout } from '../ui/container.ts';
 import type { BannerContext } from '../ui/widgets/banner.ts';
@@ -179,6 +180,15 @@ export interface PenteInspect {
    * observable behavior, not a log line (agent-principles #3). Async because reading IndexedDB is.
    */
   getArchive(): Promise<readonly ArchiveListing[]>;
+  /**
+   * The live canonical game's `headHash` — the whole-history fingerprint of the event log the app
+   * autosaves (GLOSSARY "Hash chain"). Lets Playwright wait DETERMINISTICALLY for an autosave to
+   * become durable: an archive record whose `meta.headHash` equals this value IS the current game
+   * persisted at the current ply. Without this, a test can only wait on the record COUNT, which is
+   * satisfied by an earlier-ply autosave still overwriting toward the head — the concrete race that
+   * made the archive load flaky under parallel load (observable behavior, not a log line — #3).
+   */
+  getHeadHash(): string | null;
 }
 
 /** The app-level archive readouts wired into the inspect API (Task 5.8; the DB lives in `main.ts`). */
@@ -229,6 +239,7 @@ export function installInspectApi(
     getNet: () => scene.getNet(),
     getHelpSources: () => scene.getHelpSources(),
     getArchive: () => archive.listArchive(),
+    getHeadHash: () => headHash(scene.getGame().log),
   };
   window.__pente = api;
   log.info('window.__pente installed', Object.keys(api));
