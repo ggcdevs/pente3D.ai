@@ -78,6 +78,18 @@ export interface LinesHandle {
   /** Toggle a category's visibility at runtime (glue flips a flag, no rebuild). */
   setVisible(category: LineCategory, visible: boolean): void;
   /**
+   * Live-set the shared line opacity across all three category materials (Task 5.4 settings-modal
+   * colour live-preview). No rebuild — just the material `opacity`, so the change is visible on the
+   * next frame. Returns the applied opacity, so the scene's `applyColors` can report render truth.
+   */
+  setOpacity(opacity: number): number;
+  /**
+   * Live-set a category's base per-instance colour (Task 5.4 colour live-preview). Recolours every
+   * NON-highlighted segment of the category to `hex` (a highlighted segment keeps the glow until
+   * the hover clears, then restores to this new base). Returns the applied `#rrggbb`.
+   */
+  setBaseColor(category: LineCategory, hex: string): string;
+  /**
    * Apply the hover glow to exactly the segment instances of `lineIds`, restoring every other
    * segment to its base per-category colour (render-ui/game-core design: "hovering a line
    * highlights the whole gridline"). Idempotent; an unknown lineId is ignored. Segments the
@@ -286,6 +298,30 @@ export function createLines(size: number): LinesHandle {
     meshes[category].visible = visible;
   }
 
+  /** Live-set the shared line opacity across every category material (settings live-preview). */
+  function setOpacity(opacity: number): number {
+    for (const category of LINE_CATEGORIES) {
+      (meshes[category].material as THREE.MeshBasicMaterial).opacity = opacity;
+    }
+    return opacity;
+  }
+
+  /**
+   * Live-set a category's base colour: update the stored base + recolour every currently-
+   * non-highlighted segment. Highlighted segments keep the glow (they restore to this new base
+   * when the hover clears), so the preview never fights the hover highlight.
+   */
+  function setBaseColor(category: LineCategory, hex: string): string {
+    baseColors[category].set(hex);
+    const mesh = meshes[category];
+    const glowing = highlightedSegments[category];
+    for (let i = 0; i < layout[category].segmentCount; i++) {
+      if (!glowing.has(i)) mesh.setColorAt(i, baseColors[category]);
+    }
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    return `#${baseColors[category].getHexString()}`;
+  }
+
   function dispose(): void {
     for (const category of LINE_CATEGORIES) {
       const mesh = meshes[category];
@@ -295,5 +331,15 @@ export function createLines(size: number): LinesHandle {
     }
   }
 
-  return { object, getVisibleLines, rangeOf, pickables, setVisible, highlight, dispose };
+  return {
+    object,
+    getVisibleLines,
+    rangeOf,
+    pickables,
+    setVisible,
+    setOpacity,
+    setBaseColor,
+    highlight,
+    dispose,
+  };
 }

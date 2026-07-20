@@ -38,6 +38,7 @@ export default defineConfig({
         'src/ui/widgets/placeholder.ts',
         'src/ui/widgets/banner.ts',
         'src/ui/widgets/menu.ts',
+        'src/ui/widgets/settings.ts',
       ],
       // MACHINE-ENFORCED GATE (not documentation): the pure rules engine AND the
       // in-scope config/persist layers are held to a hard 100% floor
@@ -204,6 +205,17 @@ export default defineConfig({
         // scope-push widget glue (`widgets/menu.ts`) is Playwright-verified and excluded above. In
         // the mutation scope and held to the hard 100% floor. Do not weaken.
         'src/ui/widgets/menuModel.ts': {
+          statements: 100,
+          branches: 100,
+          functions: 100,
+          lines: 100,
+        },
+        // Pure settings view-model (Task 5.4): the config sections → the ordered form model
+        // (board-size / preset options, colour + opacity fields, keybinding rows) + the input→patch
+        // normalizers (each rejecting a malformed value). THREE-free / DOM-free — the DOM/config-
+        // write + scope-push widget glue (`widgets/settings.ts`) is Playwright-verified and excluded
+        // above. In the mutation scope and held to the hard 100% floor. Do not weaken.
+        'src/ui/widgets/settingsModel.ts': {
           statements: 100,
           branches: 100,
           functions: 100,

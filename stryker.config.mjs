@@ -118,6 +118,12 @@ export default {
     // (`widgets/menu.ts`) is the Playwright-verified IO boundary, excluded exactly as the
     // container/shell/banner glue is above.
     'src/ui/widgets/menuModel.ts',
+    // Pure settings view-model (Task 5.4): the config-sections → form-model derivation (board-size /
+    // preset options, ordered colour+opacity fields, ordered keybinding rows) plus the input→patch
+    // normalizers that REJECT a malformed board size / preset / colour / opacity. THREE-free /
+    // DOM-free — the DOM/config-write + scope-push widget glue (`widgets/settings.ts`) is the
+    // Playwright-verified IO boundary, excluded exactly as the menu/banner glue is above.
+    'src/ui/widgets/settingsModel.ts',
     '!src/ui/**/*.test.ts',
   ],
   coverageAnalysis: 'perTest',

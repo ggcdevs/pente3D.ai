@@ -151,23 +151,42 @@ test('an outside click closes the modal and pops the blocking scope', async ({ p
   expect(closed.scopes).not.toContain(MENU_SCOPE_ID);
 });
 
-test('choosing an entry closes the modal, pops the scope, and dispatches its command', async ({
+test('choosing an entry closes the modal, pops the menu scope, and dispatches its command', async ({
   page,
 }) => {
   await ready(page);
   await button(page).click();
   await expect(modal(page)).toBeVisible();
 
-  // Choose "Settings". Its command (`openSettings`) is not yet registered (lands in 5.4), so the
-  // observable effect here is: the modal closes and the blocking scope is popped. The dispatch is
-  // an honest no-op (registry returns false for an unknown id) — no crash.
-  await menu(page).locator('[data-testid="menu-entry-settings"]').click();
+  // Choose "Export". Its command (`exportGame`) is not yet registered (lands in 5.8), so the
+  // observable effect here is: the menu modal closes and its blocking scope is popped. The dispatch
+  // is an honest no-op (registry returns false for an unknown id) — no crash, no scope pushed.
+  await menu(page).locator('[data-testid="menu-entry-export"]').click();
 
   await expect(modal(page)).toBeHidden();
   const closed = await get(page, (p) => p.getInput()!);
   expect(closed.scopes).not.toContain(MENU_SCOPE_ID);
-  // Only the base game scope remains (no leaked menu scope).
+  // Only the base game scope remains (no leaked menu scope, and an unregistered entry pushes none).
   expect(closed.scopes[closed.scopes.length - 1]).toBe('game');
+});
+
+test('choosing "Settings" pops the menu scope and opens the settings modal (Task 5.4 wiring)', async ({
+  page,
+}) => {
+  await ready(page);
+  await button(page).click();
+  await expect(modal(page)).toBeVisible();
+
+  // Choosing Settings dispatches `openSettings` (now registered in 5.4): the menu modal closes and
+  // its scope pops, AND the settings modal opens, pushing the blocking `settings` scope on top of
+  // the game scope. This proves the one-action-layer wiring end-to-end (design Principle 3).
+  await menu(page).locator('[data-testid="menu-entry-settings"]').click();
+
+  await expect(modal(page)).toBeHidden();
+  await expect(page.locator('[data-testid="settings-modal"]')).toBeVisible();
+  const after = await get(page, (p) => p.getInput()!);
+  expect(after.scopes).not.toContain(MENU_SCOPE_ID);
+  expect(after.scopes[after.scopes.length - 1]).toBe('settings');
 });
 
 test('the ✕ button closes the modal and pops the scope; re-opening pushes exactly one scope', async ({

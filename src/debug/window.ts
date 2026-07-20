@@ -4,6 +4,7 @@ import type {
   LightingReadout,
   ViewportReadout,
   TempReadout,
+  ColorsReadout,
 } from '../render/scene.ts';
 import type { LineGroupReadout } from '../render/lines.ts';
 import type { PieceReadout } from '../render/pieces.ts';
@@ -38,6 +39,13 @@ export interface PenteInspect {
   getViewportSize(): ViewportReadout | null;
   /** Per-category gridline readouts (visibility/blending/instance counts) as plain numbers. */
   getVisibleLines(): LineGroupReadout[] | null;
+  /**
+   * The live-previewable colours actually applied to the scene (Task 5.4): background, gridline
+   * opacity, and each line category's base colour, read back off the real Three.js objects. Lets
+   * Playwright prove a settings-modal colour/opacity edit CHANGED the rendered scene (observable
+   * behavior, not a log line — agent-principles #3).
+   */
+  getColors(): ColorsReadout | null;
   /** The live game state (pieces/turn/captures/winner) as plain values. */
   getState(): GameState | null;
   /**
@@ -122,6 +130,7 @@ export function installInspectApi(scene: SceneHandle, ui: UiHandle): PenteInspec
     getLighting: () => scene.getLighting(),
     getViewportSize: () => scene.getViewportSize(),
     getVisibleLines: () => scene.getVisibleLines(),
+    getColors: () => scene.getColors(),
     getState: () => scene.getState(),
     getBannerContext: () => scene.getBannerContext(),
     getPieces: () => scene.getPieces(),

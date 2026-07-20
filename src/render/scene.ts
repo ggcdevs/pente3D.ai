@@ -44,9 +44,6 @@ import { generateAllLines, type LineCategory } from '../core/lines.ts';
 
 const log = createLogger('render:scene');
 
-/** The board edge length the scene renders. Configurable board size lands with 4.x. */
-const BOARD_SIZE = 5;
-
 /** A plain-number camera readout, safe to serialize and assert on from Playwright. */
 export interface CameraReadout {
   position: { x: number; y: number; z: number };
@@ -69,6 +66,40 @@ export interface ViewportReadout {
   width: number;
   height: number;
   aspect: number;
+}
+
+/**
+ * A live-applicable subset of the `colors` config (Task 5.4 settings-modal live preview). Every
+ * field is optional so the settings modal can preview ONE changed colour at a time. `applyColors`
+ * reflects these onto the scene immediately (no reload): `background` → the scene background,
+ * `lineOpacity` → the shared gridline opacity, the three `line*` colours → each category's base
+ * instance colour. Other `colors` keys (piece/marker/hover/win colours) are baked into instanced
+ * buffers at build and take effect on reload like every other config section — that documented
+ * contract is honest and unchanged (agent-principles #1: no disguised scaffolding).
+ */
+export interface ColorsPreview {
+  background?: string;
+  lineOpacity?: number;
+  lineOrthogonal?: string;
+  lineFaceDiagonal?: string;
+  lineSpaceDiagonal?: string;
+}
+
+/**
+ * A plain readout of the live-previewable colours actually applied to the scene (Task 5.4). Read
+ * back off the real Three.js objects (the background `Color`, the gridline material opacity, each
+ * category's base instance colour) so Playwright proves a settings-modal colour edit CHANGED the
+ * rendered scene — observable behavior, not a log line (agent-principles #3).
+ */
+export interface ColorsReadout {
+  /** The scene background as `#rrggbb`. */
+  background: string;
+  /** The shared gridline material opacity in 0..1. */
+  lineOpacity: number;
+  /** Each category's base instance colour as `#rrggbb`. */
+  lineOrthogonal: string;
+  lineFaceDiagonal: string;
+  lineSpaceDiagonal: string;
 }
 
 /**
@@ -100,6 +131,14 @@ export interface SceneHandle {
   getViewportSize(): ViewportReadout;
   /** Per-category gridline readouts (visibility/blending/instance counts) as plain numbers. */
   getVisibleLines(): LineGroupReadout[];
+  /**
+   * Live-apply a subset of the `colors` config to the scene (Task 5.4 settings-modal preview):
+   * background, gridline opacity, and the three line colours update on the next frame WITHOUT a
+   * reload. Returns the {@link ColorsReadout} of what is now actually applied (render truth).
+   */
+  applyColors(preview: ColorsPreview): ColorsReadout;
+  /** The live-previewable colours actually applied to the scene, read back off the Three.js objects. */
+  getColors(): ColorsReadout;
   /** The live game state (pieces/turn/captures/winner) — for Playwright assertions. */
   getState(): GameState;
   /**
@@ -138,6 +177,12 @@ export interface SceneHandle {
   popScope(): void;
   /** Dispatch a command by id — the same registry keys use (button path). */
   dispatch(id: string): boolean;
+  /**
+   * Wire the `openSettings` command (Task 5.4) to the mounted settings-modal widget's open().
+   * The scene does not own the modal (a UI widget), so the app registers the opener here after
+   * mounting the UI. Dispatching `openSettings` (menu entry or keybinding) then opens the modal.
+   */
+  setOpenSettings(open: () => void): void;
   /** Resolve a chord through the scope stack and dispatch it — drives the key path in tests. */
   pressKey(chord: string): KeyResolution;
   /**
@@ -183,6 +228,12 @@ export interface SceneHandle {
 export function createScene(container: HTMLElement): SceneHandle {
   const width = container.clientWidth || window.innerWidth;
   const height = container.clientHeight || window.innerHeight;
+
+  // Board edge length, resolved from the layered `board` config (Task 5.4: the settings modal
+  // writes `board.size`; it takes effect on reload, like every other config section — the whole
+  // board is rebuilt from N, so there is no in-place resize). No magic value: the default lives
+  // in `config/defaults/board.json` (the SSOT), not here.
+  const BOARD_SIZE = (getConfig('board') as unknown as { size: number }).size;
 
   // Resolve lights + background from the layered config store (no magic values).
   const resolved: ResolvedSceneConfig = resolveSceneConfig(
@@ -375,6 +426,11 @@ export function createScene(container: HTMLElement): SceneHandle {
   // action layer"). Handlers bind to the live `game`/`lines`; illegal actions (e.g. undo at
   // ply 0) are swallowed here so a stray hotkey never throws mid-render — the *scene* place
   // path still propagates IllegalMove honestly.
+  // The settings-modal open hook (Task 5.4): the `openSettings` command invokes this. The scene
+  // does not own the modal (it is a UI widget), so the app sets this to the widget's open() via
+  // `setOpenSettings`. Default is a no-op so an unwired/absent modal never crashes on dispatch.
+  let openSettingsHook: () => void = () => {};
+
   const undoRedoSafe = (fn: () => void): void => {
     try {
       fn();
@@ -414,6 +470,11 @@ export function createScene(container: HTMLElement): SceneHandle {
     { id: 'enterTempMode', run: () => doEnterTemp() },
     { id: 'exitTempMode', run: () => doExitTemp() },
     { id: 'confirmTempPiece', run: () => doConfirmTemp() },
+    // Open the settings modal (Task 5.4). The modal is a UI widget the scene does not own, so the
+    // command invokes a settable hook the app wires to the mounted widget's open(). Until wired
+    // (or if the widget is absent) it is an honest no-op — never a crash (design Principle 3: the
+    // menu's "Settings" entry and any keybinding dispatch this identical id).
+    { id: 'openSettings', run: () => openSettingsHook() },
   ];
   const input: InputHandle = createInput(
     commands,
@@ -489,6 +550,49 @@ export function createScene(container: HTMLElement): SceneHandle {
     return lines.getVisibleLines();
   }
 
+  // Live-previewable colour state (Task 5.4). Seeded from the same `colors` config the objects
+  // were built from, then mutated in place by `applyColors` so `getColors` reports render truth
+  // without re-reading the (possibly since-changed) config store. `background`/`lineOpacity`/the
+  // three line colours are the fields that update live; everything else needs a reload.
+  const previewColors = getConfig('colors') as unknown as {
+    background: string;
+    lineOpacity: number;
+    lineOrthogonal: string;
+    lineFaceDiagonal: string;
+    lineSpaceDiagonal: string;
+  };
+  const liveColors: ColorsReadout = {
+    background: `#${new THREE.Color(previewColors.background).getHexString()}`,
+    lineOpacity: previewColors.lineOpacity,
+    lineOrthogonal: `#${new THREE.Color(previewColors.lineOrthogonal).getHexString()}`,
+    lineFaceDiagonal: `#${new THREE.Color(previewColors.lineFaceDiagonal).getHexString()}`,
+    lineSpaceDiagonal: `#${new THREE.Color(previewColors.lineSpaceDiagonal).getHexString()}`,
+  };
+
+  function applyColors(preview: ColorsPreview): ColorsReadout {
+    if (preview.background !== undefined) {
+      (scene.background as THREE.Color).set(preview.background);
+      liveColors.background = `#${(scene.background as THREE.Color).getHexString()}`;
+    }
+    if (preview.lineOpacity !== undefined) {
+      liveColors.lineOpacity = lines.setOpacity(preview.lineOpacity);
+    }
+    if (preview.lineOrthogonal !== undefined) {
+      liveColors.lineOrthogonal = lines.setBaseColor('orthogonal', preview.lineOrthogonal);
+    }
+    if (preview.lineFaceDiagonal !== undefined) {
+      liveColors.lineFaceDiagonal = lines.setBaseColor('face', preview.lineFaceDiagonal);
+    }
+    if (preview.lineSpaceDiagonal !== undefined) {
+      liveColors.lineSpaceDiagonal = lines.setBaseColor('space', preview.lineSpaceDiagonal);
+    }
+    return getColors();
+  }
+
+  function getColors(): ColorsReadout {
+    return { ...liveColors };
+  }
+
   function getState(): GameState {
     return game.state();
   }
@@ -537,6 +641,10 @@ export function createScene(container: HTMLElement): SceneHandle {
 
   function dispatch(id: string): boolean {
     return input.dispatch(id);
+  }
+
+  function setOpenSettings(open: () => void): void {
+    openSettingsHook = open;
   }
 
   // Scope-stack drivers for UI modals/modes (Task 5.3). The scene owns the `input` stack; the UI
@@ -741,6 +849,8 @@ export function createScene(container: HTMLElement): SceneHandle {
     getLighting,
     getViewportSize,
     getVisibleLines,
+    applyColors,
+    getColors,
     getState,
     getBannerContext,
     onStateChange,
@@ -752,6 +862,7 @@ export function createScene(container: HTMLElement): SceneHandle {
     pushScope,
     popScope,
     dispatch,
+    setOpenSettings,
     pressKey,
     place,
     pickAt,

@@ -36,6 +36,7 @@ import lightingDefault from './defaults/lighting.json';
 import geometryDefault from './defaults/geometry.json';
 import blendingDefault from './defaults/blending.json';
 import interactionDefault from './defaults/interaction.json';
+import boardDefault from './defaults/board.json';
 
 /**
  * The relay SSOT shape: the single record consumed by both `MqttTransport` and the
@@ -67,6 +68,7 @@ const DEFAULTS = {
   geometry: geometryDefault,
   blending: blendingDefault,
   interaction: interactionDefault,
+  board: boardDefault,
 } as const;
 
 /** A configurable section name (`'keybindings' | 'controls' | …`). */

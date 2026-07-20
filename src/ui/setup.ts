@@ -22,6 +22,12 @@ import { createUiContainer, type LayoutReadout, type UiContainerHandle } from '.
 import { placeholderWidget } from './widgets/placeholder.ts';
 import { bannerWidget, BANNER_WIDGET_ID } from './widgets/banner.ts';
 import { menuWidget, MENU_WIDGET_ID, type MenuScope } from './widgets/menu.ts';
+import {
+  settingsWidget,
+  SETTINGS_WIDGET_ID,
+  type SettingsScope,
+  type SettingsColorsPreview,
+} from './widgets/settings.ts';
 import type { LayoutConfig } from './layout.ts';
 
 /**
@@ -36,9 +42,22 @@ export interface UiDeps {
    * scope) enters by pushing its scope onto the scene's stack. Supplied by the app (the scene
    * handle) so the UI shell never imports the input module.
    */
-  pushScope(scope: MenuScope): void;
+  pushScope(scope: MenuScope | SettingsScope): void;
   /** Pop the topmost input scope (Task 5.3) — a modal/mode leaves by popping its scope. */
   popScope(): void;
+  /**
+   * Register the settings-modal opener (Task 5.4). The settings widget hands its `open()` here at
+   * mount; the app wires it to the scene's `openSettings` command (`scene.setOpenSettings`) so the
+   * menu's "Settings" entry / a keybinding opens the modal (design Principle 3, one action layer).
+   */
+  registerOpener(open: () => void): void;
+  /**
+   * Live-apply a colour preview to the scene (Task 5.4) — the settings modal's colour/opacity live
+   * preview. Supplied by the app (the scene's `applyColors` seam) so the UI shell never imports
+   * render. Only the previewable subset (background / line opacity / line colours) applies live;
+   * the rest of `colors` takes effect on reload (the documented config contract).
+   */
+  applyColors(preview: SettingsColorsPreview): void;
 }
 
 /** The live UI handle exposed to the app + tests: the container plus its layout readout. */
@@ -61,6 +80,7 @@ export function defaultWidgetFactories(layout: LayoutConfig): WidgetFactory[] {
   return Object.keys(layout.widgets).map((id) => {
     if (id === BANNER_WIDGET_ID) return bannerWidget();
     if (id === MENU_WIDGET_ID) return menuWidget();
+    if (id === SETTINGS_WIDGET_ID) return settingsWidget();
     return placeholderWidget(id);
   });
 }
@@ -85,6 +105,8 @@ export function createUi(container: HTMLElement, deps: UiDeps): UiHandle {
       dispatch: deps.dispatch,
       pushScope: deps.pushScope,
       popScope: deps.popScope,
+      registerOpener: deps.registerOpener,
+      applyColors: deps.applyColors,
     },
     document,
   );

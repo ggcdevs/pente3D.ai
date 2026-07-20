@@ -61,6 +61,17 @@ const UI_STYLESHEET = `
 .pente-menu-close { position: absolute; top: 12px; right: 12px; cursor: pointer; border: none; background: transparent; color: #e6e6ea; font-size: 16px; line-height: 1; }
 .pente-menu-entry { cursor: pointer; text-align: left; padding: 8px 12px; border-radius: 6px; border: none; background: rgba(255,255,255,0.06); color: #e6e6ea; font-size: 14px; }
 .pente-menu-entry:hover { background: rgba(255,255,255,0.14); }
+.pente-settings-modal[hidden] { display: none; }
+.pente-settings-modal { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.45); pointer-events: auto; z-index: 30; }
+.pente-settings-panel { position: relative; display: flex; flex-direction: column; gap: 10px; min-width: 320px; max-height: 80vh; overflow-y: auto; padding: 24px; border-radius: 10px; background: #1a1a20; color: #e6e6ea; font-family: system-ui, sans-serif; box-shadow: 0 8px 32px rgba(0,0,0,0.5); }
+.pente-settings-title { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
+.pente-settings-subtitle { font-size: 14px; font-weight: 600; margin-top: 8px; }
+.pente-settings-close { position: absolute; top: 16px; right: 16px; cursor: pointer; border: none; background: transparent; color: #e6e6ea; font-size: 16px; line-height: 1; }
+.pente-settings-body { display: flex; flex-direction: column; gap: 8px; }
+.pente-settings-field { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 13px; }
+.pente-settings-keybinding-row { font-size: 12px; opacity: 0.85; font-family: ui-monospace, monospace; }
+.pente-settings-reset { margin-top: 12px; cursor: pointer; padding: 8px 12px; border-radius: 6px; border: none; background: rgba(255,80,80,0.18); color: #ffb0b0; font-size: 13px; }
+.pente-settings-reset:hover { background: rgba(255,80,80,0.28); }
 `;
 
 /** Install the overlay stylesheet once per document (idempotent, keyed by {@link UI_STYLE_ID}). */

@@ -85,6 +85,21 @@ describe('getConfig — defaults', () => {
     expect(interaction.dragGuard.enabled).toBe(true);
     expect(interaction.dragGuard.thresholdPx).toBe(6);
   });
+
+  it('returns the board-size default (Task 5.4 SSOT the scene reads for N)', () => {
+    // The scene resolves its board edge length from this section (no magic value in scene.ts);
+    // the settings modal writes it via setConfig. Assert the concrete default the scene renders.
+    const board = getConfig('board', storage);
+    expect(board.size).toBe(5);
+  });
+
+  it('persists + reads back a board-size override (the settings-modal write path)', () => {
+    setConfig('board', { size: 7 }, storage);
+    expect(getConfig('board', storage).size).toBe(7);
+    // resetConfig restores the default (the modal's reset-to-defaults, per-section).
+    resetConfig('board', storage);
+    expect(getConfig('board', storage).size).toBe(5);
+  });
 });
 
 describe('getConfig — interaction.dragGuard (issue #1)', () => {
@@ -419,10 +434,11 @@ describe('render config sections (Task 4.2)', () => {
 });
 
 describe('sections registry', () => {
-  it('exposes exactly the twelve required sections', () => {
+  it('exposes exactly the thirteen required sections', () => {
     expect([...CONFIG_SECTIONS].sort()).toEqual(
       [
         'blending',
+        'board',
         'colors',
         'controls',
         'geometry',
