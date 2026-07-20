@@ -3,6 +3,7 @@ import type {
   CameraReadout,
   LightingReadout,
   ViewportReadout,
+  TempReadout,
 } from '../render/scene.ts';
 import type { LineGroupReadout } from '../render/lines.ts';
 import type { PieceReadout } from '../render/pieces.ts';
@@ -64,6 +65,18 @@ export interface PenteInspect {
   hoverAt(ndcX: number, ndcY: number): HoverTarget | null;
   /** The current hover highlight target (nodes/lines/pieces), or null if nothing hovered. */
   getHoverTarget(): HoverTarget | null;
+  /**
+   * Click (place) at an NDC pointer position (−1..1): an empty-node hit places the current
+   * player's piece (returns the new state); an occupied node / line / miss — or a click while
+   * temp mode is active (which retargets the preview instead) — returns null. The IO half of
+   * Task 4.8's "click empty node → place", asserted on by Playwright.
+   */
+  clickAt(ndcX: number, ndcY: number): GameState | null;
+  /**
+   * The live temp-placement readout (Task 4.8): `active` flag, the previewed node key, and the
+   * translucent preview mesh's opacity — so Playwright proves the preview is actually drawn.
+   */
+  getTemp(): TempReadout | null;
 }
 
 declare global {
@@ -89,6 +102,8 @@ export function installInspectApi(scene: SceneHandle): PenteInspect {
     pickAt: (ndcX: number, ndcY: number) => scene.pickAt(ndcX, ndcY),
     hoverAt: (ndcX: number, ndcY: number) => scene.hoverAt(ndcX, ndcY),
     getHoverTarget: () => scene.getHoverTarget(),
+    clickAt: (ndcX: number, ndcY: number) => scene.clickAt(ndcX, ndcY),
+    getTemp: () => scene.getTemp(),
   };
   window.__pente = api;
   log.info('window.__pente installed', Object.keys(api));

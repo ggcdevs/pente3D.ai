@@ -10,6 +10,17 @@ import { applyCameraPreset, type CameraPresetReadout } from './cameraControls.ts
 import { createInput, type InputHandle, type InputReadout } from '../input/setup.ts';
 import type { Command } from '../input/commands.ts';
 import type { KeyResolution } from '../input/scopes.ts';
+import {
+  placementFromHit,
+  enterTemp,
+  setTempPreview,
+  confirmTemp,
+  exitTemp,
+  initialTemp,
+  tempPlacementScope,
+  TEMP_SCOPE_ID,
+  type TempPlacement,
+} from '../input/placement.ts';
 import { createPicking, type PickingHandle, type PickGeometryConfig } from './picking.ts';
 import {
   buildHoverLookup,
@@ -20,7 +31,7 @@ import {
 } from './hover.ts';
 import { Game } from '../core/game.ts';
 import type { GameState } from '../core/gameState.ts';
-import type { Coord } from '../core/coords.ts';
+import { keyOf, type Coord } from '../core/coords.ts';
 import { generateAllLines, type LineCategory } from '../core/lines.ts';
 
 const log = createLogger('render:scene');
@@ -50,6 +61,21 @@ export interface ViewportReadout {
   width: number;
   height: number;
   aspect: number;
+}
+
+/**
+ * A plain, serializable readout of the temp-placement mode (Task 4.8) — for Playwright
+ * assertions. Mirrors the pure `TempPlacement` model plus the live preview mesh's opacity,
+ * so a test can prove the translucent preview is actually drawn (observable behavior, not a
+ * log line — agent-principles #3).
+ */
+export interface TempReadout {
+  /** Whether temp-placement mode is active. */
+  active: boolean;
+  /** The previewed node key (the translucent piece), or null if none. */
+  preview: string | null;
+  /** The preview mesh's current material opacity (0 when no preview is drawn). */
+  previewOpacity: number;
 }
 
 /** The live scene handle exposed to the app and (via window.__pente) to tests. */
@@ -98,6 +124,15 @@ export interface SceneHandle {
   hoverAt(ndcX: number, ndcY: number): HoverTarget | null;
   /** The current hover highlight target (nodes/lines/pieces), or null if nothing hovered. */
   getHoverTarget(): HoverTarget | null;
+  /**
+   * Click (place) at an NDC pointer position (−1..1): raycast → if the hit is an empty node,
+   * place the current player's piece there and return the new state; otherwise (occupied
+   * node / line / miss, or while temp mode is active) return null without placing. The IO
+   * half of Task 4.8's "click empty node → place" — Playwright drives it on the real canvas.
+   */
+  clickAt(ndcX: number, ndcY: number): GameState | null;
+  /** The live temp-placement mode readout (active/preview/preview-opacity) — for assertions. */
+  getTemp(): TempReadout;
   dispose(): void;
 }
 
@@ -179,6 +214,56 @@ export function createScene(container: HTMLElement): SceneHandle {
   const hoverRendering = getConfig('rendering') as unknown as { emissiveBoost: number };
   let hoverTarget: HoverTarget | null = null;
 
+  // Temp-placement mode (Task 4.8): a translucent preview piece the player can examine
+  // before committing. The mode state machine is PURE (`src/input/placement.ts`, strict
+  // unit+mutation); this is the IO glue that pushes/pops the `tempPlacement` scope and draws
+  // the single translucent preview mesh, positioned at the previewed node. `t` enters (and
+  // exits); `Enter` confirms → a real placement; a pointer move sets the preview node.
+  const tempGeometry = getConfig('geometry') as unknown as {
+    spacing: number;
+    pieceRadius: number;
+    sphereSegments: { width: number; height: number };
+  };
+  const tempColors = getConfig('colors') as unknown as { tempPiece: string };
+  const tempMaterials = getConfig('materials') as unknown as { tempPieceOpacity: number };
+  const tempMesh = new THREE.Mesh(
+    new THREE.SphereGeometry(
+      tempGeometry.pieceRadius,
+      tempGeometry.sphereSegments.width,
+      tempGeometry.sphereSegments.height,
+    ),
+    new THREE.MeshStandardMaterial({
+      color: new THREE.Color(tempColors.tempPiece),
+      transparent: true,
+      opacity: 0,
+    }),
+  );
+  tempMesh.name = 'temp-preview';
+  tempMesh.visible = false;
+  scene.add(tempMesh);
+  const tempMaterial = tempMesh.material as THREE.MeshStandardMaterial;
+  let temp: TempPlacement = initialTemp();
+
+  /** Board-centered world position of a node key (mirrors pieces/picking convention). */
+  function worldOfNode(node: string): THREE.Vector3 {
+    const [x, y, z] = node.split(',').map(Number) as [number, number, number];
+    const c = (BOARD_SIZE - 1) / 2;
+    const s = tempGeometry.spacing;
+    return new THREE.Vector3((x - c) * s, (y - c) * s, (z - c) * s);
+  }
+
+  /** Reflect the pure temp model onto the preview mesh (draw at preview node, or hide). */
+  function syncTempPreview(): void {
+    if (temp.active && temp.preview !== null) {
+      tempMesh.position.copy(worldOfNode(temp.preview));
+      tempMesh.visible = true;
+      tempMaterial.opacity = tempMaterials.tempPieceOpacity;
+    } else {
+      tempMesh.visible = false;
+      tempMaterial.opacity = 0;
+    }
+  }
+
   // Camera presets (Task 4.6): resolve the active `controls` preset (PURE) and BIND it to
   // the OrbitControls (IO glue) — mouse-button mapping, speeds, invert, zoom limits.
   const presetReadout: CameraPresetReadout = applyCameraPreset(
@@ -230,6 +315,11 @@ export function createScene(container: HTMLElement): SceneHandle {
         }
       },
     },
+    // Temp-placement mode (Task 4.8). The transitions are the pure model; these handlers are
+    // the IO glue that also push/pop the `tempPlacement` scope and redraw the preview. Idempotent.
+    { id: 'enterTempMode', run: () => doEnterTemp() },
+    { id: 'exitTempMode', run: () => doExitTemp() },
+    { id: 'confirmTempPiece', run: () => doConfirmTemp() },
   ];
   const input: InputHandle = createInput(
     commands,
@@ -237,6 +327,43 @@ export function createScene(container: HTMLElement): SceneHandle {
     null,
     window,
   );
+
+  const keybindings = getConfig('keybindings');
+
+  /** Enter temp mode: advance the pure model + push the (config-bound) tempPlacement scope. */
+  function doEnterTemp(): void {
+    if (temp.active) return; // already active — `t` is inert until exited (idempotent enter)
+    temp = enterTemp();
+    input.push(tempPlacementScope(keybindings));
+    syncTempPreview();
+  }
+
+  /** Exit temp mode: clear the pure model, pop the tempPlacement scope, hide the preview. */
+  function doExitTemp(): void {
+    if (!temp.active) return; // not in temp mode — nothing to exit
+    temp = exitTemp(temp);
+    if (input.stack().scopes[input.stack().scopes.length - 1]?.id === TEMP_SCOPE_ID) {
+      input.pop();
+    }
+    syncTempPreview();
+  }
+
+  /**
+   * Confirm the previewed piece: the pure `confirmTemp` yields the coord to commit (or null).
+   * On a commit we place it (a real move — IllegalMove propagates via `place`), then pop the
+   * scope and hide the preview. With no preview, `Enter` is inert (no commit, stays active).
+   */
+  function doConfirmTemp(): void {
+    const result = confirmTemp(temp);
+    temp = result.next;
+    if (result.commit !== null) {
+      place(result.commit);
+      if (input.stack().scopes[input.stack().scopes.length - 1]?.id === TEMP_SCOPE_ID) {
+        input.pop();
+      }
+    }
+    syncTempPreview();
+  }
 
   function getCamera(): CameraReadout {
     return {
@@ -328,16 +455,65 @@ export function createScene(container: HTMLElement): SceneHandle {
     return hoverTarget;
   }
 
+  /**
+   * Click-to-place (Task 4.8, IO half): raycast the NDC position; the PURE `placementFromHit`
+   * decides whether the hit is a placeable empty node. While temp mode is active a click
+   * instead moves the preview (the commit is `Enter`), so a live click never bypasses the
+   * preview. Returns the new state on a placement, else null (occupied/line/miss/temp-active).
+   */
+  function clickAt(ndcX: number, ndcY: number): GameState | null {
+    const hit = pickAt(ndcX, ndcY);
+    if (temp.active) {
+      // In temp mode a click retargets the translucent preview onto the clicked empty node
+      // (if any) rather than committing — commit is `Enter` (game-core Part 4 examine-first).
+      const coord = placementFromHit(hit);
+      if (coord !== null) {
+        temp = setTempPreview(temp, keyOf(coord));
+        syncTempPreview();
+      }
+      return null;
+    }
+    const coord = placementFromHit(hit);
+    if (coord === null) return null;
+    return place(coord);
+  }
+
+  function getTemp(): TempReadout {
+    return {
+      active: temp.active,
+      preview: temp.preview,
+      previewOpacity: tempMaterial.opacity,
+    };
+  }
+
   // Pointer-driven hover: translate a pointermove on the canvas to NDC and run the hover
   // path. Verified by Playwright moving the real mouse and asserting on getHoverTarget().
+  // In temp mode the same move also retargets the translucent preview onto the hovered node.
   function onPointerMove(event: PointerEvent): void {
     const rect = renderer.domElement.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return;
     const ndcX = ((event.clientX - rect.left) / rect.width) * 2 - 1;
     const ndcY = -((event.clientY - rect.top) / rect.height) * 2 + 1;
     hoverAt(ndcX, ndcY);
+    if (temp.active) {
+      const coord = placementFromHit(pickAt(ndcX, ndcY));
+      if (coord !== null) {
+        temp = setTempPreview(temp, keyOf(coord));
+        syncTempPreview();
+      }
+    }
   }
   renderer.domElement.addEventListener('pointermove', onPointerMove);
+
+  // Click-driven placement (Task 4.8): a canvas click at an empty node places a piece.
+  function onClick(event: MouseEvent): void {
+    const rect = renderer.domElement.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    const ndcX = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    const ndcY = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    clickAt(ndcX, ndcY);
+  }
+  renderer.domElement.addEventListener('click', onClick);
 
   let running = true;
   let lastFrame = performance.now();
@@ -365,12 +541,15 @@ export function createScene(container: HTMLElement): SceneHandle {
     running = false;
     window.removeEventListener('resize', onResize);
     renderer.domElement.removeEventListener('pointermove', onPointerMove);
+    renderer.domElement.removeEventListener('click', onClick);
     input.dispose();
     controls.dispose();
     renderer.dispose();
     lines.dispose();
     pieces.dispose();
     picking.dispose();
+    tempMesh.geometry.dispose();
+    tempMaterial.dispose();
     renderer.domElement.remove();
   }
 
@@ -401,6 +580,8 @@ export function createScene(container: HTMLElement): SceneHandle {
     pickAt,
     hoverAt,
     getHoverTarget,
+    clickAt,
+    getTemp,
     dispose,
   };
 }

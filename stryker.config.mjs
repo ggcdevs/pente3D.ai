@@ -79,6 +79,11 @@ export default {
     'src/input/commands.ts',
     'src/input/scopes.ts',
     'src/input/keybindings.ts',
+    // Pure placement + temp-mode wiring (Task 4.8): the empty-node → place resolver and the
+    // immutable temp-placement state machine + scope builder. THREE-free / DOM-free; the
+    // Three.js click/preview glue in `scene.ts` is excluded (Playwright-verified) exactly as
+    // the other scene glue above.
+    'src/input/placement.ts',
     '!src/input/**/*.test.ts',
   ],
   coverageAnalysis: 'perTest',
