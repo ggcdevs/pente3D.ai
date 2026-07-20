@@ -17,7 +17,13 @@ const scene = createScene(container);
 // command ids through the scene's registry — the SAME path a keybinding uses (design Principle
 // 3) — so a button and a hotkey fire the identical command. Kept in sync with live state so its
 // widgets (Task 5.2 status banner) read the current game + history (design Part 6).
-const ui = createUi(container, { dispatch: (id) => scene.dispatch(id) });
+const ui = createUi(container, {
+  dispatch: (id) => scene.dispatch(id),
+  // Modal/mode widgets (Task 5.3: the menu modal) push/pop input scopes on the scene's stack —
+  // a blocking scope while a modal is open, popped when it closes (design Part 5 / GLOSSARY).
+  pushScope: (scope) => scene.pushScope(scope),
+  popScope: () => scene.popScope(),
+});
 
 /** Repaint every widget from the live state + the banner history context (Task 5.2). */
 function refreshUi(): void {

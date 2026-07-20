@@ -11,7 +11,7 @@ import { resolveCameraPreset, type ControlsConfig } from './cameraPresets.ts';
 import { applyCameraPreset, type CameraPresetReadout } from './cameraControls.ts';
 import { createInput, type InputHandle, type InputReadout } from '../input/setup.ts';
 import type { Command } from '../input/commands.ts';
-import type { KeyResolution } from '../input/scopes.ts';
+import type { KeyResolution, Scope } from '../input/scopes.ts';
 import {
   placementFromHit,
   enterTemp,
@@ -128,6 +128,14 @@ export interface SceneHandle {
   getCameraPreset(): CameraPresetReadout;
   /** The active scope stack + registered command ids (for input assertions). */
   getInput(): InputReadout;
+  /**
+   * Push an input scope onto the stack (Task 5.3): a UI modal/mode enters by pushing its scope
+   * (e.g. the menu modal pushes a `blocking` scope so stray keys are swallowed). The scene owns
+   * the stack; the UI shell drives it through here so the widget never imports the input module.
+   */
+  pushScope(scope: Scope): void;
+  /** Pop the topmost input scope (Task 5.3): a UI modal/mode leaves by popping its scope. */
+  popScope(): void;
   /** Dispatch a command by id — the same registry keys use (button path). */
   dispatch(id: string): boolean;
   /** Resolve a chord through the scope stack and dispatch it — drives the key path in tests. */
@@ -531,6 +539,18 @@ export function createScene(container: HTMLElement): SceneHandle {
     return input.dispatch(id);
   }
 
+  // Scope-stack drivers for UI modals/modes (Task 5.3). The scene owns the `input` stack; the UI
+  // shell pushes/pops through these so a widget (e.g. the menu modal) never imports the input
+  // module. A blocking modal scope swallows stray keys while it is on top (GLOSSARY "Blocking
+  // scope"); popping restores the underlying game/camera scopes.
+  function pushScope(scope: Scope): void {
+    input.push(scope);
+  }
+
+  function popScope(): void {
+    input.pop();
+  }
+
   function pressKey(chord: string): KeyResolution {
     return input.handleChord(chord);
   }
@@ -729,6 +749,8 @@ export function createScene(container: HTMLElement): SceneHandle {
     getWinLine,
     getCameraPreset,
     getInput,
+    pushScope,
+    popScope,
     dispatch,
     pressKey,
     place,

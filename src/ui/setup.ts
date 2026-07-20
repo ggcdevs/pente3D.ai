@@ -21,6 +21,7 @@ import { createWidgetRegistry, type WidgetFactory } from './registry.ts';
 import { createUiContainer, type LayoutReadout, type UiContainerHandle } from './container.ts';
 import { placeholderWidget } from './widgets/placeholder.ts';
 import { bannerWidget, BANNER_WIDGET_ID } from './widgets/banner.ts';
+import { menuWidget, MENU_WIDGET_ID, type MenuScope } from './widgets/menu.ts';
 import type { LayoutConfig } from './layout.ts';
 
 /**
@@ -30,6 +31,14 @@ import type { LayoutConfig } from './layout.ts';
 export interface UiDeps {
   /** Dispatch a command id (e.g. `'undo'`). Returns whether a command ran. */
   dispatch(commandId: string): boolean;
+  /**
+   * Push an input scope (Task 5.3) — a modal/mode widget (e.g. the menu modal pushes a `blocking`
+   * scope) enters by pushing its scope onto the scene's stack. Supplied by the app (the scene
+   * handle) so the UI shell never imports the input module.
+   */
+  pushScope(scope: MenuScope): void;
+  /** Pop the topmost input scope (Task 5.3) — a modal/mode leaves by popping its scope. */
+  popScope(): void;
 }
 
 /** The live UI handle exposed to the app + tests: the container plus its layout readout. */
@@ -49,9 +58,11 @@ export interface UiHandle {
  * facts). As each real widget lands it replaces its placeholder here; the framework is unchanged.
  */
 export function defaultWidgetFactories(layout: LayoutConfig): WidgetFactory[] {
-  return Object.keys(layout.widgets).map((id) =>
-    id === BANNER_WIDGET_ID ? bannerWidget() : placeholderWidget(id),
-  );
+  return Object.keys(layout.widgets).map((id) => {
+    if (id === BANNER_WIDGET_ID) return bannerWidget();
+    if (id === MENU_WIDGET_ID) return menuWidget();
+    return placeholderWidget(id);
+  });
 }
 
 /**
@@ -69,7 +80,12 @@ export function createUi(container: HTMLElement, deps: UiDeps): UiHandle {
   const ui = createUiContainer(
     registry,
     layout,
-    { doc: document, dispatch: deps.dispatch },
+    {
+      doc: document,
+      dispatch: deps.dispatch,
+      pushScope: deps.pushScope,
+      popScope: deps.popScope,
+    },
     document,
   );
   container.appendChild(ui.root);

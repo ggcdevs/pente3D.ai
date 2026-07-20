@@ -37,6 +37,7 @@ export default defineConfig({
         'src/ui/setup.ts',
         'src/ui/widgets/placeholder.ts',
         'src/ui/widgets/banner.ts',
+        'src/ui/widgets/menu.ts',
       ],
       // MACHINE-ENFORCED GATE (not documentation): the pure rules engine AND the
       // in-scope config/persist layers are held to a hard 100% floor
@@ -193,6 +194,16 @@ export default defineConfig({
         // DOM-free — the DOM/dispatch widget glue (`widgets/banner.ts`) is Playwright-verified and
         // excluded above. In the mutation scope and held to the hard 100% floor. Do not weaken.
         'src/ui/widgets/bannerModel.ts': {
+          statements: 100,
+          branches: 100,
+          functions: 100,
+          lines: 100,
+        },
+        // Pure menu view-model (Task 5.3): the entry roster → the ordered, visible-filtered menu
+        // items (id/label/commandId) the modal renders. THREE-free / DOM-free — the DOM/dispatch +
+        // scope-push widget glue (`widgets/menu.ts`) is Playwright-verified and excluded above. In
+        // the mutation scope and held to the hard 100% floor. Do not weaken.
+        'src/ui/widgets/menuModel.ts': {
           statements: 100,
           branches: 100,
           functions: 100,

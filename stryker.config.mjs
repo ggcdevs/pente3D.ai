@@ -113,6 +113,11 @@ export default {
     // — the DOM/dispatch widget glue (`widgets/banner.ts`) is the Playwright-verified IO boundary,
     // excluded exactly as the container/shell glue is above.
     'src/ui/widgets/bannerModel.ts',
+    // Pure menu view-model (Task 5.3): the entry roster → ordered, visible-filtered menu items
+    // (id/label/commandId). THREE-free / DOM-free — the DOM/dispatch + scope-push widget glue
+    // (`widgets/menu.ts`) is the Playwright-verified IO boundary, excluded exactly as the
+    // container/shell/banner glue is above.
+    'src/ui/widgets/menuModel.ts',
     '!src/ui/**/*.test.ts',
   ],
   coverageAnalysis: 'perTest',
