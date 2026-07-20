@@ -104,15 +104,39 @@ try {
 let autosaveStartedAt = Date.now();
 
 // Generation token the pure boundary detector reads to learn "this is a DIFFERENT game" without
-// diffing logs (`gameLifecycle` design). Bumped whenever the AUTHORITATIVE game's object identity
-// changes — a scene reset/load swaps `scene.getGame()`, and a networked session brings its own game.
-// Object identity is the honest, DRY signal (the scene/session already own the swap); we do not
-// duplicate their reset/load/net-start logic here.
+// diffing logs (`gameLifecycle` design). It is a per-GAME token bumped ONLY on EXPLICIT game-boundary
+// events, NEVER on a `Game` object-identity change (issue #7): a networked session swaps in a NEW
+// `Game` object on EVERY adopted remote move (Task 6.1 `adoptNetState` → `SyncEngine` `Game.fromLog`),
+// so keying "new game" off object identity minted a fresh archive record per ply for networked games
+// (one record per MOVE instead of one per GAME). The real boundaries are: a scene RESET (new local
+// game), an archive LOAD (restore / resume into the scene), and a net SESSION START (host/join begins
+// a networked game — bumped ONCE at start, not per remote move). We subscribe to the scene's
+// `onNewGame` (fires on reset/load only) and bump explicitly in the host/join net hooks, so adopting a
+// remote move within the SAME networked game leaves the generation unchanged and the single
+// current-game record keeps growing until a real boundary mints a fresh one.
 let generation = 0;
-let lastGame: Game | null = null;
+
+/**
+ * Bump the per-game generation at an EXPLICIT game boundary (reset / load / net-session-start). The
+ * next `autosaveTick` observes the changed generation and — over a game that had been PLAYED — mints a
+ * fresh archive record for the new game (the pure `gameLifecycle` rule). Never called for a plain move
+ * or a remote-move adoption, so a growing game keeps overwriting its single record (issue #7).
+ */
+function bumpGeneration(): void {
+  generation += 1;
+}
 
 /** The lifecycle-tracking cursor threaded through the pure boundary decision (never mutated in place). */
 let lifecycle: LifecycleState = initialLifecycle();
+
+// LOCAL game boundaries (issue #7): the scene fires `onNewGame` exactly when it installs a fresh local
+// `Game` object — a RESET (new local game) or a `loadGame` (boot restore / archive resume). Bump the
+// generation here so the next autosave tick mints a fresh record for the new game. Subscribed BEFORE
+// the boot-restore's `loadGame` runs (that path re-seeds the lifecycle from the post-bump generation,
+// so the restored game resumes its SAME record rather than spuriously minting a new one). NET session
+// starts bump separately in the host/join hooks — a networked game is a boundary at START, and its
+// per-remote-move `Game`-object swaps must NOT bump (the issue #7 fix).
+scene.onNewGame(bumpGeneration);
 
 // The networked session's authoritative game, set once the net session wires up (below). Until then
 // (offline / pre-wiring) there is no net game and the scene's local game is authoritative — the same
@@ -126,13 +150,8 @@ function authoritativeGame(): Game {
   return netAuthoritativeGame() ?? scene.getGame();
 }
 
-/** The current authoritative game's generation, bumped when its object identity changes (a new game). */
+/** The current per-game generation token — bumped ONLY at explicit boundaries (see `bumpGeneration`). */
 function currentGeneration(): number {
-  const g = authoritativeGame();
-  if (g !== lastGame) {
-    generation += 1;
-    lastGame = g;
-  }
   return generation;
 }
 
@@ -214,8 +233,9 @@ void openDatabase(resolveDbName())
       log.info('autosaved game restored', { id: autosaveId, ply: restored.ply() });
     }
     // Seed the lifecycle cursor from the game now live (after any restore), so the first tick observes
-    // the SAME generation and does not spuriously treat a restored game as a boundary.
-    lastGame = authoritativeGame();
+    // the SAME generation and does not spuriously treat a restored game as a boundary. A boot restore
+    // fired `onNewGame` → bumped the generation; seeding from that post-bump value here means the first
+    // autosave tick sees `prev.generation === obs.generation` and resumes the restored record (no mint).
     lifecycle = { generation, ply: authoritativeGame().ply(), finalized: false };
     // AUTOSAVE + boundary detection on every state change (place/undo/redo/reset/load/net-adopt).
     scene.onStateChange(() => {
@@ -343,14 +363,23 @@ void createAppNetSession(scene.getState().size)
         scene.dispatch('reset');
       }
     };
+    // Starting a networked game is an EXPLICIT game boundary (issue #7): bump the generation ONCE here,
+    // at host/join, NOT per adopted remote move. The session swaps in a fresh `Game` object on every
+    // remote move (`SyncEngine` rebuilds from the peer's log), but adopting a move within the SAME net
+    // game must NOT bump — otherwise a networked game would mint one archive record per PLY. The pure
+    // lifecycle then mints a fresh record only if the local game we are leaving had been PLAYED (a
+    // pristine board is reused, not littered), and the single net-game record grows as moves accumulate.
+    const startNetGame = (begin: () => void): void => {
+      archiveResetBeforeStart();
+      bumpGeneration();
+      begin();
+    };
     scene.setNetHooks({
       host: () => {
-        archiveResetBeforeStart();
-        void session.host().then(refreshUi);
+        startNetGame(() => void session.host().then(refreshUi));
       },
       join: () => {
-        archiveResetBeforeStart();
-        void session.join(pendingJoinCode).then(refreshUi);
+        startNetGame(() => void session.join(pendingJoinCode).then(refreshUi));
       },
       setPendingJoinCode: (code) => {
         pendingJoinCode = code;
@@ -411,6 +440,10 @@ void createAppNetSession(scene.getState().size)
       const code = session.state().code;
       const seat = session.state().seat;
       session.disconnect();
+      // A rematch (game-over → a new game) is an EXPLICIT boundary (issue #7): bump the generation ONCE
+      // so the just-finished (won) net game is left and the rematch mints its own fresh archive record —
+      // the same one-record-per-GAME rule, not one per remote move of the rematch.
+      bumpGeneration();
       // Preserve the role: a host re-hosts (a fresh code); a joiner rejoins the SAME room code so both
       // accepting peers meet again. `disconnect` returned us to offline, so host/join are live again.
       if (seat === 'black' && code !== null) {

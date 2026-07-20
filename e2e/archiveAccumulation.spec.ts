@@ -32,6 +32,7 @@ type Pente = {
   getState(): GameStateReadout | null;
   getArchive(): Promise<ArchiveListing[]>;
   getHeadHash(): string | null;
+  getNet(): { phase: string; seat: string | null; code: string | null } | null;
   dispatch(id: string): boolean | null;
   place(coords: [number, number, number]): GameStateReadout | null;
 };
@@ -226,4 +227,199 @@ test('a WIN finalizes the won game as its own record, and the next game accumula
   // The other record is the fresh in-progress game (distinct head, not a winner).
   const other = after.find((g) => g.meta.headHash !== wonHead)!;
   expect(other.meta.result).toBe('in-progress');
+});
+
+// --- issue #7: N moves in ONE game must yield EXACTLY ONE archive record (never one-per-move) --------
+// The regression is that "new game" was inferred from the authoritative `Game` OBJECT IDENTITY. A LOCAL
+// game mutates ONE `Game` object in place (stable identity → one record, always fine), but a NETWORKED
+// game ADOPTS each remote move by swapping in a NEW `Game` object (`SyncEngine` rebuilds from the peer's
+// log), so the old logic minted a fresh archive record on EVERY ply. These two tests pin the invariant
+// for both — and the networked one is the RED-against-the-bug case: with the old object-identity
+// generation logic it produces N records (this `toBe(1)` FAILS); with the issue #7 fix, exactly 1.
+
+test('LOCAL: playing N moves in ONE game keeps EXACTLY ONE archive record (no per-move records)', async ({
+  page,
+}) => {
+  await isolate(page);
+  await ready(page);
+  // The boot pristine record is the single current-game record. Play several non-winning moves on the
+  // default size-5 board; each is a mutation of the SAME local `Game`, so the ONE record just grows.
+  const moves: [number, number, number][] = [
+    [0, 0, 0],
+    [4, 4, 4],
+    [0, 4, 0],
+    [4, 0, 4],
+    [0, 0, 4],
+    [4, 4, 0],
+  ];
+  // `place` rides the coord as a literal arg — the page-side closure cannot capture the loop variable.
+  const placeArg = (c: [number, number, number]): Promise<unknown> =>
+    page.evaluate((coord: [number, number, number]) => {
+      (window as unknown as { __pente: Pente }).__pente.place(coord);
+    }, c);
+  for (const m of moves) await placeArg(m);
+  await waitForAutosaved(page); // the head is durable at the final ply
+  // Give any (erroneous per-move) mint writes time to land, then assert the count is still ONE.
+  await page.waitForTimeout(200);
+  const archive = await getAsync(page, (p) => p.getArchive());
+  expect(archive).toHaveLength(1);
+  // The single record IS the live game at its final ply (headHash matches) — not an early-ply leftover.
+  expect(archive[0]!.meta.headHash).toBe(await get(page, (p) => p.getHeadHash()!));
+});
+
+/**
+ * Combined per-page init for the NETWORKED accumulation test: a private archive DB (so `getArchive`
+ * is isolated per tab) PLUS the BroadcastChannel-backed mock transport (from `netWiring.spec.ts`) so
+ * two tabs in one context exchange REAL sync messages. `adoptNetState` swaps the scene's authoritative
+ * `Game` object on every adopted remote move — exactly the identity churn that made the old logic mint
+ * a record per ply. Written as ONE init script so the mock's `localStorage.clear()` cannot wipe the
+ * dbName we just set (order-of-init-scripts hazard).
+ */
+async function isolateNet(
+  page: import('@playwright/test').Page,
+  senderId: string,
+): Promise<void> {
+  const dbName = `pente3d-e2e-${crypto.randomUUID()}`;
+  await page.addInitScript(
+    ({ sid, name }: { sid: string; name: string }) => {
+      window.localStorage.clear();
+      (window as unknown as { __penteDbName: string }).__penteDbName = name;
+      (
+        window as unknown as { __penteNetTransportFactory: () => unknown }
+      ).__penteNetTransportFactory = () => {
+        let channel: BroadcastChannel | null = null;
+        let msgCb: (msg: unknown) => void = () => {};
+        let presenceCb: (peers: readonly string[]) => void = () => {};
+        const present = new Set<string>([sid]);
+        let lastBody: unknown = null;
+        return {
+          connect: (roomCode: string) => {
+            channel = new BroadcastChannel(`pente-mock-${roomCode}`);
+            channel.onmessage = (ev: MessageEvent) => {
+              const data = ev.data as { from: string; kind: string; body?: unknown };
+              if (data.from === sid) return; // faithful relay: never echo to the sender
+              if (data.kind === 'msg') {
+                msgCb(data.body);
+              } else if (data.kind === 'hello') {
+                present.add(data.from);
+                presenceCb([...present]);
+                channel!.postMessage({ from: sid, kind: 'hello-ack' });
+                if (lastBody !== null) {
+                  channel!.postMessage({ from: sid, kind: 'msg', body: lastBody });
+                }
+              } else if (data.kind === 'hello-ack') {
+                present.add(data.from);
+                presenceCb([...present]);
+              }
+            };
+            channel.postMessage({ from: sid, kind: 'hello' });
+            presenceCb([...present]);
+            return Promise.resolve();
+          },
+          publish: (body: unknown) => {
+            lastBody = JSON.parse(JSON.stringify(body));
+            channel?.postMessage({ from: sid, kind: 'msg', body: lastBody });
+          },
+          onMessage: (cb: (msg: unknown) => void) => {
+            msgCb = cb;
+          },
+          onPresence: (cb: (peers: readonly string[]) => void) => {
+            presenceCb = cb;
+          },
+          disconnect: () => {
+            channel?.close();
+            channel = null;
+          },
+        };
+      };
+    },
+    { sid: senderId, name: dbName },
+  );
+}
+
+const netReadout = (page: import('@playwright/test').Page) =>
+  page.evaluate(() => (window as unknown as { __pente: Pente }).__pente.getNet());
+
+async function waitNetConnected(page: import('@playwright/test').Page): Promise<void> {
+  await page.waitForFunction(() => {
+    const p = (window as unknown as { __pente: Pente }).__pente;
+    return p.getNet()?.phase === 'connected';
+  });
+}
+
+test('NETWORKED (issue #7): N moves in ONE net game keep EXACTLY ONE archive record, not one-per-move', async ({
+  browser,
+}) => {
+  // Two tabs in ONE context share a BroadcastChannel relay, each with its OWN archive DB. The host
+  // and joiner ALTERNATE moves (the seat gate lets each place only on its turn), so within ONE net
+  // game we drive N committed plies — every one adopted by the opponent swaps in a NEW `Game` object.
+  const context = await browser.newContext();
+  const host = await context.newPage();
+  const joiner = await context.newPage();
+  await isolateNet(host, 'host-acc');
+  await isolateNet(joiner, 'joiner-acc');
+
+  await ready(host);
+  // Boot pristine record on the host (the single current-game record we assert stays singular).
+  const bootHost = await getAsync(host, (p) => p.getArchive());
+  expect(bootHost).toHaveLength(1);
+
+  await host.evaluate(() => (window as unknown as { __pente: Pente }).__pente.dispatch('hostGame'));
+  await waitNetConnected(host);
+  const code = (await netReadout(host))?.code;
+  expect(code).not.toBeNull();
+
+  await ready(joiner);
+  await joiner.evaluate((c: string) => {
+    const input = document.querySelector('[data-testid="net-join-input"]') as HTMLInputElement;
+    input.value = c;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    (document.querySelector('[data-testid="net-join"]') as HTMLButtonElement).click();
+  }, code!);
+  await waitNetConnected(joiner);
+  expect((await netReadout(joiner))?.seat).toBe('black');
+
+  // Alternate five committed moves across the two tabs (white on the host, black on the joiner). Each
+  // opponent ADOPTS the peer's move — swapping in a fresh `Game` object, the identity churn the bug
+  // keyed a new record off. None of these is a five-in-a-row, so the ONE game runs the whole way.
+  const placeOn = (page: import('@playwright/test').Page, c: [number, number, number]) =>
+    page.evaluate((coord: [number, number, number]) => {
+      (window as unknown as { __pente: Pente }).__pente.place(coord);
+    }, c);
+  const seq: { page: import('@playwright/test').Page; coord: [number, number, number] }[] = [
+    { page: host, coord: [0, 0, 0] }, // white 1
+    { page: joiner, coord: [0, 2, 2] }, // black 1
+    { page: host, coord: [1, 0, 0] }, // white 2
+    { page: joiner, coord: [1, 2, 2] }, // black 2
+    { page: host, coord: [2, 0, 0] }, // white 3
+  ];
+  for (const { page, coord } of seq) {
+    await placeOn(page, coord);
+    // Wait until BOTH tabs have adopted this move (the peer swapped in a new authoritative Game object)
+    // before the next placement, so the seat gate sees the correct turn and every ply is committed.
+    const key = `${coord[0]},${coord[1]},${coord[2]}`;
+    for (const p of [host, joiner]) {
+      await p.waitForFunction((k: string) => {
+        const s = (window as unknown as { __pente: Pente }).__pente.getState();
+        return !!s && s.pieces[k] !== undefined;
+      }, key);
+    }
+  }
+
+  // Observable: the shared net game actually has all five pieces and both tabs converged.
+  const hostState = await get(host, (p) => p.getState()!);
+  expect(Object.keys(hostState.pieces)).toHaveLength(5);
+  expect(await get(host, (p) => p.getHeadHash()!)).toBe(await get(joiner, (p) => p.getHeadHash()!));
+
+  // Let any (erroneous per-move) mint writes settle, then the CORE assertion (RED against the bug):
+  // the host archive still holds EXACTLY ONE record for this ONE game — not five (one per adopted ply).
+  await waitForAutosaved(host);
+  await host.waitForTimeout(300);
+  const hostArchive = await getAsync(host, (p) => p.getArchive());
+  expect(hostArchive).toHaveLength(1);
+  // And that single record IS the live net game at its final ply (headHash matches) — accumulation,
+  // not an early-ply leftover from a record that got abandoned by a spurious mint.
+  expect(hostArchive[0]!.meta.headHash).toBe(await get(host, (p) => p.getHeadHash()!));
+
+  await context.close();
 });

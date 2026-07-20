@@ -270,6 +270,18 @@ export interface SceneHandle {
    * matter what triggered the change (button / hotkey / canvas click). Returns an unsubscribe fn.
    */
   onStateChange(listener: () => void): () => void;
+  /**
+   * Subscribe to genuinely-new-LOCAL-GAME events (issue #7): `listener` fires exactly when the scene
+   * installs a fresh local `Game` OBJECT — a `reset` (new local game) or a `loadGame` (restore /
+   * archive load). It does NOT fire for an ordinary move, undo/redo, a scrub, or a networked-move
+   * adoption (`adoptNetState` renders the session's game without swapping the scene-local one). This
+   * is the LOCAL game-boundary signal the app's autosave uses to bump its lifecycle `generation`
+   * explicitly, so a new archive record is minted only at a real boundary — NOT on every remote-move
+   * `Game`-object swap the networked session performs (the issue #7 per-move-record bug). Returns an
+   * unsubscribe fn. Fires from within `reset` / `loadGame` (after the swap), no matter the trigger
+   * source (button, hotkey, or a programmatic `dispatch('reset')`), so no boundary is missed.
+   */
+  onNewGame(listener: () => void): () => void;
   /** Plain-number readout of every live piece mesh (node/owner/position/opacity). */
   getPieces(): PieceReadout[];
   /**
@@ -514,6 +526,15 @@ export function createScene(container: HTMLElement): SceneHandle {
     for (const listener of stateChangeListeners) listener();
   }
 
+  // Genuinely-new-LOCAL-GAME subscribers (issue #7): fired only when the scene swaps in a fresh local
+  // `Game` object — a `reset` or a `loadGame`. This is the LOCAL game-boundary signal the app's
+  // autosave lifecycle bumps its `generation` off, INSTEAD of inferring "new game" from `Game` object
+  // identity (which a networked session changes every remote move, minting a spurious record per ply).
+  const newGameListeners = new Set<() => void>();
+  function notifyNewGame(): void {
+    for (const listener of newGameListeners) listener();
+  }
+
   // Seat-turn gate (Task 6.2, issue #4c): the running count of placement attempts rejected because it
   // was not the local seat's turn in the networked game. Incremented once per blocked attempt (never on
   // a legal or local placement); the banner mirrors it to fire the subtle off-turn cue and Playwright
@@ -713,6 +734,10 @@ export function createScene(container: HTMLElement): SceneHandle {
       id: 'reset',
       run: () => {
         game = new Game(BOARD_SIZE);
+        // A reset is a genuine LOCAL game boundary (issue #7): notify FIRST so the app bumps its autosave
+        // generation BEFORE the `commitLive` below fires the state-change autosave tick — the tick must
+        // observe the bumped generation to detect the boundary and mint a fresh record for the new game.
+        notifyNewGame();
         // A fresh game is a live state change: clear any scrub and reflect the pristine head.
         commitLive();
       },
@@ -950,6 +975,12 @@ export function createScene(container: HTMLElement): SceneHandle {
     return () => stateChangeListeners.delete(listener);
   }
 
+  /** Subscribe to genuinely-new-local-game events (reset / load, issue #7); returns an unsubscribe fn. */
+  function onNewGame(listener: () => void): () => void {
+    newGameListeners.add(listener);
+    return () => newGameListeners.delete(listener);
+  }
+
   function getPieces(): PieceReadout[] {
     return pieces.getPieces();
   }
@@ -997,6 +1028,10 @@ export function createScene(container: HTMLElement): SceneHandle {
    */
   function loadGame(loaded: Game): void {
     game = loaded;
+    // A load is a genuine LOCAL game boundary (issue #7): notify FIRST so the app bumps its autosave
+    // generation BEFORE the `commitLive` tick observes it. (The boot-restore path re-seeds its
+    // lifecycle from the post-bump generation, so a restore resumes its record — see main.ts.)
+    notifyNewGame();
     // A load is a live state change: clear any scrub and reflect the loaded head.
     commitLive();
   }
@@ -1358,6 +1393,7 @@ export function createScene(container: HTMLElement): SceneHandle {
     getTurnGate,
     scrubTo,
     onStateChange,
+    onNewGame,
     getPieces,
     getMarkers,
     getWinLine,
