@@ -102,6 +102,13 @@ export default {
     // boundary, excluded exactly as the other scene glue above.
     'src/input/pointerGesture.ts',
     '!src/input/**/*.test.ts',
+    // Pure composable-UI logic (Task 5.1): the zone-based layout resolver and the widget
+    // registry. THREE-free / DOM-free — the DOM container/shell/widget glue (`container.ts`,
+    // `setup.ts`, `widgets/**`) is NOT mutated; it is the Playwright-verified IO boundary,
+    // excluded exactly as `scene.ts` / `input/setup.ts` glue is excluded above.
+    'src/ui/layout.ts',
+    'src/ui/registry.ts',
+    '!src/ui/**/*.test.ts',
   ],
   coverageAnalysis: 'perTest',
   // Generous timeout to make Killed-vs-Timeout classification DETERMINISTIC (see header):

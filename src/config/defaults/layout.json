@@ -1,9 +1,9 @@
 {
   "widgets": {
-    "statusBanner": { "slot": "top", "order": 0, "visible": true },
-    "menuButton": { "slot": "top-right", "order": 0, "visible": true },
-    "lineVisibilityPanel": { "slot": "left", "order": 0, "visible": true },
-    "historySlider": { "slot": "bottom", "order": 0, "visible": true },
-    "connectionStatus": { "slot": "top-left", "order": 0, "visible": true }
+    "statusBanner": { "zone": "top-center", "order": 0, "visible": true },
+    "menuButton": { "zone": "top-right", "order": 0, "visible": true },
+    "lineVisibilityPanel": { "zone": "left", "order": 0, "visible": true },
+    "historySlider": { "zone": "bottom-center", "order": 0, "visible": true },
+    "connectionStatus": { "zone": "top-left", "order": 0, "visible": true }
   }
 }

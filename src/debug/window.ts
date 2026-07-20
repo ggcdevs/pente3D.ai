@@ -15,6 +15,8 @@ import type { KeyResolution } from '../input/scopes.ts';
 import type { RaycastHit, HoverTarget } from '../render/hover.ts';
 import type { GameState } from '../core/gameState.ts';
 import type { Coord } from '../core/coords.ts';
+import type { UiHandle } from '../ui/setup.ts';
+import type { LayoutReadout } from '../ui/container.ts';
 import { createLogger } from './log.ts';
 
 const log = createLogger('debug:window');
@@ -92,6 +94,12 @@ export interface PenteInspect {
    * translucent preview mesh's opacity — so Playwright proves the preview is actually drawn.
    */
   getTemp(): TempReadout | null;
+  /**
+   * The mounted composable-UI layout (Task 5.1), read back off the live DOM: `zone → ordered
+   * widget ids`. Lets Playwright prove the DOM reflects the `layout` config and that reordering
+   * the config reorders the DOM (observable behavior, not a log line — agent-principles #3).
+   */
+  getLayout(): LayoutReadout | null;
 }
 
 declare global {
@@ -100,8 +108,8 @@ declare global {
   }
 }
 
-/** Install `window.__pente`, wired to the live scene handle. Dev/test builds only. */
-export function installInspectApi(scene: SceneHandle): PenteInspect {
+/** Install `window.__pente`, wired to the live scene + UI handles. Dev/test builds only. */
+export function installInspectApi(scene: SceneHandle, ui: UiHandle): PenteInspect {
   const api: PenteInspect = {
     getCamera: () => scene.getCamera(),
     getLighting: () => scene.getLighting(),
@@ -121,6 +129,7 @@ export function installInspectApi(scene: SceneHandle): PenteInspect {
     getHoverTarget: () => scene.getHoverTarget(),
     clickAt: (ndcX: number, ndcY: number) => scene.clickAt(ndcX, ndcY),
     getTemp: () => scene.getTemp(),
+    getLayout: () => ui.getLayout(),
   };
   window.__pente = api;
   log.info('window.__pente installed', Object.keys(api));
