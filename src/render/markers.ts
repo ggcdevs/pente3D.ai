@@ -46,10 +46,9 @@ export interface MarkerMaterialsConfig {
   markerDepthWrite: boolean;
 }
 
-/** The `rendering` config subset the markers need (gloss + hover emissive boost). */
+/** The `rendering` config subset the markers need (surface gloss). */
 export interface MarkerRenderingConfig {
   marker: { roughness: number; metalness: number };
-  emissiveBoost: number;
 }
 
 /** A plain, serializable readout for one queried node — for Playwright assertions. */
@@ -62,6 +61,14 @@ export interface MarkerNodeReadout {
   visible: boolean;
   /** True iff the marker is currently hover-highlighted (its instance colour is the glow). */
   highlighted: boolean;
+  /**
+   * The instance's ACTUAL rendered colour, read back from the live `instanceColor` GPU buffer
+   * (not the logical `highlighted` flag) as a lowercase `#rrggbb` string. This is render truth:
+   * it exposes what pixel each individual instance draws, so a test can prove a hover changed
+   * ONLY the hovered instance and left every other instance's colour untouched — catching a
+   * shared-material glow that a logical highlight flag would miss. `#000000` for id -1.
+   */
+  instanceColorHex: string;
 }
 
 /** A plain-number readout of the whole marker layer — for `window.__pente`. */
@@ -72,6 +79,14 @@ export interface MarkersReadout {
   visibleCount: number;
   /** How many markers are currently hover-highlighted. */
   highlightedCount: number;
+  /**
+   * The shared material's effective emissive contribution: `emissiveIntensity` if the emissive
+   * colour is non-black, else 0 (a black emissive contributes nothing regardless of intensity).
+   * The hover glow MUST NOT drive this — any material-level emissive lights every instance at
+   * once (the "hover one, all glow" bug), so a test asserting this stays 0 across a hover pins
+   * the highlight to per-instance colour only.
+   */
+  materialEmissiveIntensity: number;
   /** Per-node detail for the queried node keys (order preserved). */
   nodes: MarkerNodeReadout[];
 }
@@ -132,9 +147,14 @@ export function createMarkers(
     geometry.sphereSegments.width,
     geometry.sphereSegments.height,
   );
-  // Per-instance colour drives the hover glow (base colour → highlight colour); vertex
-  // colours are multiplied into the material colour, so the material stays white and each
-  // instance's `setColorAt` is the literal colour drawn.
+  // Per-instance colour drives the hover glow (base colour → highlight colour); `instanceColor`
+  // is multiplied into the material colour, so the material stays white and each instance's
+  // `setColorAt` is the literal colour drawn. The glow MUST be per-instance only: the material
+  // is shared across all N³ instances, so any material-level property (e.g. `emissive` /
+  // `emissiveIntensity`) would light EVERY marker at once — the exact "hover one, all glow" bug.
+  // Emissive cannot be varied per-instance on a MeshStandardMaterial without a custom shader,
+  // so the highlight is expressed purely as a per-instance albedo swap (same technique the lines
+  // layer uses) and the material carries NO emissive.
   const material = new THREE.MeshStandardMaterial({
     color: 0xffffff,
     roughness: rendering.marker.roughness,
@@ -142,8 +162,6 @@ export function createMarkers(
     transparent: true,
     opacity: materials.markerOpacity,
     depthWrite: materials.markerDepthWrite,
-    emissive: new THREE.Color(colors.hoverHighlight),
-    emissiveIntensity: 0,
   });
   const mesh = new THREE.InstancedMesh(geo, material, index.count);
   mesh.name = 'markers:spheres';
@@ -151,7 +169,6 @@ export function createMarkers(
 
   const baseColor = new THREE.Color(colors.emptySphere);
   const glowColor = new THREE.Color(colors.hoverHighlight);
-  const emissiveBoost = rendering.emissiveBoost;
 
   // The visible-scale matrix per instance (identity translation to its node); the hidden
   // matrix is the same but zero-scaled. We keep the shown/zero matrices per instance so a
@@ -193,20 +210,27 @@ export function createMarkers(
 
   function highlight(nodes: readonly NodeKey[]): void {
     const on = new Set(markerInstancesFor(index, nodes));
-    let anyOn = false;
+    let changed = false;
     for (let i = 0; i < index.count; i++) {
       const want = on.has(i);
-      anyOn = anyOn || want;
       if (want !== highlighted[i]) {
+        // Per-instance colour swap ONLY — no material-level property is touched, so the glow
+        // is confined to instance `i` and never bleeds onto the other N³−1 markers.
         mesh.setColorAt(i, want ? glowColor : baseColor);
         highlighted[i] = want;
+        changed = true;
       }
     }
-    // A single shared emissiveIntensity is enough: only highlighted instances carry the
-    // glow colour, so the base (grey) instances read the emissive faintly but uniformly.
-    // Gate it on whether anything is highlighted so an empty hover is fully un-lit.
-    material.emissiveIntensity = anyOn ? emissiveBoost : 0;
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    if (changed && mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+  }
+
+  // Scratch colour reused for every read-back — the real per-instance colour is pulled from the
+  // live `instanceColor` buffer via `getColorAt`, so the readout reflects the GPU state actually
+  // drawn, never the logical `highlighted` flag.
+  const readColor = new THREE.Color();
+  function instanceColorHexOf(id: number): string {
+    mesh.getColorAt(id, readColor);
+    return `#${readColor.getHexString()}`;
   }
 
   function getMarkers(query: readonly NodeKey[] = []): MarkersReadout {
@@ -219,10 +243,28 @@ export function createMarkers(
     const nodes: MarkerNodeReadout[] = query.map((node) => {
       const id = index.instanceIdOf.get(node);
       return id === undefined
-        ? { node, instanceId: -1, visible: false, highlighted: false }
-        : { node, instanceId: id, visible: visible[id]!, highlighted: highlighted[id]! };
+        ? { node, instanceId: -1, visible: false, highlighted: false, instanceColorHex: '#000000' }
+        : {
+            node,
+            instanceId: id,
+            visible: visible[id]!,
+            highlighted: highlighted[id]!,
+            instanceColorHex: instanceColorHexOf(id),
+          };
     });
-    return { count: index.count, visibleCount, highlightedCount, nodes };
+    // A black emissive contributes nothing however high the intensity, so report the effective
+    // glow lever: 0 when the emissive colour is black. This is what actually lights the pixels,
+    // and it is a SHARED (per-material, not per-instance) value — non-zero here means every
+    // marker glows at once (the bug this readout exists to catch).
+    const emissiveIsBlack =
+      material.emissive.r === 0 && material.emissive.g === 0 && material.emissive.b === 0;
+    return {
+      count: index.count,
+      visibleCount,
+      highlightedCount,
+      materialEmissiveIntensity: emissiveIsBlack ? 0 : material.emissiveIntensity,
+      nodes,
+    };
   }
 
   function dispose(): void {

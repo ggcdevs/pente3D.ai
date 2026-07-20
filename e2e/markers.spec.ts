@@ -33,11 +33,13 @@ interface MarkerNodeReadout {
   instanceId: number;
   visible: boolean;
   highlighted: boolean;
+  instanceColorHex: string;
 }
 interface MarkersReadout {
   count: number;
   visibleCount: number;
   highlightedCount: number;
+  materialEmissiveIntensity: number;
   nodes: MarkerNodeReadout[];
 }
 type RaycastHit =
@@ -147,6 +149,13 @@ test('hovering an empty node GLOWS its marker; empty space clears it', async ({ 
   await ready(page);
 
   const center = keyOf([2, 2, 2]);
+  // A DIFFERENT, un-hovered marker we sample as the control: hovering `center` must not touch it.
+  const other = keyOf([0, 0, 0]);
+  // The SSOT colours the render must draw: base grey for un-highlighted, hover yellow for the
+  // hovered instance. Normalised to lowercase #rrggbb to match the buffer read-back.
+  const baseHex = colorsDefault.emptySphere.toLowerCase();
+  const glowHex = colorsDefault.hoverHighlight.toLowerCase();
+
   // The orbit target is the board origin = center node; NDC (0,0) rays through it.
   const hit = await page.evaluate(() => {
     const p = (window as unknown as { __pente: Pente }).__pente;
@@ -155,6 +164,13 @@ test('hovering an empty node GLOWS its marker; empty space clears it', async ({ 
   expect(hit!.kind).toBe('empty-node');
   expect((hit as { node: string }).node).toBe(center);
 
+  // Baseline: before any hover, BOTH the target and the control render the base grey colour,
+  // and the shared material carries no emissive glow lever.
+  const initial = await markers(page, [center, other]);
+  expect(initial.nodes.find((n) => n.node === center)!.instanceColorHex).toBe(baseHex);
+  expect(initial.nodes.find((n) => n.node === other)!.instanceColorHex).toBe(baseHex);
+  expect(initial.materialEmissiveIntensity).toBe(0);
+
   // Hover it: the hover target names the center node, and its marker instance glows.
   const target = await page.evaluate(() => {
     const p = (window as unknown as { __pente: Pente }).__pente;
@@ -162,10 +178,21 @@ test('hovering an empty node GLOWS its marker; empty space clears it', async ({ 
   });
   expect(target!.nodes).toContain(center);
 
-  const glowed = await markers(page, [center]);
-  expect(glowed.nodes[0]!.highlighted).toBe(true);
+  const glowed = await markers(page, [center, other]);
+  const glowedCenter = glowed.nodes.find((n) => n.node === center)!;
+  const glowedOther = glowed.nodes.find((n) => n.node === other)!;
+  expect(glowedCenter.highlighted).toBe(true);
   // Exactly the hovered empty node's marker is highlighted (a single empty-node hover).
   expect(glowed.highlightedCount).toBe(1);
+
+  // RENDER TRUTH, not logical state (agent-principles #3): read the live per-instance colour
+  // from the actual `instanceColor` GPU buffer. Only the hovered instance may change colour;
+  // the sampled OTHER instance MUST stay base grey. A shared-material glow (setting a material-
+  // level emissive) would light every instance at once — this catches that class of bug.
+  expect(glowedCenter.instanceColorHex).toBe(glowHex);
+  expect(glowedOther.instanceColorHex).toBe(baseHex);
+  // Belt-and-braces: the shared material's emissive is NOT the glow lever (would glow all N³).
+  expect(glowed.materialEmissiveIntensity).toBe(0);
 
   // Capture the artifact WHILE the marker is glowing (highlightedCount === 1), so the image
   // actually demonstrates the hover glow — not the post-clear zero-highlight state. Taken
@@ -180,11 +207,17 @@ test('hovering an empty node GLOWS its marker; empty space clears it', async ({ 
     return p.hoverAt(0.98, 0.98);
   });
   expect(cleared).toBeNull();
-  const restored = await markers(page, [center]);
-  expect(restored.nodes[0]!.highlighted).toBe(false);
+  const restored = await markers(page, [center, other]);
+  const restoredCenter = restored.nodes.find((n) => n.node === center)!;
+  expect(restoredCenter.highlighted).toBe(false);
   expect(restored.highlightedCount).toBe(0);
   // The marker is still visible (hover glow does not hide it).
-  expect(restored.nodes[0]!.visible).toBe(true);
+  expect(restoredCenter.visible).toBe(true);
+  // The previously-glowing instance's real colour is restored to base grey (un-hover reverts
+  // the per-instance colour, not just the logical flag), and the control never moved.
+  expect(restoredCenter.instanceColorHex).toBe(baseHex);
+  expect(restored.nodes.find((n) => n.node === other)!.instanceColorHex).toBe(baseHex);
+  expect(restored.materialEmissiveIntensity).toBe(0);
 
   // Nothing regressed: pickAt still resolves the empty center node as before.
   const rehit = await page.evaluate(() => {
