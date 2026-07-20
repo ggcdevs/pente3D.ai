@@ -67,6 +67,10 @@ export default {
     '!src/persist/**/*.test.ts',
     'src/net/seats.ts',
     'src/net/sync.ts',
+    // Pure net-routing decisions (Task 6.1): where a placement flows (session vs local) and whether
+    // the scene renders the session game — the issue #4 "one authoritative game per session" logic,
+    // separated from the scene/session IO glue so it is mutation-gated like the other pure net logic.
+    'src/net/netRouting.ts',
     '!src/net/**/*.test.ts',
     // Pure render resolvers only (THREE-free). The Three.js scene GLUE (`scene.ts`,
     // `lines.ts`) is NOT mutated — it is an IO boundary verified by Playwright (build

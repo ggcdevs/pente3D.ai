@@ -17,7 +17,6 @@ import type { KeyResolution } from '../input/scopes.ts';
 import type { RaycastHit, HoverTarget } from '../render/hover.ts';
 import type { GameState } from '../core/gameState.ts';
 import type { Coord } from '../core/coords.ts';
-import { headHash } from '../core/eventLog.ts';
 import type { UiHandle } from '../ui/setup.ts';
 import type { LayoutReadout } from '../ui/container.ts';
 import type { BannerContext } from '../ui/widgets/banner.ts';
@@ -239,7 +238,9 @@ export function installInspectApi(
     getNet: () => scene.getNet(),
     getHelpSources: () => scene.getHelpSources(),
     getArchive: () => archive.listArchive(),
-    getHeadHash: () => headHash(scene.getGame().log),
+    // The AUTHORITATIVE game's head hash (Task 6.1, issue #4): the networked session's game when a
+    // net game is live, else the local game — so a two-client test proves convergence to one head.
+    getHeadHash: () => scene.getHeadHash(),
   };
   window.__pente = api;
   log.info('window.__pente installed', Object.keys(api));

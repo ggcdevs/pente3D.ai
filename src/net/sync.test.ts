@@ -339,6 +339,111 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
   });
 });
 
+describe('SyncEngine.onChange — the resync notification (Task 6.1, issue #4)', () => {
+  let db: IDBDatabase;
+  const meta = { players: { white: 'w', black: 'b' }, startedAt: 1000 };
+
+  beforeEach(async () => {
+    db = await openDatabase(`sync-change-${Math.random().toString(36).slice(2)}`);
+  });
+
+  /**
+   * A solo engine (no peer) connected to a mock room, so place()/undo() can publish. receive() is
+   * still driven directly to simulate inbound peer messages.
+   */
+  async function solo(size = 9): Promise<SyncEngine> {
+    const hub = new MockRelayHub();
+    const t = new MockTransport(hub, 'chg');
+    const eng = new SyncEngine(new Game(size), t, db, () => meta, 'white');
+    await eng.connect('change-room');
+    return eng;
+  }
+
+  it('fires on a local move (so the local placement re-renders the scene)', async () => {
+    const eng = await solo();
+    let fires = 0;
+    eng.onChange(() => (fires += 1));
+    eng.place([0, 0, 0]);
+    expect(fires).toBe(1);
+  });
+
+  it('fires when ADOPTING a peer log — the remote-move resync link', async () => {
+    // This is the core issue #4 gap: the transport pump mutates the game silently. onChange must
+    // fire on adopt so the app re-renders the peer's move (observable: the listener saw the change
+    // AND the adopted piece is really on the board).
+    const eng = await solo();
+    let fires = 0;
+    let seenPly = -1;
+    eng.onChange(() => {
+      fires += 1;
+      seenPly = eng.game().ply();
+    });
+    eng.receive(toSyncMessage(logOf('0,0,0', '1,1,1')));
+    expect(fires).toBe(1);
+    expect(seenPly).toBe(2);
+    expect(eng.game().state().pieces['0,0,0']).toBe('white');
+  });
+
+  it('does NOT fire when IGNORING a stale/equal replay (no change happened)', async () => {
+    // A replay is a genuine no-op: firing here would falsely tell the scene state changed.
+    const eng = await solo();
+    eng.receive(toSyncMessage(logOf('0,0,0', '1,1,1'))); // adopt → 2
+    let fires = 0;
+    eng.onChange(() => (fires += 1));
+    eng.receive(toSyncMessage(logOf('0,0,0'))); // stale prefix → ignore
+    eng.receive(toSyncMessage(eng.game().log)); // equal → ignore
+    expect(fires).toBe(0);
+    expect(eng.game().ply()).toBe(2);
+  });
+
+  it('fires on a CONFLICT (so the UI reflects the stopped game)', async () => {
+    const eng = await solo();
+    eng.placeLocalOnly([0, 0, 0]); // my fork
+    let fires = 0;
+    let statusAtFire: string | null = null;
+    eng.onChange(() => {
+      fires += 1;
+      statusAtFire = eng.status().kind;
+    });
+    eng.receive(toSyncMessage(logOf('1,1,1'))); // a divergent fork → conflict
+    expect(fires).toBe(1);
+    expect(statusAtFire).toBe('conflict');
+    await eng.whenSettled();
+  });
+
+  it('fires on undo (the extended log re-renders and publishes)', async () => {
+    const eng = await solo();
+    eng.place([0, 0, 0]); // white's move — white may undo its own last move
+    let fires = 0;
+    eng.onChange(() => (fires += 1));
+    eng.undo();
+    expect(fires).toBe(1);
+    expect(eng.game().state().pieces['0,0,0']).toBeUndefined();
+  });
+
+  it('stops notifying after unsubscribe', async () => {
+    const eng = await solo();
+    let fires = 0;
+    const off = eng.onChange(() => (fires += 1));
+    eng.place([0, 0, 0]);
+    off();
+    eng.place([1, 1, 1]);
+    expect(fires).toBe(1);
+  });
+
+  it('a frozen (conflicted) game neither fires nor mutates on a later strict extension', async () => {
+    // Once stopped, receive() returns before touching the game — so no listener fires either
+    // (the guard holds for the notification too; a frozen game reports no phantom change).
+    const eng = await solo();
+    eng.placeLocalOnly([0, 0, 0]);
+    eng.receive(toSyncMessage(logOf('1,1,1'))); // conflict → stopped
+    let fires = 0;
+    eng.onChange(() => (fires += 1));
+    eng.receive(toSyncMessage(logOf('0,0,0', '2,2,2'))); // would adopt if not frozen
+    expect(fires).toBe(0);
+  });
+});
+
 describe('decideUndo — pure restricted-undo permission', () => {
   /** A fresh game whose last committed move was played by `lastMover`. */
   function gameAfter(...moves: [number, number, number][]): Game {

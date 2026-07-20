@@ -43,6 +43,7 @@ import type { NetSessionState } from '../ui/widgets/netModel.ts';
 import type { HelpSources } from '../ui/widgets/helpModel.ts';
 import { keyOf, type Coord, type NodeKey } from '../core/coords.ts';
 import { generateAllLines, type LineCategory } from '../core/lines.ts';
+import { headHash } from '../core/eventLog.ts';
 
 const log = createLogger('render:scene');
 
@@ -153,6 +154,25 @@ export interface NetHooks {
   setPendingJoinCode(code: string): void;
   /** The live session readout the net widget renders. */
   getNet(): NetSessionState;
+  /**
+   * Route a local placement through the networked session (Task 6.1, issue #4): the SyncEngine
+   * applies + publishes the move so the peer receives it, and the returned {@link GameState} is the
+   * session's authoritative state the scene renders. Throws `IllegalMove` (propagated) on an illegal
+   * move. Only called when {@link getNetGameState} is non-null (a live session owns the game).
+   */
+  place(coords: Coord): GameState;
+  /**
+   * The session's authoritative game state to RENDER when a networked game is live (issue #4: ONE
+   * game per session), or `null` when the scene should render its own local game (offline / stopped).
+   * The scene adopts this on every session change so a REMOTE move re-renders the board.
+   */
+  getNetGameState(): GameState | null;
+  /**
+   * The `headHash` of the session's authoritative game log when networked (issue #4), or `null` when
+   * the scene's local game is authoritative. Lets `window.__pente.getHeadHash` report the SHARED
+   * game's fingerprint so a two-client test can prove both peers converged to an identical head.
+   */
+  getNetHeadHash(): string | null;
 }
 
 export interface SceneHandle {
@@ -270,6 +290,12 @@ export interface SceneHandle {
    */
   getGame(): Game;
   /**
+   * The `headHash` of the AUTHORITATIVE game (Task 6.1, issue #4): the networked session's game log
+   * hash when a net game is live, else the local game's head. The inspect API surfaces this so a
+   * two-client test can prove both peers converged to an identical head (observable behavior, #3).
+   */
+  getHeadHash(): string;
+  /**
    * The LIVE sources the help overlay generates its shortcut list from (Task 5.7): the registered
    * command ids + the current `key→commandId` bindings. The overlay derives its rows from these so
    * it can never drift from what the keys actually do (design Part 6; agent-principles #8).
@@ -281,6 +307,13 @@ export interface SceneHandle {
    * then drives the session; the net widget reads the live readout via {@link getNet}.
    */
   setNetHooks(hooks: NetHooks): void;
+  /**
+   * Adopt + render the session's authoritative game state (Task 6.1, issue #4). The app calls this on
+   * every session change so a REMOTE move (adopted by the transport pump) re-renders the board — the
+   * render half of "ONE authoritative game per session". A no-op when no session is live (offline /
+   * stopped): the scene keeps rendering its own local game. Observable via `getState`/`getPieces`.
+   */
+  adoptNetState(): void;
   /** The live networking-session readout the net widget renders (offline until a session is wired). */
   getNet(): NetSessionState;
   /** Stash a validated join code for the next `joinGame` dispatch (Task 5.5 argument seam). */
@@ -594,6 +627,13 @@ export function createScene(container: HTMLElement): SceneHandle {
     join: () => {},
     setPendingJoinCode: () => {},
     getNet: () => ({ phase: 'offline', code: null, seat: null, peerPresent: false, joinError: null }),
+    // Until a session is wired, there is no networked game: placements stay local and the scene
+    // renders its own game (getNetGameState → null). `place` is never invoked in this state (the
+    // scene only routes to it when getNetGameState is non-null), but is a defined no-op returning the
+    // local head so the shape is honest — never an undefined method that could crash on dispatch.
+    place: (coords: Coord) => place(coords),
+    getNetGameState: () => null,
+    getNetHeadHash: () => null,
   };
 
   const undoRedoSafe = (fn: () => void): void => {
@@ -796,8 +836,14 @@ export function createScene(container: HTMLElement): SceneHandle {
   }
 
   function getState(): GameState {
-    // Report the RENDERED state (the scrubbed snapshot while reviewing, else the live head) so a
-    // history scrub is observable via getState — the piece count matches what is on screen (5.6).
+    // In a networked game the SESSION owns the authoritative game (Task 6.1, issue #4): report its
+    // state so getState matches the rendered board (and the peer's) — the single source of truth,
+    // never the disconnected scene-local game. History scrubbing is a local-game feature; a net game
+    // is always live, so getNetGameState (when non-null) supersedes the scrub view here.
+    const netState = netHooks.getNetGameState();
+    if (netState !== null) return netState;
+    // Otherwise report the RENDERED local state (the scrubbed snapshot while reviewing, else the live
+    // head) so a history scrub is observable via getState — the piece count matches on screen (5.6).
     return renderState();
   }
 
@@ -901,6 +947,16 @@ export function createScene(container: HTMLElement): SceneHandle {
   }
 
   /**
+   * The `headHash` of the AUTHORITATIVE game (Task 6.1, issue #4): the session's game log hash when a
+   * networked game is live, else the local game's head. Lets `window.__pente.getHeadHash` report the
+   * SHARED fingerprint so a two-client test can prove convergence to an identical head — and so a net
+   * move (which does not touch the local game) is observable as a changed head.
+   */
+  function getHeadHash(): string {
+    return netHooks.getNetHeadHash() ?? headHash(game.log);
+  }
+
+  /**
    * The LIVE sources the help overlay generates its shortcut list from (Task 5.7): the registered
    * command ids (from the same registry keybindings dispatch through) + the current `key→commandId`
    * bindings (the tracked `keybindings` config). The overlay derives its rows from these, so it can
@@ -943,12 +999,48 @@ export function createScene(container: HTMLElement): SceneHandle {
   }
 
   function place(coords: Coord): GameState {
+    // Route through the SESSION when a networked game is live (Task 6.1, issue #4): ONE authoritative
+    // game per session. If the session owns the game (getNetGameState non-null), the move goes to the
+    // SyncEngine (which applies + publishes it to the peer) and the returned state is the session's
+    // authoritative state we render — never a second, disconnected scene-local game. Otherwise it is
+    // an ordinary local placement on the scene's own game.
+    if (netHooks.getNetGameState() !== null) {
+      // The engine applies + publishes; IllegalMove / stopped-game errors propagate honestly.
+      const netState = netHooks.place(coords);
+      renderNetState(netState);
+      return netState;
+    }
     // `game.place` throws IllegalMove on an illegal move; let it propagate honestly.
     game.place(coords);
     // A placement is a live state change: snap the local view back to live (clears any scrub) and
     // reflect the new head — a piece placed while reviewing history returns the viewer to live.
     commitLive();
     return game.state();
+  }
+
+  /**
+   * Reflect the SESSION's authoritative game state into the meshes (Task 6.1, issue #4). Used both
+   * when a local move routes through the session (above) and when the app adopts a REMOTE move via
+   * {@link adoptNetState}. Clears any local scrub (a networked move is always live) and reconciles
+   * every state-derived mesh set to the session state — the single render path for a networked game,
+   * so a local and a remote move render identically from the one authoritative source.
+   */
+  function renderNetState(netState: GameState): void {
+    scrubIndex = null;
+    syncBoard(netState);
+  }
+
+  /**
+   * Adopt + render the session's current authoritative state (Task 6.1, issue #4). The app calls this
+   * on every session change (`session.onChange`), so a peer's move — adopted by the transport pump —
+   * re-renders the local board. A no-op when there is no live session (offline / stopped): the scene
+   * keeps rendering its own local game. This is the render half of "ONE game per session"; the place
+   * half is {@link place}'s session route above.
+   */
+  function adoptNetState(): void {
+    const netState = netHooks.getNetGameState();
+    if (netState === null) return;
+    renderNetState(netState);
   }
 
   /** The line categories currently drawn — the visible-only filter for hover. */
@@ -1196,8 +1288,10 @@ export function createScene(container: HTMLElement): SceneHandle {
     setOpenArchive,
     loadGame,
     getGame,
+    getHeadHash,
     getHelpSources,
     setNetHooks,
+    adoptNetState,
     getNet,
     setPendingJoinCode,
     pressKey,

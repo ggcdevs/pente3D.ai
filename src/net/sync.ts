@@ -216,6 +216,8 @@ export class SyncEngine {
   private _conflict: { mine: EventLog; theirs: EventLog } | null = null;
   /** The in-flight conflict-archival write, if any (for {@link whenSettled}). */
   private _archiving: Promise<void> = Promise.resolve();
+  /** Subscribers notified after every game mutation (local move OR remote adopt/conflict). */
+  private readonly changeListeners = new Set<() => void>();
 
   /**
    * @param game The initial local game (usually fresh; may already hold moves).
@@ -247,6 +249,23 @@ export class SyncEngine {
     return this._game;
   }
 
+  /**
+   * Subscribe to game changes — fired after EVERY mutation of the wrapped game, whether from a
+   * local {@link place} / {@link undo} or from adopting a peer's log / detecting a conflict on
+   * {@link receive}. This is the seam the app-level session wires so a REMOTE move re-renders the
+   * scene: without it, the transport pump mutates `_game` silently and the rendered board goes
+   * stale (the core issue #4 "no resync" gap). Returns an unsubscribe fn.
+   */
+  onChange(listener: () => void): () => void {
+    this.changeListeners.add(listener);
+    return () => this.changeListeners.delete(listener);
+  }
+
+  /** Notify every change subscriber (after a local or remote game mutation). */
+  private emitChange(): void {
+    for (const listener of this.changeListeners) listener();
+  }
+
   /** The engine status — `ok`, or `conflict` once a fork stops the game. */
   status(): SyncStatus {
     return this._status;
@@ -274,6 +293,7 @@ export class SyncEngine {
     this.assertLive();
     this._game.place(coords);
     this.publishState();
+    this.emitChange();
   }
 
   /**
@@ -308,6 +328,7 @@ export class SyncEngine {
     }
     this._game.undo();
     this.publishState();
+    this.emitChange();
   }
 
   /**
@@ -344,12 +365,20 @@ export class SyncEngine {
     const decision = decideSync(this._game.log, remote);
     switch (decision.action) {
       case 'ignore':
+        // Stale / replay: the game did not change, so no listener fires (a spurious re-render on an
+        // ignored replay would be a lie about state changing — keep the notification truthful).
         return;
       case 'adopt':
+        // Adopt the peer's strict extension as the new authoritative game, then notify so the
+        // scene re-renders the REMOTE move (the issue #4 resync link).
         this._game = Game.fromLog(this.size, remote);
+        this.emitChange();
         return;
       case 'conflict':
+        // The logs forked and the game is stopped: archive both forks and notify so the UI reflects
+        // the stopped/conflicted state (the phase flips synchronously inside onConflict).
         this._archiving = this.onConflict(remote, decision.divergePly);
+        this.emitChange();
         return;
     }
   }

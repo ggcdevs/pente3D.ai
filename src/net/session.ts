@@ -32,7 +32,7 @@
 
 import { Game } from '../core/game';
 import type { Coord } from '../core/coords';
-import type { Player } from '../core/gameState';
+import type { GameState, Player } from '../core/gameState';
 import type { ArchivedMeta } from '../persist/archive';
 import type { Transport } from './transport';
 import { SyncEngine } from './sync';
@@ -179,6 +179,15 @@ export class NetSession {
     });
     const engine = new SyncEngine(game, transport, this.deps.db, meta, claim.color as Player);
     this.engine = engine;
+    // Re-emit on EVERY engine game change — crucially including a REMOTE move adopted by the
+    // transport pump (which mutates the engine's game silently). This is the resync link that makes
+    // a peer's move re-render the scene (issue #4): the app subscribes to the session's onChange and
+    // adopts the session's authoritative game back into the rendered board. A conflict also folds the
+    // engine status into the phase here, so the stopped/conflict state surfaces in the readout.
+    engine.onChange(() => {
+      this.reflectEngineStatus();
+      this.emit();
+    });
 
     try {
       await engine.connect(this.code);
@@ -220,6 +229,16 @@ export class NetSession {
   /** The wrapped SyncEngine, for the scene to read its `Game`/state once connected, or null. */
   syncEngine(): SyncEngine | null {
     return this.engine;
+  }
+
+  /**
+   * The authoritative game state to RENDER while a session is live (Task 6.1, issue #4): the wrapped
+   * engine's current game state, or `null` when there is no engine (offline). This is the ONE game
+   * per session — the app adopts it into the scene on every session change, so both the local and the
+   * remote move render from the same source of truth instead of a disconnected scene-local game.
+   */
+  gameState(): GameState | null {
+    return this.engine === null ? null : this.engine.game().state();
   }
 
   /**

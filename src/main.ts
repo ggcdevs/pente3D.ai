@@ -3,6 +3,8 @@ import { createUi } from './ui/setup.ts';
 import { installInspectApi } from './debug/window.ts';
 import { createLogger } from './debug/log.ts';
 import { createAppNetSession } from './net/appSession.ts';
+import { shouldRenderSessionGame } from './net/netRouting.ts';
+import { headHash } from './core/eventLog.ts';
 import { openDatabase, resolveDbName } from './persist/db.ts';
 import {
   saveGame,
@@ -149,6 +151,12 @@ async function loadConflictedIfAny(
 let pendingJoinCode = '';
 void createAppNetSession(scene.getState().size)
   .then((session) => {
+    // The pure decision (`netRouting.ts`) that a networked game is authoritative: exactly when a
+    // placement routes to the session. When true, the scene renders the session's ONE authoritative
+    // game (issue #4); when false (offline / stopped-conflict) it renders its own local game. Keeping
+    // this in the pure module (not an `if` in the scene) makes every phase boundary negatively tested.
+    const netGameState = () =>
+      shouldRenderSessionGame(session.state()) ? session.gameState() : null;
     scene.setNetHooks({
       host: () => void session.host().then(refreshUi),
       join: () => void session.join(pendingJoinCode).then(refreshUi),
@@ -156,10 +164,33 @@ void createAppNetSession(scene.getState().size)
         pendingJoinCode = code;
       },
       getNet: () => session.state(),
+      // Route a local placement through the session so the SyncEngine publishes it to the peer, then
+      // return the session's authoritative state for the scene to render (issue #4). IllegalMove /
+      // stopped-game errors propagate honestly from the engine.
+      place: (coords) => {
+        session.place(coords);
+        const state = session.gameState();
+        if (state === null) throw new Error('net place: no live session game');
+        return state;
+      },
+      getNetGameState: netGameState,
+      // The authoritative session game's head hash when a net game is live (issue #4): computed off
+      // the wrapped engine's log, so `window.__pente.getHeadHash` reports the SHARED fingerprint and a
+      // net move (which never touches the local game) is observable as a changed head.
+      getNetHeadHash: () => {
+        if (!shouldRenderSessionGame(session.state())) return null;
+        const engine = session.syncEngine();
+        return engine === null ? null : headHash(engine.game().log);
+      },
     });
-    // Repaint the net widget on every session-state change (connect/presence/conflict), regardless
-    // of what triggered it — the same pattern the board uses via onStateChange.
-    session.onChange(() => refreshUi());
+    // On EVERY session-state change — a local move, a REMOTE move adopted by the transport pump
+    // (the resync link), presence, or a conflict — adopt the session's authoritative game into the
+    // scene (re-rendering a remote move) and repaint the widgets. This is the render half of "ONE
+    // authoritative game per session"; without it a peer's move never reaches the board (issue #4).
+    session.onChange(() => {
+      scene.adoptNetState();
+      refreshUi();
+    });
     refreshUi();
     log.info('net session wired');
   })
