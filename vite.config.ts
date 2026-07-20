@@ -39,6 +39,13 @@ export default defineConfig({
         'src/ui/widgets/banner.ts',
         'src/ui/widgets/menu.ts',
         'src/ui/widgets/settings.ts',
+        // Task 5.5 net widget + the app-level net-session IO wiring (SyncEngine + seat orchestration
+        // over a transport + IndexedDB). All touch the DOM / network / browser globals — verified by
+        // the Task 5.5 Playwright spec, not unit coverage. The PURE `netModel.ts` is pinned to the
+        // 100% floor below (and in the mutation scope). Excluded file-by-file so netModel stays measured.
+        'src/ui/widgets/net.ts',
+        'src/net/session.ts',
+        'src/net/appSession.ts',
       ],
       // MACHINE-ENFORCED GATE (not documentation): the pure rules engine AND the
       // in-scope config/persist layers are held to a hard 100% floor
@@ -216,6 +223,17 @@ export default defineConfig({
         // write + scope-push widget glue (`widgets/settings.ts`) is Playwright-verified and excluded
         // above. In the mutation scope and held to the hard 100% floor. Do not weaken.
         'src/ui/widgets/settingsModel.ts': {
+          statements: 100,
+          branches: 100,
+          functions: 100,
+          lines: 100,
+        },
+        // Pure networking view-model (Task 5.5): the session-state → panel/label/banner derivation
+        // plus the code validation/normalization/generation. THREE-free / DOM-free — the DOM/dispatch
+        // widget glue (`widgets/net.ts`) and the SyncEngine+seat session wiring (`net/session.ts`,
+        // `net/appSession.ts`) are the Playwright-verified IO boundary, excluded above. In the
+        // mutation scope and held to the hard 100% floor. Do not weaken (agent-principles #6).
+        'src/ui/widgets/netModel.ts': {
           statements: 100,
           branches: 100,
           functions: 100,

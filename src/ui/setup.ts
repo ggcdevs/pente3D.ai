@@ -28,6 +28,8 @@ import {
   type SettingsScope,
   type SettingsColorsPreview,
 } from './widgets/settings.ts';
+import { netWidget, NET_WIDGET_ID } from './widgets/net.ts';
+import type { NetSessionState } from './widgets/netModel.ts';
 import type { LayoutConfig } from './layout.ts';
 
 /**
@@ -58,6 +60,23 @@ export interface UiDeps {
    * the rest of `colors` takes effect on reload (the documented config contract).
    */
   applyColors(preview: SettingsColorsPreview): void;
+  /**
+   * The live networking-session readout (Task 5.5) the net widget renders — the scene's `getNet`,
+   * produced off the app's net session (SyncEngine + seat manager). Supplied by the app so the UI
+   * shell never imports `src/net`.
+   */
+  getNet(): NetSessionState;
+  /**
+   * Stash a validated join code for the next `joinGame` dispatch (Task 5.5 argument seam) — the
+   * scene's `setPendingJoinCode`. The net widget validates a typed code, stashes it here, then
+   * dispatches the argument-free `joinGame` command; the session reads it.
+   */
+  setPendingJoinCode(code: string): void;
+  /**
+   * Copy text to the clipboard (Task 5.5) — the net widget's "Copy game code". Supplied by the app
+   * (the real `navigator.clipboard.writeText`) so the widget never reaches for a global directly.
+   */
+  copyToClipboard(text: string): Promise<void>;
 }
 
 /** The live UI handle exposed to the app + tests: the container plus its layout readout. */
@@ -81,6 +100,7 @@ export function defaultWidgetFactories(layout: LayoutConfig): WidgetFactory[] {
     if (id === BANNER_WIDGET_ID) return bannerWidget();
     if (id === MENU_WIDGET_ID) return menuWidget();
     if (id === SETTINGS_WIDGET_ID) return settingsWidget();
+    if (id === NET_WIDGET_ID) return netWidget();
     return placeholderWidget(id);
   });
 }
@@ -107,6 +127,9 @@ export function createUi(container: HTMLElement, deps: UiDeps): UiHandle {
       popScope: deps.popScope,
       registerOpener: deps.registerOpener,
       applyColors: deps.applyColors,
+      getNet: deps.getNet,
+      setPendingJoinCode: deps.setPendingJoinCode,
+      copyToClipboard: deps.copyToClipboard,
     },
     document,
   );

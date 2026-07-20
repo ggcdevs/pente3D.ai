@@ -72,6 +72,20 @@ const UI_STYLESHEET = `
 .pente-settings-keybinding-row { font-size: 12px; opacity: 0.85; font-family: ui-monospace, monospace; }
 .pente-settings-reset { margin-top: 12px; cursor: pointer; padding: 8px 12px; border-radius: 6px; border: none; background: rgba(255,80,80,0.18); color: #ffb0b0; font-size: 13px; }
 .pente-settings-reset:hover { background: rgba(255,80,80,0.28); }
+.pente-widget--net { display: flex; flex-direction: column; gap: 8px; min-width: 200px; padding: 10px 12px; border-radius: 6px; background: rgba(16,16,20,0.72); color: #e6e6ea; font-family: system-ui, sans-serif; font-size: 13px; }
+.pente-net-controls[hidden], .pente-net-status[hidden], .pente-net-conflict[hidden], .pente-net-code-row[hidden], .pente-net-seat[hidden], .pente-net-join-error[hidden] { display: none; }
+.pente-net-controls { display: flex; flex-direction: column; gap: 8px; }
+.pente-net-join-row { display: flex; gap: 6px; }
+.pente-net-join-input { flex: 1; min-width: 0; padding: 5px 8px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.3); color: #e6e6ea; font-size: 13px; text-transform: uppercase; }
+.pente-net-host, .pente-net-join { cursor: pointer; padding: 6px 12px; border-radius: 4px; border: none; background: rgba(74,144,217,0.4); color: #e6e6ea; font-size: 13px; }
+.pente-net-host:hover, .pente-net-join:hover { background: rgba(74,144,217,0.6); }
+.pente-net-join-error { color: #ffb0b0; font-size: 12px; }
+.pente-net-status { display: flex; flex-direction: column; gap: 6px; }
+.pente-net-code-row { display: flex; gap: 6px; align-items: center; }
+.pente-net-code { font-family: ui-monospace, monospace; font-size: 16px; letter-spacing: 2px; }
+.pente-net-copy { cursor: pointer; padding: 3px 8px; border-radius: 4px; border: none; background: rgba(255,255,255,0.12); color: #e6e6ea; font-size: 12px; }
+.pente-net-seat { opacity: 0.85; }
+.pente-net-conflict { padding: 8px; border-radius: 4px; background: rgba(255,80,80,0.18); color: #ffb0b0; font-size: 12px; }
 `;
 
 /** Install the overlay stylesheet once per document (idempotent, keyed by {@link UI_STYLE_ID}). */

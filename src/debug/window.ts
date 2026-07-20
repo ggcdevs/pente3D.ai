@@ -19,6 +19,7 @@ import type { Coord } from '../core/coords.ts';
 import type { UiHandle } from '../ui/setup.ts';
 import type { LayoutReadout } from '../ui/container.ts';
 import type { BannerContext } from '../ui/widgets/banner.ts';
+import type { NetSessionState } from '../ui/widgets/netModel.ts';
 import { createLogger } from './log.ts';
 
 const log = createLogger('debug:window');
@@ -115,6 +116,13 @@ export interface PenteInspect {
    * the config reorders the DOM (observable behavior, not a log line — agent-principles #3).
    */
   getLayout(): LayoutReadout | null;
+  /**
+   * The live networking-session readout (Task 5.5): `phase` / game `code` / `seat` / `peerPresent` /
+   * `joinError`, produced off the app's net session (SyncEngine + seat manager). Lets Playwright
+   * prove that hosting actually CONNECTS and CLAIMS a seat, and that a join over the shared mock
+   * relay reaches `connected` with the other seat — observable behavior, not a log line (#3).
+   */
+  getNet(): NetSessionState | null;
 }
 
 declare global {
@@ -147,6 +155,7 @@ export function installInspectApi(scene: SceneHandle, ui: UiHandle): PenteInspec
     clickAt: (ndcX: number, ndcY: number) => scene.clickAt(ndcX, ndcY),
     getTemp: () => scene.getTemp(),
     getLayout: () => ui.getLayout(),
+    getNet: () => scene.getNet(),
   };
   window.__pente = api;
   log.info('window.__pente installed', Object.keys(api));

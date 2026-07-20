@@ -39,6 +39,7 @@ import {
 import { Game } from '../core/game.ts';
 import type { GameState } from '../core/gameState.ts';
 import type { BannerContext } from '../ui/widgets/banner.ts';
+import type { NetSessionState } from '../ui/widgets/netModel.ts';
 import { keyOf, type Coord } from '../core/coords.ts';
 import { generateAllLines, type LineCategory } from '../core/lines.ts';
 
@@ -118,6 +119,23 @@ export interface TempReadout {
 }
 
 /** The live scene handle exposed to the app and (via window.__pente) to tests. */
+/**
+ * The networking hooks (Task 5.5) the app wires to its net session after constructing it. The scene
+ * does not own the session (it needs a DB + transport — an app-level concern), so `hostGame` /
+ * `joinGame` invoke `host` / `join` here, the net widget reads `getNet`, and the widget stashes a
+ * validated join code via `setPendingJoinCode` before dispatching the argument-free `joinGame`.
+ */
+export interface NetHooks {
+  /** Host a new game (generate a code, claim white, connect). */
+  host(): void;
+  /** Join the game whose code was last stashed via {@link setPendingJoinCode}. */
+  join(): void;
+  /** Stash a validated join code for the next {@link join}. */
+  setPendingJoinCode(code: string): void;
+  /** The live session readout the net widget renders. */
+  getNet(): NetSessionState;
+}
+
 export interface SceneHandle {
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
@@ -183,6 +201,16 @@ export interface SceneHandle {
    * mounting the UI. Dispatching `openSettings` (menu entry or keybinding) then opens the modal.
    */
   setOpenSettings(open: () => void): void;
+  /**
+   * Wire the networking hooks (Task 5.5) to the app's net session (constructed after the scene, as
+   * it needs a DB + transport). Dispatching `hostGame` / `joinGame` (menu entry, button, or key)
+   * then drives the session; the net widget reads the live readout via {@link getNet}.
+   */
+  setNetHooks(hooks: NetHooks): void;
+  /** The live networking-session readout the net widget renders (offline until a session is wired). */
+  getNet(): NetSessionState;
+  /** Stash a validated join code for the next `joinGame` dispatch (Task 5.5 argument seam). */
+  setPendingJoinCode(code: string): void;
   /** Resolve a chord through the scope stack and dispatch it — drives the key path in tests. */
   pressKey(chord: string): KeyResolution;
   /**
@@ -431,6 +459,19 @@ export function createScene(container: HTMLElement): SceneHandle {
   // `setOpenSettings`. Default is a no-op so an unwired/absent modal never crashes on dispatch.
   let openSettingsHook: () => void = () => {};
 
+  // Networking seams (Task 5.5). The scene does not own the net SESSION (it needs an IndexedDB
+  // handle + a transport — an app-level concern), exactly as it does not own the settings modal.
+  // The app wires these hooks after constructing the session (`setNetHooks`), and the net widget
+  // reads the live readout through `getNet`. Until wired, `hostGame`/`joinGame` are honest no-ops
+  // and `getNet` reports an offline session — never a crash (design Principle 3: the same ids the
+  // menu's Host/Join entries and any keybinding dispatch).
+  let netHooks: NetHooks = {
+    host: () => {},
+    join: () => {},
+    setPendingJoinCode: () => {},
+    getNet: () => ({ phase: 'offline', code: null, seat: null, peerPresent: false, joinError: null }),
+  };
+
   const undoRedoSafe = (fn: () => void): void => {
     try {
       fn();
@@ -475,6 +516,12 @@ export function createScene(container: HTMLElement): SceneHandle {
     // (or if the widget is absent) it is an honest no-op — never a crash (design Principle 3: the
     // menu's "Settings" entry and any keybinding dispatch this identical id).
     { id: 'openSettings', run: () => openSettingsHook() },
+    // Networking (Task 5.5): Host a game / Join by code. The session is an app-level object (needs a
+    // DB + transport), so these commands invoke settable hooks the app wires to the net session.
+    // Both are argument-free like every command; the join code rides via `setPendingJoinCode` (the
+    // widget stashes a validated code before dispatching `joinGame`). Until wired they are no-ops.
+    { id: 'hostGame', run: () => netHooks.host() },
+    { id: 'joinGame', run: () => netHooks.join() },
   ];
   const input: InputHandle = createInput(
     commands,
@@ -645,6 +692,21 @@ export function createScene(container: HTMLElement): SceneHandle {
 
   function setOpenSettings(open: () => void): void {
     openSettingsHook = open;
+  }
+
+  /** Wire the networking hooks (Task 5.5) to the app's net session, after it is constructed. */
+  function setNetHooks(hooks: NetHooks): void {
+    netHooks = hooks;
+  }
+
+  /** The live networking-session readout the net widget renders (offline until a session is wired). */
+  function getNet(): NetSessionState {
+    return netHooks.getNet();
+  }
+
+  /** Stash a validated join code for the next `joinGame` dispatch (the argument seam, Task 5.5). */
+  function setPendingJoinCode(code: string): void {
+    netHooks.setPendingJoinCode(code);
   }
 
   // Scope-stack drivers for UI modals/modes (Task 5.3). The scene owns the `input` stack; the UI
@@ -863,6 +925,9 @@ export function createScene(container: HTMLElement): SceneHandle {
     popScope,
     dispatch,
     setOpenSettings,
+    setNetHooks,
+    getNet,
+    setPendingJoinCode,
     pressKey,
     place,
     pickAt,

@@ -124,6 +124,12 @@ export default {
     // DOM-free — the DOM/config-write + scope-push widget glue (`widgets/settings.ts`) is the
     // Playwright-verified IO boundary, excluded exactly as the menu/banner glue is above.
     'src/ui/widgets/settingsModel.ts',
+    // Pure networking view-model (Task 5.5): the session-state → panel/label/conflict-banner
+    // derivation, and the game-code validation / normalization / generation (each rejecting a
+    // malformed typed code). THREE-free / DOM-free — the DOM/dispatch widget glue (`widgets/net.ts`)
+    // and the SyncEngine+seat session wiring (`net/session.ts`, `net/appSession.ts`) are the
+    // Playwright-verified IO boundary, excluded exactly as the menu/settings glue is above.
+    'src/ui/widgets/netModel.ts',
     '!src/ui/**/*.test.ts',
   ],
   coverageAnalysis: 'perTest',
