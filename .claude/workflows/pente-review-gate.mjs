@@ -84,7 +84,7 @@ const setup = await agent(
     `Tooling may already exist from a prior stage — be IDEMPOTENT and never drop paths already covered:\n` +
     `1. StrykerJS (@stryker-mutator/core + @stryker-mutator/vitest-runner): ensure installed; ensure stryker.config.mjs \`mutate\` includes the MUTATION scope "${MUTATE_SCOPE}" — each entry may be a dir (expand to \`<dir>/**/*.ts\`) or an exact \`.ts\` file — excluding \`*.test.ts\`, keeping existing paths. Do NOT add IO-glue files that are outside "${MUTATE_SCOPE}". Ensure \`thresholds.break = ${MUT_MIN}\` and an npm \`mutate\` script. Run \`npx stryker run\` and paste the score.\n` +
     `2. eslint-plugin-vitest rules (expect-expect, valid-expect, no-disabled-tests, no-focused-tests) active as errors on *.test.ts; \`npm run lint\` exits 0.\n` +
-    `3. vite coverage \`thresholds\` pins every path in the COVERAGE scope "${SCOPE}" (\`<path>/**/*.ts\`) to 100% on statements/branches/functions/lines, keeping existing pins.\n` +
+    `3. vite coverage \`thresholds\`: pin every PURE (THREE-free / DOM-free) file under the COVERAGE scope "${SCOPE}" to 100% on statements/branches/functions/lines, keeping existing pins. Coverage MUST stay aligned with the mutation scope — every mutation-gated file must ALSO be 100% coverage-pinned (fix any drift). Do NOT pin the Three.js/DOM IO-glue files (scene/renderer/InstancedMesh/Raycaster/DOM-touching) — those are the Playwright-verified IO boundary; LIST which files you classified as glue vs pure.\n` +
     `PROVE each gate BITES (${PRINCIPLES} #7): show it exit non-zero on a deliberate regression (raise stryker \`break\` above the current score -> exit 1; inject an uncovered branch into an in-scope file -> \`npm run coverage\` exit 1), then RESTORE to green.\n` +
     `Commit any config changes (message + trailer \`${TRAILER}\`). Do NOT push. Return structured evidence (gatesBiteProven=true only if you actually observed the non-zero exits).`,
   { schema: SETUP_SCHEMA, phase: 'Harden', label: 'harden:gates' }
@@ -105,6 +105,7 @@ while (round < 3) {
       `You are an ADVERSARIAL REVIEWER for Pente3D Stage ${STAGE}, lens: ${L.key}. ${DOCTRINE}\n` +
         `Read ${PRINCIPLES} (esp. the Reviewer Charter) and enforce it rigidly. Your goal is to FIND PROBLEMS, not approve — approving is the lazy path and is forbidden unless the code genuinely holds up.\n` +
         `Read the real implementation AND tests under ${SCOPE}. Focus especially on: ${L.focus}.\n` +
+        `VISUAL VERIFICATION: if the stage produced Playwright screenshot artifacts (e2e/artifacts/*.png), VIEW them (Read the image files) and confirm each shows what its test claims — a passing Playwright test paired with a blank, empty, or visibly-wrong screenshot is a BLOCKER (proof-by-inference, not proof-by-behavior).\n` +
         `Assume the implementer took the minimal-effort path; verify the opposite. Cite exact file:line. If uncertain, FLAG it (do not approve to be safe).\n` +
         `Return {approved, issues[]}. Only set approved=true if you found no blocker/major issues.`,
       { schema: REVIEW_SCHEMA, phase: 'Review', label: `review:${L.key}:r${round + 1}` }
