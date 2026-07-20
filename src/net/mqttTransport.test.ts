@@ -25,6 +25,13 @@ class FakeMqttClient implements MqttClientLike {
     return this;
   }
 
+  /** True once our LIVE (non-retained) presence hello was published on connect. */
+  helloPublished(peerId: string): boolean {
+    return this.published.some(
+      (m) => m.topic.endsWith(`/presence/${peerId}`) && m.opts?.retain === false && m.payload !== '',
+    );
+  }
+
   subscribe(topics: string[], cb?: (err: Error | null) => void): this {
     this.subscribed.push(...topics);
     cb?.(null);
@@ -52,12 +59,18 @@ class FakeMqttClient implements MqttClientLike {
     for (const cb of this.handlers['connect'] ?? []) (cb as () => void)();
   }
 
-  /** Test driver: fire an incoming `message`. */
-  fireMessage(topic: string, payload: string): void {
+  /**
+   * Test driver: fire an incoming `message`. `retained` models the mqtt.js `packet.retain` flag —
+   * a message the broker replayed because it was retained (`true`) vs a live publish seen while
+   * subscribed (`false`, the default). This is load-bearing for issue #5: a retained presence must
+   * not count as a live peer.
+   */
+  fireMessage(topic: string, payload: string, retained = false): void {
     for (const cb of this.handlers['message'] ?? []) {
-      (cb as (t: string, p: Uint8Array) => void)(
+      (cb as (t: string, p: Uint8Array, packet: { retain: boolean }) => void)(
         topic,
         new TextEncoder().encode(payload),
+        { retain: retained },
       );
     }
   }
@@ -144,12 +157,21 @@ describe('MqttTransport.connect', () => {
     t.fake.fireConnect();
     await p;
 
-    const presence = t.fake.published.find((m) =>
-      m.topic.endsWith('/presence/peer-A'),
+    const presence = t.fake.published.find(
+      (m) => m.topic.endsWith('/presence/peer-A') && m.opts?.retain === true,
     );
     expect(presence).toBeDefined();
-    expect(presence!.opts?.retain).toBe(true);
     expect(JSON.parse(presence!.payload)).toEqual({ id: 'peer-A' });
+  });
+
+  it('also publishes a LIVE (non-retained) presence hello on connect (issue #5 handshake)', async () => {
+    // The retained presence is for discovery; the live hello is the FRESH signal a present peer
+    // replies to. Without it, two peers already retained on the broker would each only see the
+    // other's retained snapshot and never confirm liveness.
+    const p = t.transport.connect('room1');
+    t.fake.fireConnect();
+    await p;
+    expect(t.fake.helloPublished('peer-A')).toBe(true);
   });
 
   it('resolves only after the broker `connect` event fires', async () => {
@@ -246,7 +268,7 @@ describe('MqttTransport message routing', () => {
     expect(seen).toEqual([]);
   });
 
-  it('tracks presence: a non-empty presence payload adds the peer', async () => {
+  it('tracks presence: a non-empty LIVE presence payload adds the peer', async () => {
     const t = makeTransport();
     const presence: string[][] = [];
     t.transport.onPresence((p) => presence.push([...p]));
@@ -257,9 +279,100 @@ describe('MqttTransport message routing', () => {
     t.fake.fireMessage(
       'pente/v1/room1/presence/peer-B',
       JSON.stringify({ id: 'peer-B' }),
+      false, // live (non-retained) — a genuinely present peer
     );
 
     expect(presence.at(-1)).toEqual(['peer-B']);
+  });
+
+  it('issue #5: a RETAINED presence does NOT surface a peer as present (phantom guard)', async () => {
+    // The dead-room scenario: a joiner subscribes to a room where peer-B crashed leaving a stale
+    // RETAINED presence. The broker replays it (retain=true). It must NOT be reported as present —
+    // there is no live opponent, only a ghost. (mqtt-level proof of the issue #5 fix.)
+    const t = makeTransport();
+    const presence: string[][] = [];
+    t.transport.onPresence((p) => presence.push([...p]));
+    const pr = t.transport.connect('room1');
+    t.fake.fireConnect();
+    await pr;
+
+    t.fake.fireMessage(
+      'pente/v1/room1/presence/peer-B',
+      JSON.stringify({ id: 'peer-B' }),
+      true, // RETAINED — a stale snapshot from a peer that is gone
+    );
+
+    // No presence callback fired with peer-B present (the live set never changed).
+    expect(presence.every((snap) => !snap.includes('peer-B'))).toBe(true);
+  });
+
+  it('issue #5: a retained snapshot FOLLOWED BY a live announcement DOES surface the peer', async () => {
+    // The same peer that first appeared retained then sends a FRESH live presence (e.g. it really is
+    // online and answers our hello) — now it is a genuine live opponent and must be reported.
+    const t = makeTransport();
+    const presence: string[][] = [];
+    t.transport.onPresence((p) => presence.push([...p]));
+    const pr = t.transport.connect('room1');
+    t.fake.fireConnect();
+    await pr;
+
+    t.fake.fireMessage('pente/v1/room1/presence/peer-B', JSON.stringify({ id: 'peer-B' }), true);
+    expect(presence.every((snap) => !snap.includes('peer-B'))).toBe(true);
+
+    t.fake.fireMessage('pente/v1/room1/presence/peer-B', JSON.stringify({ id: 'peer-B' }), false);
+    expect(presence.at(-1)).toEqual(['peer-B']);
+  });
+
+  it('issue #5: replies to a peer\'s LIVE hello with our own live presence (handshake ack)', async () => {
+    // When a live peer announces itself, we must answer with a fresh live presence so IT learns we
+    // are alive too — completing the handshake both ways. The ack is a non-retained publish on our
+    // own presence topic.
+    const t = makeTransport();
+    const pr = t.transport.connect('room1');
+    t.fake.fireConnect();
+    await pr;
+    const beforeAck = t.fake.published.filter(
+      (m) => m.topic.endsWith('/presence/peer-A') && m.opts?.retain === false,
+    ).length;
+
+    t.fake.fireMessage('pente/v1/room1/presence/peer-B', JSON.stringify({ id: 'peer-B' }), false);
+
+    const afterAck = t.fake.published.filter(
+      (m) => m.topic.endsWith('/presence/peer-A') && m.opts?.retain === false,
+    ).length;
+    expect(afterAck).toBe(beforeAck + 1); // exactly one live ack published in response
+  });
+
+  it('issue #5: does not re-ack a peer that announces live twice (one ack per peer)', async () => {
+    const t = makeTransport();
+    const pr = t.transport.connect('room1');
+    t.fake.fireConnect();
+    await pr;
+
+    t.fake.fireMessage('pente/v1/room1/presence/peer-B', JSON.stringify({ id: 'peer-B' }), false);
+    const afterFirst = t.fake.published.filter(
+      (m) => m.topic.endsWith('/presence/peer-A') && m.opts?.retain === false,
+    ).length;
+    t.fake.fireMessage('pente/v1/room1/presence/peer-B', JSON.stringify({ id: 'peer-B' }), false);
+    const afterSecond = t.fake.published.filter(
+      (m) => m.topic.endsWith('/presence/peer-A') && m.opts?.retain === false,
+    ).length;
+
+    expect(afterSecond).toBe(afterFirst); // no second ack
+  });
+
+  it('issue #5: ignores our OWN presence topic (never self-counts)', async () => {
+    const t = makeTransport('me');
+    const presence: string[][] = [];
+    t.transport.onPresence((p) => presence.push([...p]));
+    const pr = t.transport.connect('room1');
+    t.fake.fireConnect();
+    await pr;
+
+    // The broker echoes our own live presence back on our topic; it must never make US present.
+    t.fake.fireMessage('pente/v1/room1/presence/me', JSON.stringify({ id: 'me' }), false);
+
+    expect(presence.every((snap) => !snap.includes('me'))).toBe(true);
   });
 
   it('tracks presence: an empty presence payload removes the peer (LWT/drop)', async () => {
@@ -270,7 +383,7 @@ describe('MqttTransport message routing', () => {
     t.fake.fireConnect();
     await p;
 
-    t.fake.fireMessage('pente/v1/room1/presence/peer-B', JSON.stringify({ id: 'peer-B' }));
+    t.fake.fireMessage('pente/v1/room1/presence/peer-B', JSON.stringify({ id: 'peer-B' }), false);
     expect(presence.at(-1)).toEqual(['peer-B']);
 
     // peer-B drops -> broker delivers empty retained payload on its presence topic

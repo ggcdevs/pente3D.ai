@@ -34,6 +34,7 @@ import {
   type Transport,
   type TransportMessage,
 } from './transport';
+import { PresenceTracker } from './presence';
 
 /** Options accepted by an mqtt.js `publish` call (the subset we use). */
 export interface MqttPublishOptions {
@@ -66,7 +67,16 @@ export interface MqttConnectOptions {
  */
 export interface MqttClientLike {
   on(event: 'connect', cb: () => void): this;
-  on(event: 'message', cb: (topic: string, payload: Uint8Array) => void): this;
+  /**
+   * The mqtt.js `message` event delivers `(topic, payload, packet)`. The `packet.retain` flag is
+   * LOAD-BEARING for issue #5: a message the broker replayed because it was retained arrives with
+   * `retain === true`, while a live publish seen while subscribed arrives with `retain === false`.
+   * The transport uses that flag to refuse counting a stale retained presence as a live peer.
+   */
+  on(
+    event: 'message',
+    cb: (topic: string, payload: Uint8Array, packet: { retain: boolean }) => void,
+  ): this;
   on(event: 'error', cb: (err: Error) => void): this;
   on(event: string, cb: (...args: never[]) => void): this;
   subscribe(topics: string[], cb?: (err: Error | null) => void): this;
@@ -107,7 +117,15 @@ export class MqttTransport implements Transport {
 
   private client: MqttClientLike | null = null;
   private room: string | null = null;
-  private readonly online = new Set<string>();
+  /**
+   * Presence-liveness evaluator (issue #5). A retained presence snapshot the broker replays is
+   * recorded as a CANDIDATE, never a live peer; only a fresh LIVE presence publish (a genuinely
+   * online peer's own announcement or its reply to our hello) promotes it. This is what stops a dead
+   * room — where a crashed peer left a stale retained presence — showing a phantom opponent.
+   */
+  private readonly presence = new PresenceTracker();
+  /** Peers we have already sent a live hello-ack to this session (dedupes the handshake reply). */
+  private readonly acked = new Set<string>();
 
   private msgCb: MessageHandler = () => {};
   private presenceCb: PresenceHandler = () => {};
@@ -153,17 +171,23 @@ export class MqttTransport implements Transport {
         client.subscribe(
           [this.topic('/events'), this.topic('/state'), this.topic('/presence/+')],
           () => {
-            // Announce ourselves (retained so late joiners see us).
-            client.publish(presenceMine, JSON.stringify({ id: this.peerId }), {
-              retain: true,
-            });
+            // Announce ourselves TWICE, deliberately (issue #5 handshake):
+            //   1. a RETAINED presence so a late joiner discovers we exist (a candidate to ping);
+            //   2. a LIVE (non-retained) hello so an already-present peer sees a FRESH signal from us
+            //      and — per `route` — replies with its own live presence, proving IT is alive too.
+            // The retained publish does not carry liveness on its own (a crashed peer's retained
+            // message looks identical); only the live exchange does. A dead peer never answers the
+            // hello, so it stays a candidate and is never counted as a live opponent.
+            const body = JSON.stringify({ id: this.peerId });
+            client.publish(presenceMine, body, { retain: true });
+            client.publish(presenceMine, body, { retain: false });
             resolve();
           },
         );
       });
 
-      client.on('message', (topic: string, payload: Uint8Array) => {
-        this.route(topic, decode(payload));
+      client.on('message', (topic: string, payload: Uint8Array, packet: { retain: boolean }) => {
+        this.route(topic, decode(payload), packet.retain);
       });
 
       client.on('error', reject);
@@ -171,11 +195,14 @@ export class MqttTransport implements Transport {
   }
 
   /**
-   * Route an inbound message by topic suffix — the pure logic of the adapter:
-   * `/events` → onMessage, `/presence/*` → presence set, everything else
+   * Route an inbound message by topic suffix — the glue of the adapter:
+   * `/events` → onMessage, `/presence/*` → the presence tracker, everything else
    * (including the retained `/state` snapshot) is ignored by this seam.
+   *
+   * @param retained Whether the broker delivered this as a RETAINED message (mqtt.js `packet.retain`).
+   *   Load-bearing for issue #5: a retained presence is a candidate, not a live peer.
    */
-  private route(topic: string, body: string): void {
+  private route(topic: string, body: string, retained: boolean): void {
     if (topic.endsWith('/events')) {
       if (body) this.msgCb(JSON.parse(body) as TransportMessage);
       return;
@@ -184,11 +211,39 @@ export class MqttTransport implements Transport {
     const idx = topic.indexOf(presenceMarker);
     if (idx !== -1) {
       const id = topic.slice(idx + presenceMarker.length);
-      if (body) this.online.add(id);
-      else this.online.delete(id);
-      this.presenceCb([...this.online]);
+      // Our OWN presence (retained or live) is not a peer; ignore it so we never self-count.
+      if (id === this.peerId) return;
+      this.routePresence(id, body, retained);
     }
     // `/state` and any other topic: not part of this seam — ignore.
+  }
+
+  /**
+   * Fold one peer's presence into the tracker and, if the LIVE-peer set changed, notify the caller
+   * with the LIVE peers only (never a mere retained candidate — the issue #5 fix). An empty body is
+   * an absence (graceful clear / Last-Will); a non-empty body is a candidate if retained, or a live
+   * confirmation if fresh. A fresh live signal from a not-yet-acked peer triggers a one-shot live
+   * hello-ack so that peer learns WE are alive too (completing the handshake both ways).
+   */
+  private routePresence(id: string, body: string, retained: boolean): void {
+    const kind = body === '' ? 'absent' : retained ? 'retained' : 'live';
+    if (kind === 'absent') this.acked.delete(id);
+    else if (kind === 'live') this.ackHello(id);
+    const changed = this.presence.apply({ peerId: id, kind });
+    if (changed) this.presenceCb(this.presence.livePeers());
+  }
+
+  /**
+   * Reply to a peer's fresh LIVE presence with our own live presence publish — once per peer per
+   * session — so the peer confirms our liveness in return. Skipped after the first ack (and while
+   * disconnected) so the handshake settles instead of ping-ponging live publishes forever.
+   */
+  private ackHello(id: string): void {
+    if (this.acked.has(id) || this.client === null) return;
+    this.acked.add(id);
+    this.client.publish(this.topic(`/presence/${this.peerId}`), JSON.stringify({ id: this.peerId }), {
+      retain: false,
+    });
   }
 
   publish(msg: TransportMessage): void {

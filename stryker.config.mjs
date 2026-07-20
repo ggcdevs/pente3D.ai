@@ -80,6 +80,11 @@ export default {
     // networked game should prompt for another (winner → yes). Separated from the scene/session IO
     // glue so it is mutation-gated like the other pure net logic.
     'src/net/rematch.ts',
+    // Pure presence-liveness evaluator (Task 6.5, issue #5): folds retained/live/absent presence
+    // signals into the set of peers that are actually live — a RETAINED-only presence never counts,
+    // so a dead room shows no phantom opponent. Separated from the mqtt transport glue so it is
+    // mutation-gated like the other pure net logic.
+    'src/net/presence.ts',
     '!src/net/**/*.test.ts',
     // Pure render resolvers only (THREE-free). The Three.js scene GLUE (`scene.ts`,
     // `lines.ts`) is NOT mutated — it is an IO boundary verified by Playwright (build
