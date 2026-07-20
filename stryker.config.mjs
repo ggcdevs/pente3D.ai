@@ -141,6 +141,13 @@ export default {
     // / DOM-free — the DOM/scope-push widget glue (`widgets/help.ts`) is the Playwright-verified IO
     // boundary, excluded exactly as the menu/settings/slider glue is above.
     'src/ui/widgets/helpModel.ts',
+    // Pure archive-browser view-model (Task 5.8): the archive's `GameListing[]` → newest-first
+    // rows (id / players label / result / conflicted flag / headHash / startedAt) + the
+    // deterministic players-label projection. THREE-free / DOM-free — the DOM/dispatch + IndexedDB
+    // widget glue (`widgets/archive.ts`), the scene's `loadGame` seam, and the app-level
+    // autosave/restore wiring (`main.ts`) are the Playwright-verified IO boundary, excluded exactly
+    // as the menu/net/slider glue is above.
+    'src/ui/widgets/archiveModel.ts',
     '!src/ui/**/*.test.ts',
   ],
   coverageAnalysis: 'perTest',

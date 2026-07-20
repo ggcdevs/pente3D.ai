@@ -243,6 +243,25 @@ export interface SceneHandle {
    */
   setOpenHelp(open: () => void): void;
   /**
+   * Wire the `loadGame` command (Task 5.8) to the mounted archive-browser widget's open(). The
+   * scene does not own the browser (a UI widget reading the IndexedDB archive), so the app registers
+   * the opener here after mounting the UI. Dispatching `loadGame` (menu "Load" entry or keybinding)
+   * then opens the browser.
+   */
+  setOpenArchive(open: () => void): void;
+  /**
+   * Swap a reconstructed `Game` into the scene (Task 5.8): replace the live game, clear any scrub,
+   * and reconcile every state-derived mesh to the loaded head. Used to restore an autosaved game on
+   * boot and to load an archived game chosen in the browser — observable via `getState`/`getHistory`.
+   */
+  loadGame(loaded: Game): void;
+  /**
+   * The live canonical `Game` the scene owns (Task 5.8): the autosave source — the app reads its
+   * event log to persist the current game to the archive. Returned live (not a copy); the app treats
+   * it read-only.
+   */
+  getGame(): Game;
+  /**
    * The LIVE sources the help overlay generates its shortcut list from (Task 5.7): the registered
    * command ids + the current `key→commandId` bindings. The overlay derives its rows from these so
    * it can never drift from what the keys actually do (design Part 6; agent-principles #8).
@@ -532,6 +551,13 @@ export function createScene(container: HTMLElement): SceneHandle {
   // crashes on dispatch (the `?` keybinding is bound in the tracked defaults from ply 0).
   let openHelpHook: () => void = () => {};
 
+  // The archive-browser open hook (Task 5.8): the `loadGame` command invokes this. Like the
+  // settings/help modals, the scene does not own the browser (it is a UI widget that reads the
+  // IndexedDB archive), so the app sets this to the widget's open() via `setOpenArchive`. Default is
+  // a no-op so an unwired/absent browser never crashes on dispatch (the menu's "Load" entry and any
+  // keybinding dispatch this identical id — design Principle 3).
+  let openArchiveHook: () => void = () => {};
+
   // Networking seams (Task 5.5). The scene does not own the net SESSION (it needs an IndexedDB
   // handle + a transport — an app-level concern), exactly as it does not own the settings modal.
   // The app wires these hooks after constructing the session (`setNetHooks`), and the net widget
@@ -596,6 +622,12 @@ export function createScene(container: HTMLElement): SceneHandle {
     // keybinding (tracked default) dispatches this identical id (design Principle 3). Until wired
     // (or if the widget is absent) it is an honest no-op — never a crash.
     { id: 'showHelp', run: () => openHelpHook() },
+    // Open the archive browser (Task 5.8). The browser is a UI widget the scene does not own (it
+    // reads the IndexedDB archive), so the command invokes a settable hook the app wires to the
+    // mounted widget's open(). The menu's "Load" entry (commandId `loadGame`) and any keybinding
+    // dispatch this identical id (design Principle 3). Until wired (or if the widget is absent) it
+    // is an honest no-op — never a crash.
+    { id: 'loadGame', run: () => openArchiveHook() },
     // Networking (Task 5.5): Host a game / Join by code. The session is an app-level object (needs a
     // DB + transport), so these commands invoke settable hooks the app wires to the net session.
     // Both are argument-free like every command; the join code rides via `setPendingJoinCode` (the
@@ -800,6 +832,29 @@ export function createScene(container: HTMLElement): SceneHandle {
   /** Wire the `showHelp` command (Task 5.7) to the mounted help-overlay widget's open(). */
   function setOpenHelp(open: () => void): void {
     openHelpHook = open;
+  }
+
+  /** Wire the `loadGame` command (Task 5.8) to the mounted archive-browser widget's open(). */
+  function setOpenArchive(open: () => void): void {
+    openArchiveHook = open;
+  }
+
+  /**
+   * Swap a reconstructed game into the scene (Task 5.8 restore/load). Replaces the live `Game` with
+   * `loaded` (e.g. an autosaved game restored on boot, or an archived game chosen in the browser),
+   * clears any history scrub, and reconciles every state-derived mesh set to the loaded head — so
+   * the board immediately reflects the restored game (observable via `getState`/`getHistory`). The
+   * loaded game keeps its full event log, so undo/redo and the history slider work on it unchanged.
+   */
+  function loadGame(loaded: Game): void {
+    game = loaded;
+    // A load is a live state change: clear any scrub and reflect the loaded head.
+    commitLive();
+  }
+
+  /** The live canonical `Game` the scene owns (Task 5.8 autosave source — the app persists its log). */
+  function getGame(): Game {
+    return game;
   }
 
   /**
@@ -1049,6 +1104,9 @@ export function createScene(container: HTMLElement): SceneHandle {
     dispatch,
     setOpenSettings,
     setOpenHelp,
+    setOpenArchive,
+    loadGame,
+    getGame,
     getHelpSources,
     setNetHooks,
     getNet,

@@ -99,6 +99,20 @@ const UI_STYLESHEET = `
 .pente-history-range { width: 240px; cursor: pointer; }
 .pente-history-range:disabled { cursor: default; opacity: 0.45; }
 .pente-history-label { min-width: 72px; text-align: center; font-variant-numeric: tabular-nums; }
+.pente-archive-modal[hidden] { display: none; }
+.pente-archive-modal { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.45); pointer-events: auto; z-index: 30; }
+.pente-archive-panel { position: relative; display: flex; flex-direction: column; gap: 6px; min-width: 360px; max-height: 80vh; overflow-y: auto; padding: 24px; border-radius: 10px; background: #1a1a20; color: #e6e6ea; font-family: system-ui, sans-serif; box-shadow: 0 8px 32px rgba(0,0,0,0.5); }
+.pente-archive-title { font-size: 18px; font-weight: 600; margin-bottom: 8px; }
+.pente-archive-close { position: absolute; top: 16px; right: 16px; cursor: pointer; border: none; background: transparent; color: #e6e6ea; font-size: 16px; line-height: 1; }
+.pente-archive-body { display: flex; flex-direction: column; gap: 6px; }
+.pente-archive-empty[hidden] { display: none; }
+.pente-archive-empty { opacity: 0.7; font-size: 14px; padding: 8px 0; }
+.pente-archive-row { display: flex; flex-direction: column; gap: 2px; text-align: left; cursor: pointer; padding: 10px 12px; border-radius: 6px; border: none; background: rgba(255,255,255,0.06); color: #e6e6ea; font-size: 14px; }
+.pente-archive-row:hover { background: rgba(255,255,255,0.14); }
+.pente-archive-row[data-conflicted="true"] { background: rgba(255,80,80,0.16); }
+.pente-archive-row[data-conflicted="true"]:hover { background: rgba(255,80,80,0.26); }
+.pente-archive-players { font-weight: 600; }
+.pente-archive-meta { font-size: 12px; opacity: 0.8; }
 `;
 
 /** Install the overlay stylesheet once per document (idempotent, keyed by {@link UI_STYLE_ID}). */

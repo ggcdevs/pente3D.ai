@@ -56,6 +56,12 @@ export default defineConfig({
         // 5.7 Playwright spec, not unit coverage. The PURE `helpModel.ts` is pinned to the 100%
         // floor below (and in the mutation scope). Excluded file-by-file so helpModel stays measured.
         'src/ui/widgets/help.ts',
+        // Task 5.8 archive-browser widget: the modal DOM glue that reads the archive over IndexedDB
+        // (`persist/archive.ts`) and dispatches a review/load. Touches the DOM + IndexedDB — verified
+        // by the Task 5.8 Playwright spec, not unit coverage. The PURE `archiveModel.ts` is pinned to
+        // the 100% floor below (and in the mutation scope). Excluded file-by-file so archiveModel
+        // stays measured.
+        'src/ui/widgets/archive.ts',
       ],
       // MACHINE-ENFORCED GATE (not documentation): the pure rules engine AND the
       // in-scope config/persist layers are held to a hard 100% floor
@@ -266,6 +272,18 @@ export default defineConfig({
         // verified IO boundary, excluded above. In the mutation scope and held to the hard 100%
         // floor. Do not weaken (agent-principles #6).
         'src/ui/widgets/helpModel.ts': {
+          statements: 100,
+          branches: 100,
+          functions: 100,
+          lines: 100,
+        },
+        // Pure archive-browser view-model (Task 5.8): the archive's listings → newest-first rows
+        // (id / players label / result / conflicted flag / headHash / startedAt) + the deterministic
+        // players-label projection. THREE-free / DOM-free — the modal DOM/dispatch + IndexedDB widget
+        // glue (`widgets/archive.ts`), the scene's `loadGame` seam, and the app autosave/restore
+        // wiring (`main.ts`) are the Playwright-verified IO boundary, excluded above. In the mutation
+        // scope and held to the hard 100% floor. Do not weaken (agent-principles #6).
+        'src/ui/widgets/archiveModel.ts': {
           statements: 100,
           branches: 100,
           functions: 100,

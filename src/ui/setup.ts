@@ -37,6 +37,8 @@ import {
 import type { HistoryFacts } from './widgets/sliderModel.ts';
 import { helpWidget, HELP_WIDGET_ID, type HelpScope } from './widgets/help.ts';
 import type { HelpSources } from './widgets/helpModel.ts';
+import { archiveWidget, ARCHIVE_WIDGET_ID, type ArchiveScope } from './widgets/archive.ts';
+import type { ArchiveListing } from './widgets/archiveModel.ts';
 import type { LayoutConfig } from './layout.ts';
 
 /**
@@ -51,7 +53,7 @@ export interface UiDeps {
    * scope) enters by pushing its scope onto the scene's stack. Supplied by the app (the scene
    * handle) so the UI shell never imports the input module.
    */
-  pushScope(scope: MenuScope | SettingsScope | HelpScope): void;
+  pushScope(scope: MenuScope | SettingsScope | HelpScope | ArchiveScope): void;
   /** Pop the topmost input scope (Task 5.3) — a modal/mode leaves by popping its scope. */
   popScope(): void;
   /**
@@ -66,6 +68,24 @@ export interface UiDeps {
    * (or any UI trigger) opens the overlay (design Principle 3, one action layer).
    */
   registerOpenHelp(open: () => void): void;
+  /**
+   * Register the archive-browser opener (Task 5.8). The archive widget hands its `open()` here at
+   * mount; the app wires it to the scene's `loadGame` command (`scene.setOpenArchive`) so the menu's
+   * "Load" entry / a keybinding opens the browser (design Principle 3, one action layer).
+   */
+  registerOpenArchive(open: () => void): void;
+  /**
+   * List every archived game as `{ id, meta }` (no logs) for the archive browser (Task 5.8) — the
+   * app's `listArchivedGames` over IndexedDB. Supplied by the app so the UI shell never opens the
+   * DB itself; the pure model sorts them newest-first.
+   */
+  listArchive(): Promise<readonly ArchiveListing[]>;
+  /**
+   * Reconstruct the archived game `id` and swap it into the scene for review (Task 5.8) — the app's
+   * archive→scene load path (fold the stored log into a `Game`, then `scene.loadGame`). Supplied by
+   * the app so the UI shell never imports `src/persist` / `src/render`.
+   */
+  loadArchived(id: string): Promise<void>;
   /**
    * The LIVE sources the help overlay generates its shortcut list from (Task 5.7) — the scene's
    * `getHelpSources` (registered command ids + current bindings). Supplied by the app so the UI
@@ -134,6 +154,7 @@ export function defaultWidgetFactories(layout: LayoutConfig): WidgetFactory[] {
     if (id === NET_WIDGET_ID) return netWidget();
     if (id === HISTORY_SLIDER_WIDGET_ID) return historySliderWidget();
     if (id === HELP_WIDGET_ID) return helpWidget();
+    if (id === ARCHIVE_WIDGET_ID) return archiveWidget();
     return placeholderWidget(id);
   });
 }
@@ -160,6 +181,9 @@ export function createUi(container: HTMLElement, deps: UiDeps): UiHandle {
       popScope: deps.popScope,
       registerOpener: deps.registerOpener,
       registerOpenHelp: deps.registerOpenHelp,
+      registerOpenArchive: deps.registerOpenArchive,
+      listArchive: deps.listArchive,
+      loadArchived: deps.loadArchived,
       getHelpSources: deps.getHelpSources,
       applyColors: deps.applyColors,
       getNet: deps.getNet,

@@ -22,6 +22,7 @@ import type { LayoutReadout } from '../ui/container.ts';
 import type { BannerContext } from '../ui/widgets/banner.ts';
 import type { NetSessionState } from '../ui/widgets/netModel.ts';
 import type { HelpSources } from '../ui/widgets/helpModel.ts';
+import type { ArchiveListing } from '../ui/widgets/archiveModel.ts';
 import { createLogger } from './log.ts';
 
 const log = createLogger('debug:window');
@@ -146,6 +147,19 @@ export interface PenteInspect {
    * line — agent-principles #3 / #8).
    */
   getHelpSources(): HelpSources | null;
+  /**
+   * The archived games (Task 5.8): `{ id, meta }` listings read live from the IndexedDB archive
+   * (no event logs). Lets Playwright prove the current game was actually AUTOSAVED (a record with
+   * the live headHash exists) and that the archive browser's data source is the real archive —
+   * observable behavior, not a log line (agent-principles #3). Async because reading IndexedDB is.
+   */
+  getArchive(): Promise<readonly ArchiveListing[]>;
+}
+
+/** The app-level archive readouts wired into the inspect API (Task 5.8; the DB lives in `main.ts`). */
+export interface ArchiveInspect {
+  /** List every archived game as `{ id, meta }` (no logs) — the browser's live data source. */
+  listArchive(): Promise<readonly ArchiveListing[]>;
 }
 
 declare global {
@@ -155,7 +169,11 @@ declare global {
 }
 
 /** Install `window.__pente`, wired to the live scene + UI handles. Dev/test builds only. */
-export function installInspectApi(scene: SceneHandle, ui: UiHandle): PenteInspect {
+export function installInspectApi(
+  scene: SceneHandle,
+  ui: UiHandle,
+  archive: ArchiveInspect,
+): PenteInspect {
   const api: PenteInspect = {
     getCamera: () => scene.getCamera(),
     getLighting: () => scene.getLighting(),
@@ -182,6 +200,7 @@ export function installInspectApi(scene: SceneHandle, ui: UiHandle): PenteInspec
     getLayout: () => ui.getLayout(),
     getNet: () => scene.getNet(),
     getHelpSources: () => scene.getHelpSources(),
+    getArchive: () => archive.listArchive(),
   };
   window.__pente = api;
   log.info('window.__pente installed', Object.keys(api));
