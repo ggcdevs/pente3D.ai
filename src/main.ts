@@ -13,6 +13,13 @@ import {
   listArchivedGames,
   type ArchivedMeta,
 } from './persist/archive.ts';
+import {
+  initialLifecycle,
+  nextLifecycle,
+  observeLifecycle,
+  type LifecycleState,
+} from './persist/gameLifecycle.ts';
+import type { Game } from './core/game.ts';
 import type { ArchiveListing } from './ui/widgets/archiveModel.ts';
 
 const log = createLogger('app:boot');
@@ -31,10 +38,12 @@ const scene = createScene(container);
 // browser (a UI widget) reviews + loads any past or conflicted game. All three are IO glue verified
 // by the Task 5.8 Playwright spec (asserting on window.__pente getState/getHistory), not unit-gated.
 
-/** The localStorage key holding the current local game's stable archive id (restored on boot). */
+/** The localStorage key holding the CURRENT game's autosave id (restored on boot; re-minted per game). */
 const AUTOSAVE_ID_KEY = 'pente:autosave:id';
 
-/** Resolve (creating on first run) the stable archive id the current local game autosaves under. */
+/** Resolve (creating on first run) the archive id the CURRENT game autosaves under. Re-minted at each
+ *  game boundary (Task 6.3) so past games accumulate; the current id is persisted so a refresh resumes
+ *  the same in-progress game rather than the last-finalized one. */
 function resolveAutosaveId(): string {
   const existing = window.localStorage.getItem(AUTOSAVE_ID_KEY);
   if (existing !== null && existing.length > 0) return existing;
@@ -43,13 +52,54 @@ function resolveAutosaveId(): string {
   return id;
 }
 
-const autosaveId = resolveAutosaveId();
+// --- Archive ACCUMULATION (Task 6.3, issue #4) --------------------------------------------------
+// Stage 5 autosaved under ONE stable id, so every new game OVERWROTE the previous record and the
+// archive could only ever hold the current game. Now a fresh id is minted at each GAME BOUNDARY —
+// game-over, reset, or host/join-onto-a-played-board — and the just-ended game is finalized under its
+// own id, so EVERY game (finished OR abandoned, local OR networked) is kept as its own archive record.
+// The DECISION (is this a boundary?) is the PURE `gameLifecycle` module (strict unit+mutation); this
+// glue only reads the plain facts, mints ids, and writes to the archive.
 
-// A single startedAt for the life of this local game so successive autosaves overwrite ONE record
-// (the archive keys by id; overwriting keeps the archive current as the game grows — archive.ts).
-const autosaveStartedAt = Date.now();
+/** The id the CURRENT game autosaves under. Re-minted (and persisted) at each boundary. */
+let autosaveId = resolveAutosaveId();
 
-/** The metadata attached to the autosaved local game (single-player defaults; startedAt is stable). */
+/** The `startedAt` of the current game's record — reset when a fresh game boundary mints a new id. */
+let autosaveStartedAt = Date.now();
+
+// Generation token the pure boundary detector reads to learn "this is a DIFFERENT game" without
+// diffing logs (`gameLifecycle` design). Bumped whenever the AUTHORITATIVE game's object identity
+// changes — a scene reset/load swaps `scene.getGame()`, and a networked session brings its own game.
+// Object identity is the honest, DRY signal (the scene/session already own the swap); we do not
+// duplicate their reset/load/net-start logic here.
+let generation = 0;
+let lastGame: Game | null = null;
+
+/** The lifecycle-tracking cursor threaded through the pure boundary decision (never mutated in place). */
+let lifecycle: LifecycleState = initialLifecycle();
+
+// The networked session's authoritative game, set once the net session wires up (below). Until then
+// (offline / pre-wiring) there is no net game and the scene's local game is authoritative — the same
+// honest-until-wired pattern the net hooks use. Returns the SESSION engine's live `Game` when a net
+// game is authoritative, else null.
+let netAuthoritativeGame: () => Game | null = () => null;
+
+/** The authoritative game to archive: the networked SESSION's game when a net game is live, else the
+ *  scene's local game. Both expose the same `Game` shape (log + ply + state) the archive persists. */
+function authoritativeGame(): Game {
+  return netAuthoritativeGame() ?? scene.getGame();
+}
+
+/** The current authoritative game's generation, bumped when its object identity changes (a new game). */
+function currentGeneration(): number {
+  const g = authoritativeGame();
+  if (g !== lastGame) {
+    generation += 1;
+    lastGame = g;
+  }
+  return generation;
+}
+
+/** The metadata attached to the current game's record (single-player defaults; result reflects a win). */
 function autosaveMeta(): ArchivedMeta {
   const winner = scene.getState().winner;
   return {
@@ -64,29 +114,66 @@ function autosaveMeta(): ArchivedMeta {
 // pattern the net session uses). Restore folds any autosaved log back into a Game on boot.
 let archiveDb: IDBDatabase | null = null;
 
+/**
+ * Autosave the authoritative game so past games ACCUMULATE (Task 6.3, issue #4). Each call asks the
+ * PURE `nextLifecycle` — from the game's generation (bumped when a new `Game` is swapped in) + ply +
+ * winner — for two independent actions, then does exactly the matching archive write:
+ *   - `mintFresh` (a NEW game began over a played one — reset / load / net-start): the game just left
+ *     is ALREADY durable under the current id (every in-game autosave kept it current), so we MINT a
+ *     fresh id + `startedAt` (persisted) and save the new game under it — the old record stays intact.
+ *     This is the accumulation point: one archive id per real game.
+ *   - `finalizeCurrent` (the game reached a WINNER): save its terminal state under the CURRENT id.
+ *     No mint — the fresh id is minted only when the NEXT game actually begins, so a won game is not
+ *     prematurely stamped under a new id and duplicated.
+ * A plain in-game move is neither: it just overwrites the current id, keeping the live game current.
+ * The current id is persisted so a refresh resumes THIS in-progress game (not the last-finalized one).
+ * A write error surfaces honestly (never swallowed as a silent success).
+ */
+async function autosaveTick(): Promise<void> {
+  if (archiveDb === null) return;
+  const generation = currentGeneration();
+  const game = authoritativeGame();
+  const decision = nextLifecycle(lifecycle, observeLifecycle(generation, game.ply(), game.state()));
+  lifecycle = decision.next;
+  if (decision.mintFresh) {
+    // A new game began: the game just left is already durable under the OLD id, so mint a fresh id
+    // for the new game (the old record is left untouched — that is how past games accumulate).
+    autosaveId = crypto.randomUUID();
+    autosaveStartedAt = Date.now();
+    window.localStorage.setItem(AUTOSAVE_ID_KEY, autosaveId);
+    log.info('new game — minted fresh archive id', { id: autosaveId, generation });
+  }
+  if (decision.finalizeCurrent) {
+    log.info('game won — finalizing archive record', { id: autosaveId, ply: game.ply() });
+  }
+  // Save the live game under the current id (the freshly-minted one on a mint, the same one otherwise;
+  // on a finalize this captures the won game's terminal state under its own id).
+  await saveGame(archiveDb, autosaveId, game, autosaveMeta());
+}
+
 void openDatabase(resolveDbName())
   .then(async (db) => {
     archiveDb = db;
-    // RESTORE ON LOAD: if a game was autosaved under our id, reconstruct it (fold its event log)
-    // and swap it into the scene, so a refresh resumes exactly where the player left off. A corrupt
-    // stored log surfaces honestly via the catch below (never a silently-broken board).
+    // RESTORE ON LOAD: if the current game was autosaved under our (persisted) id, reconstruct it
+    // (fold its event log) and swap it into the scene, so a refresh resumes exactly where the player
+    // left off — the IN-PROGRESS game, since a finalized game re-minted the id before the refresh. A
+    // corrupt stored log surfaces honestly via the catch below (never a silently-broken board).
     const restored = await loadArchivedGame(db, autosaveId);
     if (restored !== undefined) {
       scene.loadGame(restored);
       refreshUi();
       log.info('autosaved game restored', { id: autosaveId, ply: restored.ply() });
     }
-    // AUTOSAVE: persist the current game on every state change (place/undo/redo/reset/load). The
-    // archive keys by id, so each save overwrites the one record, keeping it current. A write error
-    // is surfaced honestly (never swallowed as a silent success).
+    // Seed the lifecycle cursor from the game now live (after any restore), so the first tick observes
+    // the SAME generation and does not spuriously treat a restored game as a boundary.
+    lastGame = authoritativeGame();
+    lifecycle = { generation, ply: authoritativeGame().ply(), finalized: false };
+    // AUTOSAVE + boundary detection on every state change (place/undo/redo/reset/load/net-adopt).
     scene.onStateChange(() => {
-      if (archiveDb === null) return;
-      void saveGame(archiveDb, autosaveId, scene.getGame(), autosaveMeta()).catch((err: unknown) => {
-        log.error('autosave failed', err);
-      });
+      void autosaveTick().catch((err: unknown) => log.error('autosave failed', err));
     });
     // Persist the initial state immediately so a fresh game is browsable even before the first move.
-    await saveGame(db, autosaveId, scene.getGame(), autosaveMeta());
+    await saveGame(db, autosaveId, authoritativeGame(), autosaveMeta());
     log.info('autosave wired', { id: autosaveId });
   })
   .catch((err: unknown) => {
@@ -188,6 +275,17 @@ void createAppNetSession(scene.getState().size)
         return engine === null ? null : headHash(engine.game().log);
       },
     });
+    // Archive ACCUMULATION for NETWORKED games (Task 6.3): the authoritative game to persist while a
+    // net game is live is the SESSION engine's game — its own `Game` object, distinct from the scene's
+    // local one. Exposing it here lets the autosave bump its generation (a fresh net game is a new game
+    // identity) so starting a networked game onto a played local board finalizes that local game and
+    // mints a fresh record for the networked one. Same authoritative condition as `netGameState`, so
+    // the archived game and the rendered game can never drift.
+    netAuthoritativeGame = () => {
+      if (!shouldRenderSessionGame(session.state())) return null;
+      const engine = session.syncEngine();
+      return engine === null ? null : engine.game();
+    };
     // On EVERY session-state change — a local move, a REMOTE move adopted by the transport pump
     // (the resync link), presence, or a conflict — adopt the session's authoritative game into the
     // scene (re-rendering a remote move) and repaint the widgets. This is the render half of "ONE
