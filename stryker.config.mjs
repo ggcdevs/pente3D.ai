@@ -34,7 +34,12 @@
  *     `undefined`;
  *   - sync.ts: error-MESSAGE string literals (the `SyncError` TYPE and its occurrence
  *     ARE asserted; only the human-readable message text is not) and the `case 'ignore'`
- *     no-op arm. Kill genuine (non-equivalent) survivors with real tests; never suppress.
+ *     no-op arm;
+ *   - winLineLayout.ts: the empty `drawn` array passed to `generatePartialLine` (`[]` →
+ *     `["Stryker was here"]`). The win line is never pre-registered, so any `drawn` list
+ *     lacking the segment's canonical id yields identical behavior — an equivalent mutant
+ *     (killing it would require asserting on a contrived id-collision, not real behavior).
+ *     Kill genuine (non-equivalent) survivors with real tests; never suppress.
  *
  * Gate-rejection is re-proven on every review-gate run (agent-principles #7): temporarily
  * raising `break` above the current score makes `npm run mutate` exit non-zero.
@@ -64,6 +69,7 @@ export default {
     'src/render/sceneConfig.ts',
     'src/render/linesLayout.ts',
     'src/render/piecesDiff.ts',
+    'src/render/winLineLayout.ts',
     'src/render/cameraPresets.ts',
     // Pure hover-target computation (Task 4.7): the game-core Part 4 hover rules resolved
     // from a raycast hit + state + line index. THREE-free / DOM-free. The Three.js

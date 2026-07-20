@@ -5,6 +5,7 @@ import { getConfig } from '../config/config.ts';
 import { resolveSceneConfig, type ResolvedSceneConfig, type Vec3 } from './sceneConfig.ts';
 import { createLines, type LinesHandle, type LineGroupReadout } from './lines.ts';
 import { createPieces, type PiecesHandle, type PieceReadout } from './pieces.ts';
+import { createWinLine, type WinLineHandle, type WinLineReadout } from './winLine.ts';
 import { resolveCameraPreset, type ControlsConfig } from './cameraPresets.ts';
 import { applyCameraPreset, type CameraPresetReadout } from './cameraControls.ts';
 import { createInput, type InputHandle, type InputReadout } from '../input/setup.ts';
@@ -96,6 +97,8 @@ export interface SceneHandle {
   getState(): GameState;
   /** Plain-number readout of every live piece mesh (node/owner/position/opacity). */
   getPieces(): PieceReadout[];
+  /** The winning-line mesh readout (visible/nodes/segmentCount/color) — for Task 4.9. */
+  getWinLine(): WinLineReadout;
   /** The camera preset actually applied to the controls (name/buttons/limits/speeds). */
   getCameraPreset(): CameraPresetReadout;
   /** The active scope stack + registered command ids (for input assertions). */
@@ -198,7 +201,21 @@ export function createScene(container: HTMLElement): SceneHandle {
   const game = new Game(BOARD_SIZE);
   const pieces: PiecesHandle = createPieces(BOARD_SIZE);
   scene.add(pieces.object);
-  pieces.sync(game.state());
+
+  // Winning-line mesh (Task 4.9): an individual, partial line drawn on a five-in-a-row
+  // win (render-ui design Part 1). The endpoint/segment layout is the PURE `resolveWinLine`
+  // (`winLineLayout.ts`, strict unit+mutation); this handle is the IO glue that reflects
+  // `state.winningLine` into a single InstancedMesh. Kept in lockstep with the pieces via
+  // `syncBoard`, so every state change (place/undo/redo) updates both.
+  const winLine: WinLineHandle = createWinLine(BOARD_SIZE);
+  scene.add(winLine.object);
+
+  /** Reconcile every state-derived mesh set (pieces + win line) to one `GameState`. */
+  function syncBoard(state: GameState): void {
+    pieces.sync(state);
+    winLine.sync(state);
+  }
+  syncBoard(game.state());
 
   // Picking + hover (Task 4.7): an invisible node pick-sphere layer (IO) resolves a pointer
   // ray to a RaycastHit; the PURE `computeHoverTarget` turns that hit + live state + the
@@ -298,7 +315,7 @@ export function createScene(container: HTMLElement): SceneHandle {
       // Nothing to undo/redo — a no-op for the hotkey (the button UI reflects availability).
       return;
     }
-    pieces.sync(game.state());
+    syncBoard(game.state());
   };
   const commands: Command[] = [
     { id: 'undo', run: () => undoRedoSafe(() => game.undo()) },
@@ -403,6 +420,10 @@ export function createScene(container: HTMLElement): SceneHandle {
     return pieces.getPieces();
   }
 
+  function getWinLine(): WinLineReadout {
+    return winLine.getWinLine();
+  }
+
   function getCameraPreset(): CameraPresetReadout {
     return presetReadout;
   }
@@ -422,7 +443,7 @@ export function createScene(container: HTMLElement): SceneHandle {
   function place(coords: Coord): GameState {
     // `game.place` throws IllegalMove on an illegal move; let it propagate honestly.
     game.place(coords);
-    pieces.sync(game.state());
+    syncBoard(game.state());
     return game.state();
   }
 
@@ -547,6 +568,7 @@ export function createScene(container: HTMLElement): SceneHandle {
     renderer.dispose();
     lines.dispose();
     pieces.dispose();
+    winLine.dispose();
     picking.dispose();
     tempMesh.geometry.dispose();
     tempMaterial.dispose();
@@ -572,6 +594,7 @@ export function createScene(container: HTMLElement): SceneHandle {
     getVisibleLines,
     getState,
     getPieces,
+    getWinLine,
     getCameraPreset,
     getInput,
     dispatch,

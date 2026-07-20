@@ -7,6 +7,7 @@ import type {
 } from '../render/scene.ts';
 import type { LineGroupReadout } from '../render/lines.ts';
 import type { PieceReadout } from '../render/pieces.ts';
+import type { WinLineReadout } from '../render/winLine.ts';
 import type { CameraPresetReadout } from '../render/cameraControls.ts';
 import type { InputReadout } from '../input/setup.ts';
 import type { KeyResolution } from '../input/scopes.ts';
@@ -37,6 +38,13 @@ export interface PenteInspect {
   getState(): GameState | null;
   /** Plain-number readout of every live piece mesh (node/owner/position/opacity). */
   getPieces(): PieceReadout[] | null;
+  /**
+   * The winning-line mesh readout (Task 4.9): `visible`, the drawn run's `nodes`, the
+   * `segmentCount`, and the config-derived `color`. Lets Playwright prove that on a forced
+   * five-in-a-row win the partial line mesh is actually drawn along the winning run
+   * (observable behavior, not a log line — agent-principles #3).
+   */
+  getWinLine(): WinLineReadout | null;
   /**
    * Place the current player's piece at `coords`, reconcile the meshes, and return the
    * new state. Throws `IllegalMove` on an illegal move (propagated so tests observe it).
@@ -94,6 +102,7 @@ export function installInspectApi(scene: SceneHandle): PenteInspect {
     getVisibleLines: () => scene.getVisibleLines(),
     getState: () => scene.getState(),
     getPieces: () => scene.getPieces(),
+    getWinLine: () => scene.getWinLine(),
     place: (coords: Coord) => scene.place(coords),
     getCameraPreset: () => scene.getCameraPreset(),
     getInput: () => scene.getInput(),

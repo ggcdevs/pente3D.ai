@@ -8,5 +8,7 @@
     "metalness": 0
   },
   "emissiveBoost": 0.6,
-  "pieceFadeMs": 180
+  "pieceFadeMs": 180,
+  "winLineThickness": 3,
+  "winLineOpacity": 0.9
 }
