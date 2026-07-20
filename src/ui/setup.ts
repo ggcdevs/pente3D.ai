@@ -20,7 +20,17 @@ import { getConfig } from '../config/config.ts';
 import { createWidgetRegistry, type WidgetFactory } from './registry.ts';
 import { createUiContainer, type LayoutReadout, type UiContainerHandle } from './container.ts';
 import { placeholderWidget } from './widgets/placeholder.ts';
+import { bannerWidget, BANNER_WIDGET_ID } from './widgets/banner.ts';
 import type { LayoutConfig } from './layout.ts';
+
+/**
+ * The command-dispatch surface widgets need — the SAME registry keybindings use (design
+ * Principle 3). Supplied by the app (the scene handle) so the UI shell never imports render.
+ */
+export interface UiDeps {
+  /** Dispatch a command id (e.g. `'undo'`). Returns whether a command ran. */
+  dispatch(commandId: string): boolean;
+}
 
 /** The live UI handle exposed to the app + tests: the container plus its layout readout. */
 export interface UiHandle {
@@ -31,13 +41,17 @@ export interface UiHandle {
 }
 
 /**
- * The Task 5.1 widget roster: a placeholder factory for every widget id the tracked `layout`
- * default names. Derived FROM the config (not a hardcoded id list) so the roster and the layout
- * can never drift, and a future config-only widget add is picked up automatically (agent-
- * principles #8: no duplicated volatile facts).
+ * The widget roster: the REAL factory for each widget id that has been built (Task 5.2: the
+ * score/status banner for `statusBanner`), and a placeholder for every other id the tracked
+ * `layout` default still names (menu/settings/net/history land in 5.3+). Derived FROM the config
+ * (not a hardcoded id list) so the roster and the layout can never drift, and a future
+ * config-only widget add is picked up automatically (agent-principles #8: no duplicated volatile
+ * facts). As each real widget lands it replaces its placeholder here; the framework is unchanged.
  */
 export function defaultWidgetFactories(layout: LayoutConfig): WidgetFactory[] {
-  return Object.keys(layout.widgets).map((id) => placeholderWidget(id));
+  return Object.keys(layout.widgets).map((id) =>
+    id === BANNER_WIDGET_ID ? bannerWidget() : placeholderWidget(id),
+  );
 }
 
 /**
@@ -45,11 +59,19 @@ export function defaultWidgetFactories(layout: LayoutConfig): WidgetFactory[] {
  * from the default roster, resolves the zones, and mounts the widgets. Returns the {@link UiHandle}.
  *
  * @param container The app container the overlay is appended to (over the canvas).
+ * @param deps      The command-dispatch surface widgets dispatch through (the scene's registry —
+ *   the SAME path a keybinding uses, design Principle 3). Carried into every widget's `mount`
+ *   alongside the document.
  */
-export function createUi(container: HTMLElement): UiHandle {
+export function createUi(container: HTMLElement, deps: UiDeps): UiHandle {
   const layout = getConfig('layout') as unknown as LayoutConfig;
   const registry = createWidgetRegistry(defaultWidgetFactories(layout));
-  const ui = createUiContainer(registry, layout, { doc: document }, document);
+  const ui = createUiContainer(
+    registry,
+    layout,
+    { doc: document, dispatch: deps.dispatch },
+    document,
+  );
   container.appendChild(ui.root);
   return {
     container: ui,

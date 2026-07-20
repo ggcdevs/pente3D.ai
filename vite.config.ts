@@ -28,12 +28,15 @@ export default defineConfig({
         'src/main.ts',
         'src/render/scene.ts',
         'src/debug/window.ts',
-        // `src/ui` DOM glue (Task 5.1): the container that mounts widgets into zones, the shell
-        // wiring, and the placeholder widget all touch the DOM — verified by Playwright, not unit
-        // coverage. The PURE `layout.ts` + `registry.ts` are pinned to the 100% floor below.
+        // `src/ui` DOM glue (Task 5.1+): the container that mounts widgets into zones, the shell
+        // wiring, and the DOM widgets all touch the DOM — verified by Playwright, not unit
+        // coverage. The PURE `layout.ts` + `registry.ts` + `widgets/bannerModel.ts` are pinned to
+        // the 100% floor below. The DOM widgets are excluded file-by-file (NOT the whole
+        // `widgets/**` dir) so the pure `bannerModel.ts` stays measured.
         'src/ui/container.ts',
         'src/ui/setup.ts',
-        'src/ui/widgets/**',
+        'src/ui/widgets/placeholder.ts',
+        'src/ui/widgets/banner.ts',
       ],
       // MACHINE-ENFORCED GATE (not documentation): the pure rules engine AND the
       // in-scope config/persist layers are held to a hard 100% floor
@@ -180,6 +183,16 @@ export default defineConfig({
           lines: 100,
         },
         'src/ui/registry.ts': {
+          statements: 100,
+          branches: 100,
+          functions: 100,
+          lines: 100,
+        },
+        // Pure score/status banner view-model (Task 5.2): state + history → the serializable
+        // banner model (status/captures/ordered Undo-Redo-Reset buttons + enabled). THREE-free /
+        // DOM-free — the DOM/dispatch widget glue (`widgets/banner.ts`) is Playwright-verified and
+        // excluded above. In the mutation scope and held to the hard 100% floor. Do not weaken.
+        'src/ui/widgets/bannerModel.ts': {
           statements: 100,
           branches: 100,
           functions: 100,

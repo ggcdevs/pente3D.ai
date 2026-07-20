@@ -90,6 +90,23 @@ export class Game {
   }
 
   /**
+   * Whether an {@link undo} is possible right now — i.e. the cursor is off ply 0, so a committed
+   * placement exists to undo. Lets a UI reflect availability without catching the thrown
+   * `IllegalMove` from a probe undo (banner Undo button, Task 5.2).
+   */
+  canUndo(): boolean {
+    return this._cursor > 0;
+  }
+
+  /**
+   * Whether a {@link redo} is possible right now — i.e. an undone snapshot remains above the
+   * cursor (a redo tail). Mirrors the `redo` guard exactly, so the button and the action agree.
+   */
+  canRedo(): boolean {
+    return this._cursor < this._snapshots.length - 1;
+  }
+
+  /**
    * The derived state at ply `k`, in O(1) from the snapshot cache. Used by the
    * read-only local history slider (Stage 5). `k` is clamped into the valid
    * snapshot range `0..maxReachablePly`, so out-of-range indices never throw.

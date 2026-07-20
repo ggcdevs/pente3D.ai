@@ -108,6 +108,11 @@ export default {
     // excluded exactly as `scene.ts` / `input/setup.ts` glue is excluded above.
     'src/ui/layout.ts',
     'src/ui/registry.ts',
+    // Pure score/status banner view-model (Task 5.2): state + history flags → the serializable
+    // model (status, captures, ordered Undo/Redo/Reset buttons + enabled). THREE-free / DOM-free
+    // — the DOM/dispatch widget glue (`widgets/banner.ts`) is the Playwright-verified IO boundary,
+    // excluded exactly as the container/shell glue is above.
+    'src/ui/widgets/bannerModel.ts',
     '!src/ui/**/*.test.ts',
   ],
   coverageAnalysis: 'perTest',

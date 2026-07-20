@@ -38,6 +38,7 @@ import {
 } from './hover.ts';
 import { Game } from '../core/game.ts';
 import type { GameState } from '../core/gameState.ts';
+import type { BannerContext } from '../ui/widgets/banner.ts';
 import { keyOf, type Coord } from '../core/coords.ts';
 import { generateAllLines, type LineCategory } from '../core/lines.ts';
 
@@ -101,6 +102,18 @@ export interface SceneHandle {
   getVisibleLines(): LineGroupReadout[];
   /** The live game state (pieces/turn/captures/winner) — for Playwright assertions. */
   getState(): GameState;
+  /**
+   * The status-banner history context (Task 5.2): `{ history: { canUndo, canRedo, canReset } }`.
+   * Passed as the banner widget's `update` config so its Undo/Redo/Reset buttons reflect
+   * availability from the `Game` the scene owns (a history fact `GameState` cannot carry).
+   */
+  getBannerContext(): BannerContext;
+  /**
+   * Subscribe to board state changes (Task 5.2): `listener` fires after EVERY state change
+   * (place / undo / redo / reset / temp-confirm), so the UI shell can repaint its widgets no
+   * matter what triggered the change (button / hotkey / canvas click). Returns an unsubscribe fn.
+   */
+  onStateChange(listener: () => void): () => void;
   /** Plain-number readout of every live piece mesh (node/owner/position/opacity). */
   getPieces(): PieceReadout[];
   /**
@@ -210,7 +223,7 @@ export function createScene(container: HTMLElement): SceneHandle {
   // plan on every placement, fading pieces in (placement) and out (capture). This is the
   // scene's live game — Playwright drives it via `place()` and asserts on `getState()` /
   // `getPieces()` (build plan Task 4.5).
-  const game = new Game(BOARD_SIZE);
+  let game = new Game(BOARD_SIZE);
   const pieces: PiecesHandle = createPieces(BOARD_SIZE);
   scene.add(pieces.object);
 
@@ -242,11 +255,21 @@ export function createScene(container: HTMLElement): SceneHandle {
   const markers: MarkersHandle = createMarkers(BOARD_SIZE, (node) => picking.worldOf(node));
   scene.add(markers.object);
 
+  // State-change subscribers (Task 5.2): the UI shell subscribes so its widgets (the status
+  // banner) repaint on EVERY board change — place/undo/redo/reset/temp-confirm — no matter
+  // whether the change came from a button, a hotkey, or a canvas click. `syncBoard` is the
+  // single choke point through which every state change flows, so notifying here covers them all.
+  const stateChangeListeners = new Set<() => void>();
+  function notifyStateChanged(): void {
+    for (const listener of stateChangeListeners) listener();
+  }
+
   /** Reconcile every state-derived mesh set (markers + pieces + win line) to one `GameState`. */
   function syncBoard(state: GameState): void {
     markers.sync(state);
     pieces.sync(state);
     winLine.sync(state);
+    notifyStateChanged();
   }
   syncBoard(game.state());
 
@@ -356,6 +379,16 @@ export function createScene(container: HTMLElement): SceneHandle {
   const commands: Command[] = [
     { id: 'undo', run: () => undoRedoSafe(() => game.undo()) },
     { id: 'redo', run: () => undoRedoSafe(() => game.redo()) },
+    // Reset (Task 5.2): start a brand-new game. Replaces the `Game` instance (undo/redo of a
+    // reset is out of scope for v1) and reconciles every state-derived mesh to the pristine
+    // state. A no-op reflected in the UI is fine — a pristine game's Reset is disabled anyway.
+    {
+      id: 'reset',
+      run: () => {
+        game = new Game(BOARD_SIZE);
+        syncBoard(game.state());
+      },
+    },
     { id: 'toggleOrthogonal', run: () => toggleCategory('orthogonal') },
     { id: 'toggleFaceDiagonals', run: () => toggleCategory('face') },
     { id: 'toggleSpaceDiagonals', run: () => toggleCategory('space') },
@@ -450,6 +483,28 @@ export function createScene(container: HTMLElement): SceneHandle {
 
   function getState(): GameState {
     return game.state();
+  }
+
+  /**
+   * The banner's history-reachability context (Task 5.2). The status banner's Undo/Redo/Reset
+   * buttons reflect availability without probing (which would throw); these flags come from the
+   * `Game` the scene owns — `GameState` alone cannot know its ply or redo tail. `canReset` is
+   * true whenever the game is not pristine (a move was made or an undone tail remains).
+   */
+  function getBannerContext(): BannerContext {
+    return {
+      history: {
+        canUndo: game.canUndo(),
+        canRedo: game.canRedo(),
+        canReset: game.canUndo() || game.canRedo(),
+      },
+    };
+  }
+
+  /** Subscribe to board state changes; returns an unsubscribe fn (Task 5.2). */
+  function onStateChange(listener: () => void): () => void {
+    stateChangeListeners.add(listener);
+    return () => stateChangeListeners.delete(listener);
   }
 
   function getPieces(): PieceReadout[] {
@@ -667,6 +722,8 @@ export function createScene(container: HTMLElement): SceneHandle {
     getViewportSize,
     getVisibleLines,
     getState,
+    getBannerContext,
+    onStateChange,
     getPieces,
     getMarkers,
     getWinLine,

@@ -17,6 +17,7 @@ import type { GameState } from '../core/gameState.ts';
 import type { Coord } from '../core/coords.ts';
 import type { UiHandle } from '../ui/setup.ts';
 import type { LayoutReadout } from '../ui/container.ts';
+import type { BannerContext } from '../ui/widgets/banner.ts';
 import { createLogger } from './log.ts';
 
 const log = createLogger('debug:window');
@@ -39,6 +40,12 @@ export interface PenteInspect {
   getVisibleLines(): LineGroupReadout[] | null;
   /** The live game state (pieces/turn/captures/winner) as plain values. */
   getState(): GameState | null;
+  /**
+   * The status-banner history context (Task 5.2): `{ history: { canUndo, canRedo, canReset } }`,
+   * computed from the scene's `Game`. Lets Playwright assert the Undo/Redo/Reset button
+   * availability against real reachability (observable behavior, not a log line — principle #3).
+   */
+  getBannerContext(): BannerContext | null;
   /** Plain-number readout of every live piece mesh (node/owner/position/opacity). */
   getPieces(): PieceReadout[] | null;
   /**
@@ -116,6 +123,7 @@ export function installInspectApi(scene: SceneHandle, ui: UiHandle): PenteInspec
     getViewportSize: () => scene.getViewportSize(),
     getVisibleLines: () => scene.getVisibleLines(),
     getState: () => scene.getState(),
+    getBannerContext: () => scene.getBannerContext(),
     getPieces: () => scene.getPieces(),
     getMarkers: (query?: readonly string[]) => scene.getMarkers(query),
     getWinLine: () => scene.getWinLine(),

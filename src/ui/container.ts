@@ -25,6 +25,44 @@ const log = createLogger('ui:container');
 export const WIDGET_ID_ATTR = 'data-widget-id';
 /** The data attribute a zone element carries, naming its zone. */
 export const ZONE_ATTR = 'data-zone';
+/** The id of the one-time injected stylesheet, so it is installed at most once per document. */
+export const UI_STYLE_ID = 'pente-ui-style';
+
+/**
+ * The overlay stylesheet: the root is a full-viewport overlay that is click-THROUGH
+ * (`pointer-events: none`) so canvas orbit/pan/zoom still work under it; each anchor zone
+ * (design Part 6) is absolutely positioned at its screen edge and its widgets re-enable
+ * `pointer-events` so buttons are clickable. Zone anchoring is a fixed name→edge mapping (not
+ * config-derived logic — the config drives WHICH widgets sit WHERE, resolved purely in
+ * `layout.ts`), so it lives here as constant CSS rather than in the mutation-gated pure layer.
+ */
+const UI_STYLESHEET = `
+.pente-ui-root { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
+.pente-ui-zone { position: absolute; display: flex; gap: 8px; padding: 12px; }
+.pente-ui-zone > * { pointer-events: auto; }
+.pente-ui-zone--top-left { top: 0; left: 0; flex-direction: column; align-items: flex-start; }
+.pente-ui-zone--top-center { top: 0; left: 50%; transform: translateX(-50%); flex-direction: column; align-items: center; }
+.pente-ui-zone--top-right { top: 0; right: 0; flex-direction: column; align-items: flex-end; }
+.pente-ui-zone--left { top: 50%; left: 0; transform: translateY(-50%); flex-direction: column; }
+.pente-ui-zone--right { top: 50%; right: 0; transform: translateY(-50%); flex-direction: column; align-items: flex-end; }
+.pente-ui-zone--center { top: 50%; left: 50%; transform: translate(-50%, -50%); flex-direction: column; align-items: center; }
+.pente-ui-zone--bottom-left { bottom: 0; left: 0; flex-direction: column; align-items: flex-start; }
+.pente-ui-zone--bottom-center { bottom: 0; left: 50%; transform: translateX(-50%); flex-direction: column; align-items: center; }
+.pente-ui-zone--bottom-right { bottom: 0; right: 0; flex-direction: column; align-items: flex-end; }
+.pente-widget--banner { display: flex; gap: 12px; align-items: center; padding: 6px 12px; border-radius: 6px; background: rgba(16,16,20,0.72); color: #e6e6ea; font-family: system-ui, sans-serif; font-size: 14px; }
+.pente-banner-controls { display: flex; gap: 6px; }
+.pente-banner-button { cursor: pointer; }
+.pente-banner-button:disabled { cursor: default; opacity: 0.45; }
+`;
+
+/** Install the overlay stylesheet once per document (idempotent, keyed by {@link UI_STYLE_ID}). */
+function ensureStyles(doc: Document): void {
+  if (doc.getElementById(UI_STYLE_ID)) return;
+  const style = doc.createElement('style');
+  style.id = UI_STYLE_ID;
+  style.textContent = UI_STYLESHEET;
+  (doc.head ?? doc.documentElement).appendChild(style);
+}
 
 /** A plain, serializable readout of the mounted UI, read back off the live DOM. */
 export interface LayoutReadout {
@@ -62,6 +100,7 @@ export function createUiContainer(
   deps: unknown,
   doc: Document = document,
 ): UiContainerHandle {
+  ensureStyles(doc);
   const root = doc.createElement('div');
   root.className = 'pente-ui-root';
   root.setAttribute('data-testid', 'pente-ui-root');

@@ -133,6 +133,62 @@ describe('Game — undo / redo', () => {
   });
 });
 
+describe('Game — canUndo / canRedo reachability (mirrors the undo/redo guards)', () => {
+  it('a pristine game can neither undo nor redo', () => {
+    const g = new Game(9);
+    expect(g.canUndo()).toBe(false);
+    expect(g.canRedo()).toBe(false);
+  });
+
+  it('after a placement, undo is available and redo is not', () => {
+    const g = new Game(9);
+    g.place([4, 4, 4]);
+    expect(g.canUndo()).toBe(true);
+    expect(g.canRedo()).toBe(false);
+  });
+
+  it('after an undo, redo is available and (at ply 0) undo is not', () => {
+    const g = new Game(9);
+    g.place([4, 4, 4]);
+    g.undo();
+    expect(g.canUndo()).toBe(false); // back at ply 0
+    expect(g.canRedo()).toBe(true); // one undone snapshot remains
+  });
+
+  it('with two plies then one undo, BOTH undo and redo are available', () => {
+    const g = new Game(9);
+    g.place([4, 4, 4]);
+    g.place([0, 0, 0]);
+    g.undo(); // cursor at ply 1: a committed piece below, an undone one above
+    expect(g.canUndo()).toBe(true);
+    expect(g.canRedo()).toBe(true);
+  });
+
+  it('placing after an undo discards the redo tail, so canRedo goes false', () => {
+    const g = new Game(9);
+    g.place([4, 4, 4]);
+    g.undo();
+    expect(g.canRedo()).toBe(true);
+    g.place([1, 1, 1]); // branch cut — drops the undone tail
+    expect(g.canRedo()).toBe(false);
+    expect(g.canUndo()).toBe(true);
+  });
+
+  it('canUndo/canRedo agree with the undo/redo guards: no throw iff the flag is true', () => {
+    const g = new Game(9);
+    g.place([4, 4, 4]);
+    g.place([0, 0, 0]);
+    // canUndo true → undo does not throw; drive to ply 0 then it must be false and undo throws.
+    while (g.canUndo()) g.undo();
+    expect(g.canUndo()).toBe(false);
+    expect(() => g.undo()).toThrow(IllegalMove);
+    // canRedo true → redo does not throw; drive to the top then it must be false and redo throws.
+    while (g.canRedo()) g.redo();
+    expect(g.canRedo()).toBe(false);
+    expect(() => g.redo()).toThrow(IllegalMove);
+  });
+});
+
 describe('Game — undo after a win recomputes the winner', () => {
   it('undoing the winning move clears winner and re-enables play', () => {
     // White makes 5-in-a-row along x through 0..4 at y=0,z=0.
