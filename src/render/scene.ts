@@ -5,9 +5,15 @@ import { getConfig } from '../config/config.ts';
 import { resolveSceneConfig, type ResolvedSceneConfig, type Vec3 } from './sceneConfig.ts';
 import { createLines, type LinesHandle, type LineGroupReadout } from './lines.ts';
 import { createPieces, type PiecesHandle, type PieceReadout } from './pieces.ts';
+import { resolveCameraPreset, type ControlsConfig } from './cameraPresets.ts';
+import { applyCameraPreset, type CameraPresetReadout } from './cameraControls.ts';
+import { createInput, type InputHandle, type InputReadout } from '../input/setup.ts';
+import type { Command } from '../input/commands.ts';
+import type { KeyResolution } from '../input/scopes.ts';
 import { Game } from '../core/game.ts';
 import type { GameState } from '../core/gameState.ts';
 import type { Coord } from '../core/coords.ts';
+import type { LineCategory } from '../core/lines.ts';
 
 const log = createLogger('render:scene');
 
@@ -56,6 +62,14 @@ export interface SceneHandle {
   getState(): GameState;
   /** Plain-number readout of every live piece mesh (node/owner/position/opacity). */
   getPieces(): PieceReadout[];
+  /** The camera preset actually applied to the controls (name/buttons/limits/speeds). */
+  getCameraPreset(): CameraPresetReadout;
+  /** The active scope stack + registered command ids (for input assertions). */
+  getInput(): InputReadout;
+  /** Dispatch a command by id — the same registry keys use (button path). */
+  dispatch(id: string): boolean;
+  /** Resolve a chord through the scope stack and dispatch it — drives the key path in tests. */
+  pressKey(chord: string): KeyResolution;
   /**
    * Place the current player's piece at `coords` and reconcile the piece meshes. Throws
    * `IllegalMove` on an illegal move (propagated honestly). Drives Task 4.5's e2e:
@@ -129,6 +143,65 @@ export function createScene(container: HTMLElement): SceneHandle {
   scene.add(pieces.object);
   pieces.sync(game.state());
 
+  // Camera presets (Task 4.6): resolve the active `controls` preset (PURE) and BIND it to
+  // the OrbitControls (IO glue) — mouse-button mapping, speeds, invert, zoom limits.
+  const presetReadout: CameraPresetReadout = applyCameraPreset(
+    controls,
+    resolveCameraPreset(getConfig('controls') as unknown as ControlsConfig),
+  );
+
+  // Line-visibility toggle shared by the category commands: flips the config-derived
+  // visible flag on the group mesh and mirrors it into the state we report.
+  const lineVisible: Record<LineCategory, boolean> = {
+    orthogonal: true,
+    face: true,
+    space: true,
+  };
+  for (const readout of lines.getVisibleLines()) {
+    lineVisible[readout.category] = readout.visible;
+  }
+  function toggleCategory(category: LineCategory): void {
+    lineVisible[category] = !lineVisible[category];
+    lines.setVisible(category, lineVisible[category]);
+  }
+
+  // Input system (Task 4.6): the command registry + scope stack + keydown listener. Each
+  // command is a stable id dispatched identically by a keybinding or a UI button (the "one
+  // action layer"). Handlers bind to the live `game`/`lines`; illegal actions (e.g. undo at
+  // ply 0) are swallowed here so a stray hotkey never throws mid-render — the *scene* place
+  // path still propagates IllegalMove honestly.
+  const undoRedoSafe = (fn: () => void): void => {
+    try {
+      fn();
+    } catch {
+      // Nothing to undo/redo — a no-op for the hotkey (the button UI reflects availability).
+      return;
+    }
+    pieces.sync(game.state());
+  };
+  const commands: Command[] = [
+    { id: 'undo', run: () => undoRedoSafe(() => game.undo()) },
+    { id: 'redo', run: () => undoRedoSafe(() => game.redo()) },
+    { id: 'toggleOrthogonal', run: () => toggleCategory('orthogonal') },
+    { id: 'toggleFaceDiagonals', run: () => toggleCategory('face') },
+    { id: 'toggleSpaceDiagonals', run: () => toggleCategory('space') },
+    {
+      id: 'showAllDiagonals',
+      run: () => {
+        for (const category of ['face', 'space'] as const) {
+          lineVisible[category] = true;
+          lines.setVisible(category, true);
+        }
+      },
+    },
+  ];
+  const input: InputHandle = createInput(
+    commands,
+    getConfig('keybindings'),
+    null,
+    window,
+  );
+
   function getCamera(): CameraReadout {
     return {
       position: { x: camera.position.x, y: camera.position.y, z: camera.position.z },
@@ -167,6 +240,22 @@ export function createScene(container: HTMLElement): SceneHandle {
     return pieces.getPieces();
   }
 
+  function getCameraPreset(): CameraPresetReadout {
+    return presetReadout;
+  }
+
+  function getInput(): InputReadout {
+    return input.readout();
+  }
+
+  function dispatch(id: string): boolean {
+    return input.dispatch(id);
+  }
+
+  function pressKey(chord: string): KeyResolution {
+    return input.handleChord(chord);
+  }
+
   function place(coords: Coord): GameState {
     // `game.place` throws IllegalMove on an illegal move; let it propagate honestly.
     game.place(coords);
@@ -199,6 +288,7 @@ export function createScene(container: HTMLElement): SceneHandle {
   function dispose(): void {
     running = false;
     window.removeEventListener('resize', onResize);
+    input.dispose();
     controls.dispose();
     renderer.dispose();
     lines.dispose();
@@ -225,6 +315,10 @@ export function createScene(container: HTMLElement): SceneHandle {
     getVisibleLines,
     getState,
     getPieces,
+    getCameraPreset,
+    getInput,
+    dispatch,
+    pressKey,
     place,
     dispose,
   };

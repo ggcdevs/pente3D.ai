@@ -2,16 +2,40 @@
   "preset": "fusion360",
   "presets": {
     "fusion360": {
-      "orbitButton": "middle",
-      "panModifier": "shift",
+      "orbit": "shift+middle",
+      "pan": "middle",
+      "zoom": "wheel",
+      "orbitSpeed": 1.0,
+      "panSpeed": 1.0,
+      "zoomSpeed": 1.0,
+      "invertY": false,
       "zoomToCursor": true,
-      "invertY": false
+      "minDistance": 2,
+      "maxDistance": 40
+    },
+    "trackpad": {
+      "orbit": "drag",
+      "pan": "shift+drag",
+      "zoom": "pinch",
+      "orbitSpeed": 1.0,
+      "panSpeed": 1.0,
+      "zoomSpeed": 1.0,
+      "invertY": false,
+      "zoomToCursor": true,
+      "minDistance": 2,
+      "maxDistance": 40
     },
     "web": {
-      "orbitButton": "left",
-      "panModifier": "ctrl",
+      "orbit": "left",
+      "pan": "ctrl+left",
+      "zoom": "wheel",
+      "orbitSpeed": 1.0,
+      "panSpeed": 1.0,
+      "zoomSpeed": 1.0,
+      "invertY": false,
       "zoomToCursor": false,
-      "invertY": false
+      "minDistance": 2,
+      "maxDistance": 40
     }
   }
 }

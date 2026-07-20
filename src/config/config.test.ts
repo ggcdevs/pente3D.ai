@@ -82,21 +82,21 @@ describe('getConfig — defaults', () => {
 
 describe('getConfig — deep merge of overrides', () => {
   it('deep-merges a partial override over the default, keeping untouched keys', () => {
-    // Override only the orbitButton of the fusion360 preset; everything else must survive.
+    // Override only the orbit gesture of the fusion360 preset; everything else must survive.
     // Use a distinctive value ('right') so we can prove it did not leak into the web preset.
     storage.setItem(
       overrideStorageKey('controls'),
-      JSON.stringify({ presets: { fusion360: { orbitButton: 'right' } } }),
+      JSON.stringify({ presets: { fusion360: { orbit: 'right' } } }),
     );
     // getConfig('controls') is typed from the JSON default, so preset names are
     // known keys — no index access, no `noUncheckedIndexedAccess` undefined.
     const controls = getConfig('controls', storage);
     expect(controls.preset).toBe('fusion360'); // untouched default
-    expect(controls.presets.fusion360.orbitButton).toBe('right'); // overridden
-    expect(controls.presets.fusion360.panModifier).toBe('shift'); // sibling untouched
+    expect(controls.presets.fusion360.orbit).toBe('right'); // overridden
+    expect(controls.presets.fusion360.pan).toBe('middle'); // sibling untouched
     expect(controls.presets.fusion360.zoomToCursor).toBe(true); // sibling untouched
-    expect(controls.presets.web.orbitButton).toBe('left'); // other preset untouched — override did NOT leak
-    expect(controls.presets.web.panModifier).toBe('ctrl'); // untouched
+    expect(controls.presets.web.orbit).toBe('left'); // other preset untouched — override did NOT leak
+    expect(controls.presets.web.pan).toBe('ctrl+left'); // untouched
   });
 
   it('a top-level override can flip a single boolean without dropping the others', () => {

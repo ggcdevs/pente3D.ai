@@ -6,6 +6,9 @@ import type {
 } from '../render/scene.ts';
 import type { LineGroupReadout } from '../render/lines.ts';
 import type { PieceReadout } from '../render/pieces.ts';
+import type { CameraPresetReadout } from '../render/cameraControls.ts';
+import type { InputReadout } from '../input/setup.ts';
+import type { KeyResolution } from '../input/scopes.ts';
 import type { GameState } from '../core/gameState.ts';
 import type { Coord } from '../core/coords.ts';
 import { createLogger } from './log.ts';
@@ -37,6 +40,17 @@ export interface PenteInspect {
    * new state. Throws `IllegalMove` on an illegal move (propagated so tests observe it).
    */
   place(coords: Coord): GameState | null;
+  /** The camera preset applied to the controls (name/buttons/zoom-limits/speeds). */
+  getCameraPreset(): CameraPresetReadout | null;
+  /** The active input scope stack + registered command ids. */
+  getInput(): InputReadout | null;
+  /** Dispatch a command id directly (the UI-button path — same registry as keys). */
+  dispatch(id: string): boolean | null;
+  /**
+   * Resolve a key chord (e.g. `'u'`, `'ctrl+s'`) through the scope stack and dispatch it —
+   * drives the keybinding path from a test without synthesizing a raw KeyboardEvent.
+   */
+  pressKey(chord: string): KeyResolution | null;
 }
 
 declare global {
@@ -55,6 +69,10 @@ export function installInspectApi(scene: SceneHandle): PenteInspect {
     getState: () => scene.getState(),
     getPieces: () => scene.getPieces(),
     place: (coords: Coord) => scene.place(coords),
+    getCameraPreset: () => scene.getCameraPreset(),
+    getInput: () => scene.getInput(),
+    dispatch: (id: string) => scene.dispatch(id),
+    pressKey: (chord: string) => scene.pressKey(chord),
   };
   window.__pente = api;
   log.info('window.__pente installed', Object.keys(api));

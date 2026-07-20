@@ -64,7 +64,17 @@ export default {
     'src/render/sceneConfig.ts',
     'src/render/linesLayout.ts',
     'src/render/piecesDiff.ts',
+    'src/render/cameraPresets.ts',
     '!src/render/**/*.test.ts',
+    // Pure input system (Task 4.6): command registry, keybinding-chord normalization,
+    // and the scope-stack resolver. THREE-free / DOM-free — this is core interaction
+    // logic, strictly mutation-gated. NOT `src/input/setup.ts`: that installs a DOM
+    // `keydown` listener (an IO boundary verified by Playwright), so it is deliberately
+    // excluded, exactly as `scene.ts`/`lines.ts` glue is excluded above.
+    'src/input/commands.ts',
+    'src/input/scopes.ts',
+    'src/input/keybindings.ts',
+    '!src/input/**/*.test.ts',
   ],
   coverageAnalysis: 'perTest',
   // Generous timeout to make Killed-vs-Timeout classification DETERMINISTIC (see header):
