@@ -5,6 +5,7 @@ import { getConfig } from '../config/config.ts';
 import { resolveSceneConfig, type ResolvedSceneConfig, type Vec3 } from './sceneConfig.ts';
 import { createLines, type LinesHandle, type LineGroupReadout } from './lines.ts';
 import { createPieces, type PiecesHandle, type PieceReadout } from './pieces.ts';
+import { createMarkers, type MarkersHandle, type MarkersReadout } from './markers.ts';
 import { createWinLine, type WinLineHandle, type WinLineReadout } from './winLine.ts';
 import { resolveCameraPreset, type ControlsConfig } from './cameraPresets.ts';
 import { applyCameraPreset, type CameraPresetReadout } from './cameraControls.ts';
@@ -97,6 +98,12 @@ export interface SceneHandle {
   getState(): GameState;
   /** Plain-number readout of every live piece mesh (node/owner/position/opacity). */
   getPieces(): PieceReadout[];
+  /**
+   * Plain-number readout of the node-marker layer (Task 4.3): total/visible/highlighted
+   * counts plus per-node detail for the queried keys. Lets Playwright prove a marker hides
+   * when a piece lands on its node and glows on hover (observable behavior, not a log line).
+   */
+  getMarkers(query?: readonly string[]): MarkersReadout;
   /** The winning-line mesh readout (visible/nodes/segmentCount/color) — for Task 4.9. */
   getWinLine(): WinLineReadout;
   /** The camera preset actually applied to the controls (name/buttons/limits/speeds). */
@@ -210,22 +217,37 @@ export function createScene(container: HTMLElement): SceneHandle {
   const winLine: WinLineHandle = createWinLine(BOARD_SIZE);
   scene.add(winLine.object);
 
-  /** Reconcile every state-derived mesh set (pieces + win line) to one `GameState`. */
-  function syncBoard(state: GameState): void {
-    pieces.sync(state);
-    winLine.sync(state);
-  }
-  syncBoard(game.state());
-
-  // Picking + hover (Task 4.7): an invisible node pick-sphere layer (IO) resolves a pointer
-  // ray to a RaycastHit; the PURE `computeHoverTarget` turns that hit + live state + the
-  // node↔line index into a highlight set (empty-node vs placed-sphere vs line, visible-only,
-  // the placed-sphere asymmetry — game-core Part 4); the glue applies the emissive boost.
+  // Picking (Task 4.7): the invisible node pick-sphere layer (IO) that resolves a pointer
+  // ray to a RaycastHit. Created before the markers so the markers can REUSE its
+  // board-centered `worldOf` node-position helper (DRY) — the marker you see and the node
+  // you pick then share an exact world position.
   const picking: PickingHandle = createPicking(
     BOARD_SIZE,
     getConfig('geometry') as unknown as PickGeometryConfig,
   );
   scene.add(picking.object);
+
+  // Instanced node markers (Task 4.3): one InstancedMesh of N³ translucent spheres, one per
+  // board node (render-ui design Part 1). The `nodeKey↔instanceId` index + occupancy /
+  // hover-instance logic is the PURE `markersLayout.ts` (strict unit+mutation); this handle
+  // is the IO glue that reflects it onto the GPU. A marker HIDES when a piece occupies its
+  // node (kept in lockstep via `syncBoard`), and hovering an empty node glows its marker
+  // (applied alongside the piece glow in `applyHoverHighlight`). Placement reuses picking's
+  // `worldOf` so markers and pick spheres coincide exactly.
+  const markers: MarkersHandle = createMarkers(BOARD_SIZE, (node) => picking.worldOf(node));
+  scene.add(markers.object);
+
+  /** Reconcile every state-derived mesh set (markers + pieces + win line) to one `GameState`. */
+  function syncBoard(state: GameState): void {
+    markers.sync(state);
+    pieces.sync(state);
+    winLine.sync(state);
+  }
+  syncBoard(game.state());
+
+  // Hover (Task 4.7): the PURE `computeHoverTarget` turns a raycast hit + live state + the
+  // node↔line index into a highlight set (empty-node vs placed-sphere vs line, visible-only,
+  // the placed-sphere asymmetry — game-core Part 4); the glue applies the emissive boost.
   const hoverLookup: HoverLookup = buildHoverLookup(generateAllLines(BOARD_SIZE));
   const hoverColors = getConfig('colors') as unknown as { hoverHighlight: string };
   const hoverRendering = getConfig('rendering') as unknown as { emissiveBoost: number };
@@ -420,6 +442,10 @@ export function createScene(container: HTMLElement): SceneHandle {
     return pieces.getPieces();
   }
 
+  function getMarkers(query?: readonly string[]): MarkersReadout {
+    return markers.getMarkers(query);
+  }
+
   function getWinLine(): WinLineReadout {
     return winLine.getWinLine();
   }
@@ -456,13 +482,20 @@ export function createScene(container: HTMLElement): SceneHandle {
     return picking.pickAt(ndcX, ndcY, camera, game.state(), lines.pickables());
   }
 
-  /** Apply the current `hoverTarget`'s emissive glow to the piece meshes (glue). */
+  /**
+   * Apply the current `hoverTarget`'s emissive glow: the highlighted pieces glow (piece
+   * meshes), and the empty-node markers in `hoverTarget.nodes` glow (marker instances). Both
+   * are restored to base on the next hover with an empty set (idempotent) — the empty-node
+   * marker highlight the hover resolver already yields (`nodeMarkerKeys` / `HoverTarget.nodes`)
+   * is finally *applied* here (Task 4.3 wiring #3).
+   */
   function applyHoverHighlight(): void {
     pieces.highlight(
       hoverTarget?.pieces ?? [],
       hoverColors.hoverHighlight,
       hoverRendering.emissiveBoost,
     );
+    markers.highlight(hoverTarget?.nodes ?? []);
   }
 
   function hoverAt(ndcX: number, ndcY: number): HoverTarget | null {
@@ -568,6 +601,7 @@ export function createScene(container: HTMLElement): SceneHandle {
     renderer.dispose();
     lines.dispose();
     pieces.dispose();
+    markers.dispose();
     winLine.dispose();
     picking.dispose();
     tempMesh.geometry.dispose();
@@ -594,6 +628,7 @@ export function createScene(container: HTMLElement): SceneHandle {
     getVisibleLines,
     getState,
     getPieces,
+    getMarkers,
     getWinLine,
     getCameraPreset,
     getInput,

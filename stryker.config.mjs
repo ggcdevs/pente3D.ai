@@ -39,6 +39,11 @@
  *     `["Stryker was here"]`). The win line is never pre-registered, so any `drawn` list
  *     lacking the segment's canonical id yields identical behavior — an equivalent mutant
  *     (killing it would require asserting on a contrived id-collision, not real behavior).
+ *   - markersLayout.ts: the `if (id !== undefined)` guard on the occupancy write for an
+ *     off-board `pieces` key. Mutated to `if (true)` it runs `visible[undefined] = false`,
+ *     which only adds a non-index `"undefined"` property to the array — length, values, and
+ *     the visibleCount the readout reports are all unchanged. Equivalent (killing it would
+ *     require asserting on the presence of a junk property, not real behavior).
  *     Kill genuine (non-equivalent) survivors with real tests; never suppress.
  *
  * Gate-rejection is re-proven on every review-gate run (agent-principles #7): temporarily
@@ -67,6 +72,7 @@ export default {
     // `lines.ts`) is NOT mutated — it is an IO boundary verified by Playwright (build
     // plan Tasks 4.1/4.4).
     'src/render/sceneConfig.ts',
+    'src/render/markersLayout.ts',
     'src/render/linesLayout.ts',
     'src/render/piecesDiff.ts',
     'src/render/winLineLayout.ts',

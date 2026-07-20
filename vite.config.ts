@@ -76,6 +76,16 @@ export default defineConfig({
           functions: 100,
           lines: 100,
         },
+        // Pure node-marker layout (Task 4.3): the `nodeKey↔instanceId` index + occupancy /
+        // hover-instance logic. THREE-free / DOM-free — the InstancedMesh glue lives in
+        // `markers.ts` (Playwright-verified, excluded via the `src/render/**` glue exclusion).
+        // Held to the hard 100% floor. Do not weaken (agent-principles #6).
+        'src/render/markersLayout.ts': {
+          statements: 100,
+          branches: 100,
+          functions: 100,
+          lines: 100,
+        },
         // Pure placement + temp-mode wiring (Task 4.8): the "click empty node → place"
         // resolver and the immutable temp-placement state machine + its scope. THREE-free /
         // DOM-free — the Three.js click/preview glue lives in `scene.ts` (Playwright-verified,

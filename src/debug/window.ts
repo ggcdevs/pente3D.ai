@@ -7,6 +7,7 @@ import type {
 } from '../render/scene.ts';
 import type { LineGroupReadout } from '../render/lines.ts';
 import type { PieceReadout } from '../render/pieces.ts';
+import type { MarkersReadout } from '../render/markers.ts';
 import type { WinLineReadout } from '../render/winLine.ts';
 import type { CameraPresetReadout } from '../render/cameraControls.ts';
 import type { InputReadout } from '../input/setup.ts';
@@ -38,6 +39,12 @@ export interface PenteInspect {
   getState(): GameState | null;
   /** Plain-number readout of every live piece mesh (node/owner/position/opacity). */
   getPieces(): PieceReadout[] | null;
+  /**
+   * Node-marker readout (Task 4.3): total/visible/highlighted counts + per-node detail for
+   * the queried keys. Lets Playwright prove a marker HIDES when a piece lands on its node and
+   * GLOWS on hover (observable behavior, not a log line — agent-principles #3).
+   */
+  getMarkers(query?: readonly string[]): MarkersReadout | null;
   /**
    * The winning-line mesh readout (Task 4.9): `visible`, the drawn run's `nodes`, the
    * `segmentCount`, and the config-derived `color`. Lets Playwright prove that on a forced
@@ -102,6 +109,7 @@ export function installInspectApi(scene: SceneHandle): PenteInspect {
     getVisibleLines: () => scene.getVisibleLines(),
     getState: () => scene.getState(),
     getPieces: () => scene.getPieces(),
+    getMarkers: (query?: readonly string[]) => scene.getMarkers(query),
     getWinLine: () => scene.getWinLine(),
     place: (coords: Coord) => scene.place(coords),
     getCameraPreset: () => scene.getCameraPreset(),
