@@ -7,10 +7,11 @@
  * factories, resolves + mounts them into their config-driven zones via `createUiContainer`, and
  * returns a handle whose `getLayout()` is surfaced on `window.__pente` for Playwright.
  *
- * For Task 5.1 the roster is the {@link placeholderWidget} set — one factory per widget id in
- * the tracked `layout` default — enough to prove the shell reflects config and that reordering
- * the config reorders the DOM. The real widgets (banner/menu/settings/net/history/help) replace
- * these factories in Tasks 5.2+; the framework does not change.
+ * The roster is the {@link defaultWidgetFactories} set — one factory per real widget the app can
+ * mount (banner/menu/settings/net/history/help/archive). The registry reconciles it against the
+ * `layout` config: a config entry with no factory is dropped by `resolveLayout`, and a factory
+ * with no config entry is never placed — so the config and the roster can diverge safely without
+ * ever painting a stub on screen.
  *
  * It may import DOM + config; it must NOT be imported BY `src/core` (the eslint boundary keeps
  * core pure).
@@ -19,25 +20,20 @@
 import { getConfig } from '../config/config.ts';
 import { createWidgetRegistry, type WidgetFactory } from './registry.ts';
 import { createUiContainer, type LayoutReadout, type UiContainerHandle } from './container.ts';
-import { placeholderWidget } from './widgets/placeholder.ts';
-import { bannerWidget, BANNER_WIDGET_ID } from './widgets/banner.ts';
-import { menuWidget, MENU_WIDGET_ID, type MenuScope } from './widgets/menu.ts';
+import { bannerWidget } from './widgets/banner.ts';
+import { menuWidget, type MenuScope } from './widgets/menu.ts';
 import {
   settingsWidget,
-  SETTINGS_WIDGET_ID,
   type SettingsScope,
   type SettingsColorsPreview,
 } from './widgets/settings.ts';
-import { netWidget, NET_WIDGET_ID } from './widgets/net.ts';
+import { netWidget } from './widgets/net.ts';
 import type { NetSessionState } from './widgets/netModel.ts';
-import {
-  historySliderWidget,
-  HISTORY_SLIDER_WIDGET_ID,
-} from './widgets/historySlider.ts';
+import { historySliderWidget } from './widgets/historySlider.ts';
 import type { HistoryFacts } from './widgets/sliderModel.ts';
-import { helpWidget, HELP_WIDGET_ID, type HelpScope } from './widgets/help.ts';
+import { helpWidget, type HelpScope } from './widgets/help.ts';
 import type { HelpSources } from './widgets/helpModel.ts';
-import { archiveWidget, ARCHIVE_WIDGET_ID, type ArchiveScope } from './widgets/archive.ts';
+import { archiveWidget, type ArchiveScope } from './widgets/archive.ts';
 import type { ArchiveListing } from './widgets/archiveModel.ts';
 import type { LayoutConfig } from './layout.ts';
 
@@ -139,24 +135,25 @@ export interface UiHandle {
 }
 
 /**
- * The widget roster: the REAL factory for each widget id that has been built (Task 5.2: the
- * score/status banner for `statusBanner`), and a placeholder for every other id the tracked
- * `layout` default still names (menu/settings/net/history land in 5.3+). Derived FROM the config
- * (not a hardcoded id list) so the roster and the layout can never drift, and a future
- * config-only widget add is picked up automatically (agent-principles #8: no duplicated volatile
- * facts). As each real widget lands it replaces its placeholder here; the framework is unchanged.
+ * The widget roster: the REAL factory for every widget that has been built. Each factory owns
+ * its own id (the `*_WIDGET_ID` constant), so the roster is the single source of truth for what
+ * the app can mount — it does NOT derive its ids from the `layout` config. Reconciliation with
+ * the config is the registry's job: `resolveLayout` drops any config entry whose id has no
+ * registered factory (design Part 6: "Unknown widget id → ignored gracefully"), and a factory
+ * with no config entry is simply never placed. That two-layer contract means a config-only
+ * widget add lands as a graceful no-op until its factory ships here — never as scaffolding
+ * painted on screen. As each new widget is built (design Part 6 roster), its factory is added.
  */
-export function defaultWidgetFactories(layout: LayoutConfig): WidgetFactory[] {
-  return Object.keys(layout.widgets).map((id) => {
-    if (id === BANNER_WIDGET_ID) return bannerWidget();
-    if (id === MENU_WIDGET_ID) return menuWidget();
-    if (id === SETTINGS_WIDGET_ID) return settingsWidget();
-    if (id === NET_WIDGET_ID) return netWidget();
-    if (id === HISTORY_SLIDER_WIDGET_ID) return historySliderWidget();
-    if (id === HELP_WIDGET_ID) return helpWidget();
-    if (id === ARCHIVE_WIDGET_ID) return archiveWidget();
-    return placeholderWidget(id);
-  });
+export function defaultWidgetFactories(): WidgetFactory[] {
+  return [
+    bannerWidget(),
+    menuWidget(),
+    settingsWidget(),
+    netWidget(),
+    historySliderWidget(),
+    helpWidget(),
+    archiveWidget(),
+  ];
 }
 
 /**
@@ -170,7 +167,7 @@ export function defaultWidgetFactories(layout: LayoutConfig): WidgetFactory[] {
  */
 export function createUi(container: HTMLElement, deps: UiDeps): UiHandle {
   const layout = getConfig('layout') as unknown as LayoutConfig;
-  const registry = createWidgetRegistry(defaultWidgetFactories(layout));
+  const registry = createWidgetRegistry(defaultWidgetFactories());
   const ui = createUiContainer(
     registry,
     layout,

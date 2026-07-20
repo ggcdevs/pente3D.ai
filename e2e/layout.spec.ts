@@ -55,6 +55,12 @@ test('getLayout reflects the tracked layout config (zone + presence)', async ({ 
     // And that element sits inside the reported zone element.
     const inZone = page.locator(`[data-zone="${placement.zone}"] [data-widget-id="${id}"]`);
     await expect(inZone).toHaveCount(1);
+    // It must be a REAL widget, not a scaffolding stub. A placeholder painted its raw id as its
+    // whole visible text (`element.textContent = id`), so a visible id string on screen is the
+    // exact leak this gate exists to reject (agent-principles #1/#3: mounted ≠ a real widget).
+    // A real widget renders structured/meaningful content, never just its own debug id verbatim.
+    const visibleText = (await el.innerText()).trim();
+    expect(visibleText, `widget ${id} renders its raw id as its whole content — scaffolding leak`).not.toBe(id);
   }
 
   // The set of populated zones is exactly the set of zones named by visible widgets.
