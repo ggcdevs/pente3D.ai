@@ -86,6 +86,10 @@ const UI_STYLESHEET = `
 .pente-net-copy { cursor: pointer; padding: 3px 8px; border-radius: 4px; border: none; background: rgba(255,255,255,0.12); color: #e6e6ea; font-size: 12px; }
 .pente-net-seat { opacity: 0.85; }
 .pente-net-conflict { padding: 8px; border-radius: 4px; background: rgba(255,80,80,0.18); color: #ffb0b0; font-size: 12px; }
+.pente-widget--history { display: flex; gap: 10px; align-items: center; padding: 6px 12px; border-radius: 6px; background: rgba(16,16,20,0.72); color: #e6e6ea; font-family: system-ui, sans-serif; font-size: 13px; }
+.pente-history-range { width: 240px; cursor: pointer; }
+.pente-history-range:disabled { cursor: default; opacity: 0.45; }
+.pente-history-label { min-width: 72px; text-align: center; font-variant-numeric: tabular-nums; }
 `;
 
 /** Install the overlay stylesheet once per document (idempotent, keyed by {@link UI_STYLE_ID}). */

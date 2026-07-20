@@ -5,6 +5,7 @@ import type {
   ViewportReadout,
   TempReadout,
   ColorsReadout,
+  HistoryReadout,
 } from '../render/scene.ts';
 import type { LineGroupReadout } from '../render/lines.ts';
 import type { PieceReadout } from '../render/pieces.ts';
@@ -55,6 +56,19 @@ export interface PenteInspect {
    * availability against real reachability (observable behavior, not a log line — principle #3).
    */
   getBannerContext(): BannerContext | null;
+  /**
+   * The read-only local history readout (Task 5.6): `{ maxPly, viewedPly, scrubbing }`. `maxPly`
+   * reports the UNTOUCHED canonical `Game` head, so a Playwright test can prove a scrub is
+   * viewer-local — the rendered state (`getState`) drops later pieces WHILE `maxPly` (and thus the
+   * real history) is intact (observable behavior, not a log line — agent-principles #3).
+   */
+  getHistory(): HistoryReadout | null;
+  /**
+   * Scrub the LOCAL view to ply `k` (Task 5.6, read-only): re-render `game.stateAt(k)` for the
+   * local viewer without mutating the canonical `Game`; `k >= maxPly` snaps back to live. Lets
+   * Playwright drive the scrub programmatically and assert the rendered piece count changed.
+   */
+  scrubTo(k: number): void;
   /** Plain-number readout of every live piece mesh (node/owner/position/opacity). */
   getPieces(): PieceReadout[] | null;
   /**
@@ -141,6 +155,8 @@ export function installInspectApi(scene: SceneHandle, ui: UiHandle): PenteInspec
     getColors: () => scene.getColors(),
     getState: () => scene.getState(),
     getBannerContext: () => scene.getBannerContext(),
+    getHistory: () => scene.getHistory(),
+    scrubTo: (k: number) => scene.scrubTo(k),
     getPieces: () => scene.getPieces(),
     getMarkers: (query?: readonly string[]) => scene.getMarkers(query),
     getWinLine: () => scene.getWinLine(),

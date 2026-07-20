@@ -46,6 +46,11 @@ export default defineConfig({
         'src/ui/widgets/net.ts',
         'src/net/session.ts',
         'src/net/appSession.ts',
+        // Task 5.6 history-slider widget: the `<input type=range>` DOM glue that reads the scene's
+        // history readout and drives its read-only scrub seam. Touches the DOM — verified by the
+        // Task 5.6 Playwright spec, not unit coverage. The PURE `sliderModel.ts` is pinned to the
+        // 100% floor below (and in the mutation scope). Excluded file-by-file so sliderModel stays measured.
+        'src/ui/widgets/historySlider.ts',
       ],
       // MACHINE-ENFORCED GATE (not documentation): the pure rules engine AND the
       // in-scope config/persist layers are held to a hard 100% floor
@@ -234,6 +239,17 @@ export default defineConfig({
         // `net/appSession.ts`) are the Playwright-verified IO boundary, excluded above. In the
         // mutation scope and held to the hard 100% floor. Do not weaken (agent-principles #6).
         'src/ui/widgets/netModel.ts': {
+          statements: 100,
+          branches: 100,
+          functions: 100,
+          lines: 100,
+        },
+        // Pure history-slider view-model (Task 5.6): the raw-value → clamped-viewed-ply resolution
+        // and the ply/max/viewed facts → serializable model derivation. THREE-free / DOM-free — the
+        // DOM `<input type=range>` widget glue (`widgets/historySlider.ts`) and the scene's read-only
+        // scrub seam (`scene.ts` scrubTo/getHistory) are the Playwright-verified IO boundary,
+        // excluded above. In the mutation scope and held to the hard 100% floor. Do not weaken.
+        'src/ui/widgets/sliderModel.ts': {
           statements: 100,
           branches: 100,
           functions: 100,

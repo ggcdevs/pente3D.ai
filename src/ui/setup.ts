@@ -30,6 +30,11 @@ import {
 } from './widgets/settings.ts';
 import { netWidget, NET_WIDGET_ID } from './widgets/net.ts';
 import type { NetSessionState } from './widgets/netModel.ts';
+import {
+  historySliderWidget,
+  HISTORY_SLIDER_WIDGET_ID,
+} from './widgets/historySlider.ts';
+import type { HistoryFacts } from './widgets/sliderModel.ts';
 import type { LayoutConfig } from './layout.ts';
 
 /**
@@ -77,6 +82,17 @@ export interface UiDeps {
    * (the real `navigator.clipboard.writeText`) so the widget never reaches for a global directly.
    */
   copyToClipboard(text: string): Promise<void>;
+  /**
+   * The live read-only history readout (Task 5.6) the slider renders — the scene's `getHistory`
+   * (the untouched canonical `Game` head + the currently-viewed ply). Supplied by the app so the
+   * UI shell never imports `src/render`.
+   */
+  getHistory(): HistoryFacts;
+  /**
+   * Scrub the LOCAL view to ply `k` (Task 5.6, read-only) — the scene's `scrubTo`. Re-renders
+   * `game.stateAt(k)` for the local viewer without mutating the game; `k >= head` snaps to live.
+   */
+  scrubTo(k: number): void;
 }
 
 /** The live UI handle exposed to the app + tests: the container plus its layout readout. */
@@ -101,6 +117,7 @@ export function defaultWidgetFactories(layout: LayoutConfig): WidgetFactory[] {
     if (id === MENU_WIDGET_ID) return menuWidget();
     if (id === SETTINGS_WIDGET_ID) return settingsWidget();
     if (id === NET_WIDGET_ID) return netWidget();
+    if (id === HISTORY_SLIDER_WIDGET_ID) return historySliderWidget();
     return placeholderWidget(id);
   });
 }
@@ -130,6 +147,8 @@ export function createUi(container: HTMLElement, deps: UiDeps): UiHandle {
       getNet: deps.getNet,
       setPendingJoinCode: deps.setPendingJoinCode,
       copyToClipboard: deps.copyToClipboard,
+      getHistory: deps.getHistory,
+      scrubTo: deps.scrubTo,
     },
     document,
   );

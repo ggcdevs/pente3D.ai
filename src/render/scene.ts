@@ -118,6 +118,24 @@ export interface TempReadout {
   previewOpacity: number;
 }
 
+/**
+ * A plain, serializable readout of the read-only local history scrub (Task 5.6) — for the history
+ * slider widget + Playwright. `maxPly` is the live head ply (the canonical `Game`'s highest
+ * reachable ply, UNAFFECTED by scrubbing); `viewedPly` is the ply currently RENDERED for the local
+ * viewer (`maxPly` when live, an earlier ply while scrubbing back); `scrubbing` is true iff the
+ * viewer is looking at an earlier ply than the live head. Because `maxPly` reports the untouched
+ * `Game`, a test can prove scrubbing rendered an earlier state (fewer pieces via `getState`) WHILE
+ * the canonical history is intact (agent-principles #3: observable behavior, never a log line).
+ */
+export interface HistoryReadout {
+  /** The live head ply — the canonical `Game`'s highest reachable ply (unaffected by scrubbing). */
+  maxPly: number;
+  /** The ply currently rendered for the local viewer (`maxPly` when live, earlier while scrubbing). */
+  viewedPly: number;
+  /** Whether the viewer is scrubbed back (`viewedPly < maxPly`). */
+  scrubbing: boolean;
+}
+
 /** The live scene handle exposed to the app and (via window.__pente) to tests. */
 /**
  * The networking hooks (Task 5.5) the app wires to its net session after constructing it. The scene
@@ -157,7 +175,11 @@ export interface SceneHandle {
   applyColors(preview: ColorsPreview): ColorsReadout;
   /** The live-previewable colours actually applied to the scene, read back off the Three.js objects. */
   getColors(): ColorsReadout;
-  /** The live game state (pieces/turn/captures/winner) — for Playwright assertions. */
+  /**
+   * The game state CURRENTLY RENDERED for the local viewer (pieces/turn/captures/winner) — the live
+   * head normally, or the scrubbed-to `game.stateAt(k)` while the history slider is scrubbed back
+   * (Task 5.6). Playwright asserts on this to prove scrubbing changed the rendered piece count.
+   */
   getState(): GameState;
   /**
    * The status-banner history context (Task 5.2): `{ history: { canUndo, canRedo, canReset } }`.
@@ -165,6 +187,18 @@ export interface SceneHandle {
    * availability from the `Game` the scene owns (a history fact `GameState` cannot carry).
    */
   getBannerContext(): BannerContext;
+  /**
+   * The read-only local history scrub readout (Task 5.6): `{ maxPly, viewedPly, scrubbing }`. The
+   * history slider reads this to derive its range/label; `maxPly` reports the untouched canonical
+   * `Game` head, so a test can prove the scrub is viewer-local (history intact while rendered).
+   */
+  getHistory(): HistoryReadout;
+  /**
+   * Scrub the LOCAL view to ply `k` (Task 5.6, read-only): re-render `game.stateAt(k)` for the
+   * local viewer WITHOUT mutating the canonical `Game` (log / cursor / headHash untouched). A
+   * `k >= maxPly` snaps back to live. Emits/syncs nothing — distinct from `undo` (GLOSSARY).
+   */
+  scrubTo(k: number): void;
   /**
    * Subscribe to board state changes (Task 5.2): `listener` fires after EVERY state change
    * (place / undo / redo / reset / temp-confirm), so the UI shell can repaint its widgets no
@@ -358,7 +392,27 @@ export function createScene(container: HTMLElement): SceneHandle {
     winLine.sync(state);
     notifyStateChanged();
   }
-  syncBoard(game.state());
+
+  // Read-only local history scrub (Task 5.6). `scrubIndex` is the ply the LOCAL viewer is looking
+  // at, or `null` when live (the head). It is a pure view overlay: the canonical `game` (its log /
+  // cursor / headHash) is NEVER touched by scrubbing — only which snapshot we reflect into the
+  // meshes changes. `renderState()` is the single source of "what is on screen": the scrubbed
+  // snapshot while scrubbing, else the live head. Every live mutation (place/undo/redo/reset)
+  // routes through `commitLive`, which clears the scrub so a real move always snaps back to live.
+  let scrubIndex: number | null = null;
+
+  /** The state currently reflected into the meshes: the scrubbed snapshot, or the live head. */
+  function renderState(): GameState {
+    return scrubIndex === null ? game.state() : game.stateAt(scrubIndex);
+  }
+
+  /** Clear any scrub and reconcile the meshes to the live head — every real state change flows here. */
+  function commitLive(): void {
+    scrubIndex = null;
+    syncBoard(game.state());
+  }
+
+  syncBoard(renderState());
 
   // Hover (Task 4.7): the PURE `computeHoverTarget` turns a raycast hit + live state + the
   // node↔line index into a highlight set (empty-node vs placed-sphere vs line, visible-only,
@@ -479,7 +533,8 @@ export function createScene(container: HTMLElement): SceneHandle {
       // Nothing to undo/redo — a no-op for the hotkey (the button UI reflects availability).
       return;
     }
-    syncBoard(game.state());
+    // A real undo/redo is a live state change: snap the local view back to live (clears any scrub).
+    commitLive();
   };
   const commands: Command[] = [
     { id: 'undo', run: () => undoRedoSafe(() => game.undo()) },
@@ -491,7 +546,8 @@ export function createScene(container: HTMLElement): SceneHandle {
       id: 'reset',
       run: () => {
         game = new Game(BOARD_SIZE);
-        syncBoard(game.state());
+        // A fresh game is a live state change: clear any scrub and reflect the pristine head.
+        commitLive();
       },
     },
     { id: 'toggleOrthogonal', run: () => toggleCategory('orthogonal') },
@@ -641,7 +697,9 @@ export function createScene(container: HTMLElement): SceneHandle {
   }
 
   function getState(): GameState {
-    return game.state();
+    // Report the RENDERED state (the scrubbed snapshot while reviewing, else the live head) so a
+    // history scrub is observable via getState — the piece count matches what is on screen (5.6).
+    return renderState();
   }
 
   /**
@@ -658,6 +716,27 @@ export function createScene(container: HTMLElement): SceneHandle {
         canReset: game.canUndo() || game.canRedo(),
       },
     };
+  }
+
+  /**
+   * The read-only local history scrub readout (Task 5.6). `maxPly` is the untouched canonical
+   * `Game` head; `viewedPly` is the ply currently rendered (`maxPly` when live, `scrubIndex` while
+   * scrubbing). `scrubbing` is true iff the viewer is back off the head.
+   */
+  function getHistory(): HistoryReadout {
+    const maxPly = game.ply();
+    const viewedPly = scrubIndex === null ? maxPly : scrubIndex;
+    return { maxPly, viewedPly, scrubbing: scrubIndex !== null };
+  }
+
+  /**
+   * Scrub the LOCAL view to ply `k` (Task 5.6, read-only). Reflects `game.stateAt(k)` into the
+   * meshes WITHOUT touching the canonical `Game`. A `k` at/after the live head snaps back to live
+   * (`scrubIndex = null`); otherwise the earlier snapshot is shown. Emits/syncs nothing.
+   */
+  function scrubTo(k: number): void {
+    scrubIndex = k >= game.ply() ? null : k;
+    syncBoard(renderState());
   }
 
   /** Subscribe to board state changes; returns an unsubscribe fn (Task 5.2). */
@@ -728,7 +807,9 @@ export function createScene(container: HTMLElement): SceneHandle {
   function place(coords: Coord): GameState {
     // `game.place` throws IllegalMove on an illegal move; let it propagate honestly.
     game.place(coords);
-    syncBoard(game.state());
+    // A placement is a live state change: snap the local view back to live (clears any scrub) and
+    // reflect the new head — a piece placed while reviewing history returns the viewer to live.
+    commitLive();
     return game.state();
   }
 
@@ -915,6 +996,8 @@ export function createScene(container: HTMLElement): SceneHandle {
     getColors,
     getState,
     getBannerContext,
+    getHistory,
+    scrubTo,
     onStateChange,
     getPieces,
     getMarkers,

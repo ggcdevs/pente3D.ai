@@ -1,0 +1,143 @@
+import { describe, it, expect } from 'vitest';
+import {
+  resolveScrub,
+  deriveSlider,
+  type HistoryFacts,
+  type SliderModel,
+} from './sliderModel.ts';
+
+/**
+ * Task 5.6 — the PURE history-slider view-model (render-ui design Part 6; GLOSSARY "History
+ * slider"). Two DOM-free, THREE-free derivations under the strict unit + mutation gate:
+ *   - `resolveScrub(value, maxPly)` — a raw slider value + live head ply → the CLAMPED viewed ply
+ *     and whether it is live. Negative cases: below-range clamps to 0, above-range clamps to
+ *     maxPly, a fractional value is floored, and a non-finite value snaps to live — so an
+ *     out-of-range drag can never render a nonexistent snapshot.
+ *   - `deriveSlider(facts)` — the ply/max/viewed facts → the serializable model the DOM renders
+ *     (range bounds, value, `atLive`, `enabled`, label). Negative cases: a pristine game disables
+ *     the slider; a stale out-of-range viewedPly is re-clamped before labelling; the head labels
+ *     `Live` while an earlier ply labels `Move k / max`.
+ * Genuine assertions on the derived values (not on the inputs), one-flag-at-a-time so no field can
+ * borrow another's bit. No THREE, no DOM.
+ */
+
+describe('resolveScrub — clamp + live detection', () => {
+  it('resolves an in-range integer value to exactly that viewed ply, not live below the head', () => {
+    const r = resolveScrub(2, 5);
+    expect(r.viewedPly).toBe(2);
+    expect(r.atLive).toBe(false);
+  });
+
+  it('reports atLive true exactly at the head ply (end snaps to live)', () => {
+    const r = resolveScrub(5, 5);
+    expect(r.viewedPly).toBe(5);
+    expect(r.atLive).toBe(true);
+  });
+
+  it('clamps a below-range (negative) value up to ply 0', () => {
+    const r = resolveScrub(-3, 5);
+    expect(r.viewedPly).toBe(0);
+    expect(r.atLive).toBe(false);
+  });
+
+  it('clamps an above-range value down to the head ply and reports live', () => {
+    // 9 > maxPly 5 → clamps to 5, which IS the head, so atLive must be true (drag past end = live).
+    const r = resolveScrub(9, 5);
+    expect(r.viewedPly).toBe(5);
+    expect(r.atLive).toBe(true);
+  });
+
+  it('floors a fractional value to an integer snapshot index', () => {
+    // 3.9 must floor to 3 (a real snapshot), not round to 4 — kills a round()/ceil() mutant.
+    const r = resolveScrub(3.9, 5);
+    expect(r.viewedPly).toBe(3);
+    expect(r.atLive).toBe(false);
+  });
+
+  it('treats a NaN value as live at the head (defensive against a bad DOM read)', () => {
+    const r = resolveScrub(Number.NaN, 4);
+    expect(r.viewedPly).toBe(4);
+    expect(r.atLive).toBe(true);
+  });
+
+  it('treats +Infinity as live at the head (non-finite guard, not an above-range clamp path)', () => {
+    const r = resolveScrub(Number.POSITIVE_INFINITY, 4);
+    expect(r.viewedPly).toBe(4);
+    expect(r.atLive).toBe(true);
+  });
+
+  it('treats -Infinity as live at the head (non-finite guard fires before the clamp)', () => {
+    const r = resolveScrub(Number.NEGATIVE_INFINITY, 4);
+    expect(r.viewedPly).toBe(4);
+    expect(r.atLive).toBe(true);
+  });
+
+  it('reports live at ply 0 for a pristine game (maxPly 0): head and floor coincide', () => {
+    const r = resolveScrub(0, 0);
+    expect(r.viewedPly).toBe(0);
+    expect(r.atLive).toBe(true);
+  });
+});
+
+describe('deriveSlider — model derivation', () => {
+  const facts = (over: Partial<HistoryFacts>): HistoryFacts => ({
+    maxPly: 5,
+    viewedPly: 5,
+    ...over,
+  });
+
+  it('derives Live at the head: value=max, atLive, and the "Live" label', () => {
+    const m: SliderModel = deriveSlider(facts({ maxPly: 5, viewedPly: 5 }));
+    expect(m.min).toBe(0);
+    expect(m.max).toBe(5);
+    expect(m.value).toBe(5);
+    expect(m.atLive).toBe(true);
+    expect(m.enabled).toBe(true);
+    expect(m.label).toBe('Live');
+  });
+
+  it('derives an earlier ply: value=viewed, not atLive, and a "Move k / max" label', () => {
+    const m = deriveSlider(facts({ maxPly: 5, viewedPly: 2 }));
+    expect(m.value).toBe(2);
+    expect(m.max).toBe(5);
+    expect(m.atLive).toBe(false);
+    // The label must name the VIEWED ply and the MAX (not swapped) — kills an order-swap mutant.
+    expect(m.label).toBe('Move 2 / 5');
+  });
+
+  it('disables the slider for a pristine game (maxPly 0) — nothing to review', () => {
+    const m = deriveSlider(facts({ maxPly: 0, viewedPly: 0 }));
+    expect(m.enabled).toBe(false);
+    expect(m.max).toBe(0);
+    expect(m.atLive).toBe(true);
+    expect(m.label).toBe('Live');
+  });
+
+  it('enables the slider as soon as one ply exists (maxPly 1)', () => {
+    const m = deriveSlider(facts({ maxPly: 1, viewedPly: 1 }));
+    expect(m.enabled).toBe(true);
+  });
+
+  it('re-clamps a stale above-range viewedPly down to max before labelling', () => {
+    // viewedPly 9 > max 3 (a stale fact) → value clamps to 3, which is the head → Live.
+    const m = deriveSlider(facts({ maxPly: 3, viewedPly: 9 }));
+    expect(m.value).toBe(3);
+    expect(m.atLive).toBe(true);
+    expect(m.label).toBe('Live');
+  });
+
+  it('re-clamps a negative viewedPly up to 0 (an earlier, non-live position)', () => {
+    const m = deriveSlider(facts({ maxPly: 4, viewedPly: -2 }));
+    expect(m.value).toBe(0);
+    expect(m.atLive).toBe(false);
+    expect(m.label).toBe('Move 0 / 4');
+  });
+
+  it('floors a negative maxPly to 0 (defensive) rather than emitting a negative range', () => {
+    const m = deriveSlider(facts({ maxPly: -1, viewedPly: -1 }));
+    expect(m.max).toBe(0);
+    expect(m.value).toBe(0);
+    expect(m.enabled).toBe(false);
+    expect(m.atLive).toBe(true);
+  });
+});

@@ -63,6 +63,10 @@ const ui = createUi(container, {
   getNet: () => scene.getNet(),
   setPendingJoinCode: (code) => scene.setPendingJoinCode(code),
   copyToClipboard: (text) => navigator.clipboard.writeText(text),
+  // History slider (Task 5.6): the slider reads the scene's read-only history readout and drives
+  // its local scrub seam — no command dispatch (it emits/syncs nothing; design Part 6 / GLOSSARY).
+  getHistory: () => scene.getHistory(),
+  scrubTo: (k) => scene.scrubTo(k),
 });
 
 /** Repaint every widget from the live state + the banner history context (Task 5.2). */

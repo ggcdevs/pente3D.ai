@@ -130,6 +130,12 @@ export default {
     // and the SyncEngine+seat session wiring (`net/session.ts`, `net/appSession.ts`) are the
     // Playwright-verified IO boundary, excluded exactly as the menu/settings glue is above.
     'src/ui/widgets/netModel.ts',
+    // Pure history-slider view-model (Task 5.6): the raw-value → clamped-viewed-ply resolution
+    // (`resolveScrub`) and the ply/max/viewed facts → serializable model derivation
+    // (`deriveSlider`). THREE-free / DOM-free — the `<input type=range>` widget glue
+    // (`widgets/historySlider.ts`) and the scene's read-only scrub seam (`scene.ts`) are the
+    // Playwright-verified IO boundary, excluded exactly as the net/settings glue is above.
+    'src/ui/widgets/sliderModel.ts',
     '!src/ui/**/*.test.ts',
   ],
   coverageAnalysis: 'perTest',
