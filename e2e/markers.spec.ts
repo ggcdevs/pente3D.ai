@@ -167,6 +167,13 @@ test('hovering an empty node GLOWS its marker; empty space clears it', async ({ 
   // Exactly the hovered empty node's marker is highlighted (a single empty-node hover).
   expect(glowed.highlightedCount).toBe(1);
 
+  // Capture the artifact WHILE the marker is glowing (highlightedCount === 1), so the image
+  // actually demonstrates the hover glow — not the post-clear zero-highlight state. Taken
+  // before the clear below (agent-principles #3: the artifact must show the behavior it names).
+  const shot = resolve('e2e/artifacts/markers-hover.png');
+  mkdirSync(dirname(shot), { recursive: true });
+  await page.screenshot({ path: shot });
+
   // Hover empty space (a far NDC corner off the board) → nothing highlighted, marker restored.
   const cleared = await page.evaluate(() => {
     const p = (window as unknown as { __pente: Pente }).__pente;
@@ -189,8 +196,4 @@ test('hovering an empty node GLOWS its marker; empty space clears it', async ({ 
 
   // The highlight colour SSOT is the tracked config value (load-bearing import).
   expect(colorsDefault.hoverHighlight).toMatch(/^#[0-9a-f]{6}$/i);
-
-  const shot = resolve('e2e/artifacts/markers-hover.png');
-  mkdirSync(dirname(shot), { recursive: true });
-  await page.screenshot({ path: shot });
 });

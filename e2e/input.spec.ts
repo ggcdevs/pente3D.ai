@@ -137,15 +137,38 @@ test('scroll-zoom is clamped by the preset maxDistance (a real dolly)', async ({
 
   const before = await get(page, (p) => p.getCamera()!);
   expect(dist(before)).toBeLessThanOrEqual(maxDistance + 1e-6);
+  // Sanity: we start strictly inside the clamp, so "reached the clamp" is an observed change.
+  expect(dist(before)).toBeLessThan(maxDistance - 1);
 
-  // Scroll far OUT (positive deltaY dollies out) — many big steps to hit the clamp.
-  for (let i = 0; i < 40; i++) await page.mouse.wheel(0, 200);
-  await page.waitForTimeout(100);
+  // Scroll far OUT (positive deltaY dollies out) until the clamp is reached, then a few extra
+  // events to prove the clamp HOLDS. Damping is off (scene.ts), so each real wheel event
+  // dollies synchronously — no per-frame settle needed. We poll the live camera between events
+  // and stop as soon as the distance stops growing (clamped), so the loop is bounded by how
+  // fast the dolly reaches maxDistance, NOT a fixed 40-iteration serial wait that blows the
+  // per-test timeout under parallel CPU load (agent-principles #7: a gate must pass/fail
+  // reliably, not jitter under load). `wheel(0, 400)` dollies out several notches per event, so
+  // the clamp is reached in a handful of events; the cap is a generous safety bound, not the
+  // expected count.
+  let prev = dist(before);
+  let reached = false;
+  for (let i = 0; i < 30; i++) {
+    await page.mouse.wheel(0, 400);
+    const d = dist(await get(page, (p) => p.getCamera()!));
+    // Every observed distance must respect the clamp — never past maxDistance at any point.
+    expect(d).toBeLessThanOrEqual(maxDistance + 1e-3);
+    if (Math.abs(d - prev) < 1e-4 && d > dist(before)) {
+      reached = true;
+      break;
+    }
+    prev = d;
+  }
 
   const after = await get(page, (p) => p.getCamera()!);
-  // The camera moved (a real zoom happened) but never past the configured maxDistance.
+  // The camera moved (a real zoom happened), the loop observed the clamp, and the final
+  // distance sits at the configured maxDistance (clamped, not merely below it).
+  expect(reached).toBe(true);
   expect(dist(after)).toBeGreaterThan(dist(before));
-  expect(dist(after)).toBeLessThanOrEqual(maxDistance + 1e-3);
+  expect(dist(after)).toBeCloseTo(maxDistance, 2);
 });
 
 test('a keybinding chord dispatches its command (showAllDiagonals reveals the diagonals)', async ({

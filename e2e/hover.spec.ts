@@ -43,11 +43,19 @@ interface HoverTarget {
   lines: string[];
   pieces: string[];
 }
+interface LineGroupReadout {
+  category: string;
+  visible: boolean;
+  segmentCount: number;
+  lineCount: number;
+  highlightedSegmentCount: number;
+}
 
 type Pente = {
   place(coords: [number, number, number]): GameStateReadout | null;
   getState(): GameStateReadout | null;
   getPieces(): PieceReadout[] | null;
+  getVisibleLines(): LineGroupReadout[] | null;
   pickAt(x: number, y: number): RaycastHit | null;
   hoverAt(x: number, y: number): HoverTarget | null;
   getHoverTarget(): HoverTarget | null;
@@ -223,7 +231,31 @@ test('line picking: hovering a drawn gridline (away from nodes) resolves to a li
   expect(target!.lines).toEqual([found!.lineId]);
   expect(target!.nodes).toEqual([]);
 
+  // The whole-line glow is actually APPLIED on-screen, not merely computed: exactly one line's
+  // worth of gridline segments now carry the highlight colour across the drawn groups. Before
+  // the hover no segment is highlighted; after it, precisely one full line's segments glow — so
+  // the captured artifact genuinely shows the single-line highlight it names (agent-principles
+  // #3: proof = observable render state, and the screenshot depicts that state).
+  const highlightedSegments = (groups: LineGroupReadout[]): number =>
+    groups.reduce((sum, g) => sum + g.highlightedSegmentCount, 0);
+  const lit = await get(page, (p) => p.getVisibleLines()!);
+  // Exactly ONE category group carries the glow (the group that owns the single hovered line),
+  // and it lights a whole line's worth of contiguous segments (> 0). Which line is the one line
+  // is already pinned above (`target.lines === [found.lineId]`); here we prove that whole-line
+  // highlight is actually APPLIED to on-screen segments, not merely computed in the target.
+  const litGroups = lit.filter((g) => g.highlightedSegmentCount > 0);
+  expect(litGroups).toHaveLength(1);
+  expect(litGroups[0]!.highlightedSegmentCount).toBeGreaterThan(0);
+  // The lit segments are a strict subset of one group's segments (a single line ⊂ its group),
+  // never the whole group — the highlight is one line, not a category-wide flood.
+  expect(litGroups[0]!.highlightedSegmentCount).toBeLessThan(litGroups[0]!.segmentCount);
+
   const shot = resolve('e2e/artifacts/hover-line.png');
   mkdirSync(dirname(shot), { recursive: true });
   await page.screenshot({ path: shot });
+
+  // Hovering empty space clears the whole-line glow (idempotent restore → zero highlighted).
+  await get(page, (p) => p.hoverAt(0.98, 0.98));
+  const cleared = await get(page, (p) => p.getVisibleLines()!);
+  expect(highlightedSegments(cleared)).toBe(0);
 });

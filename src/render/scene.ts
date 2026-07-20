@@ -483,11 +483,12 @@ export function createScene(container: HTMLElement): SceneHandle {
   }
 
   /**
-   * Apply the current `hoverTarget`'s emissive glow: the highlighted pieces glow (piece
-   * meshes), and the empty-node markers in `hoverTarget.nodes` glow (marker instances). Both
-   * are restored to base on the next hover with an empty set (idempotent) — the empty-node
-   * marker highlight the hover resolver already yields (`nodeMarkerKeys` / `HoverTarget.nodes`)
-   * is finally *applied* here (Task 4.3 wiring #3).
+   * Apply the current `hoverTarget`'s glow: the highlighted pieces glow (piece meshes), the
+   * empty-node markers in `hoverTarget.nodes` glow (marker instances), and the gridline
+   * segments of every line in `hoverTarget.lines` glow (line instances). All three are
+   * restored to base on the next hover with an empty set (idempotent) — the empty-node marker
+   * highlight and the whole-line highlight the hover resolver yields (`HoverTarget.nodes` /
+   * `HoverTarget.lines`) are *applied* here (Task 4.3 / 4.7 wiring).
    */
   function applyHoverHighlight(): void {
     pieces.highlight(
@@ -496,6 +497,7 @@ export function createScene(container: HTMLElement): SceneHandle {
       hoverRendering.emissiveBoost,
     );
     markers.highlight(hoverTarget?.nodes ?? []);
+    lines.highlight(hoverTarget?.lines ?? []);
   }
 
   function hoverAt(ndcX: number, ndcY: number): HoverTarget | null {

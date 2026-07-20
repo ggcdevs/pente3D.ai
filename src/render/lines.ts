@@ -30,12 +30,13 @@ import type { LineCategory, LineId } from '../core/lines.ts';
 import type { Coord } from '../core/coords.ts';
 import { getConfig } from '../config/config.ts';
 
-/** The colors config subset the gridlines need (per-category line color). */
+/** The colors config subset the gridlines need (per-category line color + hover glow). */
 export interface LineColorsConfig {
   lineOrthogonal: string;
   lineFaceDiagonal: string;
   lineSpaceDiagonal: string;
   lineOpacity: number;
+  hoverHighlight: string;
 }
 
 /** The geometry config subset the gridlines need. */
@@ -56,6 +57,8 @@ export interface LineGroupReadout {
   segmentCount: number;
   /** Number of full lines in the group. */
   lineCount: number;
+  /** How many of this group's segment instances currently carry the hover glow colour. */
+  highlightedSegmentCount: number;
 }
 
 /** The live gridlines handle: the three meshes + inspectors + toggles. */
@@ -74,6 +77,13 @@ export interface LinesHandle {
   pickables(): { category: LineCategory; mesh: THREE.InstancedMesh }[];
   /** Toggle a category's visibility at runtime (glue flips a flag, no rebuild). */
   setVisible(category: LineCategory, visible: boolean): void;
+  /**
+   * Apply the hover glow to exactly the segment instances of `lineIds`, restoring every other
+   * segment to its base per-category colour (render-ui/game-core design: "hovering a line
+   * highlights the whole gridline"). Idempotent; an unknown lineId is ignored. Segments the
+   * lineId spans in its owning category range are set to the glow colour.
+   */
+  highlight(lineIds: readonly LineId[]): void;
   /** Free GPU resources. */
   dispose(): void;
 }
@@ -141,8 +151,12 @@ function buildGroupMesh(
 ): THREE.InstancedMesh {
   const group = layout[category];
   const geo = new THREE.BoxGeometry(1, 1, 1);
+  // White material + per-instance colour: `instanceColor` is multiplied into the material
+  // colour, so each segment draws its literal per-instance colour. The base colour is the
+  // per-category line colour; a hover swaps a lineId's segments to the glow colour (same
+  // technique as the marker layer), so the highlight is a genuine on-screen colour change.
   const material = new THREE.MeshBasicMaterial({
-    color: new THREE.Color(colors[colorKeyOf(category)]),
+    color: 0xffffff,
     transparent: true,
     opacity: colors.lineOpacity,
     blending: threeBlending(group.blending),
@@ -150,10 +164,17 @@ function buildGroupMesh(
   });
   const mesh = new THREE.InstancedMesh(geo, material, group.segmentCount);
   mesh.name = `gridlines:${category}`;
+  mesh.instanceColor = new THREE.InstancedBufferAttribute(
+    new Float32Array(group.segmentCount * 3),
+    3,
+  );
+  const base = new THREE.Color(colors[colorKeyOf(category)]);
   for (let i = 0; i < group.segments.length; i++) {
     mesh.setMatrixAt(i, segmentMatrix(group.segments[i]!, size, spacing(geometry), geometry.lineThickness));
+    mesh.setColorAt(i, base);
   }
   mesh.instanceMatrix.needsUpdate = true;
+  if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
   mesh.visible = group.visible;
   return mesh;
 }
@@ -184,11 +205,17 @@ export function createLines(size: number): LinesHandle {
   const object = new THREE.Group();
   object.name = 'gridlines';
   const meshes = {} as Record<LineCategory, THREE.InstancedMesh>;
+  const baseColors = {} as Record<LineCategory, THREE.Color>;
+  // Which segment instances of each category currently carry the glow (for restore + readout).
+  const highlightedSegments = {} as Record<LineCategory, Set<number>>;
   for (const category of LINE_CATEGORIES) {
     const mesh = buildGroupMesh(category, layout, size, colors, geometry);
     meshes[category] = mesh;
+    baseColors[category] = new THREE.Color(colors[colorKeyOf(category)]);
+    highlightedSegments[category] = new Set<number>();
     object.add(mesh);
   }
+  const glowColor = new THREE.Color(colors.hoverHighlight);
 
   function getVisibleLines(): LineGroupReadout[] {
     return LINE_CATEGORIES.map((category) => ({
@@ -197,7 +224,48 @@ export function createLines(size: number): LinesHandle {
       blending: layout[category].blending,
       segmentCount: layout[category].segmentCount,
       lineCount: layout[category].lines.length,
+      highlightedSegmentCount: highlightedSegments[category].size,
     }));
+  }
+
+  /**
+   * Recolour exactly the segment instances of `lineIds` to the glow colour, restoring every
+   * previously-glowing segment (in any category) to its base colour first. A lineId is looked
+   * up in each category's `rangeOf` map (the category that owns it wins); unknown ids no-op.
+   */
+  function highlight(lineIds: readonly LineId[]): void {
+    // Resolve the requested lineIds to the segment ranges they occupy, per category.
+    const want = {} as Record<LineCategory, Set<number>>;
+    for (const category of LINE_CATEGORIES) want[category] = new Set<number>();
+    for (const id of lineIds) {
+      for (const category of LINE_CATEGORIES) {
+        const range = layout[category].rangeOf.get(id);
+        if (!range) continue;
+        for (let i = range.start; i < range.start + range.count; i++) want[category].add(i);
+      }
+    }
+    for (const category of LINE_CATEGORIES) {
+      const mesh = meshes[category];
+      const now = highlightedSegments[category];
+      const next = want[category];
+      let changed = false;
+      // Restore segments that were glowing and no longer should be.
+      for (const i of now) {
+        if (!next.has(i)) {
+          mesh.setColorAt(i, baseColors[category]);
+          changed = true;
+        }
+      }
+      // Glow segments that should be and were not.
+      for (const i of next) {
+        if (!now.has(i)) {
+          mesh.setColorAt(i, glowColor);
+          changed = true;
+        }
+      }
+      highlightedSegments[category] = next;
+      if (changed && mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    }
   }
 
   function rangeOf(
@@ -227,5 +295,5 @@ export function createLines(size: number): LinesHandle {
     }
   }
 
-  return { object, getVisibleLines, rangeOf, pickables, setVisible, dispose };
+  return { object, getVisibleLines, rangeOf, pickables, setVisible, highlight, dispose };
 }
