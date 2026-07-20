@@ -9,6 +9,7 @@ import type { PieceReadout } from '../render/pieces.ts';
 import type { CameraPresetReadout } from '../render/cameraControls.ts';
 import type { InputReadout } from '../input/setup.ts';
 import type { KeyResolution } from '../input/scopes.ts';
+import type { RaycastHit, HoverTarget } from '../render/hover.ts';
 import type { GameState } from '../core/gameState.ts';
 import type { Coord } from '../core/coords.ts';
 import { createLogger } from './log.ts';
@@ -51,6 +52,18 @@ export interface PenteInspect {
    * drives the keybinding path from a test without synthesizing a raw KeyboardEvent.
    */
   pressKey(chord: string): KeyResolution | null;
+  /**
+   * Raycast an NDC pointer position (−1..1) → the resolved hit (empty-node / placed-sphere
+   * / line) or null. The IO half of picking (Task 4.7), asserted on by Playwright.
+   */
+  pickAt(ndcX: number, ndcY: number): RaycastHit | null;
+  /**
+   * Drive a hover at an NDC pointer position: pick + compute the highlight target (pure) +
+   * apply the emissive glow. Returns the {@link HoverTarget} (nodes/lines/pieces) or null.
+   */
+  hoverAt(ndcX: number, ndcY: number): HoverTarget | null;
+  /** The current hover highlight target (nodes/lines/pieces), or null if nothing hovered. */
+  getHoverTarget(): HoverTarget | null;
 }
 
 declare global {
@@ -73,6 +86,9 @@ export function installInspectApi(scene: SceneHandle): PenteInspect {
     getInput: () => scene.getInput(),
     dispatch: (id: string) => scene.dispatch(id),
     pressKey: (chord: string) => scene.pressKey(chord),
+    pickAt: (ndcX: number, ndcY: number) => scene.pickAt(ndcX, ndcY),
+    hoverAt: (ndcX: number, ndcY: number) => scene.hoverAt(ndcX, ndcY),
+    getHoverTarget: () => scene.getHoverTarget(),
   };
   window.__pente = api;
   log.info('window.__pente installed', Object.keys(api));

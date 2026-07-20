@@ -65,6 +65,11 @@ export default {
     'src/render/linesLayout.ts',
     'src/render/piecesDiff.ts',
     'src/render/cameraPresets.ts',
+    // Pure hover-target computation (Task 4.7): the game-core Part 4 hover rules resolved
+    // from a raycast hit + state + line index. THREE-free / DOM-free. The Three.js
+    // raycaster (`picking.ts`) and emissive-application glue are NOT mutated — verified by
+    // Playwright, exactly as the other scene glue above.
+    'src/render/hover.ts',
     '!src/render/**/*.test.ts',
     // Pure input system (Task 4.6): command registry, keybinding-chord normalization,
     // and the scope-stack resolver. THREE-free / DOM-free — this is core interaction

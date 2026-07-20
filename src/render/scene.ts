@@ -10,10 +10,18 @@ import { applyCameraPreset, type CameraPresetReadout } from './cameraControls.ts
 import { createInput, type InputHandle, type InputReadout } from '../input/setup.ts';
 import type { Command } from '../input/commands.ts';
 import type { KeyResolution } from '../input/scopes.ts';
+import { createPicking, type PickingHandle, type PickGeometryConfig } from './picking.ts';
+import {
+  buildHoverLookup,
+  computeHoverTarget,
+  type HoverLookup,
+  type HoverTarget,
+  type RaycastHit,
+} from './hover.ts';
 import { Game } from '../core/game.ts';
 import type { GameState } from '../core/gameState.ts';
 import type { Coord } from '../core/coords.ts';
-import type { LineCategory } from '../core/lines.ts';
+import { generateAllLines, type LineCategory } from '../core/lines.ts';
 
 const log = createLogger('render:scene');
 
@@ -76,6 +84,20 @@ export interface SceneHandle {
    * place → a mesh appears at the node; a capturing move → the flanked meshes vanish.
    */
   place(coords: Coord): GameState;
+  /**
+   * Raycast an NDC pointer position (−1..1) and return the resolved {@link RaycastHit}
+   * (empty-node / placed-sphere / line) or null — the IO half of picking (Task 4.7). Only
+   * *visible* line meshes are intersected, so a hover never resolves to an undrawn line.
+   */
+  pickAt(ndcX: number, ndcY: number): RaycastHit | null;
+  /**
+   * Drive a hover at an NDC pointer position: pick, compute the highlight target (pure), and
+   * apply the emissive glow. Returns the computed {@link HoverTarget} (or null). This is the
+   * end-to-end hover path Playwright drives + asserts on (`getHoverTarget`).
+   */
+  hoverAt(ndcX: number, ndcY: number): HoverTarget | null;
+  /** The current hover highlight target (nodes/lines/pieces), or null if nothing hovered. */
+  getHoverTarget(): HoverTarget | null;
   dispose(): void;
 }
 
@@ -142,6 +164,20 @@ export function createScene(container: HTMLElement): SceneHandle {
   const pieces: PiecesHandle = createPieces(BOARD_SIZE);
   scene.add(pieces.object);
   pieces.sync(game.state());
+
+  // Picking + hover (Task 4.7): an invisible node pick-sphere layer (IO) resolves a pointer
+  // ray to a RaycastHit; the PURE `computeHoverTarget` turns that hit + live state + the
+  // node↔line index into a highlight set (empty-node vs placed-sphere vs line, visible-only,
+  // the placed-sphere asymmetry — game-core Part 4); the glue applies the emissive boost.
+  const picking: PickingHandle = createPicking(
+    BOARD_SIZE,
+    getConfig('geometry') as unknown as PickGeometryConfig,
+  );
+  scene.add(picking.object);
+  const hoverLookup: HoverLookup = buildHoverLookup(generateAllLines(BOARD_SIZE));
+  const hoverColors = getConfig('colors') as unknown as { hoverHighlight: string };
+  const hoverRendering = getConfig('rendering') as unknown as { emissiveBoost: number };
+  let hoverTarget: HoverTarget | null = null;
 
   // Camera presets (Task 4.6): resolve the active `controls` preset (PURE) and BIND it to
   // the OrbitControls (IO glue) — mouse-button mapping, speeds, invert, zoom limits.
@@ -263,6 +299,46 @@ export function createScene(container: HTMLElement): SceneHandle {
     return game.state();
   }
 
+  /** The line categories currently drawn — the visible-only filter for hover. */
+  function visibleCategories(): LineCategory[] {
+    return (['orthogonal', 'face', 'space'] as const).filter((c) => lineVisible[c]);
+  }
+
+  function pickAt(ndcX: number, ndcY: number): RaycastHit | null {
+    return picking.pickAt(ndcX, ndcY, camera, game.state(), lines.pickables());
+  }
+
+  /** Apply the current `hoverTarget`'s emissive glow to the piece meshes (glue). */
+  function applyHoverHighlight(): void {
+    pieces.highlight(
+      hoverTarget?.pieces ?? [],
+      hoverColors.hoverHighlight,
+      hoverRendering.emissiveBoost,
+    );
+  }
+
+  function hoverAt(ndcX: number, ndcY: number): HoverTarget | null {
+    const hit = pickAt(ndcX, ndcY);
+    hoverTarget = computeHoverTarget(hit, game.state(), hoverLookup, visibleCategories());
+    applyHoverHighlight();
+    return hoverTarget;
+  }
+
+  function getHoverTarget(): HoverTarget | null {
+    return hoverTarget;
+  }
+
+  // Pointer-driven hover: translate a pointermove on the canvas to NDC and run the hover
+  // path. Verified by Playwright moving the real mouse and asserting on getHoverTarget().
+  function onPointerMove(event: PointerEvent): void {
+    const rect = renderer.domElement.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    const ndcX = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    const ndcY = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    hoverAt(ndcX, ndcY);
+  }
+  renderer.domElement.addEventListener('pointermove', onPointerMove);
+
   let running = true;
   let lastFrame = performance.now();
   function renderLoop(): void {
@@ -288,11 +364,13 @@ export function createScene(container: HTMLElement): SceneHandle {
   function dispose(): void {
     running = false;
     window.removeEventListener('resize', onResize);
+    renderer.domElement.removeEventListener('pointermove', onPointerMove);
     input.dispose();
     controls.dispose();
     renderer.dispose();
     lines.dispose();
     pieces.dispose();
+    picking.dispose();
     renderer.domElement.remove();
   }
 
@@ -320,6 +398,9 @@ export function createScene(container: HTMLElement): SceneHandle {
     dispatch,
     pressKey,
     place,
+    pickAt,
+    hoverAt,
+    getHoverTarget,
     dispose,
   };
 }

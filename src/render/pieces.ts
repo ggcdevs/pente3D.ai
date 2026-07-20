@@ -66,6 +66,8 @@ export interface PieceReadout {
   opacity: number;
   /** True while the mesh is fading out toward disposal (a capture/rewind). */
   fadingOut: boolean;
+  /** The material's current emissive intensity — >0 iff the piece is hover-highlighted. */
+  emissiveIntensity: number;
 }
 
 /** The live pieces handle: the mesh container + inspectors + the diff-driven sync. */
@@ -76,6 +78,12 @@ export interface PiecesHandle {
   sync(state: GameState): void;
   /** Advance in-flight fades by `deltaMs`; disposes meshes whose fade-out completed. */
   tick(deltaMs: number): void;
+  /**
+   * Apply the hover emissive-boost (glow) to exactly the pieces at `nodes`, restoring every
+   * other piece's emissive to 0 (render-ui design Part 1: highlight reads as an emissive
+   * boost, cleared by setting emissive → 0). Config-driven boost + colour; idempotent.
+   */
+  highlight(nodes: readonly NodeKey[], color: string, boost: number): void;
   /** Plain-number readout of every live piece (for `window.__pente`). */
   getPieces(): PieceReadout[];
   /** The number of live piece meshes currently in the scene (post-tick). */
@@ -219,6 +227,19 @@ export function createPieces(size: number): PiecesHandle {
     }
   }
 
+  function highlight(nodes: readonly NodeKey[], color: string, boost: number): void {
+    const on = new Set(nodes);
+    const glow = new THREE.Color(color);
+    for (const [node, entry] of entries) {
+      if (on.has(node)) {
+        entry.material.emissive.copy(glow);
+        entry.material.emissiveIntensity = boost;
+      } else {
+        entry.material.emissiveIntensity = 0;
+      }
+    }
+  }
+
   function getPieces(): PieceReadout[] {
     const out: PieceReadout[] = [];
     for (const [node, entry] of entries) {
@@ -232,6 +253,7 @@ export function createPieces(size: number): PiecesHandle {
         },
         opacity: entry.material.opacity,
         fadingOut: entry.fadeDir === -1,
+        emissiveIntensity: entry.material.emissiveIntensity,
       });
     }
     return out;
@@ -247,5 +269,5 @@ export function createPieces(size: number): PiecesHandle {
     geo.dispose();
   }
 
-  return { object, sync, tick, getPieces, count, dispose };
+  return { object, sync, tick, highlight, getPieces, count, dispose };
 }

@@ -66,6 +66,12 @@ export interface LinesHandle {
   getVisibleLines(): LineGroupReadout[];
   /** The instance range `{start,count}` a `lineId` occupies in its group, or null. */
   rangeOf(category: LineCategory, lineId: LineId): { start: number; count: number } | null;
+  /**
+   * The currently-*visible* category meshes, tagged with their category — the raycast
+   * targets for line picking (Task 4.7). Hidden categories are omitted so a hover never
+   * resolves to an undrawn line (the visible-only hover rule, game-core Part 4).
+   */
+  pickables(): { category: LineCategory; mesh: THREE.InstancedMesh }[];
   /** Toggle a category's visibility at runtime (glue flips a flag, no rebuild). */
   setVisible(category: LineCategory, visible: boolean): void;
   /** Free GPU resources. */
@@ -201,6 +207,13 @@ export function createLines(size: number): LinesHandle {
     return layout[category].rangeOf.get(lineId) ?? null;
   }
 
+  function pickables(): { category: LineCategory; mesh: THREE.InstancedMesh }[] {
+    return LINE_CATEGORIES.filter((category) => meshes[category].visible).map((category) => ({
+      category,
+      mesh: meshes[category],
+    }));
+  }
+
   function setVisible(category: LineCategory, visible: boolean): void {
     meshes[category].visible = visible;
   }
@@ -214,5 +227,5 @@ export function createLines(size: number): LinesHandle {
     }
   }
 
-  return { object, getVisibleLines, rangeOf, setVisible, dispose };
+  return { object, getVisibleLines, rangeOf, pickables, setVisible, dispose };
 }
