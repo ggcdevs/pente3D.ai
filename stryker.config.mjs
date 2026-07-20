@@ -75,6 +75,11 @@ export default {
     // is in the authoritative networked game — blocks an out-of-seat-order move. Separated from the
     // scene/session IO glue so it is mutation-gated like the other pure net logic.
     'src/net/turnGate.ts',
+    // Pure host/join/play-again decisions (Task 6.4, issue #4a): whether to archive+reset the local
+    // board before starting a networked game (played → yes, pristine → no), and whether a finished
+    // networked game should prompt for another (winner → yes). Separated from the scene/session IO
+    // glue so it is mutation-gated like the other pure net logic.
+    'src/net/rematch.ts',
     '!src/net/**/*.test.ts',
     // Pure render resolvers only (THREE-free). The Three.js scene GLUE (`scene.ts`,
     // `lines.ts`) is NOT mutated — it is an IO boundary verified by Playwright (build

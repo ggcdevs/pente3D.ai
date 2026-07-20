@@ -4,6 +4,7 @@ import { installInspectApi } from './debug/window.ts';
 import { createLogger } from './debug/log.ts';
 import { createAppNetSession } from './net/appSession.ts';
 import { shouldRenderSessionGame } from './net/netRouting.ts';
+import { shouldArchiveBeforeNetStart, shouldPromptRematch } from './net/rematch.ts';
 import { headHash } from './core/eventLog.ts';
 import { openDatabase, resolveDbName } from './persist/db.ts';
 import {
@@ -23,6 +24,24 @@ import type { Game } from './core/game.ts';
 import type { ArchiveListing } from './ui/widgets/archiveModel.ts';
 
 const log = createLogger('app:boot');
+
+/**
+ * The "play another?" prompt for a finished networked game (Task 6.4), as an injectable seam so the
+ * Playwright e2e can drive accept / decline deterministically (like the `__penteNetTransportFactory`
+ * seam). In the running app it is `window.confirm`; a test installs `window.__penteRematchPrompt`
+ * BEFORE boot to answer the prompt without a real dialog. Returns `true` to start a fresh net game.
+ */
+declare global {
+  interface Window {
+    /** Test-only: answers the play-another? prompt (true = start a fresh net game). */
+    __penteRematchPrompt?: () => boolean;
+  }
+}
+function rematchPrompt(): boolean {
+  const injected = window.__penteRematchPrompt;
+  if (injected !== undefined) return injected();
+  return window.confirm('Game over — play another?');
+}
 
 const container = document.getElementById('app');
 if (!container) {
@@ -244,9 +263,27 @@ void createAppNetSession(scene.getState().size)
     // this in the pure module (not an `if` in the scene) makes every phase boundary negatively tested.
     const netGameState = () =>
       shouldRenderSessionGame(session.state()) ? session.gameState() : null;
+
+    // Host/join onto a played board (Task 6.4, issue #4a): before STARTING a networked game, archive
+    // + reset the current LOCAL game iff it has actually been PLAYED — the PURE `shouldArchiveBeforeNetStart`
+    // decides (played → yes, pristine → no) from the scene-local game's ply. The archive falls out of the
+    // Task 6.3 lifecycle: dispatching `reset` swaps in a fresh `Game`, whose generation change finalizes the
+    // just-abandoned local game under its own id. Identical for HOST and JOIN (the task's hard requirement),
+    // so both go through this one seam — a pristine board is left untouched and just started.
+    const archiveResetBeforeStart = (): void => {
+      if (shouldArchiveBeforeNetStart(scene.getGame().ply())) {
+        scene.dispatch('reset');
+      }
+    };
     scene.setNetHooks({
-      host: () => void session.host().then(refreshUi),
-      join: () => void session.join(pendingJoinCode).then(refreshUi),
+      host: () => {
+        archiveResetBeforeStart();
+        void session.host().then(refreshUi);
+      },
+      join: () => {
+        archiveResetBeforeStart();
+        void session.join(pendingJoinCode).then(refreshUi);
+      },
       setPendingJoinCode: (code) => {
         pendingJoinCode = code;
       },
@@ -286,13 +323,51 @@ void createAppNetSession(scene.getState().size)
       const engine = session.syncEngine();
       return engine === null ? null : engine.game();
     };
+    // Play-another? on a finished networked game (Task 6.4). When the authoritative networked game
+    // ENDS (a winner is set) we PROMPT the player to start another, and on accept start a fresh net
+    // game in the SAME role (host mints a new code; a joiner rejoins its code). The PURE
+    // `shouldPromptRematch` decides "has the net game ended?" from the authoritative state; the prompt
+    // itself is an injectable seam (default `window.confirm`) so the Playwright e2e can drive accept /
+    // decline deterministically. The prompt fires EXACTLY ONCE per finished game (`rematchPromptedFor`
+    // guards against re-prompting on every subsequent idle session change once won).
+    let rematchPromptedFor: string | null = null;
+    const startFreshNetGame = (): void => {
+      const code = session.state().code;
+      const seat = session.state().seat;
+      session.disconnect();
+      // Preserve the role: a host re-hosts (a fresh code); a joiner rejoins the SAME room code so both
+      // accepting peers meet again. `disconnect` returned us to offline, so host/join are live again.
+      if (seat === 'black' && code !== null) {
+        pendingJoinCode = code;
+        void session.join(pendingJoinCode).then(refreshUi);
+      } else {
+        void session.host().then(refreshUi);
+      }
+    };
+    const netHeadKey = (): string | null => {
+      const game = netAuthoritativeGame();
+      return game === null ? null : headHash(game.log);
+    };
+    const maybePromptRematch = (): void => {
+      const netState = netGameState();
+      if (netState === null || !shouldPromptRematch(netState)) return;
+      // Fire once per finished game: key the guard on the authoritative head so a NEW finished game
+      // (a later rematch that is also won) re-prompts, but the same won game does not re-prompt.
+      const key = netHeadKey();
+      if (key === null || key === rematchPromptedFor) return;
+      rematchPromptedFor = key;
+      if (rematchPrompt()) startFreshNetGame();
+    };
+
     // On EVERY session-state change — a local move, a REMOTE move adopted by the transport pump
     // (the resync link), presence, or a conflict — adopt the session's authoritative game into the
     // scene (re-rendering a remote move) and repaint the widgets. This is the render half of "ONE
     // authoritative game per session"; without it a peer's move never reaches the board (issue #4).
+    // A finished game additionally offers a rematch (Task 6.4).
     session.onChange(() => {
       scene.adoptNetState();
       refreshUi();
+      maybePromptRematch();
     });
     refreshUi();
     log.info('net session wired');
