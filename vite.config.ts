@@ -90,6 +90,18 @@ export default defineConfig({
           functions: 100,
           lines: 100,
         },
+        // Pure random-id helper (GitHub issue #6): returns a UUID v4 that works in an INSECURE
+        // context (plain http on the LAN), where `crypto.randomUUID` is undefined and crashed boot.
+        // It reads the `crypto` browser global (so it is NOT in `src/core`), but is otherwise pure,
+        // deterministic-given-its-source logic — the insecure-context + Math.random fallback branches
+        // are fault-injected in its test. In the mutation scope and held to the hard 100% floor. Do
+        // not weaken (agent-principles #6).
+        'src/util/**/*.ts': {
+          statements: 100,
+          branches: 100,
+          functions: 100,
+          lines: 100,
+        },
         // The networking seam (Transport + MqttTransport) is fully unit-coverable:
         // the pure routing/topic/presence logic and the MockTransport are exercised
         // directly, and the mqtt adapter's client is injected so its glue is driven

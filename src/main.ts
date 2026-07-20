@@ -22,6 +22,7 @@ import {
 } from './persist/gameLifecycle.ts';
 import type { Game } from './core/game.ts';
 import type { ArchiveListing } from './ui/widgets/archiveModel.ts';
+import { randomId } from './util/randomId.ts';
 
 const log = createLogger('app:boot');
 
@@ -66,7 +67,9 @@ const AUTOSAVE_ID_KEY = 'pente:autosave:id';
 function resolveAutosaveId(): string {
   const existing = window.localStorage.getItem(AUTOSAVE_ID_KEY);
   if (existing !== null && existing.length > 0) return existing;
-  const id = crypto.randomUUID();
+  // `randomId` (not `crypto.randomUUID` directly) so this boot-time mint works over plain http on the
+  // LAN (issue #6): `crypto.randomUUID` is secure-context-only and undefined there.
+  const id = randomId();
   window.localStorage.setItem(AUTOSAVE_ID_KEY, id);
   return id;
 }
@@ -79,8 +82,23 @@ function resolveAutosaveId(): string {
 // The DECISION (is this a boundary?) is the PURE `gameLifecycle` module (strict unit+mutation); this
 // glue only reads the plain facts, mints ids, and writes to the archive.
 
-/** The id the CURRENT game autosaves under. Re-minted (and persisted) at each boundary. */
-let autosaveId = resolveAutosaveId();
+/**
+ * The id the CURRENT game autosaves under. Re-minted (and persisted) at each boundary.
+ *
+ * BOOT RESILIENCE (issue #6): this runs SYNCHRONOUSLY before the DOM UI overlay mounts (below), so a
+ * throw here would abort module evaluation and the UI would never mount — exactly the class of boot
+ * crash issue #6 was (an insecure-context `crypto.randomUUID` throw). `randomId` removes the known
+ * cause, but we still isolate this risky init so ANY failure (blocked/absent localStorage, a future
+ * regression) degrades to an in-memory id and lets the UI mount. Reported honestly — a degraded id
+ * means autosave persistence may not survive a refresh, NOT a silent success.
+ */
+let autosaveId: string;
+try {
+  autosaveId = resolveAutosaveId();
+} catch (err: unknown) {
+  autosaveId = randomId();
+  log.error('autosave id init failed — using an in-memory id (autosave may not persist)', err);
+}
 
 /** The `startedAt` of the current game's record — reset when a fresh game boundary mints a new id. */
 let autosaveStartedAt = Date.now();
@@ -169,7 +187,7 @@ async function autosaveTick(): Promise<void> {
   if (decision.mintFresh) {
     // A new game began: the game just left is already durable under the OLD id, so mint a fresh id
     // for the new game (the old record is left untouched — that is how past games accumulate).
-    autosaveId = crypto.randomUUID();
+    autosaveId = randomId();
     autosaveStartedAt = Date.now();
     window.localStorage.setItem(AUTOSAVE_ID_KEY, autosaveId);
     log.info('new game — minted fresh archive id', { id: autosaveId, generation });

@@ -28,6 +28,7 @@ import type { Transport } from './transport';
 import { MqttTransport, type MqttConnectFn } from './mqttTransport';
 import { NetSession } from './session';
 import { createLogger } from '../debug/log';
+import { randomId } from '../util/randomId';
 
 const log = createLogger('net:appSession');
 
@@ -45,12 +46,14 @@ declare global {
 /**
  * Resolve (creating on first run) this browser's stable playerId. It owns a seat across reconnects
  * (GLOSSARY "playerId"): persisted in localStorage so a refresh reclaims the same seat rather than
- * grabbing a new one. Uses `crypto.randomUUID` for a collision-resistant id.
+ * grabbing a new one. Uses `randomId` (a collision-resistant UUID v4) rather than `crypto.randomUUID`
+ * directly so this boot-time mint works over plain http on the LAN (issue #6): `crypto.randomUUID` is
+ * secure-context-only and undefined there, which crashed boot.
  */
 export function resolvePlayerId(): string {
   const existing = window.localStorage.getItem(PLAYER_ID_KEY);
   if (existing !== null && existing.length > 0) return existing;
-  const id = crypto.randomUUID();
+  const id = randomId();
   window.localStorage.setItem(PLAYER_ID_KEY, id);
   return id;
 }

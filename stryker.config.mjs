@@ -3,7 +3,8 @@
  * StrykerJS mutation-testing config.
  *
  * SCOPE: mutate the pure, deterministic logic only — `src/core`, `src/config`,
- * `src/persist`, and the pure `src/net` logic (`seats.ts`, `sync.ts`). The IO
+ * `src/persist`, `src/util` (the crypto-global-reading but otherwise pure random-id
+ * helper), and the pure `src/net` logic (`seats.ts`, `sync.ts`). The IO
  * transport adapter (`src/net/transport.ts`, `mqttTransport.ts`) is deliberately NOT
  * mutated; it is verified by the real-relay integration test (Task 3.3), not by
  * mutation-testing mqtt/DOM glue. Coverage is a floor; mutation is the real bar
@@ -65,6 +66,13 @@ export default {
     '!src/config/**/*.test.ts',
     'src/persist/**/*.ts',
     '!src/persist/**/*.test.ts',
+    // Pure random-id helper (GitHub issue #6): the UUID-v4 derivation that works in an INSECURE
+    // context (plain http on the LAN) where `crypto.randomUUID` is undefined and crashed boot. It
+    // reads the `crypto` browser global (so it is NOT in `src/core`) but is otherwise pure logic —
+    // the version/variant bit-forcing and the getRandomValues / Math.random fallback selection are
+    // mutation-gated. Its insecure-context + fallback branches are fault-injected in its test.
+    'src/util/**/*.ts',
+    '!src/util/**/*.test.ts',
     'src/net/seats.ts',
     'src/net/sync.ts',
     // Pure net-routing decisions (Task 6.1): where a placement flows (session vs local) and whether
