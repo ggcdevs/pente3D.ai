@@ -72,6 +72,15 @@ const UI_STYLESHEET = `
 .pente-settings-keybinding-row { font-size: 12px; opacity: 0.85; font-family: ui-monospace, monospace; }
 .pente-settings-reset { margin-top: 12px; cursor: pointer; padding: 8px 12px; border-radius: 6px; border: none; background: rgba(255,80,80,0.18); color: #ffb0b0; font-size: 13px; }
 .pente-settings-reset:hover { background: rgba(255,80,80,0.28); }
+.pente-help-modal[hidden] { display: none; }
+.pente-help-modal { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.45); pointer-events: auto; z-index: 30; }
+.pente-help-panel { position: relative; display: flex; flex-direction: column; gap: 4px; min-width: 320px; max-height: 80vh; overflow-y: auto; padding: 24px; border-radius: 10px; background: #1a1a20; color: #e6e6ea; font-family: system-ui, sans-serif; box-shadow: 0 8px 32px rgba(0,0,0,0.5); }
+.pente-help-title { font-size: 18px; font-weight: 600; margin-bottom: 8px; }
+.pente-help-close { position: absolute; top: 16px; right: 16px; cursor: pointer; border: none; background: transparent; color: #e6e6ea; font-size: 16px; line-height: 1; }
+.pente-help-body { display: flex; flex-direction: column; gap: 4px; }
+.pente-help-row { display: flex; justify-content: space-between; align-items: center; gap: 24px; padding: 4px 0; font-size: 14px; }
+.pente-help-keys { display: flex; gap: 6px; }
+.pente-help-key { padding: 2px 8px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.3); color: #e6e6ea; font-family: ui-monospace, monospace; font-size: 12px; }
 .pente-widget--net { display: flex; flex-direction: column; gap: 8px; min-width: 200px; padding: 10px 12px; border-radius: 6px; background: rgba(16,16,20,0.72); color: #e6e6ea; font-family: system-ui, sans-serif; font-size: 13px; }
 .pente-net-controls[hidden], .pente-net-status[hidden], .pente-net-conflict[hidden], .pente-net-code-row[hidden], .pente-net-seat[hidden], .pente-net-join-error[hidden] { display: none; }
 .pente-net-controls { display: flex; flex-direction: column; gap: 8px; }

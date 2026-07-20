@@ -5,6 +5,7 @@
     "settings": { "zone": "top-right", "order": 1, "visible": true },
     "lineVisibilityPanel": { "zone": "left", "order": 0, "visible": true },
     "historySlider": { "zone": "bottom-center", "order": 0, "visible": true },
-    "connectionStatus": { "zone": "top-left", "order": 0, "visible": true }
+    "connectionStatus": { "zone": "top-left", "order": 0, "visible": true },
+    "helpOverlay": { "zone": "bottom-right", "order": 0, "visible": true }
   }
 }

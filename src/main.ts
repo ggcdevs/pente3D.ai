@@ -55,6 +55,11 @@ const ui = createUi(container, {
   // Settings modal (Task 5.4): the widget hands its open() here; wire it to the scene's
   // `openSettings` command so the menu's "Settings" entry / a keybinding opens the modal.
   registerOpener: (open) => scene.setOpenSettings(open),
+  // Help overlay (Task 5.7): the widget hands its open() here; wire it to the scene's `showHelp`
+  // command so the `?` keybinding (or any UI trigger) opens the overlay. Its shortcut list is
+  // GENERATED from the scene's live registry + bindings (getHelpSources), never a hardcoded list.
+  registerOpenHelp: (open) => scene.setOpenHelp(open),
+  getHelpSources: () => scene.getHelpSources(),
   // Live colour preview: the settings modal drives the scene's applyColors seam so a colour /
   // opacity edit updates the rendered scene immediately (background + line opacity + line colours).
   applyColors: (preview) => scene.applyColors(preview),

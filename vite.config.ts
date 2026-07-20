@@ -51,6 +51,11 @@ export default defineConfig({
         // Task 5.6 Playwright spec, not unit coverage. The PURE `sliderModel.ts` is pinned to the
         // 100% floor below (and in the mutation scope). Excluded file-by-file so sliderModel stays measured.
         'src/ui/widgets/historySlider.ts',
+        // Task 5.7 help-overlay widget: the modal DOM glue that reads the scene's live registry +
+        // bindings and paints the generated shortcut rows. Touches the DOM — verified by the Task
+        // 5.7 Playwright spec, not unit coverage. The PURE `helpModel.ts` is pinned to the 100%
+        // floor below (and in the mutation scope). Excluded file-by-file so helpModel stays measured.
+        'src/ui/widgets/help.ts',
       ],
       // MACHINE-ENFORCED GATE (not documentation): the pure rules engine AND the
       // in-scope config/persist layers are held to a hard 100% floor
@@ -250,6 +255,17 @@ export default defineConfig({
         // scrub seam (`scene.ts` scrubTo/getHistory) are the Playwright-verified IO boundary,
         // excluded above. In the mutation scope and held to the hard 100% floor. Do not weaken.
         'src/ui/widgets/sliderModel.ts': {
+          statements: 100,
+          branches: 100,
+          functions: 100,
+          lines: 100,
+        },
+        // Pure help-overlay view-model (Task 5.7): the registered command ids + current bindings →
+        // ordered shortcut rows (invert bindings; keep only registered+bound; sort). THREE-free /
+        // DOM-free — the modal DOM/scope-push widget glue (`widgets/help.ts`) is the Playwright-
+        // verified IO boundary, excluded above. In the mutation scope and held to the hard 100%
+        // floor. Do not weaken (agent-principles #6).
+        'src/ui/widgets/helpModel.ts': {
           statements: 100,
           branches: 100,
           functions: 100,

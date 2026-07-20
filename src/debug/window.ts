@@ -21,6 +21,7 @@ import type { UiHandle } from '../ui/setup.ts';
 import type { LayoutReadout } from '../ui/container.ts';
 import type { BannerContext } from '../ui/widgets/banner.ts';
 import type { NetSessionState } from '../ui/widgets/netModel.ts';
+import type { HelpSources } from '../ui/widgets/helpModel.ts';
 import { createLogger } from './log.ts';
 
 const log = createLogger('debug:window');
@@ -137,6 +138,14 @@ export interface PenteInspect {
    * relay reaches `connected` with the other seat — observable behavior, not a log line (#3).
    */
   getNet(): NetSessionState | null;
+  /**
+   * The LIVE sources the help overlay (Task 5.7) generates its shortcut list from: the registered
+   * command ids + the current `key→commandId` bindings. Lets Playwright prove the overlay is
+   * GENERATED from the real registry + config — every rendered shortcut corresponds to a
+   * registered+bound command, and stale/unbound entries are absent (observable behavior, not a log
+   * line — agent-principles #3 / #8).
+   */
+  getHelpSources(): HelpSources | null;
 }
 
 declare global {
@@ -172,6 +181,7 @@ export function installInspectApi(scene: SceneHandle, ui: UiHandle): PenteInspec
     getTemp: () => scene.getTemp(),
     getLayout: () => ui.getLayout(),
     getNet: () => scene.getNet(),
+    getHelpSources: () => scene.getHelpSources(),
   };
   window.__pente = api;
   log.info('window.__pente installed', Object.keys(api));

@@ -40,6 +40,7 @@ import { Game } from '../core/game.ts';
 import type { GameState } from '../core/gameState.ts';
 import type { BannerContext } from '../ui/widgets/banner.ts';
 import type { NetSessionState } from '../ui/widgets/netModel.ts';
+import type { HelpSources } from '../ui/widgets/helpModel.ts';
 import { keyOf, type Coord } from '../core/coords.ts';
 import { generateAllLines, type LineCategory } from '../core/lines.ts';
 
@@ -235,6 +236,18 @@ export interface SceneHandle {
    * mounting the UI. Dispatching `openSettings` (menu entry or keybinding) then opens the modal.
    */
   setOpenSettings(open: () => void): void;
+  /**
+   * Wire the `showHelp` command (Task 5.7) to the mounted help-overlay widget's open(). The scene
+   * does not own the overlay (a UI widget), so the app registers the opener here after mounting the
+   * UI. Dispatching `showHelp` (the `?` keybinding or any UI trigger) then opens the overlay.
+   */
+  setOpenHelp(open: () => void): void;
+  /**
+   * The LIVE sources the help overlay generates its shortcut list from (Task 5.7): the registered
+   * command ids + the current `key→commandId` bindings. The overlay derives its rows from these so
+   * it can never drift from what the keys actually do (design Part 6; agent-principles #8).
+   */
+  getHelpSources(): HelpSources;
   /**
    * Wire the networking hooks (Task 5.5) to the app's net session (constructed after the scene, as
    * it needs a DB + transport). Dispatching `hostGame` / `joinGame` (menu entry, button, or key)
@@ -513,6 +526,12 @@ export function createScene(container: HTMLElement): SceneHandle {
   // `setOpenSettings`. Default is a no-op so an unwired/absent modal never crashes on dispatch.
   let openSettingsHook: () => void = () => {};
 
+  // The help-overlay open hook (Task 5.7): the `showHelp` command invokes this. Like the settings
+  // modal, the scene does not own the overlay (it is a UI widget), so the app sets this to the
+  // widget's open() via `setOpenHelp`. Default is a no-op so an unwired/absent overlay never
+  // crashes on dispatch (the `?` keybinding is bound in the tracked defaults from ply 0).
+  let openHelpHook: () => void = () => {};
+
   // Networking seams (Task 5.5). The scene does not own the net SESSION (it needs an IndexedDB
   // handle + a transport — an app-level concern), exactly as it does not own the settings modal.
   // The app wires these hooks after constructing the session (`setNetHooks`), and the net widget
@@ -572,6 +591,11 @@ export function createScene(container: HTMLElement): SceneHandle {
     // (or if the widget is absent) it is an honest no-op — never a crash (design Principle 3: the
     // menu's "Settings" entry and any keybinding dispatch this identical id).
     { id: 'openSettings', run: () => openSettingsHook() },
+    // Open the help overlay (Task 5.7). The overlay is a UI widget the scene does not own, so the
+    // command invokes a settable hook the app wires to the mounted widget's open(). The `?`
+    // keybinding (tracked default) dispatches this identical id (design Principle 3). Until wired
+    // (or if the widget is absent) it is an honest no-op — never a crash.
+    { id: 'showHelp', run: () => openHelpHook() },
     // Networking (Task 5.5): Host a game / Join by code. The session is an app-level object (needs a
     // DB + transport), so these commands invoke settable hooks the app wires to the net session.
     // Both are argument-free like every command; the join code rides via `setPendingJoinCode` (the
@@ -771,6 +795,22 @@ export function createScene(container: HTMLElement): SceneHandle {
 
   function setOpenSettings(open: () => void): void {
     openSettingsHook = open;
+  }
+
+  /** Wire the `showHelp` command (Task 5.7) to the mounted help-overlay widget's open(). */
+  function setOpenHelp(open: () => void): void {
+    openHelpHook = open;
+  }
+
+  /**
+   * The LIVE sources the help overlay generates its shortcut list from (Task 5.7): the registered
+   * command ids (from the same registry keybindings dispatch through) + the current `key→commandId`
+   * bindings (the tracked `keybindings` config). The overlay derives its rows from these, so it can
+   * never drift from what the keys actually do (design Part 6 "generated from the command registry";
+   * agent-principles #8: no duplicated volatile facts).
+   */
+  function getHelpSources(): HelpSources {
+    return { commandIds: input.registry.ids(), bindings: keybindings };
   }
 
   /** Wire the networking hooks (Task 5.5) to the app's net session, after it is constructed. */
@@ -1008,6 +1048,8 @@ export function createScene(container: HTMLElement): SceneHandle {
     popScope,
     dispatch,
     setOpenSettings,
+    setOpenHelp,
+    getHelpSources,
     setNetHooks,
     getNet,
     setPendingJoinCode,

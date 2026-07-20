@@ -35,6 +35,8 @@ import {
   HISTORY_SLIDER_WIDGET_ID,
 } from './widgets/historySlider.ts';
 import type { HistoryFacts } from './widgets/sliderModel.ts';
+import { helpWidget, HELP_WIDGET_ID, type HelpScope } from './widgets/help.ts';
+import type { HelpSources } from './widgets/helpModel.ts';
 import type { LayoutConfig } from './layout.ts';
 
 /**
@@ -49,7 +51,7 @@ export interface UiDeps {
    * scope) enters by pushing its scope onto the scene's stack. Supplied by the app (the scene
    * handle) so the UI shell never imports the input module.
    */
-  pushScope(scope: MenuScope | SettingsScope): void;
+  pushScope(scope: MenuScope | SettingsScope | HelpScope): void;
   /** Pop the topmost input scope (Task 5.3) — a modal/mode leaves by popping its scope. */
   popScope(): void;
   /**
@@ -58,6 +60,19 @@ export interface UiDeps {
    * menu's "Settings" entry / a keybinding opens the modal (design Principle 3, one action layer).
    */
   registerOpener(open: () => void): void;
+  /**
+   * Register the help-overlay opener (Task 5.7). The help widget hands its `open()` here at mount;
+   * the app wires it to the scene's `showHelp` command (`scene.setOpenHelp`) so the `?` keybinding
+   * (or any UI trigger) opens the overlay (design Principle 3, one action layer).
+   */
+  registerOpenHelp(open: () => void): void;
+  /**
+   * The LIVE sources the help overlay generates its shortcut list from (Task 5.7) — the scene's
+   * `getHelpSources` (registered command ids + current bindings). Supplied by the app so the UI
+   * shell never imports `src/render`. The overlay derives its rows from these, never a hardcoded
+   * list (design Part 6; agent-principles #8).
+   */
+  getHelpSources(): HelpSources;
   /**
    * Live-apply a colour preview to the scene (Task 5.4) — the settings modal's colour/opacity live
    * preview. Supplied by the app (the scene's `applyColors` seam) so the UI shell never imports
@@ -118,6 +133,7 @@ export function defaultWidgetFactories(layout: LayoutConfig): WidgetFactory[] {
     if (id === SETTINGS_WIDGET_ID) return settingsWidget();
     if (id === NET_WIDGET_ID) return netWidget();
     if (id === HISTORY_SLIDER_WIDGET_ID) return historySliderWidget();
+    if (id === HELP_WIDGET_ID) return helpWidget();
     return placeholderWidget(id);
   });
 }
@@ -143,6 +159,8 @@ export function createUi(container: HTMLElement, deps: UiDeps): UiHandle {
       pushScope: deps.pushScope,
       popScope: deps.popScope,
       registerOpener: deps.registerOpener,
+      registerOpenHelp: deps.registerOpenHelp,
+      getHelpSources: deps.getHelpSources,
       applyColors: deps.applyColors,
       getNet: deps.getNet,
       setPendingJoinCode: deps.setPendingJoinCode,

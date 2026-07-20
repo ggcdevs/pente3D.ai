@@ -136,6 +136,11 @@ export default {
     // (`widgets/historySlider.ts`) and the scene's read-only scrub seam (`scene.ts`) are the
     // Playwright-verified IO boundary, excluded exactly as the net/settings glue is above.
     'src/ui/widgets/sliderModel.ts',
+    // Pure help-overlay view-model (Task 5.7): the registered command ids + current bindings →
+    // ordered shortcut rows (invert bindings, keep only registered+bound commands, sort). THREE-free
+    // / DOM-free — the DOM/scope-push widget glue (`widgets/help.ts`) is the Playwright-verified IO
+    // boundary, excluded exactly as the menu/settings/slider glue is above.
+    'src/ui/widgets/helpModel.ts',
     '!src/ui/**/*.test.ts',
   ],
   coverageAnalysis: 'perTest',
