@@ -196,6 +196,15 @@ export interface PenteInspect {
    * made the archive load flaky under parallel load (observable behavior, not a log line — #3).
    */
   getHeadHash(): string | null;
+  /**
+   * Re-broadcast the networked session's current authoritative log to the room (Task 6.7). A no-op
+   * offline. Idempotent by design — adopting an already-received log is a receiver no-op
+   * (`decideSync` IGNOREs a prefix) — so it never moves a peer backward; it only fills the LIVE
+   * relay's non-retained subscription gap. Lets the two-context live-relay e2e converge
+   * DETERMINISTICALLY (the mover re-broadcasts until the peer actually receives the move over the
+   * real relay — proof-by-behavior, agent-principles #3), without a re-publish loop in the app.
+   */
+  resync(): void;
 }
 
 /** The app-level archive readouts wired into the inspect API (Task 5.8; the DB lives in `main.ts`). */
@@ -250,6 +259,9 @@ export function installInspectApi(
     // The AUTHORITATIVE game's head hash (Task 6.1, issue #4): the networked session's game when a
     // net game is live, else the local game — so a two-client test proves convergence to one head.
     getHeadHash: () => scene.getHeadHash(),
+    // Re-broadcast the authoritative networked log (Task 6.7) — a no-op offline. The two-context
+    // live-relay e2e drives this to defeat the relay's subscription gap without weakening the proof.
+    resync: () => scene.resync(),
   };
   window.__pente = api;
   log.info('window.__pente installed', Object.keys(api));

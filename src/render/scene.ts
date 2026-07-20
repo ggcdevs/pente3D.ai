@@ -193,6 +193,15 @@ export interface NetHooks {
    * game's fingerprint so a two-client test can prove both peers converged to an identical head.
    */
   getNetHeadHash(): string | null;
+  /**
+   * Re-broadcast the session's current authoritative log to the room (Task 6.7). Idempotent and safe
+   * anytime: adopting an already-delivered log is a proven no-op on the receiver (`decideSync` IGNOREs
+   * a prefix), so this never moves a peer backward — it only fills the LIVE relay's non-retained
+   * subscription gap (a move published before the peer's subscription was active is otherwise dropped).
+   * A no-op with no live engine. This is the real "resync" capability a reconnect button would use; the
+   * two-context live-relay e2e drives it to defeat that gap deterministically without weakening the proof.
+   */
+  resync(): void;
 }
 
 export interface SceneHandle {
@@ -322,6 +331,13 @@ export interface SceneHandle {
    * two-client test can prove both peers converged to an identical head (observable behavior, #3).
    */
   getHeadHash(): string;
+  /**
+   * Re-broadcast the networked session's current authoritative log to the room (Task 6.7). A no-op
+   * offline (no live session). Idempotent by design (adopting an already-received log is a receiver
+   * no-op via `decideSync`), so it never moves a peer backward — it only fills the LIVE relay's
+   * non-retained subscription gap, letting a two-context live-relay e2e converge deterministically.
+   */
+  resync(): void;
   /**
    * The LIVE sources the help overlay generates its shortcut list from (Task 5.7): the registered
    * command ids + the current `key→commandId` bindings. The overlay derives its rows from these so
@@ -673,6 +689,8 @@ export function createScene(container: HTMLElement): SceneHandle {
     canPlace: () => true,
     getNetGameState: () => null,
     getNetHeadHash: () => null,
+    // No live session → nothing to re-broadcast. Honest no-op until wired (never a crash on dispatch).
+    resync: () => {},
   };
 
   const undoRedoSafe = (fn: () => void): void => {
@@ -996,6 +1014,15 @@ export function createScene(container: HTMLElement): SceneHandle {
    */
   function getHeadHash(): string {
     return netHooks.getNetHeadHash() ?? headHash(game.log);
+  }
+
+  /**
+   * Re-broadcast the networked session's current authoritative log (Task 6.7). Delegates to the net
+   * hook (which calls the SyncEngine's `publishState`); a no-op offline. Used by the two-context
+   * live-relay e2e to fill the relay's subscription gap — never changes local state (idempotent).
+   */
+  function resync(): void {
+    netHooks.resync();
   }
 
   /**
@@ -1345,6 +1372,7 @@ export function createScene(container: HTMLElement): SceneHandle {
     loadGame,
     getGame,
     getHeadHash,
+    resync,
     getHelpSources,
     setNetHooks,
     adoptNetState,

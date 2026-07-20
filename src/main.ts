@@ -361,6 +361,14 @@ void createAppNetSession(scene.getState().size)
         const engine = session.syncEngine();
         return engine === null ? null : headHash(engine.game().log);
       },
+      // Re-broadcast the authoritative log to the room (Task 6.7). Delegates to the engine's
+      // idempotent `publishState` (adopting an already-received log is a receiver no-op), so it never
+      // moves a peer backward — it only fills the LIVE relay's non-retained subscription gap. A no-op
+      // with no live engine. This is the genuine "resync" a reconnect button would use; the
+      // two-context live-relay e2e drives it to converge deterministically without weakening the proof.
+      resync: () => {
+        session.syncEngine()?.publishState();
+      },
     });
     // Archive ACCUMULATION for NETWORKED games (Task 6.3): the authoritative game to persist while a
     // net game is live is the SESSION engine's game — its own `Game` object, distinct from the scene's
