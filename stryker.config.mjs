@@ -63,6 +63,7 @@ export default {
     // plan Tasks 4.1/4.4).
     'src/render/sceneConfig.ts',
     'src/render/linesLayout.ts',
+    'src/render/piecesDiff.ts',
     '!src/render/**/*.test.ts',
   ],
   coverageAnalysis: 'perTest',

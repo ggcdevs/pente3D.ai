@@ -7,5 +7,6 @@
     "roughness": 0.8,
     "metalness": 0
   },
-  "emissiveBoost": 0.6
+  "emissiveBoost": 0.6,
+  "pieceFadeMs": 180
 }

@@ -4,6 +4,10 @@ import { createLogger } from '../debug/log.ts';
 import { getConfig } from '../config/config.ts';
 import { resolveSceneConfig, type ResolvedSceneConfig, type Vec3 } from './sceneConfig.ts';
 import { createLines, type LinesHandle, type LineGroupReadout } from './lines.ts';
+import { createPieces, type PiecesHandle, type PieceReadout } from './pieces.ts';
+import { Game } from '../core/game.ts';
+import type { GameState } from '../core/gameState.ts';
+import type { Coord } from '../core/coords.ts';
 
 const log = createLogger('render:scene');
 
@@ -48,6 +52,16 @@ export interface SceneHandle {
   getViewportSize(): ViewportReadout;
   /** Per-category gridline readouts (visibility/blending/instance counts) as plain numbers. */
   getVisibleLines(): LineGroupReadout[];
+  /** The live game state (pieces/turn/captures/winner) — for Playwright assertions. */
+  getState(): GameState;
+  /** Plain-number readout of every live piece mesh (node/owner/position/opacity). */
+  getPieces(): PieceReadout[];
+  /**
+   * Place the current player's piece at `coords` and reconcile the piece meshes. Throws
+   * `IllegalMove` on an illegal move (propagated honestly). Drives Task 4.5's e2e:
+   * place → a mesh appears at the node; a capturing move → the flanked meshes vanish.
+   */
+  place(coords: Coord): GameState;
   dispose(): void;
 }
 
@@ -105,6 +119,16 @@ export function createScene(container: HTMLElement): SceneHandle {
   const lines: LinesHandle = createLines(BOARD_SIZE);
   scene.add(lines.object);
 
+  // Individual piece meshes (Task 4.5): a `Game` drives the canonical state; the pieces
+  // handle reconciles its mesh set to `game.state().pieces` via the pure `diffPieces`
+  // plan on every placement, fading pieces in (placement) and out (capture). This is the
+  // scene's live game — Playwright drives it via `place()` and asserts on `getState()` /
+  // `getPieces()` (build plan Task 4.5).
+  const game = new Game(BOARD_SIZE);
+  const pieces: PiecesHandle = createPieces(BOARD_SIZE);
+  scene.add(pieces.object);
+  pieces.sync(game.state());
+
   function getCamera(): CameraReadout {
     return {
       position: { x: camera.position.x, y: camera.position.y, z: camera.position.z },
@@ -135,9 +159,28 @@ export function createScene(container: HTMLElement): SceneHandle {
     return lines.getVisibleLines();
   }
 
+  function getState(): GameState {
+    return game.state();
+  }
+
+  function getPieces(): PieceReadout[] {
+    return pieces.getPieces();
+  }
+
+  function place(coords: Coord): GameState {
+    // `game.place` throws IllegalMove on an illegal move; let it propagate honestly.
+    game.place(coords);
+    pieces.sync(game.state());
+    return game.state();
+  }
+
   let running = true;
+  let lastFrame = performance.now();
   function renderLoop(): void {
     if (!running) return;
+    const now = performance.now();
+    pieces.tick(now - lastFrame);
+    lastFrame = now;
     controls.update();
     renderer.render(scene, camera);
     requestAnimationFrame(renderLoop);
@@ -159,6 +202,7 @@ export function createScene(container: HTMLElement): SceneHandle {
     controls.dispose();
     renderer.dispose();
     lines.dispose();
+    pieces.dispose();
     renderer.domElement.remove();
   }
 
@@ -179,6 +223,9 @@ export function createScene(container: HTMLElement): SceneHandle {
     getLighting,
     getViewportSize,
     getVisibleLines,
+    getState,
+    getPieces,
+    place,
     dispose,
   };
 }

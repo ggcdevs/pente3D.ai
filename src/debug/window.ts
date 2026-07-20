@@ -5,6 +5,9 @@ import type {
   ViewportReadout,
 } from '../render/scene.ts';
 import type { LineGroupReadout } from '../render/lines.ts';
+import type { PieceReadout } from '../render/pieces.ts';
+import type { GameState } from '../core/gameState.ts';
+import type { Coord } from '../core/coords.ts';
 import { createLogger } from './log.ts';
 
 const log = createLogger('debug:window');
@@ -25,8 +28,15 @@ export interface PenteInspect {
   getViewportSize(): ViewportReadout | null;
   /** Per-category gridline readouts (visibility/blending/instance counts) as plain numbers. */
   getVisibleLines(): LineGroupReadout[] | null;
-  /** Game state accessor — stub until the rules core lands (Stage 1). */
-  getState(): { stub: true; note: string };
+  /** The live game state (pieces/turn/captures/winner) as plain values. */
+  getState(): GameState | null;
+  /** Plain-number readout of every live piece mesh (node/owner/position/opacity). */
+  getPieces(): PieceReadout[] | null;
+  /**
+   * Place the current player's piece at `coords`, reconcile the meshes, and return the
+   * new state. Throws `IllegalMove` on an illegal move (propagated so tests observe it).
+   */
+  place(coords: Coord): GameState | null;
 }
 
 declare global {
@@ -42,7 +52,9 @@ export function installInspectApi(scene: SceneHandle): PenteInspect {
     getLighting: () => scene.getLighting(),
     getViewportSize: () => scene.getViewportSize(),
     getVisibleLines: () => scene.getVisibleLines(),
-    getState: () => ({ stub: true, note: 'rules core not yet implemented (Stage 1)' }),
+    getState: () => scene.getState(),
+    getPieces: () => scene.getPieces(),
+    place: (coords: Coord) => scene.place(coords),
   };
   window.__pente = api;
   log.info('window.__pente installed', Object.keys(api));
