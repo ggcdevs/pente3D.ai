@@ -10,12 +10,26 @@
  * placed-sphere asymmetry) stay pure in `hover.ts`.
  *
  * Node picking uses a dedicated **invisible instanced pick-sphere layer** — one sphere per
- * board node, slightly larger than the visible marker/piece so the whole node cell is
- * clickable. Whether a picked node reads as an *empty node* or a *placed sphere* is decided
- * by the live `GameState.pieces` at pick time (the piece meshes are individual and share
- * the node's world position, so the pick sphere stands in for both). Line picking
- * intersects the three category `InstancedMesh`es and maps the struck instance back to its
- * `lineId` via the layout's segment→line ranges.
+ * board node, sized to match the node's VISIBLE geometry so "what you see is what you can
+ * hit" (GitHub issue #3): an EMPTY node's sphere is marker-sized, an OCCUPIED node's is
+ * piece-sized (plus an optional small config padding). The base geometry is a UNIT sphere and
+ * each instance is SCALED to its node's current radius via its matrix, so occupancy changes
+ * only rewrite scales — never rebuild geometry. The per-node radius decision is the PURE,
+ * THREE-free `resolveNodePickRadius` (`pickRadius.ts`, strict unit + mutation gate); this file
+ * is the IO glue that applies it. `sync(state)` re-scales the changed instances on every board
+ * change (wired through the scene's `syncBoard` choke point), so a placed piece grows its
+ * hitbox and a captured/undone one shrinks it back.
+ *
+ * Before this fix EVERY node's sphere was one generous PIECE-sized radius, so in a dense
+ * lattice viewed at an angle a near EMPTY node's oversized invisible sphere intercepted the
+ * ray aimed at a FAR node's small visible marker (the nearest-hit raycaster then returned the
+ * wrong, nearer node) — a "dead zone" over the far marker. Marker-sizing empty nodes removes it.
+ *
+ * Whether a picked node reads as an *empty node* or a *placed sphere* is still decided by the
+ * live `GameState.pieces` at pick time (the piece meshes are individual and share the node's
+ * world position, so the pick sphere stands in for both). Line picking intersects the three
+ * category `InstancedMesh`es and maps the struck instance back to its `lineId` via the
+ * layout's segment→line ranges.
  *
  * Board placement mirrors the scene/line/piece convention: node `(x,y,z)` → world
  * `((x − c)·spacing, …)` with `c = (size − 1)/2`, so the board is centered on the origin.
@@ -26,6 +40,7 @@ import { keyOf, type Coord, type NodeKey } from '../core/coords.ts';
 import type { GameState } from '../core/gameState.ts';
 import type { LineCategory, LineId } from '../core/lines.ts';
 import { buildLineGroups, LINE_CATEGORIES, type LineGroups } from './linesLayout.ts';
+import { resolveNodePickRadius } from './pickRadius.ts';
 import type { RaycastHit } from './hover.ts';
 
 /** The geometry config subset picking needs (spacing + the node pick radius basis). */
@@ -33,6 +48,8 @@ export interface PickGeometryConfig {
   spacing: number;
   markerRadius: number;
   pieceRadius: number;
+  /** Optional extra hit margin added to the visible radius (defaults to 0 when absent). */
+  pickPadding?: number;
 }
 
 /** A category line mesh the picker may intersect, with its instance→line resolver. */
@@ -57,8 +74,21 @@ export interface PickingHandle {
     state: GameState,
     lineMeshes: readonly PickableLineMesh[],
   ): RaycastHit | null;
+  /**
+   * Resize every node's pick sphere to match its CURRENT visible geometry (issue #3):
+   * marker-sized for an empty node, piece-sized for an occupied one. Call on every board
+   * change (the `syncBoard` choke point) so an occupied node's hitbox grows to its piece and
+   * an emptied node's shrinks back to its marker — keeping "what you see is what you can hit".
+   */
+  sync(state: GameState): void;
   /** World position (board-centered) of a node — exposed for tests/markers. */
   worldOf(node: Coord): { x: number; y: number; z: number };
+  /**
+   * The current pick-sphere radius for a node (world units), read back off the live instance
+   * scale — for tests to prove an empty node is marker-sized and an occupied node piece-sized
+   * (observable behavior, not inference — agent-principles #3). Returns null for an off-board node.
+   */
+  radiusOf(node: Coord): number | null;
   /** Free GPU resources. */
   dispose(): void;
 }
@@ -102,18 +132,16 @@ export function createPicking(
   geometry: PickGeometryConfig,
 ): PickingHandle {
   const spacing = geometry.spacing;
-  // Pick radius: generous — the larger of the piece and a padded marker — so the whole node
-  // cell is clickable regardless of what occupies it. Never exceeds half the spacing so
-  // adjacent nodes stay separable.
-  const pickRadius = Math.min(
-    spacing * 0.49,
-    Math.max(geometry.pieceRadius, geometry.markerRadius * 1.5),
-  );
+  const padding = geometry.pickPadding ?? 0;
 
   const object = new THREE.Group();
   object.name = 'pick:nodes';
 
-  const geo = new THREE.SphereGeometry(pickRadius, 8, 6);
+  // A UNIT sphere is the base geometry; each instance is SCALED to its node's current pick
+  // radius (issue #3). Varying the radius per instance via the matrix scale — rather than one
+  // shared oversized geometry — is what lets an empty node's hitbox stay marker-sized while an
+  // occupied node's grows to its piece, all in one draw with no geometry rebuilds.
+  const geo = new THREE.SphereGeometry(1, 8, 6);
   const material = new THREE.MeshBasicMaterial();
   const count = size * size * size;
   const mesh = new THREE.InstancedMesh(geo, material, count);
@@ -123,16 +151,47 @@ export function createPicking(
   mesh.visible = false;
 
   const nodeOfInstance: NodeKey[] = new Array(count);
+  const worldOfInstance: THREE.Vector3[] = new Array(count);
+  const instanceOfNode = new Map<NodeKey, number>();
   const dummy = new THREE.Object3D();
+  const NO_ROT = new THREE.Quaternion();
+
+  /** Resolve a node's pick radius from its occupancy — pure decision, THREE-free. */
+  function radiusFor(occupied: boolean): number {
+    return resolveNodePickRadius({
+      occupied,
+      markerRadius: geometry.markerRadius,
+      pieceRadius: geometry.pieceRadius,
+      spacing,
+      padding,
+    });
+  }
+
+  /** Write instance `i`'s matrix at its fixed world position, scaled uniformly to `radius`. */
+  function setInstanceRadius(i: number, radius: number): void {
+    dummy.position.copy(worldOfInstance[i]!);
+    dummy.scale.set(radius, radius, radius);
+    dummy.quaternion.copy(NO_ROT);
+    dummy.updateMatrix();
+    mesh.setMatrixAt(i, dummy.matrix);
+  }
+
+  // The pick radius currently applied to each instance, so `sync` only rewrites the changed
+  // ones and `radiusOf` reports observed truth (not an inferred value).
+  const radii: number[] = new Array(count);
+  const emptyRadius = radiusFor(false);
   let i = 0;
   for (let x = 0; x < size; x++) {
     for (let y = 0; y < size; y++) {
       for (let z = 0; z < size; z++) {
         const node: Coord = [x, y, z];
-        dummy.position.copy(worldVec(node, size, spacing));
-        dummy.updateMatrix();
-        mesh.setMatrixAt(i, dummy.matrix);
-        nodeOfInstance[i] = keyOf(node);
+        const key = keyOf(node);
+        worldOfInstance[i] = worldVec(node, size, spacing);
+        nodeOfInstance[i] = key;
+        instanceOfNode.set(key, i);
+        // The board starts empty → every node is marker-sized.
+        setInstanceRadius(i, emptyRadius);
+        radii[i] = emptyRadius;
         i++;
       }
     }
@@ -186,9 +245,36 @@ export function createPicking(
     return null;
   }
 
+  /**
+   * Re-scale every node's pick sphere to its CURRENT occupancy (issue #3): occupied → piece
+   * radius, empty → marker radius. Only the instances whose radius actually changed are
+   * rewritten, so a single placement touches one instance. An off-board `pieces` key names no
+   * instance and is ignored.
+   */
+  function sync(state: GameState): void {
+    let changed = false;
+    const occRadius = radiusFor(true);
+    // Fast path: assume every node empty, then bump the occupied ones. `pieces` holds only the
+    // occupied nodes, so this visits exactly the pieces plus the ones that just emptied.
+    for (let idx = 0; idx < count; idx++) {
+      const want = state.pieces[nodeOfInstance[idx]!] !== undefined ? occRadius : emptyRadius;
+      if (want !== radii[idx]) {
+        setInstanceRadius(idx, want);
+        radii[idx] = want;
+        changed = true;
+      }
+    }
+    if (changed) mesh.instanceMatrix.needsUpdate = true;
+  }
+
   function worldOf(node: Coord): { x: number; y: number; z: number } {
     const v = worldVec(node, size, spacing);
     return { x: v.x, y: v.y, z: v.z };
+  }
+
+  function radiusOf(node: Coord): number | null {
+    const idx = instanceOfNode.get(keyOf(node));
+    return idx === undefined ? null : radii[idx]!;
   }
 
   function dispose(): void {
@@ -197,5 +283,5 @@ export function createPicking(
     material.dispose();
   }
 
-  return { object, pickAt, worldOf, dispose };
+  return { object, pickAt, sync, worldOf, radiusOf, dispose };
 }

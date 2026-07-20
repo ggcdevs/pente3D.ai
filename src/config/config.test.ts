@@ -394,6 +394,9 @@ describe('render config sections (Task 4.2)', () => {
     expect(g.spacing).toBe(2);
     expect(g.markerRadius).toBe(0.14);
     expect(g.pieceRadius).toBe(0.42);
+    // Optional pick-hitbox margin (issue #3): the extra radius added to a node's VISIBLE
+    // size for its invisible pick sphere. Small, so empty-node hitboxes stay marker-sized.
+    expect(g.pickPadding).toBe(0.03);
     expect(g.lineThickness).toBe(0.02);
     expect(g.sphereSegments).toEqual({ width: 16, height: 12 });
   });

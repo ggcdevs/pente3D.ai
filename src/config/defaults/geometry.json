@@ -2,6 +2,7 @@
   "spacing": 2,
   "markerRadius": 0.14,
   "pieceRadius": 0.42,
+  "pickPadding": 0.03,
   "lineThickness": 0.02,
   "sphereSegments": { "width": 16, "height": 12 }
 }

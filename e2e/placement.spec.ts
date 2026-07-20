@@ -102,8 +102,10 @@ const clickNdc = (
 
 /**
  * Find NDC coordinates whose raycast resolves to the given empty node, by scanning the
- * viewport. Camera framing is fixed at load, so a coarse grid reliably finds each node.
- * Returns the NDC that hits `node` (as an empty node), or throws if unreachable.
+ * viewport. Camera framing is fixed at load. A FINE grid is used because empty-node hitboxes
+ * are marker-sized (GitHub issue #3): a small far marker can slip between coarse samples, so
+ * the scan steps finely to reliably land on each node. Returns the NDC that hits `node` (as an
+ * empty node), or throws if unreachable.
  */
 async function ndcForNode(
   page: import('@playwright/test').Page,
@@ -111,10 +113,11 @@ async function ndcForNode(
 ): Promise<[number, number]> {
   const found = await page.evaluate((target: string) => {
     const p = (window as unknown as { __pente: Pente }).__pente;
-    for (let iy = 0; iy <= 60; iy++) {
-      for (let ix = 0; ix <= 60; ix++) {
-        const x = (ix / 60) * 2 - 1;
-        const y = (iy / 60) * 2 - 1;
+    const STEPS = 400;
+    for (let iy = 0; iy <= STEPS; iy++) {
+      for (let ix = 0; ix <= STEPS; ix++) {
+        const x = (ix / STEPS) * 2 - 1;
+        const y = (iy / STEPS) * 2 - 1;
         const hit = p.pickAt(x, y);
         if (hit && hit.node === target) return [x, y] as [number, number];
       }

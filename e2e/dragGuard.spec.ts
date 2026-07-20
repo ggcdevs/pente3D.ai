@@ -55,16 +55,46 @@ async function clientPxForCentralNode(
     const canvas = document.querySelector('canvas') as HTMLCanvasElement;
     const rect = canvas.getBoundingClientRect();
     // Central band only: NDC in [-0.6, 0.6] on both axes keeps the pixel comfortably inside
-    // the viewport so pointer events land AND a ~180px drag around it stays on-canvas.
-    for (let iy = 20; iy <= 40; iy++) {
-      for (let ix = 20; ix <= 40; ix++) {
-        const ndcX = (ix / 60) * 2 - 1;
-        const ndcY = (iy / 60) * 2 - 1;
+    // the viewport so pointer events land AND a ~180px drag around it stays on-canvas. A FINE
+    // step is used because empty-node hitboxes are marker-sized (GitHub issue #3): a coarse grid
+    // can step over a small far marker. We also require the CLIENT pixel to round-trip back to
+    // the SAME node (the space `page.mouse` uses), so the later release genuinely lands on it.
+    const toClient = (ndcX: number, ndcY: number) => ({
+      x: rect.left + ((ndcX + 1) / 2) * rect.width,
+      y: rect.top + ((1 - ndcY) / 2) * rect.height,
+    });
+    const toNdc = (clientX: number, clientY: number) => ({
+      x: ((clientX - rect.left) / rect.width) * 2 - 1,
+      y: -(((clientY - rect.top) / rect.height) * 2 - 1),
+    });
+    // A CLIENT pixel is only accepted when it and a small pixel neighbourhood (±2px in each
+    // direction) ALL resolve to the SAME empty node. Requiring a centred pocket — not just a
+    // single edge sample — guarantees the marker-sized hitbox (issue #3) genuinely surrounds the
+    // release pixel, so `page.mouse`'s integer/sub-pixel coordinates still land on it.
+    const nodeAtPixel = (cx: number, cy: number): string | null => {
+      const n = toNdc(cx, cy);
+      const h = p.pickAt(n.x, n.y);
+      return h && h.kind === 'empty-node' && h.node ? h.node : null;
+    };
+    for (let iy = 200; iy <= 400; iy++) {
+      for (let ix = 200; ix <= 400; ix++) {
+        const ndcX = (ix / 600) * 2 - 1;
+        const ndcY = (iy / 600) * 2 - 1;
         const hit = p.pickAt(ndcX, ndcY);
         if (hit && hit.kind === 'empty-node' && hit.node) {
-          const clientX = rect.left + ((ndcX + 1) / 2) * rect.width;
-          const clientY = rect.top + ((1 - ndcY) / 2) * rect.height;
-          return { x: clientX, y: clientY, node: hit.node };
+          const client = toClient(ndcX, ndcY);
+          const cx = Math.round(client.x);
+          const cy = Math.round(client.y);
+          const centre = nodeAtPixel(cx, cy);
+          if (
+            centre === hit.node &&
+            nodeAtPixel(cx - 2, cy) === hit.node &&
+            nodeAtPixel(cx + 2, cy) === hit.node &&
+            nodeAtPixel(cx, cy - 2) === hit.node &&
+            nodeAtPixel(cx, cy + 2) === hit.node
+          ) {
+            return { x: cx, y: cy, node: hit.node };
+          }
         }
       }
     }

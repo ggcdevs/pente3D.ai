@@ -158,6 +158,16 @@ export default defineConfig({
           functions: 100,
           lines: 100,
         },
+        // Pure node-pick-radius resolver (GitHub issue #3): empty → marker-sized, occupied →
+        // piece-sized, clamped to half-spacing. Mutation-scoped, so pinned to the hard 100%
+        // floor here too (the mutation-scope↔coverage alignment above). Its InstancedMesh
+        // glue (`picking.ts`) is the Playwright-verified IO boundary and is NOT pinned.
+        'src/render/pickRadius.ts': {
+          statements: 100,
+          branches: 100,
+          functions: 100,
+          lines: 100,
+        },
         'src/input/commands.ts': {
           statements: 100,
           branches: 100,

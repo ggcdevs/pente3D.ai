@@ -41,7 +41,7 @@ import type { GameState } from '../core/gameState.ts';
 import type { BannerContext } from '../ui/widgets/banner.ts';
 import type { NetSessionState } from '../ui/widgets/netModel.ts';
 import type { HelpSources } from '../ui/widgets/helpModel.ts';
-import { keyOf, type Coord } from '../core/coords.ts';
+import { keyOf, type Coord, type NodeKey } from '../core/coords.ts';
 import { generateAllLines, type LineCategory } from '../core/lines.ts';
 
 const log = createLogger('render:scene');
@@ -162,6 +162,14 @@ export interface SceneHandle {
   controls: OrbitControls;
   /** Camera position + orbit target as plain numbers. */
   getCamera(): CameraReadout;
+  /**
+   * Position the camera + orbit target directly (test-driver seam): construct a deterministic
+   * view so picking/occlusion can be asserted from a known geometry. Updates the projection.
+   */
+  setCamera(
+    position: { x: number; y: number; z: number },
+    target: { x: number; y: number; z: number },
+  ): void;
   /** The ambient+directional lights + background actually installed, as plain numbers. */
   getLighting(): LightingReadout;
   /** The renderer's current size + camera aspect, as plain numbers. */
@@ -292,6 +300,19 @@ export interface SceneHandle {
    */
   pickAt(ndcX: number, ndcY: number): RaycastHit | null;
   /**
+   * The live pick-sphere radius (world units) for a node, or null off-board — lets a test prove
+   * an empty node's hitbox is marker-sized and an occupied node's piece-sized (issue #3).
+   */
+  pickRadiusOf(node: Coord): number | null;
+  /**
+   * Per-node perpendicular distance (world units) from the camera ray at an NDC position, plus
+   * each node's depth along the ray — a test-driver seam for the issue #3 occlusion regression.
+   */
+  rayNodeDistances(
+    ndcX: number,
+    ndcY: number,
+  ): { node: NodeKey; distance: number; depth: number }[];
+  /**
    * Drive a hover at an NDC pointer position: pick, compute the highlight target (pure), and
    * apply the emissive glow. Returns the computed {@link HoverTarget} (or null). This is the
    * end-to-end hover path Playwright drives + asserts on (`getHoverTarget`).
@@ -417,11 +438,15 @@ export function createScene(container: HTMLElement): SceneHandle {
     for (const listener of stateChangeListeners) listener();
   }
 
-  /** Reconcile every state-derived mesh set (markers + pieces + win line) to one `GameState`. */
+  /** Reconcile every state-derived mesh set (markers + pieces + win line + pick hitboxes) to one `GameState`. */
   function syncBoard(state: GameState): void {
     markers.sync(state);
     pieces.sync(state);
     winLine.sync(state);
+    // Resize each node's invisible pick sphere to its current occupancy (issue #3): an
+    // occupied node's hitbox grows to its piece, an emptied one shrinks back to its marker, so
+    // picking stays truthful ("what you see is what you can hit") across every board change.
+    picking.sync(state);
     notifyStateChanged();
   }
 
@@ -686,6 +711,24 @@ export function createScene(container: HTMLElement): SceneHandle {
     };
   }
 
+  /**
+   * Position the camera + orbit target directly (test-driver seam, like `scrubTo`). Lets a
+   * Playwright test construct a DETERMINISTIC view — e.g. one board node directly behind
+   * another along the view ray — so picking/occlusion can be asserted from a known geometry
+   * rather than the load-time framing. Updates the projection so `pickAt` rays are correct.
+   */
+  function setCamera(
+    position: { x: number; y: number; z: number },
+    target: { x: number; y: number; z: number },
+  ): void {
+    camera.position.set(position.x, position.y, position.z);
+    controls.target.set(target.x, target.y, target.z);
+    camera.lookAt(controls.target);
+    camera.updateMatrixWorld(true);
+    camera.updateProjectionMatrix();
+    controls.update();
+  }
+
   function getLighting(): LightingReadout {
     const bg = scene.background as THREE.Color;
     return {
@@ -918,6 +961,51 @@ export function createScene(container: HTMLElement): SceneHandle {
   }
 
   /**
+   * The live pick-sphere radius (world units) for a node — read back off the pick layer so a
+   * test can prove an empty node is marker-sized and an occupied node piece-sized (GitHub issue
+   * #3 "what you see is what you can hit"). Returns null for an off-board node.
+   */
+  function pickRadiusOf(node: Coord): number | null {
+    return picking.radiusOf(node);
+  }
+
+  /**
+   * For an NDC pointer position, the perpendicular distance (world units) from the camera ray
+   * to each node's centre, paired with each node's depth along the ray — a test-driver seam for
+   * the issue #3 occlusion regression. Lets a Playwright test pick, analytically and
+   * deterministically, a FAR node A the ray passes within a marker radius of and a NEARER empty
+   * node B the ray passes within the OLD piece radius of (but OUTSIDE a marker radius) — exactly
+   * the fingerprint of the bug — then assert `pickAt` returns A, not B. THREE-side glue (the ray
+   * math needs the live camera), verified via Playwright like the rest of picking.
+   */
+  function rayNodeDistances(
+    ndcX: number,
+    ndcY: number,
+  ): { node: NodeKey; distance: number; depth: number }[] {
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
+    const origin = ray.ray.origin;
+    const dir = ray.ray.direction; // unit length
+    const out: { node: NodeKey; distance: number; depth: number }[] = [];
+    const p = new THREE.Vector3();
+    const rel = new THREE.Vector3();
+    for (let x = 0; x < BOARD_SIZE; x++) {
+      for (let y = 0; y < BOARD_SIZE; y++) {
+        for (let z = 0; z < BOARD_SIZE; z++) {
+          const node: Coord = [x, y, z];
+          const w = picking.worldOf(node);
+          p.set(w.x, w.y, w.z);
+          rel.subVectors(p, origin);
+          const depth = rel.dot(dir); // projection onto the ray
+          const distance = Math.sqrt(Math.max(0, rel.lengthSq() - depth * depth));
+          out.push({ node: keyOf(node), distance, depth });
+        }
+      }
+    }
+    return out;
+  }
+
+  /**
    * Apply the current `hoverTarget`'s glow: the highlighted pieces glow (piece meshes), the
    * empty-node markers in `hoverTarget.nodes` glow (marker instances), and the gridline
    * segments of every line in `hoverTarget.lines` glow (line instances). All three are
@@ -1084,6 +1172,7 @@ export function createScene(container: HTMLElement): SceneHandle {
     renderer,
     controls,
     getCamera,
+    setCamera,
     getLighting,
     getViewportSize,
     getVisibleLines,
@@ -1114,6 +1203,8 @@ export function createScene(container: HTMLElement): SceneHandle {
     pressKey,
     place,
     pickAt,
+    pickRadiusOf,
+    rayNodeDistances,
     hoverAt,
     getHoverTarget,
     clickAt,

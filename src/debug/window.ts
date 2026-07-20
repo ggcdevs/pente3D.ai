@@ -37,6 +37,15 @@ const log = createLogger('debug:window');
 export interface PenteInspect {
   /** Camera position + orbit target as plain numbers. */
   getCamera(): CameraReadout | null;
+  /**
+   * Position the camera + orbit target directly (test-driver seam): lets Playwright construct a
+   * deterministic view — e.g. one node behind another along the ray — to assert picking/occlusion
+   * from a known geometry (GitHub issue #3 regression). Updates the projection so `pickAt` is correct.
+   */
+  setCamera(
+    position: { x: number; y: number; z: number },
+    target: { x: number; y: number; z: number },
+  ): void;
   /** The ambient+directional lights + background actually installed, as plain numbers. */
   getLighting(): LightingReadout | null;
   /** The renderer's current drawing-buffer size + camera aspect, as plain numbers. */
@@ -108,6 +117,22 @@ export interface PenteInspect {
    */
   pickAt(ndcX: number, ndcY: number): RaycastHit | null;
   /**
+   * The live pick-sphere radius (world units) for a node, or null off-board — lets Playwright
+   * prove an empty node's hitbox is marker-sized and an occupied node's piece-sized (GitHub
+   * issue #3: "what you see is what you can hit"), observable behavior not a log line (#3).
+   */
+  radiusOf(node: Coord): number | null;
+  /**
+   * Per-node perpendicular distance (world units) from the camera ray at an NDC position, plus
+   * each node's depth along the ray — a test-driver seam so Playwright can pick, analytically, a
+   * far node A and a nearer empty node B whose ray-distance is inside the OLD piece radius but
+   * outside a marker radius (the issue #3 occlusion fingerprint) and assert `pickAt` returns A.
+   */
+  rayNodeDistances(
+    ndcX: number,
+    ndcY: number,
+  ): { node: string; distance: number; depth: number }[];
+  /**
    * Drive a hover at an NDC pointer position: pick + compute the highlight target (pure) +
    * apply the emissive glow. Returns the {@link HoverTarget} (nodes/lines/pieces) or null.
    */
@@ -176,6 +201,7 @@ export function installInspectApi(
 ): PenteInspect {
   const api: PenteInspect = {
     getCamera: () => scene.getCamera(),
+    setCamera: (position, target) => scene.setCamera(position, target),
     getLighting: () => scene.getLighting(),
     getViewportSize: () => scene.getViewportSize(),
     getVisibleLines: () => scene.getVisibleLines(),
@@ -193,6 +219,8 @@ export function installInspectApi(
     dispatch: (id: string) => scene.dispatch(id),
     pressKey: (chord: string) => scene.pressKey(chord),
     pickAt: (ndcX: number, ndcY: number) => scene.pickAt(ndcX, ndcY),
+    radiusOf: (node: Coord) => scene.pickRadiusOf(node),
+    rayNodeDistances: (ndcX: number, ndcY: number) => scene.rayNodeDistances(ndcX, ndcY),
     hoverAt: (ndcX: number, ndcY: number) => scene.hoverAt(ndcX, ndcY),
     getHoverTarget: () => scene.getHoverTarget(),
     clickAt: (ndcX: number, ndcY: number) => scene.clickAt(ndcX, ndcY),

@@ -82,6 +82,12 @@ export default {
     // raycaster (`picking.ts`) and emissive-application glue are NOT mutated — verified by
     // Playwright, exactly as the other scene glue above.
     'src/render/hover.ts',
+    // Pure node-pick-radius resolver (GitHub issue #3): maps a node's occupancy + the
+    // marker/piece radii + padding + spacing to its invisible pick-sphere radius (empty →
+    // marker-sized, occupied → piece-sized, clamped to half-spacing). THREE-free / DOM-free —
+    // the InstancedMesh scaling + occupancy sync in `picking.ts` is the Playwright-verified IO
+    // boundary, NOT mutated, exactly as the other scene glue above.
+    'src/render/pickRadius.ts',
     '!src/render/**/*.test.ts',
     // Pure input system (Task 4.6): command registry, keybinding-chord normalization,
     // and the scope-stack resolver. THREE-free / DOM-free — this is core interaction
