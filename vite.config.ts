@@ -86,6 +86,62 @@ export default defineConfig({
           functions: 100,
           lines: 100,
         },
+        // COVERAGE-MUST-STAY-ALIGNED-WITH-MUTATION-SCOPE: every mutation-gated pure file
+        // (stryker.config.mjs `mutate`) is ALSO pinned to the hard 100% floor here, so a
+        // mutation-scoped file can never silently drop below full unit coverage. The seven
+        // pins below complete that alignment for the remaining THREE-free / DOM-free render
+        // + input resolvers; their Three.js/DOM glue siblings (lines.ts, markers.ts,
+        // pieces.ts, winLine.ts, scene.ts, cameraControls.ts, picking.ts, input/setup.ts)
+        // are the Playwright-verified IO boundary and are deliberately NOT pinned. Do not
+        // weaken these numbers to pass; add tests instead (agent-principles.md #6).
+        'src/render/linesLayout.ts': {
+          statements: 100,
+          branches: 100,
+          functions: 100,
+          lines: 100,
+        },
+        'src/render/piecesDiff.ts': {
+          statements: 100,
+          branches: 100,
+          functions: 100,
+          lines: 100,
+        },
+        'src/render/winLineLayout.ts': {
+          statements: 100,
+          branches: 100,
+          functions: 100,
+          lines: 100,
+        },
+        'src/render/cameraPresets.ts': {
+          statements: 100,
+          branches: 100,
+          functions: 100,
+          lines: 100,
+        },
+        'src/render/hover.ts': {
+          statements: 100,
+          branches: 100,
+          functions: 100,
+          lines: 100,
+        },
+        'src/input/commands.ts': {
+          statements: 100,
+          branches: 100,
+          functions: 100,
+          lines: 100,
+        },
+        'src/input/scopes.ts': {
+          statements: 100,
+          branches: 100,
+          functions: 100,
+          lines: 100,
+        },
+        'src/input/keybindings.ts': {
+          statements: 100,
+          branches: 100,
+          functions: 100,
+          lines: 100,
+        },
         // Pure placement + temp-mode wiring (Task 4.8): the "click empty node → place"
         // resolver and the immutable temp-placement state machine + its scope. THREE-free /
         // DOM-free — the Three.js click/preview glue lives in `scene.ts` (Playwright-verified,
