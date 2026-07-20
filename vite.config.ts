@@ -152,6 +152,16 @@ export default defineConfig({
           functions: 100,
           lines: 100,
         },
+        // Pure drag-vs-click disambiguation (GitHub issue #1): the pointerdown/pointerup →
+        // place-vs-suppress decision, config-driven via `interaction.dragGuard`. THREE-free /
+        // DOM-free — the canvas pointer plumbing lives in `scene.ts` (Playwright-verified,
+        // excluded above). Held to the hard 100% floor. Do not weaken (agent-principles #6).
+        'src/input/pointerGesture.ts': {
+          statements: 100,
+          branches: 100,
+          functions: 100,
+          lines: 100,
+        },
       },
     },
   },

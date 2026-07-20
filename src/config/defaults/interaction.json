@@ -1,0 +1,6 @@
+{
+  "dragGuard": {
+    "enabled": true,
+    "thresholdPx": 6
+  }
+}

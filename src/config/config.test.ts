@@ -78,6 +78,56 @@ describe('getConfig — defaults', () => {
     const b = getDefault('lineVisibility') as Record<string, unknown>;
     expect(b.orthogonal).toBe(true);
   });
+
+  it('returns the interaction drag-guard default: enabled with a positive px threshold (issue #1)', () => {
+    const interaction = getConfig('interaction', storage);
+    // DEFAULT ENABLED — the drag-vs-click guard is on out of the box.
+    expect(interaction.dragGuard.enabled).toBe(true);
+    expect(interaction.dragGuard.thresholdPx).toBe(6);
+  });
+});
+
+describe('getConfig — interaction.dragGuard (issue #1)', () => {
+  it('a localStorage override can disable the guard, reverting to place-on-release', () => {
+    storage.setItem(
+      overrideStorageKey('interaction'),
+      JSON.stringify({ dragGuard: { enabled: false } }),
+    );
+    const interaction = getConfig('interaction', storage);
+    expect(interaction.dragGuard.enabled).toBe(false);
+    // The sibling threshold survives the partial override (deep merge, not replace).
+    expect(interaction.dragGuard.thresholdPx).toBe(6);
+  });
+
+  it('a localStorage override can raise the threshold while leaving enabled untouched', () => {
+    storage.setItem(
+      overrideStorageKey('interaction'),
+      JSON.stringify({ dragGuard: { thresholdPx: 40 } }),
+    );
+    const interaction = getConfig('interaction', storage);
+    expect(interaction.dragGuard.thresholdPx).toBe(40);
+    expect(interaction.dragGuard.enabled).toBe(true); // sibling untouched
+  });
+
+  it('setConfig persists a partial override that getConfig deep-merges', () => {
+    setConfig('interaction', { dragGuard: { enabled: false, thresholdPx: 12 } }, storage);
+    const interaction = getConfig('interaction', storage);
+    expect(interaction.dragGuard).toEqual({ enabled: false, thresholdPx: 12 });
+  });
+
+  it('a corrupt override falls back to the pristine default (never throws)', () => {
+    storage.setItem(overrideStorageKey('interaction'), '{ not valid json');
+    const interaction = getConfig('interaction', storage);
+    expect(interaction.dragGuard).toEqual({ enabled: true, thresholdPx: 6 });
+  });
+
+  it('a scalar (non-object) override is rejected and the default is used', () => {
+    storage.setItem(overrideStorageKey('interaction'), '99');
+    expect(getConfig('interaction', storage).dragGuard).toEqual({
+      enabled: true,
+      thresholdPx: 6,
+    });
+  });
 });
 
 describe('getConfig — deep merge of overrides', () => {
@@ -369,13 +419,14 @@ describe('render config sections (Task 4.2)', () => {
 });
 
 describe('sections registry', () => {
-  it('exposes exactly the eleven required sections', () => {
+  it('exposes exactly the twelve required sections', () => {
     expect([...CONFIG_SECTIONS].sort()).toEqual(
       [
         'blending',
         'colors',
         'controls',
         'geometry',
+        'interaction',
         'keybindings',
         'layout',
         'lighting',

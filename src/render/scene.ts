@@ -23,6 +23,11 @@ import {
   TEMP_SCOPE_ID,
   type TempPlacement,
 } from '../input/placement.ts';
+import {
+  shouldPlaceFromPointer,
+  type PointerPos,
+  type DragGuardConfig,
+} from '../input/pointerGesture.ts';
 import { createPicking, type PickingHandle, type PickGeometryConfig } from './picking.ts';
 import {
   buildHoverLookup,
@@ -303,6 +308,15 @@ export function createScene(container: HTMLElement): SceneHandle {
     }
   }
 
+  // Drag-vs-click guard (GitHub issue #1): on a trackpad an orbit/pan gesture ends in a
+  // pointer release that would otherwise be treated as click-to-place, dropping pieces
+  // accidentally. The DECISION is the PURE `shouldPlaceFromPointer` (strict unit+mutation);
+  // this glue only supplies the down/up pixel positions off the real canvas. Config-driven
+  // (`interaction.dragGuard`, DEFAULT ENABLED) — resolved once at build; a live override
+  // takes effect on reload like every other config section (agent-principles #8, no magic).
+  const dragGuard = (getConfig('interaction') as unknown as { dragGuard: DragGuardConfig })
+    .dragGuard;
+
   // Camera presets (Task 4.6): resolve the active `controls` preset (PURE) and BIND it to
   // the OrbitControls (IO glue) — mouse-button mapping, speeds, invert, zoom limits.
   const presetReadout: CameraPresetReadout = applyCameraPreset(
@@ -561,15 +575,38 @@ export function createScene(container: HTMLElement): SceneHandle {
   }
   renderer.domElement.addEventListener('pointermove', onPointerMove);
 
-  // Click-driven placement (Task 4.8): a canvas click at an empty node places a piece.
-  function onClick(event: MouseEvent): void {
+  // Pointer-driven placement (Task 4.8 + GitHub issue #1): placement fires on pointer RELEASE,
+  // but only when the release was a genuine CLICK — the pointer moved <= the guard threshold
+  // since pointerdown. A larger move is a camera-manipulation drag (orbit/pan) and is
+  // suppressed, so rotating no longer drops pieces. The DRAG-vs-CLICK decision is the PURE
+  // `shouldPlaceFromPointer`; this glue only records the down position and measures travel.
+  // We track the pointer id so an interleaved second pointer can't spoof a fake short drag.
+  let pointerDownPos: PointerPos | null = null;
+  let pointerDownId: number | null = null;
+
+  function onPointerDown(event: PointerEvent): void {
+    pointerDownPos = { x: event.clientX, y: event.clientY };
+    pointerDownId = event.pointerId;
+  }
+
+  function onPointerUp(event: PointerEvent): void {
+    const down = pointerDownPos;
+    const downId = pointerDownId;
+    pointerDownPos = null;
+    pointerDownId = null;
+    // No matching pointerdown captured (release without a tracked press) → nothing to place.
+    if (down === null || event.pointerId !== downId) return;
+    // The PURE guard decides: place only on a genuine click, suppress a drag (unless the
+    // guard is disabled via config, which reverts to place-on-release).
+    if (!shouldPlaceFromPointer(down, { x: event.clientX, y: event.clientY }, dragGuard)) return;
     const rect = renderer.domElement.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return;
     const ndcX = ((event.clientX - rect.left) / rect.width) * 2 - 1;
     const ndcY = -((event.clientY - rect.top) / rect.height) * 2 + 1;
     clickAt(ndcX, ndcY);
   }
-  renderer.domElement.addEventListener('click', onClick);
+  renderer.domElement.addEventListener('pointerdown', onPointerDown);
+  renderer.domElement.addEventListener('pointerup', onPointerUp);
 
   let running = true;
   let lastFrame = performance.now();
@@ -597,7 +634,8 @@ export function createScene(container: HTMLElement): SceneHandle {
     running = false;
     window.removeEventListener('resize', onResize);
     renderer.domElement.removeEventListener('pointermove', onPointerMove);
-    renderer.domElement.removeEventListener('click', onClick);
+    renderer.domElement.removeEventListener('pointerdown', onPointerDown);
+    renderer.domElement.removeEventListener('pointerup', onPointerUp);
     input.dispose();
     controls.dispose();
     renderer.dispose();

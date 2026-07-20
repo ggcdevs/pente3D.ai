@@ -96,6 +96,11 @@ export default {
     // Three.js click/preview glue in `scene.ts` is excluded (Playwright-verified) exactly as
     // the other scene glue above.
     'src/input/placement.ts',
+    // Pure drag-vs-click disambiguation (GitHub issue #1): decides place-vs-suppress from the
+    // pointerdown/pointerup positions + the `interaction.dragGuard` config. THREE-free /
+    // DOM-free — the canvas pointer plumbing in `scene.ts` is the Playwright-verified IO
+    // boundary, excluded exactly as the other scene glue above.
+    'src/input/pointerGesture.ts',
     '!src/input/**/*.test.ts',
   ],
   coverageAnalysis: 'perTest',
