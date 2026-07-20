@@ -80,7 +80,7 @@ const GATE_SCHEMA = {
 
 phase('Harden')
 const setup = await agent(
-  `Ensure the test-integrity gates ENFORCE the scope "${SCOPE}" for Pente3D (repo ${REPO}, branch rewrite2). ${DOCTRINE}\n` +
+  `Ensure the test-integrity gates ENFORCE the scope "${SCOPE}" for Pente3D (repo ${REPO}). Work IN-PLACE on the CURRENTLY CHECKED-OUT branch — do NOT run \`git checkout\`, \`git switch\`, or otherwise change branches. ${DOCTRINE}\n` +
     `Tooling may already exist from a prior stage — be IDEMPOTENT and never drop paths already covered:\n` +
     `1. StrykerJS (@stryker-mutator/core + @stryker-mutator/vitest-runner): ensure installed; ensure stryker.config.mjs \`mutate\` includes the MUTATION scope "${MUTATE_SCOPE}" — each entry may be a dir (expand to \`<dir>/**/*.ts\`) or an exact \`.ts\` file — excluding \`*.test.ts\`, keeping existing paths. Do NOT add IO-glue files that are outside "${MUTATE_SCOPE}". Ensure \`thresholds.break = ${MUT_MIN}\` and an npm \`mutate\` script. Run \`npx stryker run\` and paste the score.\n` +
     `2. eslint-plugin-vitest rules (expect-expect, valid-expect, no-disabled-tests, no-focused-tests) active as errors on *.test.ts; \`npm run lint\` exits 0.\n` +
