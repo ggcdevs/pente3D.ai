@@ -1,6 +1,4 @@
 import { test, expect } from '@playwright/test';
-import { mkdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
 
 interface CameraReadout {
   position: { x: number; y: number; z: number };
@@ -59,11 +57,13 @@ test('dragging the canvas orbits the scene (camera changes)', async ({ page }) =
   console.log('CAMERA after :', JSON.stringify(after));
   console.log('CAMERA moved distance:', moved.toFixed(4));
 
+  // Proof is the asserted camera delta, NOT a screenshot. We deliberately do
+  // NOT write a decorative PNG here: a screenshot is an un-asserted side effect
+  // (an image whose pixels no test inspects), and a gitignored PNG cannot be
+  // regenerated from the tracked tree — so treating one as "e2e proof" is
+  // proof-by-inference (agent-principles.md #3: proof = observable behavior).
+  // Playwright's `screenshot: 'only-on-failure'` in playwright.config.ts still
+  // captures a diagnostic image when this assertion FAILS, which is legitimate
+  // debugging output, not a verification artifact.
   expect(moved).toBeGreaterThan(0.01);
-
-  // Save a screenshot artifact of the orbited scene.
-  const shotPath = resolve('e2e/artifacts/orbited-scene.png');
-  mkdirSync(dirname(shotPath), { recursive: true });
-  await page.screenshot({ path: shotPath });
-  console.log('SCREENSHOT saved to:', shotPath);
 });
