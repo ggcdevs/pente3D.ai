@@ -71,6 +71,10 @@ export default {
     // the scene renders the session game — the issue #4 "one authoritative game per session" logic,
     // separated from the scene/session IO glue so it is mutation-gated like the other pure net logic.
     'src/net/netRouting.ts',
+    // Pure seat-turn gate (Task 6.2, issue #4c): whether the local seat may place given whose turn it
+    // is in the authoritative networked game — blocks an out-of-seat-order move. Separated from the
+    // scene/session IO glue so it is mutation-gated like the other pure net logic.
+    'src/net/turnGate.ts',
     '!src/net/**/*.test.ts',
     // Pure render resolvers only (THREE-free). The Three.js scene GLUE (`scene.ts`,
     // `lines.ts`) is NOT mutated — it is an IO boundary verified by Playwright (build

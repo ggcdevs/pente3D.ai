@@ -41,6 +41,14 @@ export interface BannerDeps {
  */
 export interface BannerContext {
   readonly history: BannerHistory;
+  /**
+   * The seat-turn gate's running off-turn block count (Task 6.2, issue #4c). The banner compares it to
+   * the value it last rendered; when it ADVANCED (an off-turn placement was just rejected), it briefly
+   * pulses the "X to move" status line — the subtle off-turn cue the task requires. Absent (older
+   * callers / no net game) it is treated as 0, so the cue never fires spuriously. The pulse count is
+   * mirrored onto `data-offturn-flashes` so Playwright can prove the cue fired (observable, not a log).
+   */
+  readonly offTurnBlocks?: number;
 }
 
 /** Pristine flags used before any state arrives (nothing to undo/redo/reset yet). */
@@ -65,7 +73,31 @@ export function bannerWidget(): WidgetFactory {
       const status = doc.createElement('div');
       status.className = 'pente-banner-status';
       status.setAttribute('data-testid', 'banner-status');
+      // The off-turn cue counter (Task 6.2): mirrors how many times the "X to move" line has pulsed
+      // because an off-turn placement was rejected. Starts at 0; Playwright reads it to prove the
+      // subtle cue fired without depending on animation timing (observable behavior, not a log — #3).
+      status.setAttribute('data-offturn-flashes', '0');
       element.appendChild(status);
+
+      // The last off-turn block count this banner has rendered, so `update` can detect an INCREMENT
+      // (a fresh rejected off-turn attempt) and pulse exactly once per new block — not on every repaint.
+      let lastOffTurnBlocks = 0;
+      let flashes = 0;
+
+      /**
+       * Fire the subtle off-turn cue: bump the flash counter (mirrored to `data-offturn-flashes`) and
+       * re-trigger the CSS pulse on the status line by toggling the `--offturn` class off then on (so a
+       * second block within the animation window still visibly re-pulses). Kept deliberately subtle — a
+       * brief pulse on the existing "X to move" line, no modal / no error text (the task's requirement).
+       */
+      function flashOffTurn(): void {
+        flashes += 1;
+        status.setAttribute('data-offturn-flashes', String(flashes));
+        status.classList.remove('pente-banner-status--offturn');
+        // Force a reflow so removing then re-adding the class restarts the animation (standard idiom).
+        void status.offsetWidth;
+        status.classList.add('pente-banner-status--offturn');
+      }
 
       // Capture counts, one per player.
       const captures = doc.createElement('div');
@@ -132,8 +164,14 @@ export function bannerWidget(): WidgetFactory {
           // Before a game exists the shell still renders (pristine fallback). The history flags
           // ride in via the context bag; absent it, nothing is undo/redo/reset-able.
           const gameState = (state as GameState | null) ?? emptyStateFallback();
-          const history = (config as BannerContext | null)?.history ?? NO_HISTORY;
+          const context = config as BannerContext | null;
+          const history = context?.history ?? NO_HISTORY;
           render(deriveBanner(gameState, history));
+          // Off-turn cue (Task 6.2): if the scene's off-turn block count ADVANCED since our last
+          // paint, the local seat just attempted a move on the opponent's turn — pulse the status line.
+          const blocks = context?.offTurnBlocks ?? 0;
+          if (blocks > lastOffTurnBlocks) flashOffTurn();
+          lastOffTurnBlocks = blocks;
         },
       };
     },

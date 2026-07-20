@@ -37,6 +37,7 @@ import type { ArchivedMeta } from '../persist/archive';
 import type { Transport } from './transport';
 import { SyncEngine } from './sync';
 import { claimSeat, emptySeatMap, type SeatColor, type SeatMap } from './seats';
+import { canPlaceForSeat } from './turnGate';
 import {
   generateGameCode,
   validateGameCode,
@@ -224,6 +225,18 @@ export class NetSession {
     this.requireEngine().undo();
     this.reflectEngineStatus();
     this.emit();
+  }
+
+  /**
+   * Whether this client may place right now (Task 6.2, issue #4c): the pure {@link canPlaceForSeat}
+   * gate over this client's claimed seat + whose turn it is in the authoritative game. `true` on the
+   * local seat's turn, `false` on the opponent's — so the scene can block an out-of-seat-order move
+   * and show a subtle cue instead of pushing it onto the shared log. With no live game (offline) there
+   * is no turn to enforce and this is `true` (the scene only consults it for a live networked game).
+   */
+  canPlace(): boolean {
+    if (this.engine === null) return true;
+    return canPlaceForSeat(this.seat, this.engine.game().state().turn);
   }
 
   /** The wrapped SyncEngine, for the scene to read its `Game`/state once connected, or null. */

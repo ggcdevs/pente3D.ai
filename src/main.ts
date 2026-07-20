@@ -173,6 +173,11 @@ void createAppNetSession(scene.getState().size)
         if (state === null) throw new Error('net place: no live session game');
         return state;
       },
+      // Seat-turn gate (Task 6.2, issue #4c): the scene asks whether this client may place before
+      // routing a networked move. The session evaluates the pure `canPlaceForSeat` gate over its seat +
+      // the authoritative turn, so an off-turn click is blocked (with a subtle cue) instead of pushing
+      // an out-of-seat-order move onto the shared log.
+      canPlace: () => session.canPlace(),
       getNetGameState: netGameState,
       // The authoritative session game's head hash when a net game is live (issue #4): computed off
       // the wrapped engine's log, so `window.__pente.getHeadHash` reports the SHARED fingerprint and a

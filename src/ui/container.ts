@@ -50,6 +50,16 @@ const UI_STYLESHEET = `
 .pente-ui-zone--bottom-center { bottom: 0; left: 50%; transform: translateX(-50%); flex-direction: column; align-items: center; }
 .pente-ui-zone--bottom-right { bottom: 0; right: 0; flex-direction: column; align-items: flex-end; }
 .pente-widget--banner { display: flex; gap: 12px; align-items: center; padding: 6px 12px; border-radius: 6px; background: rgba(16,16,20,0.72); color: #e6e6ea; font-family: system-ui, sans-serif; font-size: 14px; }
+.pente-banner-status { border-radius: 4px; padding: 0 4px; }
+/* The subtle off-turn cue (Task 6.2, issue #4c): a brief single pulse of the "X to move" line when a
+   placement is rejected because it is not the local seat's turn. Deliberately understated — a short
+   background/opacity flash, no modal, no error copy. Re-triggered by the banner toggling the class. */
+.pente-banner-status--offturn { animation: pente-offturn-pulse 420ms ease-out 1; }
+@keyframes pente-offturn-pulse {
+  0% { background: rgba(74,144,217,0); opacity: 1; }
+  30% { background: rgba(74,144,217,0.45); opacity: 0.75; }
+  100% { background: rgba(74,144,217,0); opacity: 1; }
+}
 .pente-banner-controls { display: flex; gap: 6px; }
 .pente-banner-button { cursor: pointer; }
 .pente-banner-button:disabled { cursor: default; opacity: 0.45; }

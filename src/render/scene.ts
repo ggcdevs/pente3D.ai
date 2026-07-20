@@ -138,6 +138,18 @@ export interface HistoryReadout {
   scrubbing: boolean;
 }
 
+/**
+ * A plain, serializable readout of the seat-turn gate (Task 6.2, issue #4c) — for the banner cue +
+ * Playwright. `offTurnBlocks` counts how many placement attempts the scene has REJECTED because it was
+ * not the local seat's turn in the networked game; it increments once per blocked attempt and never on
+ * a legal (or local, non-networked) placement. A test proves an off-turn click was rejected — the
+ * board is unchanged AND this counter advanced — observable behavior, never a log line (principle #3).
+ */
+export interface TurnGateReadout {
+  /** The number of placement attempts rejected as off-turn since the scene was created. */
+  offTurnBlocks: number;
+}
+
 /** The live scene handle exposed to the app and (via window.__pente) to tests. */
 /**
  * The networking hooks (Task 5.5) the app wires to its net session after constructing it. The scene
@@ -161,6 +173,14 @@ export interface NetHooks {
    * move. Only called when {@link getNetGameState} is non-null (a live session owns the game).
    */
   place(coords: Coord): GameState;
+  /**
+   * Whether the local client may place right now in the networked game (Task 6.2, issue #4c): the
+   * session consults the pure {@link canPlaceForSeat} gate — `true` on the local seat's turn, `false`
+   * on the opponent's. Only meaningful (and only consulted by the scene) when {@link getNetGameState}
+   * is non-null. The scene blocks an off-turn placement and shows a subtle cue instead of pushing an
+   * out-of-seat-order move onto the shared log.
+   */
+  canPlace(): boolean;
   /**
    * The session's authoritative game state to RENDER when a networked game is live (issue #4: ONE
    * game per session), or `null` when the scene should render its own local game (offline / stopped).
@@ -222,6 +242,13 @@ export interface SceneHandle {
    * `Game` head, so a test can prove the scrub is viewer-local (history intact while rendered).
    */
   getHistory(): HistoryReadout;
+  /**
+   * The seat-turn gate readout (Task 6.2, issue #4c): `{ offTurnBlocks }` — how many placement
+   * attempts the scene rejected as off-turn in the networked game. Lets Playwright prove an off-turn
+   * click was blocked (board unchanged AND this counter advanced), and that the subtle banner cue
+   * fired (the banner's flash counter mirrors this) — observable behavior, not a log line (#3).
+   */
+  getTurnGate(): TurnGateReadout;
   /**
    * Scrub the LOCAL view to ply `k` (Task 5.6, read-only): re-render `game.stateAt(k)` for the
    * local viewer WITHOUT mutating the canonical `Game` (log / cursor / headHash untouched). A
@@ -471,6 +498,15 @@ export function createScene(container: HTMLElement): SceneHandle {
     for (const listener of stateChangeListeners) listener();
   }
 
+  // Seat-turn gate (Task 6.2, issue #4c): the running count of placement attempts rejected because it
+  // was not the local seat's turn in the networked game. Incremented once per blocked attempt (never on
+  // a legal or local placement); the banner mirrors it to fire the subtle off-turn cue and Playwright
+  // asserts on it to prove the board was left unchanged (observable behavior, not a log line — #3).
+  let offTurnBlocks = 0;
+  function getTurnGate(): TurnGateReadout {
+    return { offTurnBlocks };
+  }
+
   /** Reconcile every state-derived mesh set (markers + pieces + win line + pick hitboxes) to one `GameState`. */
   function syncBoard(state: GameState): void {
     markers.sync(state);
@@ -632,6 +668,9 @@ export function createScene(container: HTMLElement): SceneHandle {
     // scene only routes to it when getNetGameState is non-null), but is a defined no-op returning the
     // local head so the shape is honest — never an undefined method that could crash on dispatch.
     place: (coords: Coord) => place(coords),
+    // No live session → no seat turn to enforce; placement is never gated (the local game is
+    // unaffected, Task 6.2). Only consulted when getNetGameState is non-null, but honest by default.
+    canPlace: () => true,
     getNetGameState: () => null,
     getNetHeadHash: () => null,
   };
@@ -860,6 +899,9 @@ export function createScene(container: HTMLElement): SceneHandle {
         canRedo: game.canRedo(),
         canReset: game.canUndo() || game.canRedo(),
       },
+      // The seat-turn gate's running block count (Task 6.2). The banner compares it to the count it
+      // last saw and, when it advanced, briefly pulses the "X to move" line — the subtle off-turn cue.
+      offTurnBlocks,
     };
   }
 
@@ -1004,11 +1046,24 @@ export function createScene(container: HTMLElement): SceneHandle {
     // SyncEngine (which applies + publishes it to the peer) and the returned state is the session's
     // authoritative state we render — never a second, disconnected scene-local game. Otherwise it is
     // an ordinary local placement on the scene's own game.
-    if (netHooks.getNetGameState() !== null) {
+    const netState = netHooks.getNetGameState();
+    if (netState !== null) {
+      // Seat-turn gate (Task 6.2, issue #4c): in a networked game a client may only place on its own
+      // seat's turn. On an OFF-TURN attempt do NOT push a move onto the shared authoritative log —
+      // instead record the block (the banner mirrors this into a subtle cue) and return the CURRENT
+      // authoritative state UNCHANGED. Local (non-networked) games never reach here, so they are
+      // unaffected. The decision is the pure `canPlaceForSeat` gate the session evaluates via canPlace().
+      if (!netHooks.canPlace()) {
+        offTurnBlocks += 1;
+        // Re-render the (unchanged) authoritative state so the banner repaints and the cue fires;
+        // notifyStateChanged (inside syncBoard) drives the banner flash. No move is published.
+        renderNetState(netState);
+        return netState;
+      }
       // The engine applies + publishes; IllegalMove / stopped-game errors propagate honestly.
-      const netState = netHooks.place(coords);
-      renderNetState(netState);
-      return netState;
+      const placed = netHooks.place(coords);
+      renderNetState(placed);
+      return placed;
     }
     // `game.place` throws IllegalMove on an illegal move; let it propagate honestly.
     game.place(coords);
@@ -1273,6 +1328,7 @@ export function createScene(container: HTMLElement): SceneHandle {
     getState,
     getBannerContext,
     getHistory,
+    getTurnGate,
     scrubTo,
     onStateChange,
     getPieces,

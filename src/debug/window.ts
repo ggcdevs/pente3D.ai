@@ -6,6 +6,7 @@ import type {
   TempReadout,
   ColorsReadout,
   HistoryReadout,
+  TurnGateReadout,
 } from '../render/scene.ts';
 import type { LineGroupReadout } from '../render/lines.ts';
 import type { PieceReadout } from '../render/pieces.ts';
@@ -74,6 +75,13 @@ export interface PenteInspect {
    * real history) is intact (observable behavior, not a log line — agent-principles #3).
    */
   getHistory(): HistoryReadout | null;
+  /**
+   * The seat-turn gate readout (Task 6.2, issue #4c): `{ offTurnBlocks }` — how many placement attempts
+   * the scene rejected because it was not the local seat's turn in the networked game. Lets Playwright
+   * prove an off-turn `place`/`clickAt` was BLOCKED (the board is unchanged AND this counter advanced),
+   * distinguishing a genuine rejection from a placement (observable behavior, not a log line — #3).
+   */
+  getTurnGate(): TurnGateReadout | null;
   /**
    * Scrub the LOCAL view to ply `k` (Task 5.6, read-only): re-render `game.stateAt(k)` for the
    * local viewer without mutating the canonical `Game`; `k >= maxPly` snaps back to live. Lets
@@ -218,6 +226,7 @@ export function installInspectApi(
     getState: () => scene.getState(),
     getBannerContext: () => scene.getBannerContext(),
     getHistory: () => scene.getHistory(),
+    getTurnGate: () => scene.getTurnGate(),
     scrubTo: (k: number) => scene.scrubTo(k),
     getPieces: () => scene.getPieces(),
     getMarkers: (query?: readonly string[]) => scene.getMarkers(query),
