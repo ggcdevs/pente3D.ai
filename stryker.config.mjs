@@ -58,9 +58,11 @@ export default {
     'src/net/seats.ts',
     'src/net/sync.ts',
     '!src/net/**/*.test.ts',
-    // Pure render resolvers only (THREE-free). The Three.js scene GLUE (`scene.ts`) is
-    // NOT mutated — it is an IO boundary verified by Playwright (build plan Task 4.1).
+    // Pure render resolvers only (THREE-free). The Three.js scene GLUE (`scene.ts`,
+    // `lines.ts`) is NOT mutated — it is an IO boundary verified by Playwright (build
+    // plan Tasks 4.1/4.4).
     'src/render/sceneConfig.ts',
+    'src/render/linesLayout.ts',
     '!src/render/**/*.test.ts',
   ],
   coverageAnalysis: 'perTest',

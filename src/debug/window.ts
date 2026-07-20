@@ -4,6 +4,7 @@ import type {
   LightingReadout,
   ViewportReadout,
 } from '../render/scene.ts';
+import type { LineGroupReadout } from '../render/lines.ts';
 import { createLogger } from './log.ts';
 
 const log = createLogger('debug:window');
@@ -22,6 +23,8 @@ export interface PenteInspect {
   getLighting(): LightingReadout | null;
   /** The renderer's current drawing-buffer size + camera aspect, as plain numbers. */
   getViewportSize(): ViewportReadout | null;
+  /** Per-category gridline readouts (visibility/blending/instance counts) as plain numbers. */
+  getVisibleLines(): LineGroupReadout[] | null;
   /** Game state accessor — stub until the rules core lands (Stage 1). */
   getState(): { stub: true; note: string };
 }
@@ -38,6 +41,7 @@ export function installInspectApi(scene: SceneHandle): PenteInspect {
     getCamera: () => scene.getCamera(),
     getLighting: () => scene.getLighting(),
     getViewportSize: () => scene.getViewportSize(),
+    getVisibleLines: () => scene.getVisibleLines(),
     getState: () => ({ stub: true, note: 'rules core not yet implemented (Stage 1)' }),
   };
   window.__pente = api;

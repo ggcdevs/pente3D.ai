@@ -3,8 +3,12 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { createLogger } from '../debug/log.ts';
 import { getConfig } from '../config/config.ts';
 import { resolveSceneConfig, type ResolvedSceneConfig, type Vec3 } from './sceneConfig.ts';
+import { createLines, type LinesHandle, type LineGroupReadout } from './lines.ts';
 
 const log = createLogger('render:scene');
+
+/** The board edge length the scene renders. Configurable board size lands with 4.x. */
+const BOARD_SIZE = 5;
 
 /** A plain-number camera readout, safe to serialize and assert on from Playwright. */
 export interface CameraReadout {
@@ -42,6 +46,8 @@ export interface SceneHandle {
   getLighting(): LightingReadout;
   /** The renderer's current size + camera aspect, as plain numbers. */
   getViewportSize(): ViewportReadout;
+  /** Per-category gridline readouts (visibility/blending/instance counts) as plain numbers. */
+  getVisibleLines(): LineGroupReadout[];
   dispose(): void;
 }
 
@@ -93,22 +99,11 @@ export function createScene(container: HTMLElement): SceneHandle {
   );
   scene.add(dir);
 
-  // Placeholder lattice: a small grid of spheres centered on the origin. Replaced by
-  // the instanced board (markers/lines) in Tasks 4.3–4.4.
-  const N = 3;
-  const spacing = 2;
-  const offset = ((N - 1) * spacing) / 2;
-  const geometry = new THREE.SphereGeometry(0.35, 24, 16);
-  const material = new THREE.MeshStandardMaterial({ color: 0x4a90d9, roughness: 0.4 });
-  for (let x = 0; x < N; x++) {
-    for (let y = 0; y < N; y++) {
-      for (let z = 0; z < N; z++) {
-        const mesh = new THREE.Mesh(geometry, material);
-        mesh.position.set(x * spacing - offset, y * spacing - offset, z * spacing - offset);
-        scene.add(mesh);
-      }
-    }
-  }
+  // Instanced gridlines by category (Task 4.4): three InstancedMesh groups built from
+  // the pure `resolveLineLayout` plan, board-centered, additively blended per config.
+  // (Node markers / pieces attach in Tasks 4.3/4.5.)
+  const lines: LinesHandle = createLines(BOARD_SIZE);
+  scene.add(lines.object);
 
   function getCamera(): CameraReadout {
     return {
@@ -136,6 +131,10 @@ export function createScene(container: HTMLElement): SceneHandle {
     return { width: size.x, height: size.y, aspect: camera.aspect };
   }
 
+  function getVisibleLines(): LineGroupReadout[] {
+    return lines.getVisibleLines();
+  }
+
   let running = true;
   function renderLoop(): void {
     if (!running) return;
@@ -159,13 +158,13 @@ export function createScene(container: HTMLElement): SceneHandle {
     window.removeEventListener('resize', onResize);
     controls.dispose();
     renderer.dispose();
-    geometry.dispose();
-    material.dispose();
+    lines.dispose();
     renderer.domElement.remove();
   }
 
   log.info('scene initialized', {
-    spheres: N * N * N,
+    boardSize: BOARD_SIZE,
+    lines: getVisibleLines(),
     camera: getCamera(),
     lighting: getLighting(),
     size: getViewportSize(),
@@ -179,6 +178,7 @@ export function createScene(container: HTMLElement): SceneHandle {
     getCamera,
     getLighting,
     getViewportSize,
+    getVisibleLines,
     dispose,
   };
 }
