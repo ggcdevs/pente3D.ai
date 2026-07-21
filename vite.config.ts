@@ -285,6 +285,17 @@ export default defineConfig({
           functions: 100,
           lines: 100,
         },
+        // Pure recent-game-codes store (Task C.1, issue #13 picker "saved" list): record/list/clear the
+        // codes the user used to host/join, backed by an INJECTED Storage (like config.ts) so it is
+        // node-testable and degrades a corrupt record to empty. THREE-free / DOM-free — the DOM/dispatch
+        // widget glue (`widgets/net.ts`) is the Playwright-verified IO boundary, excluded above. In the
+        // mutation scope and held to the hard 100% floor. Do not weaken (agent-principles #6).
+        'src/ui/widgets/recentCodes.ts': {
+          statements: 100,
+          branches: 100,
+          functions: 100,
+          lines: 100,
+        },
         // Pure history-slider view-model (Task 5.6): the raw-value → clamped-viewed-ply resolution
         // and the ply/max/viewed facts → serializable model derivation. THREE-free / DOM-free — the
         // DOM `<input type=range>` widget glue (`widgets/historySlider.ts`) and the scene's read-only

@@ -45,6 +45,13 @@
  *     which only adds a non-index `"undefined"` property to the array — length, values, and
  *     the visibleCount the readout reports are all unchanged. Equivalent (killing it would
  *     require asserting on the presence of a junk property, not real behavior).
+ *   - recentCodes.ts: the two `[]` returns in the private `parseStoredArray` helper (`[]` →
+ *     `["Stryker was here"]`, on the non-array and the JSON-parse-error arms). `listRecentCodes`
+ *     re-validates EVERY parsed entry through `validateGameCode` and drops anything invalid, so a
+ *     junk sentinel the parser hands back is filtered right back out to `[]` at the public boundary.
+ *     Equivalent through the public seam — killing them would require asserting on the private
+ *     helper's internal return, i.e. on non-behavior. (The corrupt-record-degrades-to-empty behavior
+ *     the helper enables IS asserted, via the public list/record paths.)
  *     Kill genuine (non-equivalent) survivors with real tests; never suppress.
  *
  * Gate-rejection is re-proven on every review-gate run (agent-principles #7): temporarily
@@ -162,6 +169,11 @@ export default {
     // and the SyncEngine+seat session wiring (`net/session.ts`, `net/appSession.ts`) are the
     // Playwright-verified IO boundary, excluded exactly as the menu/settings glue is above.
     'src/ui/widgets/netModel.ts',
+    // Pure recent-game-codes store (Task C.1, issue #13 picker "saved" list): record/list/clear the
+    // codes used to host/join, backed by an INJECTED Storage (like config.ts) — dedupe, cap, newest-
+    // first, and degrade-a-corrupt-record-to-empty. THREE-free / DOM-free — the DOM widget glue
+    // (`widgets/net.ts`) is the Playwright-verified IO boundary, NOT mutated, exactly as above.
+    'src/ui/widgets/recentCodes.ts',
     // Pure history-slider view-model (Task 5.6): the raw-value → clamped-viewed-ply resolution
     // (`resolveScrub`) and the ply/max/viewed facts → serializable model derivation
     // (`deriveSlider`). THREE-free / DOM-free — the `<input type=range>` widget glue

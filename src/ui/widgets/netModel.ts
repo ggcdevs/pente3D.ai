@@ -43,11 +43,11 @@ export const JOIN_GAME_COMMAND = 'joinGame';
 /**
  * The set of characters a game code may contain, and its fixed length. A code is an
  * unambiguous-alphabet slug: uppercase letters + digits with the visually-ambiguous glyphs removed
- * (`0/O`, `1/I`) so a code read aloud or off a screen is unambiguous. This constant is the SSOT for
- * BOTH generation (the alphabet drawn from) and validation (the allowed set), so the two can never
- * disagree on what a legal code is.
+ * (`0/O`, `1/I`, and `L` — a lower-case `l` reads as `1`) so a code dictated over voice or read off a
+ * screen is unambiguous. This constant is the SSOT for BOTH generation (the alphabet drawn from) and
+ * validation (the allowed set), so the two can never disagree on what a legal code is.
  */
-export const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+export const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 
 /** The fixed game-code length. Short enough to type, long enough to avoid room collisions. */
 export const CODE_LENGTH = 6;

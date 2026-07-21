@@ -229,8 +229,8 @@ describe('constants', () => {
     expect(JOIN_GAME_COMMAND).toBe('joinGame');
   });
 
-  it('the code alphabet excludes the ambiguous glyphs 0/O/1/I', () => {
-    for (const ch of ['0', 'O', '1', 'I']) {
+  it('the code alphabet excludes the ambiguous glyphs 0/O/1/I/L', () => {
+    for (const ch of ['0', 'O', '1', 'I', 'L']) {
       expect(CODE_ALPHABET).not.toContain(ch);
     }
   });
