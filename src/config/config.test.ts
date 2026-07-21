@@ -55,11 +55,18 @@ describe('getConfig — defaults', () => {
     expect(kb.Escape).toBe('closeModal');
   });
 
-  it('exposes the relay SSOT (wssUrl/username/password/topicRoot) as the default', () => {
+  it('ships a BLANK relay default (creds injected at deploy from the RELAY_CONFIG repo variable; issue #22)', () => {
+    // The tracked default is intentionally blank so the repo is portable and holds no
+    // endpoint/creds — the GitHub Actions deploy overwrites relay.json from the
+    // `RELAY_CONFIG` repo variable. Blank wssUrl/username/password means networked
+    // host/join fails GRACEFULLY (mqtt.connect('') → ECONNREFUSED, honest error) while
+    // LOCAL play is unaffected. Developers supply their own relay locally via the
+    // localStorage override (see README "Local relay for dev"). topicRoot stays pinned
+    // to the protocol namespace so it is never a secret.
     const relay = getConfig('relay', storage);
-    expect(relay.wssUrl).toBe('wss://api.shitchell.com/289d700bfbd3-mqtt');
-    expect(relay.username).toBe('pente');
-    expect(relay.password).toBe('01cdb6fbbccb8a5d149027a14e37ef7bec9f76a66f7f1e58');
+    expect(relay.wssUrl).toBe('');
+    expect(relay.username).toBe('');
+    expect(relay.password).toBe('');
     expect(relay.topicRoot).toBe('pente/v1');
   });
 

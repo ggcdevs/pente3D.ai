@@ -2,9 +2,17 @@
 import { defineConfig } from 'vite';
 
 export default defineConfig({
-  base: '/pente3D.ai/',
+  // Per-env base (issue #22): the GitHub Actions deploy sets DEPLOY_BASE per branch
+  //   main → '/pente3D.ai/'      (Pages root)
+  //   dev  → '/pente3D.ai/dev/'  (Pages /dev subpath)
+  //   test → '/pente3D.ai/test/' (Pages /test subpath)
+  // so the same repo builds every environment. Defaults to the prod base for a plain
+  // `npm run build`.
+  base: process.env.DEPLOY_BASE || '/pente3D.ai/',
   build: {
-    outDir: 'docs',
+    // Build into a gitignored dir (issue #22). The committed `docs/` still serves prod
+    // via Pages until the Pages source is switched to the `gh-pages` branch.
+    outDir: 'dist',
     emptyOutDir: true,
   },
   test: {

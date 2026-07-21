@@ -1,0 +1,89 @@
+# Multi-env GitHub Pages deploy (issue #22).
+#
+# Builds the app for the pushed branch and publishes it to the `gh-pages` branch at a
+# per-branch subpath so the three environments coexist without clobbering each other:
+#   main → root   (base /pente3D.ai/)
+#   dev  → /dev/   (base /pente3D.ai/dev/)
+#   test → /test/  (base /pente3D.ai/test/)
+#
+# The relay endpoint/creds are NOT in the repo (portability). They live in the
+# `RELAY_CONFIG` repo variable and are written into src/config/defaults/relay.json
+# before the build. `keep_files: true` + a per-branch `destination_dir` mean a deploy
+# of one branch never deletes another branch's subtree on gh-pages.
+name: deploy
+
+on:
+  push:
+    branches: [main, dev, test]
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Derive the per-branch base + gh-pages destination from the branch name.
+      #   main → base /pente3D.ai/      dest '' (root)
+      #   dev  → base /pente3D.ai/dev/  dest 'dev'
+      #   test → base /pente3D.ai/test/ dest 'test'
+      - name: Resolve per-branch base and destination
+        id: env
+        run: |
+          case "${GITHUB_REF_NAME}" in
+            main)
+              echo "base=/pente3D.ai/" >> "$GITHUB_OUTPUT"
+              echo "dest=" >> "$GITHUB_OUTPUT"
+              ;;
+            dev)
+              echo "base=/pente3D.ai/dev/" >> "$GITHUB_OUTPUT"
+              echo "dest=dev" >> "$GITHUB_OUTPUT"
+              ;;
+            test)
+              echo "base=/pente3D.ai/test/" >> "$GITHUB_OUTPUT"
+              echo "dest=test" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "Unsupported branch: ${GITHUB_REF_NAME}" >&2
+              exit 1
+              ;;
+          esac
+
+      # Inject the real relay from the RELAY_CONFIG repo variable (the repo ships blank).
+      - name: Write relay config from RELAY_CONFIG
+        env:
+          RELAY_CONFIG: ${{ vars.RELAY_CONFIG }}
+        run: |
+          if [ -z "${RELAY_CONFIG}" ]; then
+            echo "RELAY_CONFIG repo variable is empty — refusing to deploy without a relay." >&2
+            exit 1
+          fi
+          printf '%s' "${RELAY_CONFIG}" > src/config/defaults/relay.json
+          echo "Wrote relay.json (wssUrl host only, no creds printed):"
+          node -e "const r=require('./src/config/defaults/relay.json'); console.log('wssUrl set:', Boolean(r.wssUrl), 'topicRoot:', r.topicRoot)"
+
+      - name: Build
+        env:
+          DEPLOY_BASE: ${{ steps.env.outputs.base }}
+        run: npm run build
+
+      - name: Deploy to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
+          publish_branch: gh-pages
+          destination_dir: ${{ steps.env.outputs.dest }}
+          keep_files: true
