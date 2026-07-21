@@ -8,6 +8,8 @@ import type {
   HistoryReadout,
   TurnGateReadout,
 } from '../render/scene.ts';
+import { setConfig, type ConfigSection, type ConfigOf } from '../config/config.ts';
+import type { DragGuardConfig } from '../input/pointerGesture.ts';
 import type { LineGroupReadout } from '../render/lines.ts';
 import type { PieceReadout } from '../render/pieces.ts';
 import type { MarkersReadout } from '../render/markers.ts';
@@ -60,6 +62,29 @@ export interface PenteInspect {
    * behavior, not a log line — agent-principles #3).
    */
   getColors(): ColorsReadout | null;
+  /**
+   * Live-apply a whole config SECTION to the running Three.js scene with NO reload (Task A.3, issue
+   * #15): re-reads `getConfig(section)` and reflects it onto the live objects — the generalization of
+   * `applyColors`. Live sections: `colors`/`lighting`/`materials`/`rendering`/`blending`/`interaction`/
+   * `lineVisibility`. `board`/`controls`/`geometry` are documented no-ops (baked at construction).
+   * Lets Playwright drive a config change and assert the scene reflected it live via getLighting /
+   * getMarkers / getPieces / getVisibleLines / getInteraction — observable behavior, not a log line (#3).
+   */
+  applyConfig(section: ConfigSection): void;
+  /**
+   * Persist a real config-section override (Task A.3 driver seam), exactly as the settings UI does —
+   * `setConfig` writes the partial to localStorage AND emits the section, so the app's `onConfigChange`
+   * loop re-applies it live. Lets a Playwright test drive the FULL integration path
+   * (write → emitter → onConfigChange → scene.applyConfig) and assert the scene reflected it with NO
+   * reload — the cross-component seam that per-module gates would miss (plan §"integration seam").
+   */
+  setConfig(section: ConfigSection, partial: Record<string, unknown>): void;
+  /**
+   * The drag-vs-click guard currently in force (Task A.3 `interaction` live-apply readout). Lets
+   * Playwright prove an `interaction` edit was applied live (the guard the next pointer release uses
+   * changed) — observable behavior, not a log line (agent-principles #3).
+   */
+  getInteraction(): DragGuardConfig | null;
   /** The live game state (pieces/turn/captures/winner) as plain values. */
   getState(): GameState | null;
   /**
@@ -232,6 +257,15 @@ export function installInspectApi(
     getViewportSize: () => scene.getViewportSize(),
     getVisibleLines: () => scene.getVisibleLines(),
     getColors: () => scene.getColors(),
+    // Live-apply a config section to the scene (Task A.3): the same seam the app's onConfigChange loop
+    // drives; exposed so Playwright can trigger it directly and assert render truth on the readouts.
+    applyConfig: (section: ConfigSection) => scene.applyConfig(section),
+    // Real config write (Task A.3 driver seam) — drives the FULL live path: setConfig persists +
+    // emits, and main.ts's onConfigChange loop calls scene.applyConfig(section). Cast is the same
+    // Partial<ConfigOf<S>> setConfig accepts; the test supplies a well-formed partial for the section.
+    setConfig: (section: ConfigSection, partial: Record<string, unknown>) =>
+      setConfig(section, partial as Partial<ConfigOf<typeof section>>),
+    getInteraction: () => scene.getInteraction(),
     getState: () => scene.getState(),
     getBannerContext: () => scene.getBannerContext(),
     getHistory: () => scene.getHistory(),

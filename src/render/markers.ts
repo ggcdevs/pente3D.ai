@@ -79,6 +79,12 @@ export interface MarkersReadout {
   visibleCount: number;
   /** How many markers are currently hover-highlighted. */
   highlightedCount: number;
+  /** The shared material's current surface roughness (Task A.3 live `materials`/`rendering` apply readout). */
+  roughness: number;
+  /** The shared material's current metalness (Task A.3 live `materials`/`rendering` apply readout). */
+  metalness: number;
+  /** The shared material's current opacity (Task A.3 live `materials` apply readout). */
+  opacity: number;
   /**
    * The shared material's effective emissive contribution: `emissiveIntensity` if the emissive
    * colour is non-black, else 0 (a black emissive contributes nothing regardless of intensity).
@@ -103,6 +109,14 @@ export interface MarkersHandle {
    * (so re-showing it later would glow) but a zero-scale instance draws nothing regardless.
    */
   highlight(nodes: readonly NodeKey[]): void;
+  /**
+   * Live-set the shared material's surface params (Task A.3 `materials`/`rendering` live-apply): the
+   * `roughness`/`metalness` gloss and the translucent `opacity`. No rebuild — the shared
+   * `MeshStandardMaterial` is mutated in place (it flags its own `needsUpdate` on a param set), so the
+   * change is visible on the next frame. Only the given fields change. Returns nothing; read back via
+   * `getMarkers` (`roughness`/`metalness`/`opacity`) so a test asserts render truth, not a log line.
+   */
+  setMaterial(params: { roughness?: number; metalness?: number; opacity?: number }): void;
   /** Plain-number readout; `query` node keys get per-node detail (visibility/highlight/id). */
   getMarkers(query?: readonly NodeKey[]): MarkersReadout;
   /** Free GPU resources. */
@@ -224,6 +238,18 @@ export function createMarkers(
     if (changed && mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
   }
 
+  /**
+   * Live-set the shared material's surface params (Task A.3): mutate the one shared
+   * `MeshStandardMaterial` in place. Only the provided fields change; each `set` flags the
+   * material's own `needsUpdate`, so the new gloss/opacity draws on the next frame.
+   */
+  function setMaterial(params: { roughness?: number; metalness?: number; opacity?: number }): void {
+    if (params.roughness !== undefined) material.roughness = params.roughness;
+    if (params.metalness !== undefined) material.metalness = params.metalness;
+    if (params.opacity !== undefined) material.opacity = params.opacity;
+    material.needsUpdate = true;
+  }
+
   // Scratch colour reused for every read-back — the real per-instance colour is pulled from the
   // live `instanceColor` buffer via `getColorAt`, so the readout reflects the GPU state actually
   // drawn, never the logical `highlighted` flag.
@@ -262,6 +288,9 @@ export function createMarkers(
       count: index.count,
       visibleCount,
       highlightedCount,
+      roughness: material.roughness,
+      metalness: material.metalness,
+      opacity: material.opacity,
       materialEmissiveIntensity: emissiveIsBlack ? 0 : material.emissiveIntensity,
       nodes,
     };
@@ -274,5 +303,5 @@ export function createMarkers(
     material.dispose();
   }
 
-  return { object, sync, highlight, getMarkers, dispose };
+  return { object, sync, highlight, setMaterial, getMarkers, dispose };
 }

@@ -1,9 +1,16 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { createLogger } from '../debug/log.ts';
-import { getConfig } from '../config/config.ts';
+import { getConfig, type ConfigSection } from '../config/config.ts';
 import { resolveSceneConfig, type ResolvedSceneConfig, type Vec3 } from './sceneConfig.ts';
 import { createLines, type LinesHandle, type LineGroupReadout } from './lines.ts';
+import {
+  LINE_CATEGORIES,
+  resolveLineBlending,
+  resolveLineVisibility,
+  type BlendingConfig,
+  type LineVisibilityConfig,
+} from './linesLayout.ts';
 import { createPieces, type PiecesHandle, type PieceReadout } from './pieces.ts';
 import { createMarkers, type MarkersHandle, type MarkersReadout } from './markers.ts';
 import { createWinLine, type WinLineHandle, type WinLineReadout } from './winLine.ts';
@@ -231,8 +238,35 @@ export interface SceneHandle {
    * reload. Returns the {@link ColorsReadout} of what is now actually applied (render truth).
    */
   applyColors(preview: ColorsPreview): ColorsReadout;
+  /**
+   * Live-apply a whole config SECTION to the running Three.js scene with NO reload (Task A.3, issue
+   * #15): RE-READ `getConfig(section)` (the SSOT — no value is passed in) and reflect it onto the live
+   * objects. Generalizes {@link applyColors} to every live-able section:
+   *   - `colors`      → background, gridline opacity, the three line colours, and the hover-glow colour;
+   *   - `lighting`    → ambient/directional light colour + intensity + directional position;
+   *   - `materials` / `rendering` → marker/piece surface roughness·metalness·opacity + hover emissive
+   *                     boost (each material flags its own `needsUpdate`);
+   *   - `blending`    → each line category's additive-vs-normal composite;
+   *   - `interaction` → the drag-vs-click guard, applied to the next pointer release;
+   *   - `lineVisibility` → toggle the three line-category groups.
+   * EXCLUDED as an explicit, documented no-op (NOT a silent gap): `board` (size is baked into the
+   * instanced marker/pick/line buffers + grid at construction), `controls` (the camera preset is bound
+   * onto OrbitControls at construction), and `geometry` (spacing/thickness/radii are baked into every
+   * instance matrix + the shared sphere/box geometries — a live change needs a full mesh rebuild that
+   * would be unsafe mid-game). These stay next-game / reload, matching the persisted-override contract.
+   * `keybindings`/`layout`/`relay` are not scene concerns (no-op here). Idempotent; re-applying the
+   * current config is a proven no-op. Observable via getLighting/getColors/getMarkers/getPieces/
+   * getVisibleLines/getInteraction — never a log line (agent-principles #3).
+   */
+  applyConfig(section: ConfigSection): void;
   /** The live-previewable colours actually applied to the scene, read back off the Three.js objects. */
   getColors(): ColorsReadout;
+  /**
+   * The drag-vs-click guard currently in force (Task A.3 `interaction` live-apply readout): `enabled`
+   * and the `thresholdPx`. Lets Playwright prove an `interaction` edit was applied LIVE (the guard the
+   * scene will use on the next pointer release changed) — observable behavior, not a log line (#3).
+   */
+  getInteraction(): DragGuardConfig;
   /**
    * The game state CURRENTLY RENDERED for the local viewer (pieces/turn/captures/winner) — the live
    * head normally, or the scrubbed-to `game.stateAt(k)` while the history slider is scrubbed back
@@ -581,8 +615,12 @@ export function createScene(container: HTMLElement): SceneHandle {
   // node↔line index into a highlight set (empty-node vs placed-sphere vs line, visible-only,
   // the placed-sphere asymmetry — game-core Part 4); the glue applies the emissive boost.
   const hoverLookup: HoverLookup = buildHoverLookup(generateAllLines(BOARD_SIZE));
-  const hoverColors = getConfig('colors') as unknown as { hoverHighlight: string };
-  const hoverRendering = getConfig('rendering') as unknown as { emissiveBoost: number };
+  // Hover glow colour + emissive boost (design Part 4 "interaction: hover glow intensity"). Kept as
+  // live-mutable state (NOT read once at construction) so an `interaction`/`colors`/`rendering` edit
+  // applies to the NEXT hover with no reload — `applyConfig` re-reads config and updates these, and
+  // `applyHoverHighlight` uses them (re-hovering repaints the glow with the new colour/intensity).
+  let hoverHighlight = (getConfig('colors') as unknown as { hoverHighlight: string }).hoverHighlight;
+  let emissiveBoost = (getConfig('rendering') as unknown as { emissiveBoost: number }).emissiveBoost;
   let hoverTarget: HoverTarget | null = null;
 
   // Temp-placement mode (Task 4.8): a translucent preview piece the player can examine
@@ -641,7 +679,9 @@ export function createScene(container: HTMLElement): SceneHandle {
   // this glue only supplies the down/up pixel positions off the real canvas. Config-driven
   // (`interaction.dragGuard`, DEFAULT ENABLED) — resolved once at build; a live override
   // takes effect on reload like every other config section (agent-principles #8, no magic).
-  const dragGuard = (getConfig('interaction') as unknown as { dragGuard: DragGuardConfig })
+  // Live-mutable so an `interaction` edit (drag-vs-click threshold / enable) applies to the NEXT
+  // pointer release with no reload — `applyConfig('interaction')` re-reads and reassigns this.
+  let dragGuard = (getConfig('interaction') as unknown as { dragGuard: DragGuardConfig })
     .dragGuard;
 
   // Camera presets (Task 4.6): resolve the active `controls` preset (PURE) and BIND it to
@@ -915,6 +955,146 @@ export function createScene(container: HTMLElement): SceneHandle {
 
   function getColors(): ColorsReadout {
     return { ...liveColors };
+  }
+
+  /**
+   * Re-read + live-apply the `colors` section (Task A.3): the previewable subset (background, gridline
+   * opacity, the three line colours) via {@link applyColors}, PLUS the hover-glow colour so a re-hover
+   * paints the new glow. Reads the whole section from `getConfig` (the SSOT), not a passed-in value.
+   */
+  function applyColorsSection(): void {
+    const c = getConfig('colors') as unknown as {
+      background: string;
+      lineOpacity: number;
+      lineOrthogonal: string;
+      lineFaceDiagonal: string;
+      lineSpaceDiagonal: string;
+      hoverHighlight: string;
+    };
+    applyColors({
+      background: c.background,
+      lineOpacity: c.lineOpacity,
+      lineOrthogonal: c.lineOrthogonal,
+      lineFaceDiagonal: c.lineFaceDiagonal,
+      lineSpaceDiagonal: c.lineSpaceDiagonal,
+    });
+    hoverHighlight = c.hoverHighlight;
+  }
+
+  /**
+   * Re-read + live-apply the `lighting` section (Task A.3): ambient + directional colour/intensity and
+   * the directional light's position. Resolved through the SAME pure `resolveSceneConfig` the scene was
+   * built from (no magic values), so a live edit matches a reload. Background stays a `colors` concern.
+   */
+  function applyLighting(): void {
+    const r: ResolvedSceneConfig = resolveSceneConfig(getConfig('lighting'), getConfig('colors'));
+    ambient.color.set(r.ambient.color);
+    ambient.intensity = r.ambient.intensity;
+    dir.color.set(r.directional.color);
+    dir.intensity = r.directional.intensity;
+    dir.position.set(r.directional.position.x, r.directional.position.y, r.directional.position.z);
+  }
+
+  /**
+   * Re-read + live-apply the surface `materials`/`rendering` (Task A.3): marker + piece roughness /
+   * metalness / opacity onto the shared/per-piece `MeshStandardMaterial`s (each flags its own
+   * `needsUpdate`), and the hover emissive boost for the next hover. Both sections feed one apply
+   * because they jointly define surface appearance (opacity ← `materials`, gloss ← `rendering`).
+   */
+  function applyMaterials(): void {
+    const m = getConfig('materials') as unknown as { markerOpacity: number; pieceOpacity: number };
+    const rn = getConfig('rendering') as unknown as {
+      marker: { roughness: number; metalness: number };
+      piece: { roughness: number; metalness: number };
+      emissiveBoost: number;
+    };
+    markers.setMaterial({
+      roughness: rn.marker.roughness,
+      metalness: rn.marker.metalness,
+      opacity: m.markerOpacity,
+    });
+    pieces.setMaterial({
+      roughness: rn.piece.roughness,
+      metalness: rn.piece.metalness,
+      opacity: m.pieceOpacity,
+    });
+    emissiveBoost = rn.emissiveBoost;
+    // Re-apply the current hover with the new glow intensity so an active highlight updates at once.
+    applyHoverHighlight();
+  }
+
+  /**
+   * Re-read + live-apply the `blending` section (Task A.3): each line category's additive-vs-normal
+   * composite, resolved through the pure `resolveLineBlending` (which validates every mode honestly).
+   */
+  function applyBlending(): void {
+    const resolved = resolveLineBlending(getConfig('blending') as unknown as BlendingConfig);
+    for (const category of LINE_CATEGORIES) lines.setBlending(category, resolved[category]);
+  }
+
+  /**
+   * Re-read + live-apply the `lineVisibility` section (Task A.3): toggle each of the three line-category
+   * groups to the config's default-on flags, resolved through the pure `resolveLineVisibility`. Mirrors
+   * the flag into `lineVisible` so hover's visible-only filter stays truthful.
+   */
+  function applyLineVisibility(): void {
+    const resolved = resolveLineVisibility(
+      getConfig('lineVisibility') as unknown as LineVisibilityConfig,
+    );
+    for (const category of LINE_CATEGORIES) {
+      lineVisible[category] = resolved[category];
+      lines.setVisible(category, resolved[category]);
+    }
+  }
+
+  /** Re-read + live-apply the `interaction` section (Task A.3): the drag-vs-click guard for the next release. */
+  function applyInteraction(): void {
+    dragGuard = (getConfig('interaction') as unknown as { dragGuard: DragGuardConfig }).dragGuard;
+  }
+
+  /**
+   * Live-apply a config SECTION to the running scene (Task A.3, issue #15) — see the {@link SceneHandle}
+   * doc for the full live-vs-excluded contract. Dispatches to the section's applier; the excluded
+   * sections (`board`/`controls`/`geometry`) and the non-scene sections are EXPLICIT no-ops (documented,
+   * never a silent gap). The single seam the app's `onConfigChange` loop calls on every config change.
+   */
+  function applyConfig(section: ConfigSection): void {
+    switch (section) {
+      case 'colors':
+        applyColorsSection();
+        return;
+      case 'lighting':
+        applyLighting();
+        return;
+      // Both feed the surface apply (opacity ← materials, gloss/emissive ← rendering).
+      case 'materials':
+      case 'rendering':
+        applyMaterials();
+        return;
+      case 'blending':
+        applyBlending();
+        return;
+      case 'lineVisibility':
+        applyLineVisibility();
+        return;
+      case 'interaction':
+        applyInteraction();
+        return;
+      // Excluded, on purpose (baked into instanced buffers / grid / OrbitControls at construction — a
+      // live change would need an unsafe mid-game mesh/controls rebuild): they take effect next game /
+      // on reload, matching the persisted-override contract. Not scene concerns: keybindings/layout/relay.
+      case 'board':
+      case 'controls':
+      case 'geometry':
+      case 'keybindings':
+      case 'layout':
+      case 'relay':
+        return;
+    }
+  }
+
+  function getInteraction(): DragGuardConfig {
+    return { enabled: dragGuard.enabled, thresholdPx: dragGuard.thresholdPx };
   }
 
   function getState(): GameState {
@@ -1225,8 +1405,8 @@ export function createScene(container: HTMLElement): SceneHandle {
   function applyHoverHighlight(): void {
     pieces.highlight(
       hoverTarget?.pieces ?? [],
-      hoverColors.hoverHighlight,
-      hoverRendering.emissiveBoost,
+      hoverHighlight,
+      emissiveBoost,
     );
     markers.highlight(hoverTarget?.nodes ?? []);
     lines.highlight(hoverTarget?.lines ?? []);
@@ -1386,7 +1566,9 @@ export function createScene(container: HTMLElement): SceneHandle {
     getViewportSize,
     getVisibleLines,
     applyColors,
+    applyConfig,
     getColors,
+    getInteraction,
     getState,
     getBannerContext,
     getHistory,

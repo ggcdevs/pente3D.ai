@@ -1,5 +1,6 @@
 import { createScene } from './render/scene.ts';
 import { createUi } from './ui/setup.ts';
+import { onConfigChange } from './config/config.ts';
 import { installInspectApi } from './debug/window.ts';
 import { createLogger } from './debug/log.ts';
 import { createAppNetSession } from './net/appSession.ts';
@@ -545,6 +546,19 @@ refreshUi();
 // Repaint on every board change (place/undo/redo/reset) so the banner's turn/captures/enabled
 // stay live regardless of whether the change came from a button, a hotkey, or a canvas click.
 scene.onStateChange(refreshUi);
+
+// Live settings apply with NO reload (Task A.3, issue #15): on every config-section change — whether
+// from the local settings UI or a programmatic/networked writer — re-apply it to the running scene AND
+// repaint the config-reading widgets. `setConfig`/`resetConfig` emit the SECTION NAME only (the SSOT is
+// getConfig, which the appliers re-read), so no value is duplicated onto the event. `applyConfig` is a
+// documented no-op for the reload/next-game sections (board/controls/geometry), so this loop is safe to
+// fire for any section. We NEVER write config from inside this listener (that would re-emit → loop);
+// we react by re-reading + re-applying only (design guardrail). The scene owns teardown of its own
+// objects; this app-level subscription lives for the page's lifetime alongside the scene.
+onConfigChange((section) => {
+  scene.applyConfig(section);
+  refreshUi();
+});
 
 // Expose the inspection API so browser agents (Playwright, cdp) can read real state.
 // Kept unconditional for the v1 walking skeleton; a prod gate lands with the real build.

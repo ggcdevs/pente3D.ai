@@ -68,6 +68,10 @@ export interface PieceReadout {
   fadingOut: boolean;
   /** The material's current emissive intensity — >0 iff the piece is hover-highlighted. */
   emissiveIntensity: number;
+  /** The material's current surface roughness (Task A.3 live `materials`/`rendering` apply readout). */
+  roughness: number;
+  /** The material's current metalness (Task A.3 live `materials`/`rendering` apply readout). */
+  metalness: number;
 }
 
 /** The live pieces handle: the mesh container + inspectors + the diff-driven sync. */
@@ -84,6 +88,14 @@ export interface PiecesHandle {
    * boost, cleared by setting emissive → 0). Config-driven boost + colour; idempotent.
    */
   highlight(nodes: readonly NodeKey[], color: string, boost: number): void;
+  /**
+   * Live-set the surface params (Task A.3 `materials`/`rendering` live-apply) across EVERY current
+   * and FUTURE piece: `roughness`/`metalness` gloss and the settled `opacity` target. No rebuild —
+   * each live mesh's `MeshStandardMaterial` is mutated in place (fully-faded-in meshes retarget to
+   * the new opacity immediately; mid-fade meshes fade toward it), and new pieces are created with the
+   * updated params. Only the provided fields change. Read back via `getPieces` (`roughness`/etc.).
+   */
+  setMaterial(params: { roughness?: number; metalness?: number; opacity?: number }): void;
   /** Plain-number readout of every live piece (for `window.__pente`). */
   getPieces(): PieceReadout[];
   /** The number of live piece meshes currently in the scene (post-tick). */
@@ -147,14 +159,20 @@ export function createPieces(size: number): PiecesHandle {
   );
 
   const entries = new Map<NodeKey, PieceEntry>();
-  const targetOpacity = materials.pieceOpacity;
   const fadeMs = rendering.pieceFadeMs;
+  // LIVE surface params, seeded from config then mutated by `setMaterial` (Task A.3) so a live
+  // `materials`/`rendering` edit applies to EVERY current AND future piece (new meshes read these).
+  const surface = {
+    roughness: rendering.piece.roughness,
+    metalness: rendering.piece.metalness,
+    targetOpacity: materials.pieceOpacity,
+  };
 
   function makeMaterial(owner: Player): THREE.MeshStandardMaterial {
     return new THREE.MeshStandardMaterial({
       color: new THREE.Color(colors[colorKeyOf(owner)]),
-      roughness: rendering.piece.roughness,
-      metalness: rendering.piece.metalness,
+      roughness: surface.roughness,
+      metalness: surface.metalness,
       transparent: true,
       opacity: 0, // fade in from transparent — the placement seam
     });
@@ -166,7 +184,7 @@ export function createPieces(size: number): PiecesHandle {
     mesh.name = `piece:${node}`;
     mesh.position.copy(worldOf(node, size, geometry.spacing));
     object.add(mesh);
-    entries.set(node, { mesh, material, owner, targetOpacity, fadeDir: 1 });
+    entries.set(node, { mesh, material, owner, targetOpacity: surface.targetOpacity, fadeDir: 1 });
   }
 
   function recolorPiece(node: NodeKey, to: Player): void {
@@ -240,6 +258,30 @@ export function createPieces(size: number): PiecesHandle {
     }
   }
 
+  /**
+   * Live-set the surface params (Task A.3) across every current + future piece. Roughness/metalness
+   * mutate each material in place; the opacity change retargets the fade: a settled (fully-faded-in)
+   * mesh snaps to the new opacity now, a mesh still fading IN gets the new target so it fades toward
+   * it, and a mesh fading OUT is left to complete its capture fade (retargeting would fight it). New
+   * pieces read the updated `surface` at creation. Only the provided fields change.
+   */
+  function setMaterial(params: { roughness?: number; metalness?: number; opacity?: number }): void {
+    if (params.roughness !== undefined) surface.roughness = params.roughness;
+    if (params.metalness !== undefined) surface.metalness = params.metalness;
+    if (params.opacity !== undefined) surface.targetOpacity = params.opacity;
+    for (const entry of entries.values()) {
+      if (params.roughness !== undefined) entry.material.roughness = surface.roughness;
+      if (params.metalness !== undefined) entry.material.metalness = surface.metalness;
+      if (params.opacity !== undefined && entry.fadeDir !== -1) {
+        entry.targetOpacity = surface.targetOpacity;
+        // A settled mesh is already at its old target: snap it to the new one now. A fading-in mesh
+        // keeps fading and will land on the new target via `tick` (which clamps to targetOpacity).
+        if (entry.fadeDir === 0) entry.material.opacity = surface.targetOpacity;
+      }
+      entry.material.needsUpdate = true;
+    }
+  }
+
   function getPieces(): PieceReadout[] {
     const out: PieceReadout[] = [];
     for (const [node, entry] of entries) {
@@ -254,6 +296,8 @@ export function createPieces(size: number): PiecesHandle {
         opacity: entry.material.opacity,
         fadingOut: entry.fadeDir === -1,
         emissiveIntensity: entry.material.emissiveIntensity,
+        roughness: entry.material.roughness,
+        metalness: entry.material.metalness,
       });
     }
     return out;
@@ -269,5 +313,5 @@ export function createPieces(size: number): PiecesHandle {
     geo.dispose();
   }
 
-  return { object, sync, tick, highlight, getPieces, count, dispose };
+  return { object, sync, tick, highlight, setMaterial, getPieces, count, dispose };
 }

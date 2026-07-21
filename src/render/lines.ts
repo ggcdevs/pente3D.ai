@@ -78,6 +78,13 @@ export interface LinesHandle {
   /** Toggle a category's visibility at runtime (glue flips a flag, no rebuild). */
   setVisible(category: LineCategory, visible: boolean): void;
   /**
+   * Live-set a category's composite blend mode (Task A.3 `blending` live-apply): flip the group
+   * material between additive and normal blending. No rebuild — the material's `blending` is
+   * swapped and `needsUpdate` flagged, so the change draws on the next frame. Returns the applied
+   * mode, so the scene's `applyConfig` reports render truth (mirrored into `getVisibleLines`).
+   */
+  setBlending(category: LineCategory, mode: BlendMode): BlendMode;
+  /**
    * Live-set the shared line opacity across all three category materials (Task 5.4 settings-modal
    * colour live-preview). No rebuild — just the material `opacity`, so the change is visible on the
    * next frame. Returns the applied opacity, so the scene's `applyColors` can report render truth.
@@ -220,11 +227,15 @@ export function createLines(size: number): LinesHandle {
   const baseColors = {} as Record<LineCategory, THREE.Color>;
   // Which segment instances of each category currently carry the glow (for restore + readout).
   const highlightedSegments = {} as Record<LineCategory, Set<number>>;
+  // The LIVE blend mode per category — seeded from the resolved layout, then mutated by
+  // `setBlending` so `getVisibleLines` reports render truth (not the static build-time layout).
+  const liveBlending = {} as Record<LineCategory, BlendMode>;
   for (const category of LINE_CATEGORIES) {
     const mesh = buildGroupMesh(category, layout, size, colors, geometry);
     meshes[category] = mesh;
     baseColors[category] = new THREE.Color(colors[colorKeyOf(category)]);
     highlightedSegments[category] = new Set<number>();
+    liveBlending[category] = layout[category].blending;
     object.add(mesh);
   }
   const glowColor = new THREE.Color(colors.hoverHighlight);
@@ -233,7 +244,7 @@ export function createLines(size: number): LinesHandle {
     return LINE_CATEGORIES.map((category) => ({
       category,
       visible: meshes[category].visible,
-      blending: layout[category].blending,
+      blending: liveBlending[category],
       segmentCount: layout[category].segmentCount,
       lineCount: layout[category].lines.length,
       highlightedSegmentCount: highlightedSegments[category].size,
@@ -298,6 +309,19 @@ export function createLines(size: number): LinesHandle {
     meshes[category].visible = visible;
   }
 
+  /**
+   * Live-set a category's composite blend mode (Task A.3): swap the group material's `blending`
+   * between additive and normal, flag `needsUpdate`, and mirror the mode into the live-blending
+   * state `getVisibleLines` reports. No rebuild — the same instanced mesh recomposites next frame.
+   */
+  function setBlending(category: LineCategory, mode: BlendMode): BlendMode {
+    const material = meshes[category].material as THREE.MeshBasicMaterial;
+    material.blending = threeBlending(mode);
+    material.needsUpdate = true;
+    liveBlending[category] = mode;
+    return mode;
+  }
+
   /** Live-set the shared line opacity across every category material (settings live-preview). */
   function setOpacity(opacity: number): number {
     for (const category of LINE_CATEGORIES) {
@@ -337,6 +361,7 @@ export function createLines(size: number): LinesHandle {
     rangeOf,
     pickables,
     setVisible,
+    setBlending,
     setOpacity,
     setBaseColor,
     highlight,
