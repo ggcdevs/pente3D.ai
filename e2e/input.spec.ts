@@ -34,6 +34,7 @@ interface CameraPresetReadout {
   zoomToCursor: boolean;
   minDistance: number;
   maxDistance: number;
+  mouseButtons: { LEFT: number | undefined; MIDDLE: number | undefined; RIGHT: number | undefined };
 }
 interface InputReadout {
   scopes: string[];

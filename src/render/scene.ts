@@ -15,7 +15,12 @@ import { createPieces, type PiecesHandle, type PieceReadout } from './pieces.ts'
 import { createMarkers, type MarkersHandle, type MarkersReadout } from './markers.ts';
 import { createWinLine, type WinLineHandle, type WinLineReadout } from './winLine.ts';
 import { resolveCameraPreset, type ControlsConfig } from './cameraPresets.ts';
-import { applyCameraPreset, type CameraPresetReadout } from './cameraControls.ts';
+import {
+  applyCameraPreset,
+  readCameraPreset,
+  type AppliedPresetTag,
+  type CameraPresetReadout,
+} from './cameraControls.ts';
 import { createInput, type InputHandle, type InputReadout } from '../input/setup.ts';
 import type { Command } from '../input/commands.ts';
 import type { KeyResolution, Scope } from '../input/scopes.ts';
@@ -685,11 +690,18 @@ export function createScene(container: HTMLElement): SceneHandle {
     .dragGuard;
 
   // Camera presets (Task 4.6): resolve the active `controls` preset (PURE) and BIND it to
-  // the OrbitControls (IO glue) — mouse-button mapping, speeds, invert, zoom limits.
-  const presetReadout: CameraPresetReadout = applyCameraPreset(
+  // the OrbitControls (IO glue) — mouse-button mapping, speeds, invert, zoom limits. Only the preset
+  // IDENTITY (name + orbit/pan button choice) is retained; speeds/limits/mouseButtons are read LIVE
+  // off the controls in getCameraPreset, so the readout never diverges from the actual controller.
+  const applied = applyCameraPreset(
     controls,
     resolveCameraPreset(getConfig('controls') as unknown as ControlsConfig),
   );
+  const appliedPresetTag: AppliedPresetTag = {
+    name: applied.name,
+    orbitButton: applied.orbitButton,
+    panButton: applied.panButton,
+  };
 
   // Line-visibility toggle shared by the category commands: flips the config-derived
   // visible flag on the group mesh and mirrors it into the state we report.
@@ -1174,7 +1186,10 @@ export function createScene(container: HTMLElement): SceneHandle {
   }
 
   function getCameraPreset(): CameraPresetReadout {
-    return presetReadout;
+    // Read the speeds/limits/mouseButtons LIVE off the controls (tagged with the applied preset
+    // identity), so the readout reflects the controller's current state — the observable a wrongly-live
+    // `controls` re-apply would move (agent-principles #3).
+    return readCameraPreset(controls, appliedPresetTag);
   }
 
   function getInput(): InputReadout {

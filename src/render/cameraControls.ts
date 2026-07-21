@@ -32,6 +32,13 @@ export interface CameraPresetReadout {
   zoomToCursor: boolean;
   minDistance: number;
   maxDistance: number;
+  /**
+   * The LIVE `OrbitControls.mouseButtons` action-per-button map, as THREE.MOUSE numbers. Read straight
+   * off the controller so the readout reflects the actual button bindings — the observable that changes
+   * when a different preset is applied (e.g. fusion360's MIDDLE-drag orbit vs trackpad's LEFT-drag).
+   * This is what makes a wrongly-live `controls` re-apply detectable where camera position/target can't.
+   */
+  mouseButtons: { LEFT: number | undefined; MIDDLE: number | undefined; RIGHT: number | undefined };
 }
 
 /** The button tokens a gesture string can reference. */
@@ -96,15 +103,42 @@ export function applyCameraPreset(
   controls.maxDistance = preset.maxDistance;
   controls.update();
 
+  return readCameraPreset(controls, { name: preset.name, orbitButton, panButton });
+}
+
+/** The as-applied identity of a preset — the fields NOT recoverable from the live controls alone. */
+export interface AppliedPresetTag {
+  name: string;
+  orbitButton: ButtonToken;
+  panButton: ButtonToken;
+}
+
+/**
+ * Read the plain readout, combining the LIVE `OrbitControls` state (speeds, zoom limits, and the raw
+ * `mouseButtons` action map) with the `tag` from the last apply (the preset `name` + which button the
+ * orbit/pan gesture chose — these are not losslessly recoverable from the button map, since two
+ * gestures can collide on one button). Reflecting the controller's CURRENT state — not a snapshot
+ * frozen at construction — is what makes `window.__pente.getCameraPreset()` observe whatever most
+ * recently touched the controls, so the "`controls` is a live-apply no-op" e2e gate actually bites:
+ * a wrongly-live re-apply of a different preset visibly changes `mouseButtons`/speeds/limits here,
+ * whereas camera position/target would not (agent-principles #3, #7).
+ */
+export function readCameraPreset(controls: OrbitControls, tag: AppliedPresetTag): CameraPresetReadout {
+  const mb = controls.mouseButtons;
   return {
-    name: preset.name,
-    orbitButton,
-    panButton,
+    name: tag.name,
+    orbitButton: tag.orbitButton,
+    panButton: tag.panButton,
     rotateSpeed: controls.rotateSpeed,
     panSpeed: controls.panSpeed,
     zoomSpeed: controls.zoomSpeed,
     zoomToCursor: controls.zoomToCursor,
     minDistance: controls.minDistance,
     maxDistance: controls.maxDistance,
+    mouseButtons: {
+      LEFT: mb.LEFT ?? undefined,
+      MIDDLE: mb.MIDDLE ?? undefined,
+      RIGHT: mb.RIGHT ?? undefined,
+    },
   };
 }

@@ -238,7 +238,7 @@ describe('createEmitter', () => {
           const logs: number[][] = Array.from({ length: n }, () => []);
           for (let i = 0; i < n; i++) {
             const idx = i;
-            e.subscribe((p) => logs[idx].push(p));
+            e.subscribe((p) => logs[idx]!.push(p));
           }
           for (const p of payloads) e.emit(p);
           // Every subscriber saw exactly the emitted sequence, in order.
@@ -259,12 +259,12 @@ describe('createEmitter', () => {
           const offs: Array<() => void> = [];
           for (let i = 0; i < n; i++) {
             const idx = i;
-            offs.push(e.subscribe(() => counts[idx]++));
+            offs.push(e.subscribe(() => counts[idx]!++));
           }
           const pick = rawPick % n;
 
           e.emit(1); // all fire once
-          offs[pick](); // drop the chosen one
+          offs[pick]!(); // drop the chosen one
           e.emit(2); // everyone but `pick` fires again
 
           for (let i = 0; i < n; i++) {
