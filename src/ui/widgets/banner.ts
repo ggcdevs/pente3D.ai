@@ -108,7 +108,13 @@ export function bannerWidget(): WidgetFactory {
       const blackCap = doc.createElement('span');
       blackCap.className = 'pente-banner-capture pente-banner-capture--black';
       blackCap.setAttribute('data-testid', 'banner-captures-black');
-      captures.append(whiteCap, blackCap);
+      // Visible divider BETWEEN the two score labels (issue #14: they used to render adjacent as
+      // "White: 0Black: 0"). Its text is the model's `capturesSeparator`, painted in `render`.
+      const capSep = doc.createElement('span');
+      capSep.className = 'pente-banner-capture-sep';
+      capSep.setAttribute('data-testid', 'banner-captures-sep');
+      capSep.setAttribute('aria-hidden', 'true');
+      captures.append(whiteCap, capSep, blackCap);
       element.appendChild(captures);
 
       // Controls: one button per model button, each dispatching its command id on click. Built
@@ -145,8 +151,11 @@ export function bannerWidget(): WidgetFactory {
         status.setAttribute('data-status', model.status);
         status.setAttribute('data-player', model.player);
 
-        whiteCap.textContent = `White: ${model.whiteCaptures}`;
-        blackCap.textContent = `Black: ${model.blackCaptures}`;
+        // Score text + divider all come from the pure model (single source of truth, issue #14):
+        // "White: N", a visible separator, then "Black: N" — never rendered run-together.
+        whiteCap.textContent = model.whiteCapturesLabel;
+        capSep.textContent = model.capturesSeparator;
+        blackCap.textContent = model.blackCapturesLabel;
 
         for (const spec of model.buttons) {
           const btn = buttonEls.get(spec.commandId);

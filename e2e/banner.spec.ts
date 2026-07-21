@@ -87,6 +87,23 @@ test('the banner mounts in its configured zone and shows player + captures', asy
     'Black: 0',
   );
 
+  // Issue #14: the two scores must be visually separated, never rendered as "White: 0Black: 0".
+  // A dedicated separator element carries the model's middle-dot divider between the labels.
+  await expect(banner(page).locator('[data-testid="banner-captures-sep"]')).toHaveText('·');
+  // Prove the separation on the REAL rendered layout: the black label's box starts to the right of
+  // where the white label's box ends (a horizontal gap exists), so the counts can never run together.
+  const whiteBox = await banner(page)
+    .locator('[data-testid="banner-captures-white"]')
+    .boundingBox();
+  const blackBox = await banner(page)
+    .locator('[data-testid="banner-captures-black"]')
+    .boundingBox();
+  expect(whiteBox).not.toBeNull();
+  expect(blackBox).not.toBeNull();
+  expect(blackBox!.x).toBeGreaterThan(whiteBox!.x + whiteBox!.width);
+  // And the concatenated captures-row text reads with the divider, not run-together.
+  await expect(banner(page).locator('.pente-banner-captures')).toHaveText('White: 0·Black: 0');
+
   // The three controls are present, each carrying the command id it dispatches.
   for (const commandId of ['undo', 'redo', 'reset']) {
     await expect(

@@ -77,6 +77,47 @@ describe('deriveBanner — capture counts', () => {
   });
 });
 
+describe('deriveBanner — formatted, visually-separated capture labels (issue #14)', () => {
+  // Issue #14: the DOM rendered "White: 0Black: 0" with no separation. The formatting is owned
+  // by the PURE model (single source of truth) so it can be asserted exactly here: each player
+  // gets its own "Name: N" label AND the model carries an explicit non-blank separator so the DOM
+  // can place a visible divider between the two labels. Asserting the SPECIFIC strings — not
+  // merely "contains a space" — so a mutant that drops the label prefix, swaps the count, or blanks
+  // the separator is caught.
+  it('formats each capture label as "Name: N" from the state map, not swapped', () => {
+    const model = deriveBanner(stateWith({ captures: { white: 2, black: 3 } }), allHistory());
+    expect(model.whiteCapturesLabel).toBe('White: 2');
+    expect(model.blackCapturesLabel).toBe('Black: 3');
+  });
+
+  it('formats zero-capture labels for a pristine game', () => {
+    const model = deriveBanner(initialState(3), allHistory());
+    expect(model.whiteCapturesLabel).toBe('White: 0');
+    expect(model.blackCapturesLabel).toBe('Black: 0');
+  });
+
+  it('carries a middle-dot separator so the two labels render visually apart', () => {
+    const model = deriveBanner(initialState(3), allHistory());
+    // The exact glyph the design uses to separate the scores; a blank/empty separator would
+    // reproduce the "White: 0Black: 0" run-together bug, so pin the literal.
+    expect(model.capturesSeparator).toBe('·');
+  });
+
+  it('the separator is non-empty and not whitespace-only (guards the #14 regression)', () => {
+    const model = deriveBanner(initialState(3), allHistory());
+    expect(model.capturesSeparator.trim().length).toBeGreaterThan(0);
+  });
+
+  it('composing label + separator + label yields a separated line (no run-together)', () => {
+    const model = deriveBanner(stateWith({ captures: { white: 1, black: 4 } }), allHistory());
+    const line = `${model.whiteCapturesLabel} ${model.capturesSeparator} ${model.blackCapturesLabel}`;
+    expect(line).toBe('White: 1 · Black: 4');
+    // The two counts are never adjacent — the exact failure mode of issue #14.
+    expect(line).not.toContain('0Black');
+    expect(line).not.toMatch(/\d[A-Z]/);
+  });
+});
+
 describe('deriveBanner — button set (ids, order, labels)', () => {
   it('emits Undo/Redo/Reset in order, each bound to its command id', () => {
     const model = deriveBanner(initialState(3), allHistory());

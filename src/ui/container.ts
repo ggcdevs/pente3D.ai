@@ -51,6 +51,10 @@ const UI_STYLESHEET = `
 .pente-ui-zone--bottom-right { bottom: 0; right: 0; flex-direction: column; align-items: flex-end; }
 .pente-widget--banner { display: flex; gap: 12px; align-items: center; padding: 6px 12px; border-radius: 6px; background: rgba(16,16,20,0.72); color: #e6e6ea; font-family: system-ui, sans-serif; font-size: 14px; }
 .pente-banner-status { border-radius: 4px; padding: 0 4px; }
+/* Score row: the two "Name: N" labels sit either side of a visible middle-dot separator (issue #14 —
+   they used to render adjacent as "White: 0Black: 0"); the flex gap spaces the label/sep/label. */
+.pente-banner-captures { display: flex; gap: 6px; align-items: baseline; }
+.pente-banner-capture-sep { opacity: 0.6; }
 /* The subtle off-turn cue (Task 6.2, issue #4c): a brief single pulse of the "X to move" line when a
    placement is rejected because it is not the local seat's turn. Deliberately understated — a short
    background/opacity flash, no modal, no error copy. Re-triggered by the banner toggling the class. */

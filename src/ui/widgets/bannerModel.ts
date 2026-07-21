@@ -25,6 +25,13 @@
 
 import type { GameState, Player } from '../../core/gameState.ts';
 
+/**
+ * The visible divider rendered between the two capture-score labels (issue #14). A U+00B7 MIDDLE
+ * DOT reads cleanly as `White: 0 · Black: 0`. Named so the model, the widget, and its tests share
+ * one source of truth for the glyph.
+ */
+export const CAPTURES_SEPARATOR = '·';
+
 /** The three banner controls, in display order. Each maps to a command id (design Principle 3). */
 export const BANNER_COMMANDS = {
   undo: 'undo',
@@ -65,6 +72,20 @@ export interface BannerModel {
   readonly whiteCaptures: number;
   /** Capture-pair count for black. */
   readonly blackCaptures: number;
+  /**
+   * White's fully-formatted score label (`'White: 0'`). The `'Name: N'` formatting lives here in
+   * the pure model, not the DOM glue, so it is the single source of truth for the score text and
+   * is exactly assertable under the unit + mutation gate (issue #14).
+   */
+  readonly whiteCapturesLabel: string;
+  /** Black's fully-formatted score label (`'Black: 0'`). */
+  readonly blackCapturesLabel: string;
+  /**
+   * The visible divider the DOM places BETWEEN the two capture labels (a middle dot, `'·'`). It is a
+   * non-blank glyph on purpose: issue #14 was the two labels rendering adjacent (`'White: 0Black: 0'`)
+   * with nothing between them, so the model owns an explicit separator the widget can render.
+   */
+  readonly capturesSeparator: string;
   /** The three controls (Undo / Redo / Reset) in display order, with per-button enabled flags. */
   readonly buttons: readonly BannerButton[];
 }
@@ -95,6 +116,9 @@ export function deriveBanner(state: GameState, history: BannerHistory): BannerMo
     player,
     whiteCaptures: state.captures.white,
     blackCaptures: state.captures.black,
+    whiteCapturesLabel: `White: ${state.captures.white}`,
+    blackCapturesLabel: `Black: ${state.captures.black}`,
+    capturesSeparator: CAPTURES_SEPARATOR,
     buttons,
   };
 }
