@@ -1,7 +1,7 @@
 /**
- * Menu button + modal widget (Task 5.3) — the DOM/dispatch + input-scope IO glue for the pure
- * {@link deriveMenu} view-model (`menuModel.ts`). Render-ui design Part 6 "Widget roster: menu
- * button + menu modal (Settings, Host, Join, Load, Export)".
+ * Menu button + slide-in DRAWER widget (Task 5.3 / #24) — the DOM/dispatch + input-scope IO glue
+ * for the pure {@link deriveMenu} view-model (`menuModel.ts`). Render-ui design Part 6 "Widget
+ * roster: menu button + menu (Settings, Host, Join, Load, Export)".
  *
  * A self-contained widget by the design-Part-6 contract: a stable string id (`menuButton`, the id
  * the tracked `layout` default places in `top-right`), `mount() → DOM element`, and
@@ -10,37 +10,56 @@
  * menu entry fires the exact same command a keybinding would, via the deps-supplied `dispatch` —
  * the scene's command registry).
  *
- * The open modal is a MODE change in the input layer: opening PUSHES a `blocking` input scope
- * (GLOSSARY "Blocking scope": a modal swallows stray keys so they never fall through to the
- * game/camera scopes below), and closing POPS it — so this widget is handed `pushScope`/`popScope`
- * (the scene's scope stack) alongside `dispatch`. The modal closes on **Escape** or an
- * **outside-click**, and every close path (Escape, outside-click, choosing an entry, the ✕
- * button) pops the scope exactly once, so the stack can never leak a scope.
+ * #24: the menu is a **right-edge, NON-blocking slide-in drawer**, not a centered blocking modal.
+ * Opening PUSHES a NON-blocking input scope ({@link MENU_SCOPE_BLOCKING} `=== false`) so stray keys
+ * fall THROUGH to the camera/game scopes below — the board stays fully interactive (orbit/pan/zoom
+ * + placement keep working) WHILE the drawer is open. That is the whole point of the drawer: you
+ * edit settings and watch the live board. Closing POPS the scope — so this widget is handed
+ * `pushScope`/`popScope` (the scene's scope stack) alongside `dispatch`. The drawer closes on
+ * **Escape** or an **outside-click**, and every close path (Escape, outside-click, choosing an
+ * entry, the ✕ button) pops the scope exactly once, so the stack can never leak a scope.
  *
- * All entry DECISIONS (which entries, their order, their command ids) live in the pure model; this
- * file only paints the model onto DOM, forwards clicks to `dispatch`, and manages open/close +
- * the blocking scope. It touches `document`, so it is the Playwright-verified IO boundary (asserted
- * on `window.__pente` getInput() scope stack + real interactions), not unit/mutation-gated.
- * `data-*` attributes + `data-testid`s are exposed so a test reads the rendered model + open state
- * back off the live DOM (agent-principles #3: observable behavior, never a log line).
+ * The drawer OVERLAYS the right edge of the full-viewport canvas — it does NOT reflow the board and
+ * has NO full-viewport backdrop (a backdrop would eat the very board clicks the non-blocking scope
+ * is meant to preserve). Outside-click detection is therefore a document-level "was the click
+ * outside our button + panel?" check while open.
+ *
+ * All entry DECISIONS (which entries, their order, their command ids) and the open/closed STATE
+ * transitions live in the pure model; this file only paints the model onto DOM, forwards clicks to
+ * `dispatch`, and manages the non-blocking scope. It touches `document`, so it is the
+ * Playwright-verified IO boundary (asserted on `window.__pente` getInput() scope stack + getCamera
+ * delta + real interactions), not unit/mutation-gated. `data-*` attributes + `data-testid`s are
+ * exposed so a test reads the rendered model + open state back off the live DOM (agent-principles
+ * #3: observable behavior, never a log line).
  */
 
 import type { Widget, WidgetFactory } from '../registry.ts';
-import { deriveMenu, MENU_SCOPE_ID, type MenuEntrySpec } from './menuModel.ts';
+import {
+  deriveMenu,
+  MENU_SCOPE_ID,
+  MENU_SCOPE_BLOCKING,
+  closedMenu,
+  toggleMenu,
+  closeMenu,
+  type MenuEntrySpec,
+} from './menuModel.ts';
 
 /** The stable widget id — matches the `menuButton` entry in the tracked `layout` default. */
 export const MENU_WIDGET_ID = 'menuButton';
 
 /** A minimal scope shape the widget pushes — mirrors `input/scopes.ts` `Scope` without importing
  * it (keeps this UI glue decoupled from the input module's internals; the scene supplies the
- * push/pop that consume it). A blocking scope with no bindings: it swallows every key. */
+ * push/pop that consume it). A NON-blocking scope with no bindings: unhandled keys fall through to
+ * the camera/game scopes below (#24), so the board stays interactive while the drawer is open. */
 export interface MenuScope {
   /** The scope's id (`menu`), so a test can see it on the `getInput()` stack. */
   readonly id: string;
-  /** No key bindings — the modal handles Escape itself; every other key is swallowed. */
+  /** No key bindings — the drawer handles Escape itself (via its own document listener); every
+   * other key is left unbound so it falls through to the scopes below. */
   readonly bindings: Readonly<Record<string, string>>;
-  /** Blocking: stray keys are swallowed here, never falling through to game/camera scopes. */
-  readonly blocking: true;
+  /** Non-blocking ({@link MENU_SCOPE_BLOCKING}): unbound keys fall through to game/camera scopes,
+   * keeping the board interactive while the drawer is open. */
+  readonly blocking: boolean;
 }
 
 /**
@@ -53,23 +72,24 @@ export interface MenuDeps {
   readonly doc: Document;
   /** Dispatch a command id (a chosen menu entry). Returns whether a command ran. */
   dispatch(commandId: string): boolean;
-  /** Push an input scope (the blocking `menu` scope) when the modal opens. */
+  /** Push an input scope (the non-blocking `menu` scope) when the drawer opens. */
   pushScope(scope: MenuScope): void;
-  /** Pop the topmost input scope (the `menu` scope) when the modal closes. */
+  /** Pop the topmost input scope (the `menu` scope) when the drawer closes. */
   popScope(): void;
   /** The menu entry roster (defaults to the design-Part-6 set). Injectable for tests. */
   readonly entries?: readonly MenuEntrySpec[];
 }
 
-/** Build the blocking `menu` scope the open modal pushes (id `menu`, no bindings, blocking). */
+/** Build the NON-blocking `menu` scope the open drawer pushes (id `menu`, no bindings; blocking is
+ * the pure {@link MENU_SCOPE_BLOCKING} policy so unbound keys fall through to the board — #24). */
 function menuScope(): MenuScope {
-  return { id: MENU_SCOPE_ID, bindings: {}, blocking: true };
+  return { id: MENU_SCOPE_ID, bindings: {}, blocking: MENU_SCOPE_BLOCKING };
 }
 
 /**
- * Build the menu-button {@link WidgetFactory}. The mounted element is the button; the modal is a
- * sibling overlay toggled open/closed. Opening pushes the blocking scope and shows the modal;
- * Escape / outside-click / an entry choice / the ✕ button all close it (pop the scope once).
+ * Build the menu-button {@link WidgetFactory}. The mounted element is the button; the drawer is a
+ * sibling panel toggled open/closed. Opening pushes the NON-blocking scope and slides the drawer
+ * in; Escape / outside-click / an entry choice / the ✕ button all close it (pop the scope once).
  */
 export function menuWidget(): WidgetFactory {
   return {
@@ -79,8 +99,8 @@ export function menuWidget(): WidgetFactory {
       const doc = deps.doc;
       const model = deriveMenu(deps.entries);
 
-      // Root carries BOTH the trigger button and the modal, so outside-click detection is a
-      // single "is the click within our root?" check (the button + modal are our surface).
+      // Root carries BOTH the trigger button and the drawer panel, so outside-click detection is a
+      // "is the click within the button or the panel?" check (those two are our interactive surface).
       const element = doc.createElement('div');
       element.className = 'pente-widget pente-widget--menu';
 
@@ -91,12 +111,16 @@ export function menuWidget(): WidgetFactory {
       button.textContent = 'Menu';
       element.appendChild(button);
 
-      // The modal overlay: a labelled panel listing one button per menu item. Hidden until open.
-      const modal = doc.createElement('div');
-      modal.className = 'pente-menu-modal';
-      modal.setAttribute('data-testid', 'menu-modal');
-      modal.setAttribute('role', 'menu');
-      modal.hidden = true;
+      // The slide-in drawer panel: a labelled list of one button per menu item, anchored to the
+      // right viewport edge (CSS in container.ts). NO backdrop — the board stays visible + live to
+      // its left. Hidden (and translated off-screen by CSS) until open. `data-testid` stays
+      // `menu-modal` so existing wiring/tests keep their handle; the class carries the drawer role.
+      const panelWrap = doc.createElement('div');
+      panelWrap.className = 'pente-menu-drawer';
+      panelWrap.setAttribute('data-testid', 'menu-modal');
+      panelWrap.setAttribute('role', 'menu');
+      panelWrap.setAttribute('aria-label', 'Menu');
+      panelWrap.hidden = true;
 
       const panel = doc.createElement('div');
       panel.className = 'pente-menu-panel';
@@ -113,7 +137,7 @@ export function menuWidget(): WidgetFactory {
       closeButton.textContent = '✕'; // ✕
       panel.appendChild(closeButton);
 
-      // One entry button per pure-model item; each dispatches its command id and closes the modal.
+      // One entry button per pure-model item; each dispatches its command id and closes the drawer.
       for (const item of model.items) {
         const entry = doc.createElement('button');
         entry.className = `pente-menu-entry pente-menu-entry--${item.id}`;
@@ -121,22 +145,23 @@ export function menuWidget(): WidgetFactory {
         entry.setAttribute('data-command', item.commandId);
         entry.textContent = item.label;
         entry.addEventListener('click', () => {
-          // Close FIRST — pop this menu's blocking scope — THEN dispatch the SAME command id a
-          // keybinding fires (design Principle 3). Ordering matters: a command that opens another
-          // modal (Settings, 5.4) pushes its own scope, and popping ours first keeps the stack
-          // clean (the new modal's scope sits directly on the game scope, not atop a stale menu).
+          // Close FIRST — pop this menu's scope — THEN dispatch the SAME command id a keybinding
+          // fires (design Principle 3). Ordering matters: a command that opens another panel
+          // (Settings) pushes its own scope, and popping ours first keeps the stack clean.
           close();
           deps.dispatch(item.commandId);
         });
         panel.appendChild(entry);
       }
 
-      modal.appendChild(panel);
-      element.appendChild(modal);
+      panelWrap.appendChild(panel);
+      element.appendChild(panelWrap);
 
-      let open = false;
+      // Open/closed lives in the pure model; this holds the current state and mirrors it to DOM +
+      // the scope stack. `state.open` is the single source of truth the guards read (idempotency).
+      let state = closedMenu();
 
-      /** Close on Escape (only while open). Attached to the document while the modal is open. */
+      /** Close on Escape (only while open). Attached to the document while the drawer is open. */
       function onKeyDown(event: KeyboardEvent): void {
         if (event.key === 'Escape') {
           event.preventDefault();
@@ -145,12 +170,11 @@ export function menuWidget(): WidgetFactory {
       }
 
       /**
-       * Close on a click that lands OUTSIDE the interactive surface (the trigger button + the
-       * modal panel). A click on the button or inside the panel is "inside" and keeps the modal
-       * open; a click on the backdrop overlay (which fills the viewport but is NOT the panel) or
-       * anywhere else on the page is "outside" and closes it (design Part 6: "outside-click
-       * closes"). Checking button/panel containment — not the whole root — is what makes the
-       * backdrop count as outside even though it is a descendant of the root element.
+       * Close on a pointerdown OUTSIDE the interactive surface (trigger button + drawer panel). A
+       * click on the button or inside the panel keeps the drawer open; a click anywhere else —
+       * including on the live board/canvas — is "outside" and closes it (design Part 6:
+       * "outside-click closes"). There is deliberately NO backdrop, so the canvas underneath stays
+       * clickable; this document-level listener is how outside-click still works without one.
        */
       function onOutsidePointer(event: Event): void {
         const target = event.target as Node | null;
@@ -159,34 +183,35 @@ export function menuWidget(): WidgetFactory {
       }
 
       function open_(): void {
-        if (open) return; // idempotent — a second open must not push a second scope
-        open = true;
-        modal.hidden = false;
+        if (state.open) return; // idempotent — a second open must not push a second scope
+        state = toggleMenu(state);
+        panelWrap.hidden = false;
         element.setAttribute('data-open', 'true');
         button.setAttribute('aria-expanded', 'true');
-        // Push the blocking scope: stray keys are now swallowed (GLOSSARY "Blocking scope").
+        // Push the NON-blocking scope: unbound keys fall THROUGH to the board (#24), so orbit/pan/
+        // zoom + placement keep working while the drawer is open.
         deps.pushScope(menuScope());
-        // Listen on the document (capture phase for the outside-click, so it fires before any
-        // canvas handler) only while open — removed on close so we never leak listeners.
+        // Listen on the document (capture phase for outside-click, so it fires before any canvas
+        // handler) only while open — removed on close so we never leak listeners.
         doc.addEventListener('keydown', onKeyDown);
         doc.addEventListener('pointerdown', onOutsidePointer, true);
       }
 
       function close(): void {
-        if (!open) return; // idempotent — closing when already closed must not pop a scope
-        open = false;
-        modal.hidden = true;
+        if (!state.open) return; // idempotent — closing when already closed must not pop a scope
+        state = closeMenu(state);
+        panelWrap.hidden = true;
         element.setAttribute('data-open', 'false');
         button.setAttribute('aria-expanded', 'false');
         doc.removeEventListener('keydown', onKeyDown);
         doc.removeEventListener('pointerdown', onOutsidePointer, true);
-        // Pop the blocking scope exactly once (every close path routes through here).
+        // Pop the scope exactly once (every close path routes through here).
         deps.popScope();
       }
 
       button.addEventListener('click', () => {
-        // Toggle: the button opens a closed menu and closes an open one.
-        if (open) close();
+        // Toggle: the button opens a closed drawer and closes an open one.
+        if (state.open) close();
         else open_();
       });
       closeButton.addEventListener('click', () => close());
@@ -200,9 +225,9 @@ export function menuWidget(): WidgetFactory {
         // no-op so the widget satisfies the contract without re-rendering on every board change.
         update(): void {},
         // On unmount, drop any open listeners AND pop a still-open scope so a disposed-while-open
-        // menu never leaks a scope onto the stack.
+        // drawer never leaks a scope onto the stack.
         dispose(): void {
-          if (open) close();
+          if (state.open) close();
         },
       };
     },

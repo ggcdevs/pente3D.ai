@@ -3,6 +3,10 @@ import {
   deriveMenu,
   DEFAULT_MENU_ENTRIES,
   MENU_SCOPE_ID,
+  MENU_SCOPE_BLOCKING,
+  closedMenu,
+  toggleMenu,
+  closeMenu,
   type MenuEntrySpec,
 } from './menuModel.ts';
 
@@ -105,7 +109,57 @@ describe('deriveMenu — visibility (negative cases)', () => {
 });
 
 describe('MENU_SCOPE_ID', () => {
-  it('is the stable "menu" scope id the modal pushes', () => {
+  it('is the stable "menu" scope id the drawer pushes', () => {
     expect(MENU_SCOPE_ID).toBe('menu');
+  });
+});
+
+describe('MENU_SCOPE_BLOCKING', () => {
+  it('is false — the drawer is NON-blocking so the board stays interactive (#24)', () => {
+    // The whole point of the drawer over the old modal: the scope must NOT swallow keys, so
+    // camera/game input falls through while the drawer is open. A regression to `true` here is
+    // the exact bug the drawer replaces, so this pins it as a mutation-killable fact.
+    expect(MENU_SCOPE_BLOCKING).toBe(false);
+  });
+});
+
+describe('drawer open/closed state', () => {
+  it('starts closed', () => {
+    expect(closedMenu()).toEqual({ open: false });
+  });
+
+  it('toggle opens a closed drawer', () => {
+    expect(toggleMenu(closedMenu())).toEqual({ open: true });
+  });
+
+  it('toggle closes an open drawer', () => {
+    expect(toggleMenu({ open: true })).toEqual({ open: false });
+  });
+
+  it('toggle is its own inverse (two toggles return to the start)', () => {
+    const start = closedMenu();
+    expect(toggleMenu(toggleMenu(start))).toEqual(start);
+  });
+
+  it('toggle does not mutate the input state (pure)', () => {
+    const start = closedMenu();
+    const snapshot = { ...start };
+    toggleMenu(start);
+    expect(start).toEqual(snapshot);
+  });
+
+  it('close yields a closed state from an open drawer', () => {
+    expect(closeMenu({ open: true })).toEqual({ open: false });
+  });
+
+  it('close yields a closed state from an already-closed drawer', () => {
+    expect(closeMenu({ open: false })).toEqual({ open: false });
+  });
+
+  it('close does not mutate the input state (pure)', () => {
+    const start: { open: boolean } = { open: true };
+    const snapshot = { ...start };
+    closeMenu(start);
+    expect(start).toEqual(snapshot);
   });
 });

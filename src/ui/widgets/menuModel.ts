@@ -23,9 +23,48 @@
  * The default roster ({@link DEFAULT_MENU_ENTRIES}) is the design-Part-6 set in design order.
  */
 
-/** The stable input scope id the open modal pushes — a BLOCKING scope (GLOSSARY "Blocking scope":
- * a modal swallows stray keys so they never fall through to the game/camera scopes below). */
+/** The stable input scope id the open drawer pushes. */
 export const MENU_SCOPE_ID = 'menu';
+
+/**
+ * Whether the drawer's input scope BLOCKS unhandled keys. `false` (non-blocking, #24): the drawer
+ * slides in over the right edge of the live board WITHOUT freezing it — stray keys fall THROUGH to
+ * the camera/game scopes below, so orbit/pan/zoom and placement keep working while the drawer is
+ * open (render-ui design Part 5: modes don't block, mirroring `tempPlacementScope`). This is the
+ * exact regression the old centered *blocking* modal had — it swallowed every key. A single named
+ * constant so the drawer's blocking policy is one testable fact, not a literal buried in the glue.
+ */
+export const MENU_SCOPE_BLOCKING = false;
+
+/** The drawer's open/closed view-model state — the single boolean the DOM reflects. */
+export interface MenuOpenState {
+  /** Whether the drawer is currently slid in (open). */
+  readonly open: boolean;
+}
+
+/** The initial drawer state: closed. */
+export function closedMenu(): MenuOpenState {
+  return { open: false };
+}
+
+/**
+ * Toggle the drawer open/closed (pure). The button fires this: an open drawer closes and a closed
+ * drawer opens. Returns a fresh state, never mutating the input, so the caller keeps an undo-able
+ * history without aliasing surprises (mirrors the immutable scope-stack helpers).
+ */
+export function toggleMenu(state: MenuOpenState): MenuOpenState {
+  return { open: !state.open };
+}
+
+/**
+ * Force the drawer closed (pure). Every close path (Escape, outside-click, choosing an entry, the
+ * ✕ button) routes through this; it always yields a closed state. Whether a scope-pop is actually
+ * owed is the GLUE's concern (it tracks a `wasOpen` flag), so this stays a trivial deterministic
+ * projection with no branch to leave an equivalent mutant.
+ */
+export function closeMenu(_state: MenuOpenState): MenuOpenState {
+  return { open: false };
+}
 
 /** A single configurable menu entry: what it shows and which command it dispatches. */
 export interface MenuEntrySpec {

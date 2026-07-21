@@ -5,17 +5,20 @@ import layoutDefault from '../src/config/defaults/layout.json' with { type: 'jso
 import { DEFAULT_MENU_ENTRIES, MENU_SCOPE_ID } from '../src/ui/widgets/menuModel.ts';
 
 /**
- * Task 5.3 e2e — the menu button + modal widget is the DOM/dispatch + input-scope IO boundary,
- * verified by driving the REAL app and asserting on `window.__pente` real state + the rendered DOM
- * (agent-principles #3: observable behavior, never a log line). The PURE view-model
+ * Task 5.3 / #24 e2e — the menu button + slide-in DRAWER widget is the DOM/dispatch + input-scope
+ * IO boundary, verified by driving the REAL app and asserting on `window.__pente` real state + the
+ * rendered DOM (agent-principles #3: observable behavior, never a log line). The PURE view-model
  * (`menuModel.ts`) is mutation-gated in Vitest; here we prove the WIRING:
  *   - the menu button mounts in its configured zone (`top-right` per the tracked layout);
- *   - clicking the button OPENS the modal with the design entries (Settings/Host/Join/Load/Export),
+ *   - clicking the button OPENS the drawer with the design entries (Settings/Host/Join/Load/Export),
  *     each carrying the command id it dispatches, read back off the DOM;
- *   - opening PUSHES a BLOCKING `menu` input scope onto the scene's stack (`getInput().scopes`);
+ *   - opening PUSHES a NON-blocking `menu` input scope onto the scene's stack (`getInput().scopes`);
  *     closing POPS it — proven for EVERY close path: Escape, outside-click, an entry choice, and
- *     the ✕ button. The blocking flag is proven by a key being SWALLOWED while the modal is open
- *     (`pressKey` resolves to the `menu` scope with no command);
+ *     the ✕ button;
+ *   - #24 NON-BLOCKING PROOF: while the drawer is OPEN, an otherwise-bound key FALLS THROUGH the
+ *     `menu` scope to the game scope (it is NOT swallowed — the exact opposite of the old blocking
+ *     modal), AND a camera-orbit drag on the canvas STILL moves the camera (`getCamera` delta) —
+ *     proving the board stays fully interactive under the open drawer;
  *   - choosing an entry DISPATCHES its command id (the same registry a keybinding uses).
  * The menu id + zone + entries derive from `layout.json` / `menuModel.ts` so nothing is hardcoded
  * (agent-principles #8).
@@ -32,9 +35,14 @@ interface KeyResolution {
   scopeId: string | null;
   handled: boolean;
 }
+interface CameraReadout {
+  position: { x: number; y: number; z: number };
+  target: { x: number; y: number; z: number };
+}
 type Pente = {
   getInput(): InputReadout | null;
   pressKey(chord: string): KeyResolution | null;
+  getCamera(): CameraReadout | null;
 };
 
 async function ready(page: import('@playwright/test').Page) {
@@ -45,8 +53,21 @@ async function ready(page: import('@playwright/test').Page) {
       !!p &&
       typeof p.getInput === 'function' &&
       typeof p.pressKey === 'function' &&
+      typeof p.getCamera === 'function' &&
+      !!document.querySelector('canvas') &&
       !!document.querySelector('[data-widget-id="menuButton"]')
     );
+  });
+}
+
+/** Read the live camera from window.__pente (the #24 non-blocking proof reads this delta). */
+async function readCamera(page: import('@playwright/test').Page): Promise<CameraReadout> {
+  return page.evaluate(() => {
+    const api = (window as unknown as { __pente?: { getCamera(): CameraReadout | null } }).__pente;
+    if (!api) throw new Error('window.__pente not installed');
+    const cam = api.getCamera();
+    if (!cam) throw new Error('getCamera() returned null');
+    return cam;
   });
 }
 
@@ -85,14 +106,14 @@ test('the menu button mounts in its configured zone and the modal starts closed'
   await page.screenshot({ path: shot });
 });
 
-test('clicking the button opens the modal with the design entries and pushes a blocking scope', async ({
+test('clicking the button opens the drawer with the design entries and pushes a NON-blocking scope', async ({
   page,
 }) => {
   await ready(page);
 
   await button(page).click();
 
-  // The modal is now visible and every design entry is present, each carrying its command id.
+  // The drawer is now visible and every design entry is present, each carrying its command id.
   await expect(modal(page)).toBeVisible();
   await expect(button(page)).toHaveAttribute('aria-expanded', 'true');
   for (const entry of DEFAULT_MENU_ENTRIES) {
@@ -104,21 +125,69 @@ test('clicking the button opens the modal with the design entries and pushes a b
   const labels = await menu(page).locator('[data-testid^="menu-entry-"]').allTextContents();
   expect(labels).toEqual(DEFAULT_MENU_ENTRIES.map((e) => e.label));
 
-  // Opening PUSHED the blocking `menu` scope onto the scene's stack (observable on getInput).
+  // Opening PUSHED the `menu` scope onto the scene's stack (observable on getInput).
   const input = await get(page, (p) => p.getInput()!);
   expect(input.scopes[input.scopes.length - 1]).toBe(MENU_SCOPE_ID);
 
-  // Proof the scope BLOCKS: an otherwise-bound key is SWALLOWED by the menu scope (resolved there,
-  // no command) instead of falling through to the game scope below (agent-principles #3).
-  const swallowed = await get(page, (p) => p.pressKey('u'));
-  expect(swallowed).toEqual({ commandId: null, scopeId: MENU_SCOPE_ID, handled: true });
+  // #24 NON-BLOCKING proof (key path): an otherwise-bound key is NOT swallowed by the `menu` scope
+  // — it FALLS THROUGH to the game scope below and resolves its command (`u` → `undo`). This is the
+  // exact OPPOSITE of the old blocking modal, which reported {scopeId:'menu', commandId:null}.
+  const fellThrough = await get(page, (p) => p.pressKey('u'));
+  expect(fellThrough.scopeId).toBe('game');
+  expect(fellThrough.commandId).toBe('undo');
+  expect(fellThrough.handled).toBe(true);
 
+  // Screenshot the OPEN drawer over the live board (the board fills the viewport to the drawer's
+  // left; the drawer overlays only the right edge).
   const shot = resolve('e2e/artifacts/menu-open.png');
   mkdirSync(dirname(shot), { recursive: true });
   await page.screenshot({ path: shot });
 });
 
-test('Escape closes the modal and pops the blocking scope', async ({ page }) => {
+test('#24: with the drawer OPEN, a camera-orbit drag STILL moves the camera (board stays live)', async ({
+  page,
+}) => {
+  await ready(page);
+
+  // Open the drawer, then orbit the canvas UNDERNEATH it. The old blocking modal drew a
+  // full-viewport backdrop that ate this drag; the non-blocking drawer must let it through.
+  await button(page).click();
+  await expect(modal(page)).toBeVisible();
+  const input = await get(page, (p) => p.getInput()!);
+  expect(input.scopes).toContain(MENU_SCOPE_ID); // the drawer really is open (scope on the stack)
+
+  const before = await readCamera(page);
+  expect(Number.isFinite(before.position.x)).toBe(true);
+
+  const canvas = page.locator('canvas');
+  const box = await canvas.boundingBox();
+  if (!box) throw new Error('canvas has no bounding box');
+  // Drag on the LEFT portion of the canvas, well clear of the right-edge drawer (264px wide).
+  const cx = box.x + box.width * 0.3;
+  const cy = box.y + box.height / 2;
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx + 220, cy + 120, { steps: 24 });
+  await page.mouse.up();
+  await page.waitForTimeout(200);
+
+  const after = await readCamera(page);
+  const moved = Math.hypot(
+    after.position.x - before.position.x,
+    after.position.y - before.position.y,
+    after.position.z - before.position.z,
+  );
+  // The camera MUST have moved — proof the drawer is non-blocking (the board is live under it).
+  // Under the OLD blocking modal this delta was ~0 (the backdrop swallowed the drag).
+  expect(moved).toBeGreaterThan(0.01);
+
+  // The pointerdown that began the orbit ALSO landed outside the panel, so the drawer closed and
+  // its scope popped (outside-click semantics) — the camera still moved, and no scope leaked.
+  const closed = await get(page, (p) => p.getInput()!);
+  expect(closed.scopes).not.toContain(MENU_SCOPE_ID);
+});
+
+test('Escape closes the drawer and pops the scope', async ({ page }) => {
   await ready(page);
   await button(page).click();
   const opened = await get(page, (p) => p.getInput()!);
@@ -128,8 +197,8 @@ test('Escape closes the modal and pops the blocking scope', async ({ page }) => 
 
   await expect(modal(page)).toBeHidden();
   await expect(button(page)).toHaveAttribute('aria-expanded', 'false');
-  // The blocking scope is POPPED — the stack no longer carries `menu`, and `u` falls through
-  // to the game scope again (resolves the `undo` command).
+  // The `menu` scope is POPPED — the stack no longer carries it, and `u` still resolves to the
+  // game scope's `undo` (it fell through even while open — asserted above — and still does now).
   const closed = await get(page, (p) => p.getInput()!);
   expect(closed.scopes).not.toContain(MENU_SCOPE_ID);
   const afterEscape = await get(page, (p) => p.pressKey('u'));
@@ -137,21 +206,26 @@ test('Escape closes the modal and pops the blocking scope', async ({ page }) => 
   expect(afterEscape.commandId).toBe('undo');
 });
 
-test('an outside click closes the modal and pops the blocking scope', async ({ page }) => {
+test('an outside click (on the live board) closes the drawer and pops the scope', async ({
+  page,
+}) => {
   await ready(page);
   await button(page).click();
   await expect(modal(page)).toBeVisible();
 
-  // Click the backdrop (the modal overlay itself, outside the panel) — an outside click closes.
-  // The overlay fills the viewport; click a far corner well outside the centered panel.
-  await modal(page).click({ position: { x: 5, y: 5 } });
+  // There is NO backdrop (the drawer overlays only the right edge). Click the canvas/board on the
+  // LEFT — well clear of the 264px right-edge panel — which is "outside" and closes the drawer.
+  const canvas = page.locator('canvas');
+  const box = await canvas.boundingBox();
+  if (!box) throw new Error('canvas has no bounding box');
+  await page.mouse.click(box.x + box.width * 0.2, box.y + box.height * 0.5);
 
   await expect(modal(page)).toBeHidden();
   const closed = await get(page, (p) => p.getInput()!);
   expect(closed.scopes).not.toContain(MENU_SCOPE_ID);
 });
 
-test('choosing an entry closes the modal, pops the menu scope, and dispatches its command', async ({
+test('choosing an entry closes the drawer, pops the menu scope, and dispatches its command', async ({
   page,
 }) => {
   await ready(page);
@@ -189,7 +263,7 @@ test('choosing "Settings" pops the menu scope and opens the settings modal (Task
   expect(after.scopes[after.scopes.length - 1]).toBe('settings');
 });
 
-test('the ✕ button closes the modal and pops the scope; re-opening pushes exactly one scope', async ({
+test('the ✕ button closes the drawer and pops the scope; re-opening pushes exactly one scope', async ({
   page,
 }) => {
   await ready(page);
