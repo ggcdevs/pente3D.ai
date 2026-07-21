@@ -97,16 +97,20 @@ export interface MenuModel {
 }
 
 /**
- * The default menu roster — the design-Part-6 entries in design order: Settings, Host, Join,
+ * The default menu roster — the design-Part-6 entries in design order: Settings, Network Game,
  * Load, Export. Each `commandId` is the id the corresponding action registers (Settings modal in
- * Task 5.4, networking in 5.5, persistence in 5.8); the menu only *dispatches* them, so an
- * as-yet-unregistered command is a graceful no-op at dispatch (the registry returns `false`) —
+ * Task 5.4, the Network-Game panel in C.2, persistence in 5.8); the menu only *dispatches* them, so
+ * an as-yet-unregistered command is a graceful no-op at dispatch (the registry returns `false`) —
  * never a crash and never a command invented here.
+ *
+ * Task C.2 / issue #13: the separate "Host" and "Join" entries are RETIRED in favour of a single
+ * "Network Game" entry that opens the non-blocking drawer panel (`netPanel.ts`) whose picker
+ * (custom / saved / random) feeds one code field with Host + Join buttons — Host/Join initiation no
+ * longer lives in the always-on overlay.
  */
 export const DEFAULT_MENU_ENTRIES: readonly MenuEntrySpec[] = [
   { id: 'settings', label: 'Settings', commandId: 'openSettings', order: 0 },
-  { id: 'host', label: 'Host', commandId: 'hostGame', order: 1 },
-  { id: 'join', label: 'Join', commandId: 'joinGame', order: 2 },
+  { id: 'network', label: 'Network Game', commandId: 'openNetwork', order: 1 },
   { id: 'load', label: 'Load', commandId: 'loadGame', order: 3 },
   { id: 'export', label: 'Export', commandId: 'exportGame', order: 4 },
 ];

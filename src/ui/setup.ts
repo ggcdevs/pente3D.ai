@@ -24,6 +24,7 @@ import { bannerWidget } from './widgets/banner.ts';
 import { menuWidget, type MenuScope } from './widgets/menu.ts';
 import { settingsWidget, type SettingsScope } from './widgets/settings.ts';
 import { netWidget } from './widgets/net.ts';
+import { netPanelWidget, type NetPanelScope } from './widgets/netPanel.ts';
 import type { NetSessionState } from './widgets/netModel.ts';
 import { historySliderWidget } from './widgets/historySlider.ts';
 import type { HistoryFacts } from './widgets/sliderModel.ts';
@@ -45,7 +46,7 @@ export interface UiDeps {
    * scope) enters by pushing its scope onto the scene's stack. Supplied by the app (the scene
    * handle) so the UI shell never imports the input module.
    */
-  pushScope(scope: MenuScope | SettingsScope | HelpScope | ArchiveScope): void;
+  pushScope(scope: MenuScope | SettingsScope | HelpScope | ArchiveScope | NetPanelScope): void;
   /** Pop the topmost input scope (Task 5.3) — a modal/mode leaves by popping its scope. */
   popScope(): void;
   /**
@@ -66,6 +67,12 @@ export interface UiDeps {
    * "Load" entry / a keybinding opens the browser (design Principle 3, one action layer).
    */
   registerOpenArchive(open: () => void): void;
+  /**
+   * Register the Network-Game-panel opener (Task C.2, issue #13). The panel widget hands its `open()`
+   * here at mount; the app wires it to the scene's `openNetwork` command (`scene.setOpenNetwork`) so
+   * the menu's "Network Game" entry opens the panel (design Principle 3, one action layer).
+   */
+  registerOpenNetwork(open: () => void): void;
   /**
    * List every archived game as `{ id, meta }` (no logs) for the archive browser (Task 5.8) — the
    * app's `listArchivedGames` over IndexedDB. Supplied by the app so the UI shell never opens the
@@ -146,6 +153,7 @@ export function defaultWidgetFactories(): WidgetFactory[] {
     menuWidget(),
     settingsWidget(),
     netWidget(),
+    netPanelWidget(),
     historySliderWidget(),
     helpWidget(),
     archiveWidget(),
@@ -175,6 +183,7 @@ export function createUi(container: HTMLElement, deps: UiDeps): UiHandle {
       registerOpener: deps.registerOpener,
       registerOpenHelp: deps.registerOpenHelp,
       registerOpenArchive: deps.registerOpenArchive,
+      registerOpenNetwork: deps.registerOpenNetwork,
       listArchive: deps.listArchive,
       reviewArchived: deps.reviewArchived,
       resumeArchived: deps.resumeArchived,

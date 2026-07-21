@@ -22,8 +22,7 @@ describe('deriveMenu — default roster', () => {
     const model = deriveMenu();
     expect(model.items).toEqual([
       { id: 'settings', label: 'Settings', commandId: 'openSettings' },
-      { id: 'host', label: 'Host', commandId: 'hostGame' },
-      { id: 'join', label: 'Join', commandId: 'joinGame' },
+      { id: 'network', label: 'Network Game', commandId: 'openNetwork' },
       { id: 'load', label: 'Load', commandId: 'loadGame' },
       { id: 'export', label: 'Export', commandId: 'exportGame' },
     ]);
@@ -33,11 +32,10 @@ describe('deriveMenu — default roster', () => {
     expect(deriveMenu()).toEqual(deriveMenu(DEFAULT_MENU_ENTRIES));
   });
 
-  it('the default roster carries the five design entries with distinct command ids', () => {
+  it('the default roster carries the design entries with distinct command ids', () => {
     expect(DEFAULT_MENU_ENTRIES.map((e) => e.id)).toEqual([
       'settings',
-      'host',
-      'join',
+      'network',
       'load',
       'export',
     ]);

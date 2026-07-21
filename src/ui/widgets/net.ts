@@ -13,26 +13,21 @@
  * keybinding or the menu's Host/Join entry does — via the deps-supplied `dispatch`, the scene's
  * command registry).
  *
- * The `joinGame` command is argument-free like every other command; the typed code rides via
- * `deps.setPendingJoinCode(code)` — the widget stashes the validated code on the session's pending-
- * code seam, THEN dispatches `joinGame`, and the session reads it. Before dispatching, the widget
- * validates the typed code with the pure {@link validateGameCode} and shows an inline error for a
- * malformed one (empty / too-short / bad-chars) — so a bad code never reaches the transport
- * (agent-principles: negative cases; #3 observable behavior, never a log line).
+ * Task C.2 / issue #13: the Host/Join INITIATION controls have MOVED into the non-blocking drawer's
+ * "Network Game" panel (`netPanel.ts`) with a code picker. This widget no longer HOSTS/JOINS — it is
+ * now the PERSISTENT connection/seat/turn/conflict STATUS display that must stay visible on the board
+ * (it must NOT be buried in the transient drawer). While offline it shows a passive prompt pointing at
+ * the menu; once connected it shows the live code/seat/status; a fork shows the conflict banner.
  *
- * All panel/label/banner DECISIONS live in the pure model; this file only paints the model onto DOM,
- * forwards clicks to `dispatch`, and copies the code to the clipboard. It touches `document`, so it
- * is the Playwright-verified IO boundary (asserted on `window.__pente` getNet() + real interactions),
- * not unit/mutation-gated. `data-testid`s expose the rendered model + panel for readback.
+ * All panel/label/banner DECISIONS live in the pure model; this file only paints the model onto DOM
+ * and copies the code to the clipboard. It touches `document`, so it is the Playwright-verified IO
+ * boundary (asserted on `window.__pente` getNet() + real interactions), not unit/mutation-gated.
+ * `data-testid`s expose the rendered model + panel for readback.
  */
 
 import type { Widget, WidgetFactory } from '../registry.ts';
 import {
   deriveNet,
-  validateGameCode,
-  CODE_ERROR_TEXT,
-  HOST_GAME_COMMAND,
-  JOIN_GAME_COMMAND,
   type NetSessionState,
   type NetModel,
 } from './netModel.ts';
@@ -50,19 +45,15 @@ const OFFLINE_STATE: NetSessionState = {
 };
 
 /**
- * The deps a net widget needs: a document to build in (injected for testability), the command
- * `dispatch` (the scene's registry — the SAME path a keybinding uses, design Principle 3), a live
- * `getNet()` readout of the session, and `setPendingJoinCode` (the seam the widget stashes a
- * validated join code on before dispatching the argument-free `joinGame` command).
+ * The deps the net STATUS widget needs: a document to build in (injected for testability), a live
+ * `getNet()` readout of the session, and the clipboard copy. Host/Join initiation moved to the
+ * drawer's Network-Game panel (`netPanel.ts`), so this widget no longer dispatches commands or
+ * stashes a join code — it is a pure readout of the live session.
  */
 export interface NetDeps {
   readonly doc: Document;
-  /** Dispatch a command id (Host / Join). Returns whether a command ran. */
-  dispatch(commandId: string): boolean;
   /** The live session readout the widget renders (produced by the scene's net session). */
   getNet(): NetSessionState;
-  /** Stash a validated join code for the next `joinGame` dispatch (the argument seam). */
-  setPendingJoinCode(code: string): void;
   /**
    * Copy `text` to the clipboard (injected so the widget never reaches for a global `navigator`
    * directly — testable, and the app supplies the real `navigator.clipboard.writeText`). Returns a
@@ -88,48 +79,17 @@ export function netWidget(): WidgetFactory {
       element.className = 'pente-widget pente-widget--net';
       element.setAttribute('data-testid', 'net-widget');
 
-      // --- Controls panel (offline): Host button + Join input/button. ---------------------------
+      // --- Controls panel (offline): a PASSIVE prompt pointing at the menu (Task C.2 / issue #13 —
+      //     Host/Join initiation moved to the drawer's Network-Game panel; this widget no longer
+      //     initiates, it only reflects status). The status line below carries the offline prompt copy;
+      //     this panel is otherwise empty of controls now.
       const controls = doc.createElement('div');
       controls.className = 'pente-net-controls';
       controls.setAttribute('data-testid', 'net-controls');
-
-      const hostButton = doc.createElement('button');
-      hostButton.className = 'pente-net-host';
-      hostButton.setAttribute('data-testid', 'net-host');
-      hostButton.textContent = 'Host game';
-      hostButton.addEventListener('click', () => {
-        // Fire the SAME command id the menu's "Host" entry / a keybinding fires (design Principle 3).
-        deps.dispatch(HOST_GAME_COMMAND);
-      });
-      controls.appendChild(hostButton);
-
-      const joinRow = doc.createElement('div');
-      joinRow.className = 'pente-net-join-row';
-
-      const joinInput = doc.createElement('input');
-      joinInput.type = 'text';
-      joinInput.className = 'pente-net-join-input';
-      joinInput.setAttribute('data-testid', 'net-join-input');
-      joinInput.setAttribute('placeholder', 'Game code');
-      joinInput.setAttribute('aria-label', 'Game code');
-      joinRow.appendChild(joinInput);
-
-      const joinButton = doc.createElement('button');
-      joinButton.className = 'pente-net-join';
-      joinButton.setAttribute('data-testid', 'net-join');
-      joinButton.textContent = 'Join';
-      joinButton.addEventListener('click', () => attemptJoin());
-      joinRow.appendChild(joinButton);
-      controls.appendChild(joinRow);
-
-      // A single inline error line under the Join row: either the pre-dispatch code-validation
-      // error (widget-local) or the post-dispatch session join error (from the readout).
-      const joinError = doc.createElement('div');
-      joinError.className = 'pente-net-join-error';
-      joinError.setAttribute('data-testid', 'net-join-error');
-      joinError.hidden = true;
-      controls.appendChild(joinError);
-
+      const offlinePrompt = doc.createElement('div');
+      offlinePrompt.className = 'pente-net-offline-prompt';
+      offlinePrompt.setAttribute('data-testid', 'net-offline-prompt');
+      controls.appendChild(offlinePrompt);
       element.appendChild(controls);
 
       // --- Status panel (connecting/connected): the game code + copy, status line, seat. --------
@@ -185,35 +145,16 @@ export function netWidget(): WidgetFactory {
       conflict.setAttribute('role', 'alert');
       element.appendChild(conflict);
 
-      /** Validate the typed code and, if valid, stash it + dispatch `joinGame`; else show the error. */
-      function attemptJoin(): void {
-        const validation = validateGameCode(joinInput.value);
-        if (!validation.ok) {
-          showJoinError(CODE_ERROR_TEXT[validation.reason]);
-          return;
-        }
-        clearJoinError();
-        deps.setPendingJoinCode(validation.code);
-        deps.dispatch(JOIN_GAME_COMMAND);
-      }
-
-      function showJoinError(text: string): void {
-        joinError.textContent = text;
-        joinError.hidden = false;
-      }
-
-      function clearJoinError(): void {
-        joinError.textContent = '';
-        joinError.hidden = true;
-      }
-
-      /** Paint a derived model + the raw state onto the three panels (show exactly one). */
-      function render(model: NetModel, state: NetSessionState): void {
+      /** Paint a derived model onto the three panels (show exactly one). */
+      function render(model: NetModel): void {
         element.setAttribute('data-panel', model.panel);
         controls.hidden = model.panel !== 'controls';
         status.hidden = model.panel !== 'status';
         conflict.hidden = model.panel !== 'conflict';
 
+        // Offline prompt (controls panel): the same status copy, pointing the user at the menu where
+        // Host/Join now live (Task C.2). The status panel's own line carries connecting/connected copy.
+        offlinePrompt.textContent = model.statusText;
         statusLine.textContent = model.statusText;
 
         // Code + copy row: shown only when there is a code to show.
@@ -229,25 +170,15 @@ export function netWidget(): WidgetFactory {
         seatLine.hidden = model.seatText === null;
 
         conflict.textContent = model.conflictText ?? '';
-
-        // The inline join error: prefer the post-dispatch session error (a real join failure) over a
-        // stale pre-dispatch validation hint. A validation hint set by `attemptJoin` persists until
-        // the next attempt; a session error overrides it while present.
-        if (model.joinErrorText !== null) {
-          showJoinError(model.joinErrorText);
-        } else if (state.joinError === null && joinError.textContent === '') {
-          clearJoinError();
-        }
       }
 
       /** Re-read the live session readout and repaint. */
       function refresh(): void {
-        const state = deps.getNet();
-        render(deriveNet(state), state);
+        render(deriveNet(deps.getNet()));
       }
 
       // First paint from the live readout (falls back to offline if the session is not yet wired).
-      render(deriveNet(OFFLINE_STATE), OFFLINE_STATE);
+      render(deriveNet(OFFLINE_STATE));
       refresh();
 
       return {

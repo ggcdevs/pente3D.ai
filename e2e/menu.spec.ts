@@ -10,8 +10,9 @@ import { DEFAULT_MENU_ENTRIES, MENU_SCOPE_ID } from '../src/ui/widgets/menuModel
  * rendered DOM (agent-principles #3: observable behavior, never a log line). The PURE view-model
  * (`menuModel.ts`) is mutation-gated in Vitest; here we prove the WIRING:
  *   - the menu button mounts in its configured zone (`top-right` per the tracked layout);
- *   - clicking the button OPENS the drawer with the design entries (Settings/Host/Join/Load/Export),
- *     each carrying the command id it dispatches, read back off the DOM;
+ *   - clicking the button OPENS the drawer with the design entries (Settings/Network Game/Load/Export
+ *     — Host/Join folded into "Network Game" per issue #13), each carrying the command id it
+ *     dispatches, read back off the DOM;
  *   - opening PUSHES a NON-blocking `menu` input scope onto the scene's stack (`getInput().scopes`);
  *     closing POPS it — proven for EVERY close path: Escape, outside-click, an entry choice, and
  *     the ✕ button;
@@ -136,7 +137,7 @@ test('clicking the button opens the drawer with the design entries and pushes a 
     await expect(el).toHaveText(entry.label);
     await expect(el).toHaveAttribute('data-command', entry.commandId);
   }
-  // The entries render in the pure-model order (Settings/Host/Join/Load/Export).
+  // The entries render in the pure-model order (Settings/Network Game/Load/Export).
   const labels = await menu(page).locator('[data-testid^="menu-entry-"]').allTextContents();
   expect(labels).toEqual(DEFAULT_MENU_ENTRIES.map((e) => e.label));
 

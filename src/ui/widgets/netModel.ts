@@ -184,7 +184,7 @@ export function deriveNet(state: NetSessionState): NetModel {
 function deriveStatusText(state: NetSessionState): string {
   switch (state.phase) {
     case 'offline':
-      return 'Host a game or join with a code.';
+      return 'Open the menu → Network Game to host or join.';
     case 'connecting':
       return 'Connecting…';
     case 'connected':

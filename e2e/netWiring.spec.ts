@@ -179,15 +179,15 @@ test('TWO CONTEXTS: a host move re-renders on the joiner and both headHashes mat
   // Joiner joins the SAME room code (stash the code, dispatch joinGame — the widget's path).
   await ready(joiner);
   await joiner.evaluate((c: string) => {
-    const p = (window as unknown as { __pente: Pente & { setPendingJoinCode?(x: string): void } })
-      .__pente as unknown as Record<string, (x: string) => void>;
-    // setPendingJoinCode is on the scene seam via __pente? It is exposed through the net widget; use
-    // the widget's input path instead for robustness.
-    void p;
-    const input = document.querySelector('[data-testid="net-join-input"]') as HTMLInputElement;
-    input.value = c;
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    (document.querySelector('[data-testid="net-join"]') as HTMLButtonElement).click();
+    // Task C.2: Host/Join initiation moved to the drawer's Network-Game panel; join via the SAME
+    // seam+command the panel uses (stash the validated code, then dispatch the argument-free joinGame).
+    const pente = (
+      window as unknown as {
+        __pente: { setPendingJoinCode(x: string): void; dispatch(id: string): boolean };
+      }
+    ).__pente;
+    pente.setPendingJoinCode(c);
+    pente.dispatch('joinGame');
   }, code!);
   await waitConnected(joiner);
   expect((await net(joiner))?.seat).toBe('black');
@@ -251,10 +251,11 @@ test('JOINER-INHERITS-BOARD: a late joiner adopts the host board that already ha
   // Now the joiner connects; on connect the engines exchange logs and the joiner ADOPTS the host log.
   await ready(joiner);
   await joiner.evaluate((c: string) => {
-    const input = document.querySelector('[data-testid="net-join-input"]') as HTMLInputElement;
-    input.value = c;
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    (document.querySelector('[data-testid="net-join"]') as HTMLButtonElement).click();
+    // Task C.2: Host/Join initiation moved to the drawer's Network-Game panel; join via the SAME
+    // seam+command the panel uses (stash the validated code, then dispatch the argument-free joinGame).
+    const pente = (window as unknown as { __pente: { setPendingJoinCode(x: string): void; dispatch(id: string): boolean } }).__pente;
+    pente.setPendingJoinCode(c);
+    pente.dispatch('joinGame');
   }, code!);
   await waitConnected(joiner);
 

@@ -365,6 +365,13 @@ export interface SceneHandle {
    */
   setOpenArchive(open: () => void): void;
   /**
+   * Wire the `openNetwork` command (Task C.2, issue #13) to the mounted Network-Game-panel widget's
+   * open(). The scene does not own the panel (a UI widget wrapping the Host/Join controls + code
+   * picker in the drawer), so the app registers the opener here after mounting the UI. Dispatching
+   * `openNetwork` (the menu's "Network Game" entry or a keybinding) then opens the panel.
+   */
+  setOpenNetwork(open: () => void): void;
+  /**
    * Swap a reconstructed `Game` into the scene (Task 5.8): replace the live game, clear any scrub,
    * and reconcile every state-derived mesh to the loaded head. Used to restore an autosaved game on
    * boot and to load an archived game chosen in the browser — observable via `getState`/`getHistory`.
@@ -741,6 +748,13 @@ export function createScene(container: HTMLElement): SceneHandle {
   // keybinding dispatch this identical id — design Principle 3).
   let openArchiveHook: () => void = () => {};
 
+  // The Network-Game-panel open hook (Task C.2, issue #13): the `openNetwork` command invokes this.
+  // Like the settings/help/archive modals, the scene does not own the panel (it is a UI widget that
+  // wraps the Host/Join controls in the drawer), so the app sets this to the widget's open() via
+  // `setOpenNetwork`. Default is a no-op so an unwired/absent panel never crashes on dispatch (the
+  // menu's "Network Game" entry dispatches this identical id — design Principle 3).
+  let openNetworkHook: () => void = () => {};
+
   // Networking seams (Task 5.5). The scene does not own the net SESSION (it needs an IndexedDB
   // handle + a transport — an app-level concern), exactly as it does not own the settings modal.
   // The app wires these hooks after constructing the session (`setNetHooks`), and the net widget
@@ -827,6 +841,12 @@ export function createScene(container: HTMLElement): SceneHandle {
     // dispatch this identical id (design Principle 3). Until wired (or if the widget is absent) it
     // is an honest no-op — never a crash.
     { id: 'loadGame', run: () => openArchiveHook() },
+    // Open the Network-Game panel (Task C.2, issue #13). The panel is a UI widget the scene does not
+    // own (it wraps the Host/Join controls + code picker in the non-blocking drawer), so the command
+    // invokes a settable hook the app wires to the mounted widget's open(). The menu's "Network Game"
+    // entry (commandId `openNetwork`) and any keybinding dispatch this identical id (design Principle
+    // 3). Until wired (or if the widget is absent) it is an honest no-op — never a crash.
+    { id: 'openNetwork', run: () => openNetworkHook() },
     // Networking (Task 5.5): Host a game / Join by code. The session is an app-level object (needs a
     // DB + transport), so these commands invoke settable hooks the app wires to the net session.
     // Both are argument-free like every command; the join code rides via `setPendingJoinCode` (the
@@ -1212,6 +1232,11 @@ export function createScene(container: HTMLElement): SceneHandle {
   /** Wire the `loadGame` command (Task 5.8) to the mounted archive-browser widget's open(). */
   function setOpenArchive(open: () => void): void {
     openArchiveHook = open;
+  }
+
+  /** Wire the `openNetwork` command (Task C.2) to the mounted Network-Game-panel widget's open(). */
+  function setOpenNetwork(open: () => void): void {
+    openNetworkHook = open;
   }
 
   /**
@@ -1602,6 +1627,7 @@ export function createScene(container: HTMLElement): SceneHandle {
     setOpenSettings,
     setOpenHelp,
     setOpenArchive,
+    setOpenNetwork,
     loadGame,
     getGame,
     getHeadHash,

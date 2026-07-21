@@ -180,10 +180,15 @@ test('JOIN onto a played local board archives + resets identically (host/join sh
 
   // JOIN a (self-hosted mock) room by code — the join path must also archive + reset the local board.
   await page.evaluate(() => {
-    const input = document.querySelector('[data-testid="net-join-input"]') as HTMLInputElement;
-    input.value = 'ABCDEF';
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    (document.querySelector('[data-testid="net-join"]') as HTMLButtonElement).click();
+    // Task C.2: Host/Join initiation moved to the drawer's Network-Game panel; join via the SAME
+    // seam+command the panel uses (stash the validated code, then dispatch the argument-free joinGame).
+    const pente = (
+      window as unknown as {
+        __pente: { setPendingJoinCode(x: string): void; dispatch(id: string): boolean };
+      }
+    ).__pente;
+    pente.setPendingJoinCode('ABCDEF');
+    pente.dispatch('joinGame');
   });
   await waitConnected(page);
 
@@ -233,10 +238,11 @@ test('PLAY-AGAIN: a finished networked game prompts and, on accept, starts a fre
 
   await ready(joiner);
   await joiner.evaluate((c: string) => {
-    const input = document.querySelector('[data-testid="net-join-input"]') as HTMLInputElement;
-    input.value = c;
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    (document.querySelector('[data-testid="net-join"]') as HTMLButtonElement).click();
+    // Task C.2: Host/Join initiation moved to the drawer's Network-Game panel; join via the SAME
+    // seam+command the panel uses (stash the validated code, then dispatch the argument-free joinGame).
+    const pente = (window as unknown as { __pente: { setPendingJoinCode(x: string): void; dispatch(id: string): boolean } }).__pente;
+    pente.setPendingJoinCode(c);
+    pente.dispatch('joinGame');
   }, code!);
   await waitConnected(joiner);
   expect((await net(joiner))?.seat).toBe('black');
@@ -309,10 +315,11 @@ test('DECLINE: a finished networked game left as-is starts no fresh game', async
 
   await ready(joiner);
   await joiner.evaluate((c: string) => {
-    const input = document.querySelector('[data-testid="net-join-input"]') as HTMLInputElement;
-    input.value = c;
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    (document.querySelector('[data-testid="net-join"]') as HTMLButtonElement).click();
+    // Task C.2: Host/Join initiation moved to the drawer's Network-Game panel; join via the SAME
+    // seam+command the panel uses (stash the validated code, then dispatch the argument-free joinGame).
+    const pente = (window as unknown as { __pente: { setPendingJoinCode(x: string): void; dispatch(id: string): boolean } }).__pente;
+    pente.setPendingJoinCode(c);
+    pente.dispatch('joinGame');
   }, code!);
   await waitConnected(joiner);
 

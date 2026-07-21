@@ -117,13 +117,21 @@ export class NetSession {
   }
 
   /**
-   * Host a new game: generate a fresh code, claim the white seat, and connect. Resolves once the
-   * transport is connected (or leaves the session in an error state if the connect fails). A no-op
-   * if a session is already live (offline is the only state host/join start from).
+   * Host a new game and claim the white seat: create the room `rawCode` names, or — when no code (or
+   * an INVALID one) is supplied — a freshly-generated one. This is the "create THIS room" half of the
+   * issue #13 picker (custom / saved / random), where the user's chosen code IS the room; the
+   * argument-free generate path stays as the fallback for a caller that has no code to offer. The
+   * supplied code is validated + canonicalized by the SAME {@link validateGameCode} the join path
+   * uses (so host and join can never disagree on a legal code), and an invalid/absent code degrades
+   * to a generated one rather than refusing to host. Resolves once connected (or leaves the session
+   * in an error state if the connect fails). A no-op if a session is already live.
+   *
+   * @param rawCode The chosen room code (any case / whitespace), or omitted/invalid to generate one.
    */
-  async host(): Promise<void> {
+  async host(rawCode?: string): Promise<void> {
     if (this.phase !== 'offline') return;
-    const code = generateGameCode(this.deps.rand);
+    const chosen = rawCode === undefined ? null : validateGameCode(rawCode);
+    const code = chosen !== null && chosen.ok ? chosen.code : generateGameCode(this.deps.rand);
     await this.start(code, 'white');
   }
 

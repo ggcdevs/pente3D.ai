@@ -198,6 +198,13 @@ export interface PenteInspect {
    */
   getNet(): NetSessionState | null;
   /**
+   * Stash a validated join code (Task C.2) on the session's pending-code seam — the SAME seam the
+   * drawer's Network-Game panel uses before dispatching the argument-free `joinGame` command. Lets a
+   * Playwright networking test drive the join path without opening the panel UI (the panel's own
+   * DOM-driven join is proven in `netPanel.spec.ts`).
+   */
+  setPendingJoinCode(code: string): void;
+  /**
    * The LIVE sources the help overlay (Task 5.7) generates its shortcut list from: the registered
    * command ids + the current `key→commandId` bindings. Lets Playwright prove the overlay is
    * GENERATED from the real registry + config — every rendered shortcut corresponds to a
@@ -288,6 +295,11 @@ export function installInspectApi(
     getTemp: () => scene.getTemp(),
     getLayout: () => ui.getLayout(),
     getNet: () => scene.getNet(),
+    // Stash a validated join code on the session's pending-code seam (Task C.2): the SAME seam the
+    // drawer's Network-Game panel stashes on before dispatching the argument-free `joinGame`. Exposed
+    // so a Playwright networking test can drive the join path (stash code → dispatch joinGame) without
+    // opening the panel UI — the panel's own DOM-driven join is proven in `netPanel.spec.ts`.
+    setPendingJoinCode: (code: string) => scene.setPendingJoinCode(code),
     getHelpSources: () => scene.getHelpSources(),
     getArchive: () => archive.listArchive(),
     // The AUTHORITATIVE game's head hash (Task 6.1, issue #4): the networked session's game when a

@@ -4,31 +4,31 @@ import { dirname, resolve } from 'node:path';
 import layoutDefault from '../src/config/defaults/layout.json' with { type: 'json' };
 import {
   HOST_GAME_COMMAND,
+  JOIN_GAME_COMMAND,
   CODE_LENGTH,
   CODE_ALPHABET,
-  CODE_ERROR_TEXT,
 } from '../src/ui/widgets/netModel.ts';
 
 /**
- * Task 5.5 e2e — the networking widget is the DOM/dispatch IO boundary over the net session
- * (SyncEngine + seat manager), verified by driving the REAL app and asserting on `window.__pente`
- * real state (getNet) + the rendered DOM (agent-principles #3: observable behavior, never a log
- * line). The PURE view-model (`netModel.ts`) is mutation-gated in Vitest; here we prove the WIRING:
- *   - the widget mounts in its configured zone (`top-left` per the tracked layout) and starts
- *     OFFLINE showing the Host/Join controls;
- *   - clicking Host actually CONNECTS the session (getNet().phase === 'connected'), CLAIMS the white
- *     seat (a genuine `claimSeat` — getNet().seat === 'white'), and shows a valid game code + Copy;
- *   - a peer joining the room flips `peerPresent` and the status line to "Opponent connected"
- *     (presence over the injected relay — observable, not a log line);
- *   - a JOIN with a malformed code shows the inline validation error and dispatches NOTHING (the
- *     session stays offline); a valid join CONNECTS and claims the BLACK seat;
- *   - a conflict reported by the session shows the conflict banner (the game is stopped).
+ * Task 5.5 / C.2 e2e — the `connectionStatus` widget is now the PERSISTENT connection/seat/turn/
+ * conflict STATUS display on the board (Host/Join INITIATION moved to the drawer's Network-Game panel,
+ * `netPanel.spec.ts`). Verified by driving the REAL app and asserting on `window.__pente` real state
+ * (getNet) + the rendered DOM (agent-principles #3: observable behavior, never a log line). Here we
+ * prove the STATUS half:
+ *   - the widget mounts in its configured zone (`top-left` per the tracked layout) and starts OFFLINE
+ *     showing the passive prompt (NO inline Host button / Join input — those moved to the panel);
+ *   - dispatching the SAME `hostGame` command the panel fires CONNECTS the session, CLAIMS the white
+ *     seat, and the status widget shows a valid game code + Copy (design Principle 3, one action layer);
+ *   - a peer joining flips `peerPresent` and the status line to "Opponent connected" (presence over
+ *     the injected relay — observable, not a log line);
+ *   - a JOIN via the command path + pending-code seam claims the BLACK seat and reaches the transport;
+ *   - the Copy button copies the shown code.
  *
  * A deterministic in-page MOCK transport is injected via `window.__penteNetTransportFactory` BEFORE
- * boot (the `appSession.ts` seam), so host/join connect instantly and presence is controllable —
- * the UI e2e stays hermetic (no external relay), while the REAL two-client convergence over MQTT is
- * proven separately by `sync.realrelay.test.ts`. The widget id / zone / command ids / alphabet all
- * derive from the config + model, so nothing is hardcoded (agent-principles #8).
+ * boot (the `appSession.ts` seam), so host/join connect instantly and presence is controllable — the
+ * UI e2e stays hermetic (no external relay), while the REAL two-client convergence over MQTT is proven
+ * separately by `sync.realrelay.test.ts`. The widget id / zone / command ids / alphabet all derive
+ * from the config + model, so nothing is hardcoded (agent-principles #8).
  */
 
 const NET_ID = 'connectionStatus';
@@ -60,7 +60,6 @@ async function installMock(page: import('@playwright/test').Page) {
     (window as unknown as { __mockSetPeer(present: boolean): void }).__mockSetPeer = (
       present: boolean,
     ) => {
-      // The session filters out its own playerId; use a distinct fake peer id when present.
       shared.presenceCb(present ? ['peer-other'] : []);
     };
     (
@@ -68,7 +67,6 @@ async function installMock(page: import('@playwright/test').Page) {
     ).__penteNetTransportFactory = () => ({
       connect: (roomCode: string) => {
         shared.room = roomCode;
-        // Announce only ourselves initially (no opponent yet) — the session sees no other peer.
         shared.presenceCb([]);
         return Promise.resolve();
       },
@@ -96,7 +94,6 @@ async function ready(page: import('@playwright/test').Page) {
       !!document.querySelector('[data-widget-id="connectionStatus"]')
     );
   });
-  // The session is created async (opens IndexedDB); wait until it is wired (getNet non-null offline).
   await page.waitForFunction(() => {
     const p = (window as unknown as { __pente?: { getNet(): unknown } }).__pente;
     return !!p && p.getNet() !== null;
@@ -114,28 +111,47 @@ const setPeer = (page: import('@playwright/test').Page, present: boolean): Promi
     (window as unknown as { __mockSetPeer(p: boolean): void }).__mockSetPeer(v);
   }, present);
 
+const dispatch = (page: import('@playwright/test').Page, cmd: string): Promise<boolean> =>
+  page.evaluate(
+    (id: string) =>
+      (window as unknown as { __pente: { dispatch(id: string): boolean } }).__pente.dispatch(id),
+    cmd,
+  );
+
+const setPendingJoinCode = (page: import('@playwright/test').Page, code: string): Promise<void> =>
+  page.evaluate((c: string) => {
+    (
+      window as unknown as { __pente: { setPendingJoinCode(c: string): void } }
+    ).__pente.setPendingJoinCode(c);
+  }, code);
+
 const widget = (page: import('@playwright/test').Page) =>
   page.locator(`[data-widget-id="${NET_ID}"]`);
 const testid = (page: import('@playwright/test').Page, id: string) =>
   widget(page).locator(`[data-testid="${id}"]`);
 
-test('the net widget mounts in its configured zone and starts offline with the Host/Join controls', async ({
+test('the net STATUS widget mounts in its configured zone and starts offline with a passive prompt (no inline Host/Join)', async ({
   page,
 }) => {
   await ready(page);
 
-  // Placement is pure config — assert the widget lands in the zone the tracked layout names.
   expect(layoutDefault.widgets.connectionStatus.zone).toBe('top-left');
   const inZone = page.locator(`[data-zone="top-left"] [data-widget-id="${NET_ID}"]`);
   await expect(inZone).toHaveCount(1);
 
-  // Offline: the controls panel shows, the status + conflict panels are hidden.
+  // Offline: the controls panel shows only the passive prompt; the status + conflict panels hidden.
   await expect(widget(page)).toHaveAttribute('data-panel', 'controls');
-  await expect(testid(page, 'net-controls')).toBeVisible();
+  await expect(testid(page, 'net-offline-prompt')).toBeVisible();
+  await expect(testid(page, 'net-offline-prompt')).toHaveText(
+    'Open the menu → Network Game to host or join.',
+  );
   await expect(testid(page, 'net-status')).toBeHidden();
   await expect(testid(page, 'net-conflict')).toBeHidden();
-  await expect(testid(page, 'net-host')).toBeVisible();
-  await expect(testid(page, 'net-join')).toBeVisible();
+
+  // The inline Host button / Join input are GONE (moved to the drawer's Network-Game panel, #13).
+  await expect(testid(page, 'net-host')).toHaveCount(0);
+  await expect(testid(page, 'net-join')).toHaveCount(0);
+  await expect(testid(page, 'net-join-input')).toHaveCount(0);
 
   const state = await getNet(page);
   expect(state.phase).toBe('offline');
@@ -147,14 +163,14 @@ test('the net widget mounts in its configured zone and starts offline with the H
   await page.screenshot({ path: shot });
 });
 
-test('clicking Host connects the session, claims the white seat, and shows a valid game code', async ({
+test('hosting via the command path connects the session, claims white, and the status widget shows a valid code', async ({
   page,
 }) => {
   await ready(page);
 
-  await testid(page, 'net-host').click();
+  // The panel's Host button and any keybinding dispatch this identical id (design Principle 3).
+  await dispatch(page, HOST_GAME_COMMAND);
 
-  // The session actually connected + claimed white (a genuine claimSeat) — observable via getNet.
   await page.waitForFunction(() => {
     const p = (window as unknown as { __pente: { getNet(): NetState | null } }).__pente;
     return p.getNet()?.phase === 'connected';
@@ -163,16 +179,13 @@ test('clicking Host connects the session, claims the white seat, and shows a val
   expect(state.phase).toBe('connected');
   expect(state.seat).toBe('white');
   expect(state.code).not.toBeNull();
-  // The generated code is a valid CODE_LENGTH slug over the unambiguous alphabet.
   expect(state.code!).toHaveLength(CODE_LENGTH);
   for (const ch of state.code!) expect(CODE_ALPHABET).toContain(ch);
 
-  // The status panel now shows the code + seat; the code the DOM shows matches the session code.
   await expect(widget(page)).toHaveAttribute('data-panel', 'status');
   await expect(testid(page, 'net-code')).toHaveText(state.code!);
   await expect(testid(page, 'net-seat')).toHaveText('You are White');
   await expect(testid(page, 'net-copy')).toBeVisible();
-  // No opponent yet — the status line waits.
   await expect(testid(page, 'net-status-line')).toHaveText('Waiting for opponent…');
 
   const shot = resolve('e2e/artifacts/net-hosted.png');
@@ -180,28 +193,11 @@ test('clicking Host connects the session, claims the white seat, and shows a val
   await page.screenshot({ path: shot });
 });
 
-test('Host via the command path connects identically (design Principle 3, one action layer)', async ({
-  page,
-}) => {
-  await ready(page);
-
-  // Dispatch the SAME command id the Host button fires — a keybinding / menu entry would too.
-  await page.evaluate((cmd: string) => {
-    (window as unknown as { __pente: { dispatch(id: string): boolean } }).__pente.dispatch(cmd);
-  }, HOST_GAME_COMMAND);
-
-  await page.waitForFunction(() => {
-    const p = (window as unknown as { __pente: { getNet(): NetState | null } }).__pente;
-    return p.getNet()?.phase === 'connected';
-  });
-  expect((await getNet(page)).seat).toBe('white');
-});
-
 test('a peer joining the room flips peerPresent and the status line to "Opponent connected"', async ({
   page,
 }) => {
   await ready(page);
-  await testid(page, 'net-host').click();
+  await dispatch(page, HOST_GAME_COMMAND);
   await page.waitForFunction(() => {
     const p = (window as unknown as { __pente: { getNet(): NetState | null } }).__pente;
     return p.getNet()?.phase === 'connected';
@@ -209,7 +205,6 @@ test('a peer joining the room flips peerPresent and the status line to "Opponent
   expect((await getNet(page)).peerPresent).toBe(false);
   await expect(testid(page, 'net-status-line')).toHaveText('Waiting for opponent…');
 
-  // Drive a presence change over the injected relay: an opponent appears.
   await setPeer(page, true);
 
   await page.waitForFunction(() => {
@@ -220,35 +215,15 @@ test('a peer joining the room flips peerPresent and the status line to "Opponent
   await expect(testid(page, 'net-status-line')).toHaveText('Opponent connected');
 });
 
-test('joining with a malformed code shows the inline error and dispatches nothing', async ({
-  page,
-}) => {
-  await ready(page);
-
-  // Too short — the widget validates before dispatching, so the session stays offline.
-  await testid(page, 'net-join-input').fill('ABC');
-  await testid(page, 'net-join').click();
-
-  await expect(testid(page, 'net-join-error')).toBeVisible();
-  await expect(testid(page, 'net-join-error')).toHaveText(CODE_ERROR_TEXT['too-short']);
-  // No connection was attempted — still offline (the bad code never reached the transport).
-  expect((await getNet(page)).phase).toBe('offline');
-
-  // An empty field reports the empty-specific message (precedence: empty before too-short).
-  await testid(page, 'net-join-input').fill('');
-  await testid(page, 'net-join').click();
-  await expect(testid(page, 'net-join-error')).toHaveText(CODE_ERROR_TEXT.empty);
-  expect((await getNet(page)).phase).toBe('offline');
-});
-
-test('joining with a valid code connects the session and claims the black seat', async ({
+test('joining via the pending-code seam + command connects and claims the black seat', async ({
   page,
 }) => {
   await ready(page);
 
   const code = CODE_ALPHABET.slice(0, CODE_LENGTH); // a valid, canonical code
-  await testid(page, 'net-join-input').fill(code.toLowerCase()); // lower-case → canonicalized
-  await testid(page, 'net-join').click();
+  // The panel stashes the validated code here, then dispatches the argument-free joinGame command.
+  await setPendingJoinCode(page, code);
+  await dispatch(page, JOIN_GAME_COMMAND);
 
   await page.waitForFunction(() => {
     const p = (window as unknown as { __pente: { getNet(): NetState | null } }).__pente;
@@ -257,13 +232,11 @@ test('joining with a valid code connects the session and claims the black seat',
   const state = await getNet(page);
   expect(state.phase).toBe('connected');
   expect(state.seat).toBe('black');
-  expect(state.code).toBe(code); // canonicalized to upper-case
+  expect(state.code).toBe(code);
   await expect(widget(page)).toHaveAttribute('data-panel', 'status');
   await expect(testid(page, 'net-seat')).toHaveText('You are Black');
-  // The join succeeded — no inline error.
-  await expect(testid(page, 'net-join-error')).toBeHidden();
 
-  // The room the mock transport connected to is the typed code (the wiring reached the transport).
+  // The room the mock transport connected to is the code (the wiring reached the transport).
   const room = await page.evaluate(() =>
     (window as unknown as { __mockRoom(): string | null }).__mockRoom(),
   );
@@ -276,7 +249,7 @@ test('the Copy button copies the game code to the clipboard and reports success'
 }) => {
   await context.grantPermissions(['clipboard-read', 'clipboard-write']);
   await ready(page);
-  await testid(page, 'net-host').click();
+  await dispatch(page, HOST_GAME_COMMAND);
   await page.waitForFunction(() => {
     const p = (window as unknown as { __pente: { getNet(): NetState | null } }).__pente;
     return p.getNet()?.phase === 'connected';
@@ -285,7 +258,6 @@ test('the Copy button copies the game code to the clipboard and reports success'
 
   await testid(page, 'net-copy').click();
 
-  // The button reflects success (observable), and the clipboard holds the code.
   await expect(testid(page, 'net-copy')).toHaveText('Copied');
   const clip = await page.evaluate(() => navigator.clipboard.readText());
   expect(clip).toBe(code);

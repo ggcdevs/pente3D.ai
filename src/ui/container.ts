@@ -121,14 +121,36 @@ const UI_STYLESHEET = `
 .pente-help-row { display: flex; justify-content: space-between; align-items: center; gap: 24px; padding: 4px 0; font-size: 14px; }
 .pente-help-keys { display: flex; gap: 6px; }
 .pente-help-key { padding: 2px 8px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.3); color: #e6e6ea; font-family: ui-monospace, monospace; font-size: 12px; }
+/* Task C.2 / issue #13: the Network-Game panel opens WITHIN the drawer context as a LEFT-edge
+   NON-blocking panel over the LIVE board, mirroring the settings modal EXACTLY (no backdrop, no
+   reflow; slid off-screen + hidden until the --open class toggles). Sits above the settings panel
+   (z 50 > 40). pointer-events only on the panel itself so the board stays click-through. */
+.pente-netpanel-modal { position: fixed; top: 0; left: 0; bottom: 0; display: flex; align-items: stretch; pointer-events: none; visibility: hidden; z-index: 50; transform: translateX(-100%); transition: transform 200ms cubic-bezier(0.4, 0, 0.2, 1), visibility 200ms; }
+.pente-netpanel-modal--open { transform: translateX(0); visibility: visible; }
+.pente-netpanel-panel { position: relative; display: flex; flex-direction: column; gap: 12px; width: 300px; padding: 24px; overflow-y: auto; background: rgba(20,20,26,0.94); backdrop-filter: blur(6px); color: #e6e6ea; font-family: system-ui, sans-serif; border-right: 1px solid rgba(255,255,255,0.08); box-shadow: 8px 0 32px rgba(0,0,0,0.45); pointer-events: auto; }
+.pente-netpanel-title { font-size: 18px; font-weight: 600; margin-bottom: 4px; padding-right: 28px; }
+.pente-netpanel-close { position: absolute; top: 16px; right: 16px; cursor: pointer; border: none; background: transparent; color: #e6e6ea; font-size: 16px; line-height: 1; }
+.pente-netpanel-sources { display: flex; gap: 6px; }
+.pente-netpanel-source { flex: 1; cursor: pointer; padding: 6px 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.04); color: #e6e6ea; font-size: 13px; }
+.pente-netpanel-source[data-active="true"] { background: rgba(74,144,217,0.4); border-color: rgba(74,144,217,0.7); }
+.pente-netpanel-code-input { padding: 8px 10px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.3); color: #e6e6ea; font-family: ui-monospace, monospace; font-size: 16px; letter-spacing: 2px; text-transform: uppercase; }
+.pente-netpanel-code-input:read-only { opacity: 0.85; }
+.pente-netpanel-saved[hidden], .pente-netpanel-regen[hidden], .pente-netpanel-error[hidden] { display: none; }
+.pente-netpanel-saved { padding: 6px 8px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.3); color: #e6e6ea; font-size: 13px; }
+.pente-netpanel-regen { cursor: pointer; padding: 6px 10px; border-radius: 4px; border: none; background: rgba(255,255,255,0.12); color: #e6e6ea; font-size: 13px; }
+.pente-netpanel-regen:hover { background: rgba(255,255,255,0.2); }
+.pente-netpanel-error { color: #ffb0b0; font-size: 12px; }
+.pente-netpanel-actions { display: flex; gap: 8px; margin-top: 4px; }
+.pente-netpanel-host, .pente-netpanel-join { flex: 1; cursor: pointer; padding: 8px 12px; border-radius: 4px; border: none; background: rgba(74,144,217,0.4); color: #e6e6ea; font-size: 14px; }
+.pente-netpanel-host:hover, .pente-netpanel-join:hover { background: rgba(74,144,217,0.6); }
+.pente-netpanel-host:disabled, .pente-netpanel-join:disabled { cursor: default; opacity: 0.4; }
+@media (prefers-reduced-motion: reduce) { .pente-netpanel-modal { transition: none; } }
 .pente-widget--net { display: flex; flex-direction: column; gap: 8px; min-width: 200px; padding: 10px 12px; border-radius: 6px; background: rgba(16,16,20,0.72); color: #e6e6ea; font-family: system-ui, sans-serif; font-size: 13px; }
-.pente-net-controls[hidden], .pente-net-status[hidden], .pente-net-conflict[hidden], .pente-net-code-row[hidden], .pente-net-seat[hidden], .pente-net-join-error[hidden] { display: none; }
+.pente-net-controls[hidden], .pente-net-status[hidden], .pente-net-conflict[hidden], .pente-net-code-row[hidden], .pente-net-seat[hidden] { display: none; }
+/* Task C.2 / issue #13: the inline widget no longer HOSTS/JOINS (that moved to the drawer's
+   Network-Game panel). While offline it shows a passive prompt pointing the user at the menu. */
 .pente-net-controls { display: flex; flex-direction: column; gap: 8px; }
-.pente-net-join-row { display: flex; gap: 6px; }
-.pente-net-join-input { flex: 1; min-width: 0; padding: 5px 8px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.3); color: #e6e6ea; font-size: 13px; text-transform: uppercase; }
-.pente-net-host, .pente-net-join { cursor: pointer; padding: 6px 12px; border-radius: 4px; border: none; background: rgba(74,144,217,0.4); color: #e6e6ea; font-size: 13px; }
-.pente-net-host:hover, .pente-net-join:hover { background: rgba(74,144,217,0.6); }
-.pente-net-join-error { color: #ffb0b0; font-size: 12px; }
+.pente-net-offline-prompt { opacity: 0.85; }
 .pente-net-status { display: flex; flex-direction: column; gap: 6px; }
 .pente-net-code-row { display: flex; gap: 6px; align-items: center; }
 .pente-net-code { font-family: ui-monospace, monospace; font-size: 16px; letter-spacing: 2px; }

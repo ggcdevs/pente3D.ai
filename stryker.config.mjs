@@ -174,6 +174,12 @@ export default {
     // first, and degrade-a-corrupt-record-to-empty. THREE-free / DOM-free — the DOM widget glue
     // (`widgets/net.ts`) is the Playwright-verified IO boundary, NOT mutated, exactly as above.
     'src/ui/widgets/recentCodes.ts',
+    // Pure Network-Game-panel view-model (Task C.2, issue #13 picker): the picker state (custom /
+    // saved / random) + recent codes → the effective code, its validation/canonicalization, and
+    // Host/Join button enablement (`deriveNetPanel` + the immutable mutations). THREE-free / DOM-free
+    // — the DOM/dispatch + scope-push widget glue (`widgets/netPanel.ts`) is the Playwright-verified
+    // IO boundary, NOT mutated, exactly as the net/recentCodes glue is above.
+    'src/ui/widgets/netPanelModel.ts',
     // Pure history-slider view-model (Task 5.6): the raw-value → clamped-viewed-ply resolution
     // (`resolveScrub`) and the ply/max/viewed facts → serializable model derivation
     // (`deriveSlider`). THREE-free / DOM-free — the `<input type=range>` widget glue

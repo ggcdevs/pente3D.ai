@@ -168,10 +168,11 @@ async function host(page: Page): Promise<string> {
 /** Join `code` on `page` via the net widget's real DOM path (stash code, click Join). */
 async function join(page: Page, code: string): Promise<void> {
   await page.evaluate((c: string) => {
-    const input = document.querySelector('[data-testid="net-join-input"]') as HTMLInputElement;
-    input.value = c;
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    (document.querySelector('[data-testid="net-join"]') as HTMLButtonElement).click();
+    // Task C.2: Host/Join initiation moved to the drawer's Network-Game panel; join via the SAME
+    // seam+command the panel uses (stash the validated code, then dispatch the argument-free joinGame).
+    const pente = (window as unknown as { __pente: { setPendingJoinCode(x: string): void; dispatch(id: string): boolean } }).__pente;
+    pente.setPendingJoinCode(c);
+    pente.dispatch('joinGame');
   }, code);
   await waitConnected(page);
 }

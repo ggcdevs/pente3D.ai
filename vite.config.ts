@@ -52,6 +52,11 @@ export default defineConfig({
         // the Task 5.5 Playwright spec, not unit coverage. The PURE `netModel.ts` is pinned to the
         // 100% floor below (and in the mutation scope). Excluded file-by-file so netModel stays measured.
         'src/ui/widgets/net.ts',
+        // Task C.2 Network-Game drawer panel: the DOM/dispatch + scope-push glue for the code picker.
+        // Touches the DOM — verified by the Task C.2 Playwright spec, not unit coverage. The PURE
+        // `netPanelModel.ts` is pinned to the 100% floor below (and in the mutation scope). Excluded
+        // file-by-file so netPanelModel stays measured.
+        'src/ui/widgets/netPanel.ts',
         'src/net/session.ts',
         'src/net/appSession.ts',
         // Task 5.6 history-slider widget: the `<input type=range>` DOM glue that reads the scene's
@@ -291,6 +296,17 @@ export default defineConfig({
         // widget glue (`widgets/net.ts`) is the Playwright-verified IO boundary, excluded above. In the
         // mutation scope and held to the hard 100% floor. Do not weaken (agent-principles #6).
         'src/ui/widgets/recentCodes.ts': {
+          statements: 100,
+          branches: 100,
+          functions: 100,
+          lines: 100,
+        },
+        // Pure Network-Game-panel view-model (Task C.2, issue #13 picker): the picker state (custom /
+        // saved / random) + recent codes → the effective code, its validation/canonicalization, and
+        // Host/Join button enablement. THREE-free / DOM-free — the DOM/dispatch + scope-push widget
+        // glue (`widgets/netPanel.ts`) is the Playwright-verified IO boundary, excluded above. In the
+        // mutation scope and held to the hard 100% floor. Do not weaken (agent-principles #6).
+        'src/ui/widgets/netPanelModel.ts': {
           statements: 100,
           branches: 100,
           functions: 100,

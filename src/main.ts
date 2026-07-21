@@ -377,10 +377,18 @@ void createAppNetSession(scene.getState().size)
     };
     scene.setNetHooks({
       host: () => {
-        startNetGame(() => void session.host().then(refreshUi));
+        // Host the chosen room code (issue #13: the picked code IS the room). The Network-Game panel
+        // stashes the code via `setPendingJoinCode` before dispatching `hostGame`; the session uses
+        // it (an empty/absent code degrades to a generated one). Consume-once so a later un-coded host
+        // (e.g. a keybinding) generates a fresh code instead of re-using a stale one.
+        const code = pendingJoinCode;
+        pendingJoinCode = '';
+        startNetGame(() => void session.host(code).then(refreshUi));
       },
       join: () => {
-        startNetGame(() => void session.join(pendingJoinCode).then(refreshUi));
+        const code = pendingJoinCode;
+        pendingJoinCode = '';
+        startNetGame(() => void session.join(code).then(refreshUi));
       },
       setPendingJoinCode: (code) => {
         pendingJoinCode = code;
@@ -518,6 +526,9 @@ const ui = createUi(container, {
   // command so the menu's "Load" entry / a keybinding opens the browser. The browser reads the
   // archive via listArchive and loads a chosen game via loadArchived (both over IndexedDB).
   registerOpenArchive: (open) => scene.setOpenArchive(open),
+  // Network-Game panel (Task C.2, issue #13): the widget hands its open() here; wire it to the
+  // scene's `openNetwork` command so the menu's "Network Game" entry opens the drawer panel.
+  registerOpenNetwork: (open) => scene.setOpenNetwork(open),
   listArchive: () => listArchive(),
   // Task 6.6 review vs resume: Review loads read-only (browse the slider); Resume loads + continues
   // playing under a fresh accumulating record. Two DISTINCT app seams the widget's two buttons call.
