@@ -486,6 +486,23 @@ export class SyncEngine {
   }
 
   /**
+   * Publish an OUT-OF-BAND handshake message (a `'proposal'` or `'response'`) to the room over the
+   * SAME transport the sync path uses (N.1 glue for #12/#18). It is emphatically NOT a sync message:
+   * it is never appended to the append-only move-log and never enters the retained `/state` snapshot —
+   * the transport's `publish` writes the NON-RETAINED `/events` topic, so a reconnecting peer never
+   * replays a stale proposal from a retained slot (the unique-id dedup in the handshake state machine
+   * covers any at-least-once re-delivery). Separate from {@link publishState} so a proposal and a log
+   * publish can never be conflated, and so the move-log publish path is untouched.
+   *
+   * Refused once a conflict has stopped the game ({@link assertLive}): a stopped game exchanges no
+   * further traffic of any kind, handshake included.
+   */
+  publishHandshake(msg: ProposalMessage | ResponseMessage): void {
+    this.assertLive();
+    this.transport.publish(msg as TransportMessage);
+  }
+
+  /**
    * Apply a received {@link SyncMessage} through the pure decision. Public so tests
    * (and out-of-order replay scenarios) can inject messages directly; the transport
    * handler routes through here too.

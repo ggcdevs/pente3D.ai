@@ -767,6 +767,48 @@ describe('SyncEngine.onMessage — the pump validates + routes the tagged union'
     expect(seen).toEqual([]);
     expect(b.game().log.entries.length).toBe(0);
   });
+
+  it('publishHandshake sends a proposal the PEER receives out-of-band (never on either log)', async () => {
+    const { a, b, tb } = await pair();
+    // Prove the round-trip as observable behavior (agent-principles #3): B publishes a proposal via
+    // publishHandshake and A's pump delivers the SAME message to A's onMessage seam.
+    const seenOnA: (ProposalMessage | ResponseMessage)[] = [];
+    a.onMessage((m) => seenOnA.push(m));
+    const proposal: ProposalMessage = {
+      kind: 'proposal',
+      id: 'p-hs-1',
+      action: 'rematch',
+      proposedBy: 'black',
+    };
+    b.publishHandshake(proposal);
+    // A actually received it, with every field intact — not a log line, the real inbound message.
+    expect(seenOnA).toEqual([proposal]);
+    // And it touched NEITHER append-only log: the handshake is out-of-band on both sides.
+    expect(a.game().log.entries.length).toBe(0);
+    expect(b.game().log.entries.length).toBe(0);
+    // A ResponseMessage travels the same seam and preserves its accepted flag on receipt.
+    void tb;
+    const response: ResponseMessage = { kind: 'response', proposalId: 'p-hs-1', accepted: true };
+    b.publishHandshake(response);
+    expect(seenOnA).toEqual([proposal, response]);
+  });
+
+  it('publishHandshake is REFUSED once a conflict has stopped the game (no out-of-band traffic after stop)', async () => {
+    const { a, b } = await pair();
+    // Fork A and B onto divergent 1-move histories, then converge → B conflicts and stops.
+    a.placeLocalOnly([0, 0, 0]);
+    b.placeLocalOnly([3, 3, 3]);
+    a.publishState();
+    expect(b.status().kind).toBe('conflict');
+    // A proposal from the stopped engine is refused — assertLive throws, nothing is published.
+    const seenOnA: (ProposalMessage | ResponseMessage)[] = [];
+    a.onMessage((m) => seenOnA.push(m));
+    expect(() =>
+      b.publishHandshake({ kind: 'proposal', id: 'x', action: 'undo', proposedBy: 'black' }),
+    ).toThrow(/conflict|stopped/i);
+    // The refused proposal never crossed the relay to A (proof the guard bit, not a log claim).
+    expect(seenOnA).toEqual([]);
+  });
 });
 
 describe('decideUndo — pure restricted-undo permission', () => {

@@ -425,6 +425,15 @@ void createAppNetSession(scene.getState().size)
       resync: () => {
         session.syncEngine()?.publishState();
       },
+      // Out-of-band ask/accept handshake (N.1, issues #12/#18): the shared primitive #12 rematch and
+      // #18 undo/redo build on. `getHandshake` surfaces the session's pending proposal + last
+      // resolution for `window.__pente.getHandshake` (a two-context e2e proves an ask crossed the
+      // relay and resolved). `propose`/`respond` publish the NON-RETAINED proposal/response over the
+      // SAME transport the sync path uses — never onto the append-only move-log. Auto-cancel (on a
+      // game-advance or a peer drop) lives inside the session, so a stale proposal never lingers.
+      getHandshake: () => session.getHandshake(),
+      propose: (action) => session.propose(action),
+      respond: (accepted) => session.respond(accepted),
     });
     // Archive ACCUMULATION for NETWORKED games (Task 6.3): the authoritative game to persist while a
     // net game is live is the SESSION engine's game — its own `Game` object, distinct from the scene's
@@ -486,6 +495,14 @@ void createAppNetSession(scene.getState().size)
       scene.adoptNetState();
       refreshUi();
       maybePromptRematch();
+    });
+    // Out-of-band handshake changes (N.1, #12/#18): an incoming ask, a resolution, or an auto-cancel.
+    // Repaint the widgets so a UI (the #12 rematch overlay / #18 undo prompt, built on this primitive)
+    // reflects the pending proposal. Kept separate from the sync `onChange` because a handshake
+    // transition is NOT a move — it never touches the board/log — so it must not run the adopt/rematch
+    // path; it only refreshes the view of the out-of-band state.
+    session.onHandshakeChange(() => {
+      refreshUi();
     });
     refreshUi();
     log.info('net session wired');

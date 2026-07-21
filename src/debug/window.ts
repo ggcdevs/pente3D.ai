@@ -24,6 +24,7 @@ import type { UiHandle } from '../ui/setup.ts';
 import type { LayoutReadout } from '../ui/container.ts';
 import type { BannerContext } from '../ui/widgets/banner.ts';
 import type { NetSessionState } from '../ui/widgets/netModel.ts';
+import type { HandshakeState } from '../net/handshake.ts';
 import type { HelpSources } from '../ui/widgets/helpModel.ts';
 import type { ArchiveListing } from '../ui/widgets/archiveModel.ts';
 import { createLogger } from './log.ts';
@@ -237,6 +238,29 @@ export interface PenteInspect {
    * real relay — proof-by-behavior, agent-principles #3), without a re-publish loop in the app.
    */
   resync(): void;
+  /**
+   * The OUT-OF-BAND ask/accept handshake state (N.1, issues #12/#18): the session's at-most-one
+   * pending proposal (its `direction` — `outgoing` = we asked, `incoming` = the peer asked — `action`,
+   * and `id`) plus the last `resolution` (`accepted`/`declined`). Held in session memory, NEVER on the
+   * append-only move-log. Lets a TWO-CONTEXT e2e prove a proposal actually crossed the relay: after A
+   * `propose`s, B's `getHandshake().pending.direction === 'incoming'`; after B `respond(true)`s, A's
+   * `getHandshake().resolution.outcome === 'accepted'` — the round-trip observed as real state on the
+   * OTHER client, not a log line (agent-principles #3). Idle (`{ pending: null, resolution: null }`)
+   * offline.
+   */
+  getHandshake(): HandshakeState;
+  /**
+   * Raise an OUTGOING handshake proposal for the opaque `action` (#12 `'rematch'` / #18 `'undo'`),
+   * publishing it NON-RETAINED to the peer (out-of-band — never onto the move-log). Returns `true` if
+   * raised, `false` offline. The e2e driver for the proposer side of the round-trip.
+   */
+  propose(action: string): boolean;
+  /**
+   * Accept (`true`) / decline (`false`) the INCOMING pending proposal, publishing the response so the
+   * proposer's outgoing ask resolves. Returns `true` if a response was sent, `false` if there is
+   * nothing to answer. The e2e driver for the responder side of the round-trip.
+   */
+  respond(accepted: boolean): boolean;
 }
 
 /** The app-level archive readouts wired into the inspect API (Task 5.8; the DB lives in `main.ts`). */
@@ -308,6 +332,12 @@ export function installInspectApi(
     // Re-broadcast the authoritative networked log (Task 6.7) — a no-op offline. The two-context
     // live-relay e2e drives this to defeat the relay's subscription gap without weakening the proof.
     resync: () => scene.resync(),
+    // Out-of-band ask/accept handshake (N.1, #12/#18): read the pending proposal + last resolution,
+    // and drive a proposal/response. Delegates to the scene's net hooks (the live session). A
+    // two-context e2e proves the round-trip as real state on the OTHER client (agent-principles #3).
+    getHandshake: () => scene.getHandshake(),
+    propose: (action: string) => scene.propose(action),
+    respond: (accepted: boolean) => scene.respond(accepted),
   };
   window.__pente = api;
   log.info('window.__pente installed', Object.keys(api));

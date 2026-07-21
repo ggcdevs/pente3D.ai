@@ -52,6 +52,7 @@ import { Game } from '../core/game.ts';
 import type { GameState } from '../core/gameState.ts';
 import type { BannerContext } from '../ui/widgets/banner.ts';
 import type { NetSessionState } from '../ui/widgets/netModel.ts';
+import { initialHandshake, type HandshakeState } from '../net/handshake.ts';
 import type { HelpSources } from '../ui/widgets/helpModel.ts';
 import { keyOf, type Coord, type NodeKey } from '../core/coords.ts';
 import { generateAllLines, type LineCategory } from '../core/lines.ts';
@@ -233,6 +234,26 @@ export interface NetHooks {
    * two-context live-relay e2e drives it to defeat that gap deterministically without weakening the proof.
    */
   resync(): void;
+  /**
+   * The OUT-OF-BAND ask/accept handshake readout (N.1, issues #12/#18): the session's current
+   * {@link HandshakeState} (its at-most-one pending proposal + last resolution). Held in session
+   * memory, never on the move-log. Lets `window.__pente.getHandshake` prove a proposal actually
+   * crossed the relay (the peer's session shows an INCOMING pending) and resolved (the proposer's
+   * shows an `accepted` resolution) — observable behavior, not a log line (agent-principles #3).
+   */
+  getHandshake(): HandshakeState;
+  /**
+   * Raise an OUTGOING handshake proposal for the opaque `action` (#12 `'rematch'` / #18 `'undo'`),
+   * publishing it NON-RETAINED to the peer. Returns `true` if raised, `false` when offline. Drives
+   * the consumer-agnostic primitive; #12/#18 layer their meaning on top.
+   */
+  propose(action: string): boolean;
+  /**
+   * Accept (`true`) or decline (`false`) the INCOMING pending proposal, publishing the response back
+   * so the proposer's outgoing ask resolves. Returns `true` if a response was sent, `false` when
+   * there is nothing to answer. Out-of-band throughout — no move-log write.
+   */
+  respond(accepted: boolean): boolean;
 }
 
 export interface SceneHandle {
@@ -440,6 +461,17 @@ export interface SceneHandle {
   adoptNetState(): void;
   /** The live networking-session readout the net widget renders (offline until a session is wired). */
   getNet(): NetSessionState;
+  /**
+   * The OUT-OF-BAND handshake readout (N.1, issues #12/#18): the session's current
+   * {@link HandshakeState}. Surfaced on `window.__pente.getHandshake` so a two-context e2e proves an
+   * ask crossed the relay (the peer shows an INCOMING pending) and resolved (the proposer shows an
+   * `accepted` resolution) — observable behavior, not a log line. Idle/offline until a session wires.
+   */
+  getHandshake(): HandshakeState;
+  /** Raise an out-of-band proposal (N.1); returns `true` if raised, `false` offline. Drives #12/#18. */
+  propose(action: string): boolean;
+  /** Respond accept/decline to the incoming proposal (N.1); `true` if a response was sent, else `false`. */
+  respond(accepted: boolean): boolean;
   /** Stash a validated join code for the next `joinGame` dispatch (Task 5.5 argument seam). */
   setPendingJoinCode(code: string): void;
   /** Resolve a chord through the scope stack and dispatch it — drives the key path in tests. */
@@ -801,6 +833,11 @@ export function createScene(container: HTMLElement): SceneHandle {
     getNetHeadHash: () => null,
     // No live session → nothing to re-broadcast. Honest no-op until wired (never a crash on dispatch).
     resync: () => {},
+    // No live session → no handshake: an idle state, and propose/respond are honest no-ops that
+    // report `false` (nothing raised/answered), never a crash on dispatch before the session wires.
+    getHandshake: () => initialHandshake(),
+    propose: () => false,
+    respond: () => false,
   };
 
   const undoRedoSafe = (fn: () => void): void => {
@@ -1348,6 +1385,21 @@ export function createScene(container: HTMLElement): SceneHandle {
     netHooks.resync();
   }
 
+  /** The session's OUT-OF-BAND handshake readout (N.1, #12/#18); idle until a session wires. */
+  function getHandshake(): HandshakeState {
+    return netHooks.getHandshake();
+  }
+
+  /** Raise an out-of-band proposal via the session (N.1); `false` offline. Drives #12/#18. */
+  function propose(action: string): boolean {
+    return netHooks.propose(action);
+  }
+
+  /** Respond accept/decline to the incoming proposal via the session (N.1); `false` if none. */
+  function respond(accepted: boolean): boolean {
+    return netHooks.respond(accepted);
+  }
+
   /**
    * The LIVE sources the help overlay generates its shortcut list from (Task 5.7): the registered
    * command ids (from the same registry keybindings dispatch through) + the current `key→commandId`
@@ -1700,6 +1752,9 @@ export function createScene(container: HTMLElement): SceneHandle {
     getGame,
     getHeadHash,
     resync,
+    getHandshake,
+    propose,
+    respond,
     getHelpSources,
     setNetHooks,
     adoptNetState,
