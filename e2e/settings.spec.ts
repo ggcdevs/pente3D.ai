@@ -190,6 +190,10 @@ test('#24 MONEY-SHOT: with the settings panel OPEN, a colour edit updates the bo
   //   2. the board is STILL INTERACTIVE under the open panel — a camera-orbit drag on the canvas
   //      moves the camera (getCamera delta). Under the OLD blocking modal the full-viewport backdrop
   //      swallowed this drag (delta ~0) and the settings scope swallowed every key.
+  // The money-shot artifact is captured BETWEEN the two halves — after the live edit but BEFORE the
+  // orbit — because the orbit's outside pointerdown closes the panel (outside-click semantics); the
+  // capture time is asserted to have the panel OPEN so the artifact shows the panel open over the
+  // live-edited board (design B.2), not a post-close frame.
   await ready(page);
 
   expect(await dispatch(page, OPEN_SETTINGS_COMMAND)).toBe(true);
@@ -210,6 +214,21 @@ test('#24 MONEY-SHOT: with the settings panel OPEN, a colour edit updates the bo
   });
   const afterEdit = await get(page, (p) => p.getColors()!);
   expect(afterEdit.background).toBe(target); // the real scene background changed LIVE
+
+  // Money-shot — captured HERE, BEFORE the panel-closing orbit below (design B.2: "edit while
+  // WATCHING the board WITH the drawer open and the board visible"). The `settings` scope is still
+  // on the stack and the panel is still visible, so the artifact genuinely shows the edited (#ff8800)
+  // board LIVE with the panel open OVER it — not proof-by-inference on a post-close capture. The orbit
+  // in Half 2 fires a capture-phase pointerdown OUTSIDE the 320px right-edge panel, which (by design —
+  // outside-click close) pops the scope and hides the panel; screenshotting after it would show the
+  // panel ABSENT and mislabel the money-shot. Assert the open state at capture time so the artifact
+  // can never silently drift back to a closed panel.
+  const atShot = await get(page, (p) => p.getInput()!);
+  expect(atShot.scopes[atShot.scopes.length - 1]).toBe(SETTINGS_SCOPE_ID);
+  await expect(modal(page)).toBeVisible();
+  const shot = resolve('e2e/artifacts/settings-live-while-open.png');
+  mkdirSync(dirname(shot), { recursive: true });
+  await page.screenshot({ path: shot });
 
   // --- Half 2: the board is still interactive — orbit the canvas UNDER the open panel. ----------
   const camBefore = await get(page, (p) => p.getCamera()!);
@@ -233,17 +252,16 @@ test('#24 MONEY-SHOT: with the settings panel OPEN, a colour edit updates the bo
     camAfter.position.y - camBefore.position.y,
     camAfter.position.z - camBefore.position.z,
   );
-  // The camera MUST have moved — proof the panel is non-blocking (board live under it).
+  // The camera MUST have moved — proof the panel is non-blocking (board live under it). The orbit's
+  // opening pointerdown also landed OUTSIDE the panel, so (outside-click semantics) the panel closed
+  // and its scope popped — the camera still moved, and no scope leaked.
   expect(moved).toBeGreaterThan(0.01);
+  const afterOrbit = await get(page, (p) => p.getInput()!);
+  expect(afterOrbit.scopes).not.toContain(SETTINGS_SCOPE_ID);
 
   // The LIVE edit survives the interaction — the board still shows the edited colour (no reload).
   const stillEdited = await get(page, (p) => p.getColors()!);
   expect(stillEdited.background).toBe(target);
-
-  // Money-shot: the board (edited to #ff8800) visible + live with the settings panel open over it.
-  const shot = resolve('e2e/artifacts/settings-live-while-open.png');
-  mkdirSync(dirname(shot), { recursive: true });
-  await page.screenshot({ path: shot });
 });
 
 test('changing the control preset persists a real config override', async ({ page }) => {
