@@ -51,10 +51,8 @@ describe('deriveNet — panel selection', () => {
 });
 
 describe('deriveNet — status text per phase', () => {
-  it('offline prompts to open the menu → Network Game (Host/Join moved there, issue #13)', () => {
-    expect(deriveNet(state({ phase: 'offline' })).statusText).toBe(
-      'Open the menu → Network Game to host or join.',
-    );
+  it('offline shows NO status text (issue #16 removed the board hint — no advertisement)', () => {
+    expect(deriveNet(state({ phase: 'offline' })).statusText).toBe('');
   });
 
   it('connecting shows a connecting message', () => {

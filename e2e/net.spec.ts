@@ -130,7 +130,7 @@ const widget = (page: import('@playwright/test').Page) =>
 const testid = (page: import('@playwright/test').Page, id: string) =>
   widget(page).locator(`[data-testid="${id}"]`);
 
-test('the net STATUS widget mounts in its configured zone and starts offline with a passive prompt (no inline Host/Join)', async ({
+test('the net STATUS widget mounts in its configured zone and starts offline with NO board hint (no inline Host/Join)', async ({
   page,
 }) => {
   await ready(page);
@@ -139,12 +139,10 @@ test('the net STATUS widget mounts in its configured zone and starts offline wit
   const inZone = page.locator(`[data-zone="top-left"] [data-widget-id="${NET_ID}"]`);
   await expect(inZone).toHaveCount(1);
 
-  // Offline: the controls panel shows only the passive prompt; the status + conflict panels hidden.
+  // Offline: the controls panel is shown but EMPTY — the status + conflict panels hidden. The passive
+  // "open the menu" board hint was REMOVED (issue #16): no menu feature advertises itself on the board.
   await expect(widget(page)).toHaveAttribute('data-panel', 'controls');
-  await expect(testid(page, 'net-offline-prompt')).toBeVisible();
-  await expect(testid(page, 'net-offline-prompt')).toHaveText(
-    'Open the menu → Network Game to host or join.',
-  );
+  await expect(testid(page, 'net-offline-prompt')).toHaveCount(0);
   await expect(testid(page, 'net-status')).toBeHidden();
   await expect(testid(page, 'net-conflict')).toBeHidden();
 

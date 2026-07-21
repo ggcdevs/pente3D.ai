@@ -6,18 +6,19 @@ import { CODE_LENGTH, CODE_ALPHABET, CODE_ERROR_TEXT } from '../src/ui/widgets/n
 import { NET_PANEL_SCOPE_ID } from '../src/ui/widgets/netPanel.ts';
 
 /**
- * Task C.2 / issue #13 e2e — the Network-Game DRAWER PANEL is the DOM/dispatch IO boundary for the
- * game-code picker (custom / saved / random), verified by driving the REAL app and asserting on
- * `window.__pente` real state (getNet / getInput) + the rendered DOM + screenshots (agent-principles
- * #3: observable behavior, never a log line). The PURE picker view-model (`netPanelModel.ts`) is
- * mutation-gated in Vitest; here we prove the WIRING:
+ * issue #13 / #16 e2e — the Network-Game DRAWER PANEL is the DOM/dispatch IO boundary for the game-
+ * code COMBOBOX (a text input + a dropdown of recent codes), verified by driving the REAL app and
+ * asserting on `window.__pente` real state (getNet / getInput) + the rendered DOM + screenshots
+ * (agent-principles #3: observable behavior, never a log line). The PURE combobox view-model
+ * (`netPanelModel.ts`) is mutation-gated in Vitest; here we prove the WIRING:
  *   - the menu's "Network Game" entry opens the panel (a NON-blocking scope pushed — board stays live);
- *   - opening RANDOM yields an unambiguous-alphabet code of CODE_LENGTH in the single code field;
- *   - CUSTOM validates a typed code (a malformed one disables Host/Join + shows the error);
- *   - SAVED lists the recent codes from the C.1 store (a prior host/join is remembered), and picking
- *     one feeds the field;
- *   - Host dispatches `hostGame` and CONNECTS the session (getNet phase/seat), recording the code;
- *   - Join dispatches `joinGame` with the chosen code and reaches the transport (the mock room).
+ *   - opening shows the input with a FRESH random PLACEHOLDER (an unambiguous-alphabet code of
+ *     CODE_LENGTH) and an EMPTY value; Host/Join are enabled (the placeholder is always valid);
+ *   - Host/Join with an EMPTY input use that placeholder code;
+ *   - typing a custom code OVERRIDES the placeholder; a malformed typed code disables Host/Join +
+ *     shows the error (a gate that BITES);
+ *   - the dropdown lists the recent codes newest-first; clicking one fills the input; the per-row
+ *     remove control drops just that code from the store.
  *
  * A deterministic in-page MOCK transport is injected before boot (the `appSession.ts` seam), so
  * host/join connect instantly and hermetically. The widget id / zone / command ids / alphabet all
@@ -106,6 +107,10 @@ const panel = (page: import('@playwright/test').Page) =>
 const pt = (page: import('@playwright/test').Page, id: string) =>
   panel(page).locator(`[data-testid="${id}"]`);
 
+/** The input's placeholder attribute — the fresh random code offered for an untouched input. */
+const placeholder = (page: import('@playwright/test').Page): Promise<string> =>
+  pt(page, 'netpanel-code-input').getAttribute('placeholder').then((v) => v ?? '');
+
 /** Open the menu drawer and choose "Network Game" — the real user path (design Principle 3). */
 async function openNetPanel(page: import('@playwright/test').Page) {
   await menu(page).locator('[data-testid="menu-button"]').click();
@@ -113,7 +118,18 @@ async function openNetPanel(page: import('@playwright/test').Page) {
   await expect(panel(page)).toHaveClass(/pente-netpanel-modal--open/);
 }
 
-test('the Network-Game entry mounts and, when chosen, opens the non-blocking picker panel', async ({
+/** Host a KNOWN code by typing it, so a later run finds it in the recent-codes store. */
+async function hostCode(page: import('@playwright/test').Page, code: string) {
+  await openNetPanel(page);
+  await pt(page, 'netpanel-code-input').fill(code);
+  await pt(page, 'netpanel-host').click();
+  await page.waitForFunction(() => {
+    const p = (window as unknown as { __pente: { getNet(): NetState | null } }).__pente;
+    return p.getNet()?.phase === 'connected';
+  });
+}
+
+test('the Network-Game entry mounts and, when chosen, opens the non-blocking combobox panel', async ({
   page,
 }) => {
   await ready(page);
@@ -134,135 +150,146 @@ test('the Network-Game entry mounts and, when chosen, opens the non-blocking pic
   const input = await getInput(page);
   expect(input.scopes[input.scopes.length - 1]).toBe(NET_PANEL_SCOPE_ID);
 
-  // The three picker sources are present; random is active by default.
-  await expect(pt(page, 'netpanel-source-custom')).toBeVisible();
-  await expect(pt(page, 'netpanel-source-saved')).toBeVisible();
-  await expect(pt(page, 'netpanel-source-random')).toBeVisible();
-  await expect(panel(page)).toHaveAttribute('data-source', 'random');
+  // The unified combobox is present: a single input + the dropdown toggle (no source tabs).
+  await expect(pt(page, 'netpanel-code-input')).toBeVisible();
+  await expect(pt(page, 'netpanel-toggle')).toBeVisible();
+  await expect(pt(page, 'netpanel-source-custom')).toHaveCount(0);
+  await expect(pt(page, 'netpanel-source-saved')).toHaveCount(0);
+  await expect(pt(page, 'netpanel-source-random')).toHaveCount(0);
 
   const shot = resolve('e2e/artifacts/netpanel-open.png');
   mkdirSync(dirname(shot), { recursive: true });
   await page.screenshot({ path: shot });
 });
 
-test('opening on RANDOM yields an unambiguous-alphabet code of the right length in the field', async ({
+test('opening shows a FRESH random PLACEHOLDER (unambiguous alphabet, right length) with an empty value', async ({
   page,
 }) => {
   await ready(page);
   await openNetPanel(page);
 
-  await expect(panel(page)).toHaveAttribute('data-source', 'random');
-  const code = await pt(page, 'netpanel-code-input').inputValue();
-  expect(code).toHaveLength(CODE_LENGTH);
-  for (const ch of code) expect(CODE_ALPHABET).toContain(ch);
-  // A valid code enables Host + Join.
+  // The value is empty; the PLACEHOLDER carries the fresh random code (greyed, not the value).
+  await expect(pt(page, 'netpanel-code-input')).toHaveValue('');
+  const ph = await placeholder(page);
+  expect(ph).toHaveLength(CODE_LENGTH);
+  for (const ch of ph) expect(CODE_ALPHABET).toContain(ch);
+
+  // The placeholder is always valid → Host + Join are enabled with an empty input.
   await expect(panel(page)).toHaveAttribute('data-code-valid', 'true');
   await expect(pt(page, 'netpanel-host')).toBeEnabled();
   await expect(pt(page, 'netpanel-join')).toBeEnabled();
-
-  // Regenerating produces a fresh (still-valid) code.
-  await pt(page, 'netpanel-regen').click();
-  const code2 = await pt(page, 'netpanel-code-input').inputValue();
-  expect(code2).toHaveLength(CODE_LENGTH);
-  for (const ch of code2) expect(CODE_ALPHABET).toContain(ch);
 });
 
-test('CUSTOM validates the typed code: a malformed one disables Host/Join and shows the error', async ({
+test('Host with an EMPTY input uses the PLACEHOLDER code (connects on it, remembers it)', async ({
   page,
 }) => {
   await ready(page);
   await openNetPanel(page);
 
-  await pt(page, 'netpanel-source-custom').click();
-  await expect(panel(page)).toHaveAttribute('data-source', 'custom');
-
-  // Too short → invalid, buttons disabled, the too-short message shown.
-  await pt(page, 'netpanel-code-input').fill('ABC');
-  await expect(panel(page)).toHaveAttribute('data-code-valid', 'false');
-  await expect(pt(page, 'netpanel-error')).toHaveText(CODE_ERROR_TEXT['too-short']);
-  await expect(pt(page, 'netpanel-host')).toBeDisabled();
-  await expect(pt(page, 'netpanel-join')).toBeDisabled();
-
-  // A valid (lower-cased) code → valid, buttons enabled, no error.
-  const good = CODE_ALPHABET.slice(0, CODE_LENGTH);
-  await pt(page, 'netpanel-code-input').fill(good.toLowerCase());
-  await expect(panel(page)).toHaveAttribute('data-code-valid', 'true');
-  await expect(pt(page, 'netpanel-error')).toBeHidden();
-  await expect(pt(page, 'netpanel-host')).toBeEnabled();
-});
-
-test('Host dispatches hostGame, connects the session, and remembers the code in the SAVED list', async ({
-  page,
-}) => {
-  await ready(page);
-  await openNetPanel(page);
-
-  // Host with a KNOWN custom code so we can assert the exact room + the saved-list entry.
-  const code = CODE_ALPHABET.slice(0, CODE_LENGTH);
-  await pt(page, 'netpanel-source-custom').click();
-  await pt(page, 'netpanel-code-input').fill(code);
+  // Read the offered placeholder, then Host WITHOUT typing anything.
+  const ph = await placeholder(page);
+  await expect(pt(page, 'netpanel-code-input')).toHaveValue('');
   await pt(page, 'netpanel-host').click();
 
-  // The session actually CONNECTED and claimed white (observable via getNet), on THIS code.
+  // The session connected on EXACTLY the placeholder code (the empty→placeholder fallback bit).
   await page.waitForFunction(() => {
     const p = (window as unknown as { __pente: { getNet(): NetState | null } }).__pente;
     return p.getNet()?.phase === 'connected';
   });
   const state = await getNet(page);
   expect(state.seat).toBe('white');
-  expect(state.code).toBe(code);
-  // The mock transport connected to exactly this room (the wiring reached the transport).
+  expect(state.code).toBe(ph);
   const room = await page.evaluate(() =>
     (window as unknown as { __mockRoom(): string | null }).__mockRoom(),
   );
-  expect(room).toBe(code);
-  // The status widget (persistent, on the board) now shows the code + seat.
+  expect(room).toBe(ph);
+
+  // The status widget (persistent, on the board) now shows the placeholder code + seat.
   const net = page.locator(`[data-widget-id="${NET_ID}"]`);
-  await expect(net.locator('[data-testid="net-code"]')).toHaveText(code);
+  await expect(net.locator('[data-testid="net-code"]')).toHaveText(ph);
   await expect(net.locator('[data-testid="net-seat"]')).toHaveText('You are White');
 
-  // Hosting recorded the code into the C.1 recent-codes store — the SAVED dropdown now lists it.
+  // Hosting recorded the placeholder code into the C.1 store — the dropdown now lists it.
   await openNetPanel(page);
-  await pt(page, 'netpanel-source-saved').click();
-  const savedOptions = await pt(page, 'netpanel-saved').locator('option').allTextContents();
-  expect(savedOptions).toContain(code);
+  await pt(page, 'netpanel-toggle').click();
+  await expect(pt(page, 'netpanel-recent')).toBeVisible();
+  const codes = await pt(page, 'netpanel-recent-code').allTextContents();
+  expect(codes).toContain(ph);
 });
 
-test('SAVED: picking a remembered code feeds the field, and Join dispatches joinGame with it', async ({
+test('typing a custom code OVERRIDES the placeholder; a malformed one disables Host/Join (gate bites)', async ({
   page,
 }) => {
   await ready(page);
-
-  // Seed the recent-codes store by hosting a known code first.
   await openNetPanel(page);
-  const code = CODE_ALPHABET.slice(2, 2 + CODE_LENGTH);
-  await pt(page, 'netpanel-source-custom').click();
-  await pt(page, 'netpanel-code-input').fill(code);
+
+  // Too short → invalid, buttons disabled, the too-short message shown (the validation gate BITES).
+  await pt(page, 'netpanel-code-input').fill('ABC');
+  await expect(panel(page)).toHaveAttribute('data-code-valid', 'false');
+  await expect(pt(page, 'netpanel-error')).toHaveText(CODE_ERROR_TEXT['too-short']);
+  await expect(pt(page, 'netpanel-host')).toBeDisabled();
+  await expect(pt(page, 'netpanel-join')).toBeDisabled();
+
+  // A bad-chars typed code also bites, with its own message.
+  await pt(page, 'netpanel-code-input').fill(`${CODE_ALPHABET.slice(0, CODE_LENGTH - 1)}0`); // '0' excluded
+  await expect(panel(page)).toHaveAttribute('data-code-valid', 'false');
+  await expect(pt(page, 'netpanel-error')).toHaveText(CODE_ERROR_TEXT['bad-chars']);
+
+  // A valid (lower-cased) typed code → valid, no error, buttons enabled, and it OVERRIDES the
+  // placeholder: hosting connects on the TYPED code, not the offered random one.
+  const typed = CODE_ALPHABET.slice(0, CODE_LENGTH);
+  const ph = await placeholder(page);
+  expect(typed).not.toBe(ph);
+  await pt(page, 'netpanel-code-input').fill(typed.toLowerCase());
+  await expect(panel(page)).toHaveAttribute('data-code-valid', 'true');
+  await expect(pt(page, 'netpanel-error')).toBeHidden();
+  await expect(pt(page, 'netpanel-host')).toBeEnabled();
+
   await pt(page, 'netpanel-host').click();
   await page.waitForFunction(() => {
     const p = (window as unknown as { __pente: { getNet(): NetState | null } }).__pente;
     return p.getNet()?.phase === 'connected';
   });
+  const state = await getNet(page);
+  expect(state.code).toBe(typed); // the typed code won, not the placeholder
+});
 
-  // Reload to reset the session to offline (the store persists in localStorage across the reload).
+test('the dropdown lists recent codes newest-first; clicking one fills the input, then Join uses it', async ({
+  page,
+}) => {
+  await ready(page);
+
+  // Seed two codes into the store by hosting them in order (a then b → b is newest).
+  const a = CODE_ALPHABET.slice(0, CODE_LENGTH);
+  const b = CODE_ALPHABET.slice(2, 2 + CODE_LENGTH);
+  await hostCode(page, a);
   await page.reload();
   await page.waitForFunction(() => {
     const p = (window as unknown as { __pente?: { getNet(): unknown } }).__pente;
-    return !!p && p.getNet() !== null && p.getNet() !== undefined;
+    return !!p && p.getNet() !== null;
   });
+  await hostCode(page, b);
+
+  // Reset the session to offline (the store persists across the reload).
+  await page.reload();
   await page.waitForFunction(() => {
     const p = (window as unknown as { __pente: { getNet(): NetState | null } }).__pente;
     return p.getNet()?.phase === 'offline';
   });
 
   await openNetPanel(page);
-  await pt(page, 'netpanel-source-saved').click();
-  // The remembered code is offered; select it → it feeds the single field.
-  await pt(page, 'netpanel-saved').selectOption(code);
-  await expect(pt(page, 'netpanel-code-input')).toHaveValue(code);
+  await pt(page, 'netpanel-toggle').click();
+  await expect(pt(page, 'netpanel-recent')).toBeVisible();
+  // Newest-first: b (hosted last) precedes a.
+  const codes = await pt(page, 'netpanel-recent-code').allTextContents();
+  expect(codes).toEqual([b, a]);
+
+  // Clicking a recent code fills the input with it.
+  await pt(page, 'netpanel-recent-code').filter({ hasText: a }).click();
+  await expect(pt(page, 'netpanel-code-input')).toHaveValue(a);
   await expect(panel(page)).toHaveAttribute('data-code-valid', 'true');
 
-  // Join it → the session connects on THIS code with the black seat (the joiner) via the mock room.
+  // Join it → connects on THIS code with the black seat (the joiner) via the mock room.
   await pt(page, 'netpanel-join').click();
   await page.waitForFunction(() => {
     const p = (window as unknown as { __pente: { getNet(): NetState | null } }).__pente;
@@ -270,15 +297,48 @@ test('SAVED: picking a remembered code feeds the field, and Join dispatches join
   });
   const state = await getNet(page);
   expect(state.seat).toBe('black');
-  expect(state.code).toBe(code);
-  const room = await page.evaluate(() =>
-    (window as unknown as { __mockRoom(): string | null }).__mockRoom(),
-  );
-  expect(room).toBe(code);
+  expect(state.code).toBe(a);
 
-  const shot = resolve('e2e/artifacts/netpanel-saved-join.png');
+  const shot = resolve('e2e/artifacts/netpanel-recent-join.png');
   mkdirSync(dirname(shot), { recursive: true });
   await page.screenshot({ path: shot });
+});
+
+test('the per-row remove control drops JUST that code from the store', async ({ page }) => {
+  await ready(page);
+
+  const a = CODE_ALPHABET.slice(0, CODE_LENGTH);
+  const b = CODE_ALPHABET.slice(2, 2 + CODE_LENGTH);
+  await hostCode(page, a);
+  await page.reload();
+  await page.waitForFunction(() => {
+    const p = (window as unknown as { __pente?: { getNet(): unknown } }).__pente;
+    return !!p && p.getNet() !== null;
+  });
+  await hostCode(page, b);
+  await page.reload();
+  await page.waitForFunction(() => {
+    const p = (window as unknown as { __pente: { getNet(): NetState | null } }).__pente;
+    return p.getNet()?.phase === 'offline';
+  });
+
+  await openNetPanel(page);
+  await pt(page, 'netpanel-toggle').click();
+  await expect(pt(page, 'netpanel-recent-row')).toHaveCount(2);
+
+  // Remove b (newest) via its per-row remove control → only a remains, in the DOM and the store.
+  const rowB = pt(page, 'netpanel-recent-row').filter({ hasText: b });
+  await rowB.locator('[data-testid="netpanel-recent-remove"]').click();
+  await expect(pt(page, 'netpanel-recent-row')).toHaveCount(1);
+  await expect(pt(page, 'netpanel-recent-code')).toHaveText(a);
+
+  // Prove it persisted: reopen the panel and the removed code is gone.
+  await pt(page, 'netpanel-close').click();
+  await openNetPanel(page);
+  await pt(page, 'netpanel-toggle').click();
+  const codes = await pt(page, 'netpanel-recent-code').allTextContents();
+  expect(codes).toEqual([a]);
+  expect(codes).not.toContain(b);
 });
 
 test('choosing Host closes the panel (the transient drawer does not linger) and pops its scope', async ({
@@ -289,7 +349,6 @@ test('choosing Host closes the panel (the transient drawer does not linger) and 
   // Scope pushed while open.
   expect((await getInput(page)).scopes).toContain(NET_PANEL_SCOPE_ID);
 
-  await pt(page, 'netpanel-source-random').click();
   await pt(page, 'netpanel-host').click();
 
   // The panel closed (its scope popped) — the status display persists on the board, not the drawer.

@@ -1,188 +1,157 @@
 /**
- * PURE Network-Game-panel view-model (Task C.2 — GitHub issue #13, the game-code picker). The
- * companion DOM glue is `netPanel.ts` (the drawer panel wiring Host/Join to the existing
- * `hostGame`/`joinGame`/`setPendingJoinCode` seams). Picker design resolved on issue #13:
+ * PURE Network-Game-panel view-model (issue #13 / #16 — the game-code combobox). The companion DOM
+ * glue is `netPanel.ts` (the drawer panel wiring Host/Join to the existing
+ * `hostGame`/`joinGame`/`setPendingJoinCode` seams). Simplified picker (issue #16):
  *
- *   Flow = ONE game-code field fed by a picker with three SOURCES, then a Host button (create this
- *   room) and a Join button (enter this room). One shared code, two actions.
- *     - CUSTOM — the user types a code.
- *     - SAVED  — the user picks a previously-used code from the recent-codes store (C.1).
- *     - RANDOM — an unambiguous-alphabet code generated via `generateGameCode` (netModel).
+ *   Flow = ONE combobox — a text input plus a dropdown of recently-used codes — feeding a Host
+ *   button (create this room) and a Join button (enter this room). One code, two actions.
+ *     - The input's PLACEHOLDER is a fresh random code, generated (via `generateGameCode`) when the
+ *       panel OPENS and passed into this model (the glue owns the randomness; this stays pure).
+ *     - The EFFECTIVE code = the typed text (trimmed) when non-empty, else the placeholder — so a
+ *       Host/Join with an untouched input uses the offered random code, and typing overrides it.
+ *     - The DROPDOWN lists the recent codes (newest-first from the C.1 store); clicking one fills the
+ *       input, and each row has a remove control that drops just that code from the store.
  *
- * This module owns the PURE decisions the panel makes: which source is active, what the EFFECTIVE
- * code is for that source, whether that effective code is {@link validateGameCode}-valid (so Host /
- * Join are enabled), and the human error for an invalid custom code. Turning the picker state +
- * the recent-codes list into the serializable model the DOM renders is DOM-free and deterministic,
- * so it earns the strict unit + mutation gate exactly as {@link ./netModel.ts} does. The `netPanel.ts`
- * widget is the DOM/dispatch IO glue (Playwright): it dispatches the SAME `hostGame`/`joinGame`
- * command ids a keybinding would (design Principle 3, one action layer) and records the used code
- * into the C.1 store.
- *
- * The effective code is derived, never a fourth stored copy: CUSTOM reads the typed text, SAVED
- * reads the chosen saved code, RANDOM reads the last generated code. A random source with no code
- * yet generated (the panel generates one on open) yields an empty effective code — Host/Join stay
- * disabled until one is present, so the buttons never dispatch an empty code (agent-principles:
- * negative cases; #3 observable behavior). Validation reuses the SAME `validateGameCode` the join
- * path uses, so the panel can never enable Host/Join for a code the transport would then reject.
+ * This module owns the PURE decisions the panel makes: what the EFFECTIVE code is, whether it is
+ * {@link validateGameCode}-valid (so Host / Join are enabled), the human error for an invalid TYPED
+ * code, and the canonical code the widget stashes/records. Turning the combobox state + the recent-
+ * codes list into the serializable model the DOM renders is DOM-free and deterministic, so it earns
+ * the strict unit + mutation gate exactly as {@link ./netModel.ts} does. Validation reuses the SAME
+ * `validateGameCode` the join path uses, so the panel can never enable Host/Join for a code the
+ * transport would then reject. The placeholder is always valid by construction (it comes from
+ * `generateGameCode`), so an empty input always leaves the buttons enabled.
  */
 
 import { validateGameCode, type CodeError, CODE_ERROR_TEXT } from './netModel.ts';
 
-/** The three picker sources feeding the single game-code field (issue #13). */
-export type NetPanelSource =
-  /** The user types a custom code. */
-  | 'custom'
-  /** The user picks a previously-used code from the recent-codes store (C.1). */
-  | 'saved'
-  /** A randomly-generated unambiguous-alphabet code. */
-  | 'random';
-
 /**
- * The picker's editable state — the single source of truth the DOM reflects and the pure mutations
- * below transform. Each source keeps its own field so switching source and back is lossless (a typed
- * custom code survives a peek at the saved list). The EFFECTIVE code is DERIVED from `source` +
- * these fields by {@link deriveNetPanel}, never stored separately.
+ * The combobox's editable state — the single source of truth the DOM reflects and the pure mutations
+ * below transform. `text` is the raw typed input (any case / whitespace; validated on derive);
+ * `placeholder` is the fresh random code offered when the panel opened (shown greyed as the input's
+ * HTML placeholder, NOT its value); `recent` is the recent-codes list from the C.1 store (newest-
+ * first, canonical). The EFFECTIVE code is DERIVED from `text` + `placeholder` by
+ * {@link deriveNetPanel}, never stored separately.
  */
 export interface NetPanelState {
-  /** Which source is currently active. */
-  readonly source: NetPanelSource;
-  /** The raw text typed in the custom field (any case / whitespace; validated on derive). */
-  readonly custom: string;
-  /** The saved code currently chosen from the dropdown, or `null` when none is chosen. */
-  readonly saved: string | null;
-  /** The last generated random code, or `null` before one has been generated. */
-  readonly random: string | null;
-}
-
-/** The initial picker state: RANDOM source (a code is generated on open), empty custom/saved. */
-export function initialNetPanel(): NetPanelState {
-  return { source: 'random', custom: '', saved: null, random: null };
-}
-
-/** Switch the active source (pure). Leaves every per-source field untouched (lossless switch). */
-export function setPanelSource(state: NetPanelState, source: NetPanelSource): NetPanelState {
-  return { ...state, source };
+  /** The raw text typed in the combobox input (any case / whitespace; validated on derive). */
+  readonly text: string;
+  /** The fresh random code offered when the panel opened — shown as the input's placeholder. */
+  readonly placeholder: string;
+  /** The recent codes to list in the dropdown, newest-first + canonical (from the C.1 store). */
+  readonly recent: readonly string[];
 }
 
 /**
- * Set the custom typed code AND make CUSTOM the active source (pure). Typing is an explicit choice
- * of the custom source, so a keystroke both records the text and selects custom — the field the user
- * is editing is the one the effective code reads from, with no separate "switch to custom" step.
+ * The initial combobox state for a freshly-opened panel: the given fresh random `placeholder` and
+ * the given `recent` list, with an empty typed input (so Host/Join default to the placeholder). The
+ * `placeholder` is generated by the glue via `generateGameCode` and passed in — the randomness stays
+ * out of this pure module.
+ *
+ * @param placeholder The fresh random code to offer as the input's placeholder.
+ * @param recent The recent codes (newest-first, canonical) from the C.1 store.
  */
-export function setPanelCustom(state: NetPanelState, custom: string): NetPanelState {
-  return { ...state, custom, source: 'custom' };
+export function initialNetPanel(
+  placeholder: string,
+  recent: readonly string[],
+): NetPanelState {
+  return { text: '', placeholder, recent };
+}
+
+/** Set the typed text (pure, immutable). Leaves the placeholder + recent list untouched. */
+export function setPanelText(state: NetPanelState, text: string): NetPanelState {
+  return { ...state, text };
 }
 
 /**
- * Choose a saved code AND make SAVED the active source (pure). Picking from the dropdown is an
- * explicit choice of the saved source, mirroring {@link setPanelCustom}.
+ * Fill the input from a chosen recent code (pure). Clicking a dropdown row copies its code into the
+ * typed text so it becomes the effective code (and can then be edited); it is just a targeted
+ * {@link setPanelText}, named for the call site's intent.
  */
-export function setPanelSaved(state: NetPanelState, saved: string): NetPanelState {
-  return { ...state, saved, source: 'saved' };
+export function chooseRecent(state: NetPanelState, code: string): NetPanelState {
+  return setPanelText(state, code);
 }
 
 /**
- * Record a freshly-generated random code AND make RANDOM the active source (pure). The generation
- * itself (drawing from the alphabet via an injected rng) is `generateGameCode` in `netModel.ts`; this
- * only stores the result and selects the random source, so the model stays deterministic under test.
+ * Remove exactly one code from the recent list (pure, immutable). Drops every entry equal to `code`
+ * (the store is deduped, so at most one matches) and leaves the rest in order; the typed text +
+ * placeholder are untouched. The glue also removes it from the C.1 store; this keeps the rendered
+ * model in sync without a re-read.
  */
-export function setPanelRandom(state: NetPanelState, random: string): NetPanelState {
-  return { ...state, random, source: 'random' };
+export function removeRecent(state: NetPanelState, code: string): NetPanelState {
+  return { ...state, recent: state.recent.filter((c) => c !== code) };
 }
 
-/** A saved-code option the dropdown renders (its value; newest-first order comes from the store). */
-export interface NetPanelSavedOption {
-  /** The canonical saved code. */
+/** A recent-code row the dropdown renders (its code; newest-first order comes from the store). */
+export interface NetPanelRecentRow {
+  /** The canonical recent code. */
   readonly code: string;
-  /** Whether this option is the currently-chosen saved code. */
-  readonly selected: boolean;
 }
 
 /** The serializable Network-Game-panel view-model the DOM renders (and Playwright asserts on). */
 export interface NetPanelModel {
-  /** The active source (drives which picker control is highlighted). */
-  readonly source: NetPanelSource;
-  /** The raw custom text to show in the custom field. */
-  readonly customText: string;
-  /** The saved-code dropdown options, newest-first, with the chosen one flagged. */
-  readonly savedOptions: readonly NetPanelSavedOption[];
-  /** The generated random code to show (or `null` before one is generated). */
-  readonly randomCode: string | null;
+  /** The raw typed text to show in the combobox input. */
+  readonly text: string;
+  /** The placeholder (fresh random code) to show greyed in the empty input. */
+  readonly placeholder: string;
+  /** The dropdown rows (recent codes, newest-first). */
+  readonly recentRows: readonly NetPanelRecentRow[];
   /**
-   * The EFFECTIVE code the single field shows for the active source — the raw custom text, the chosen
-   * saved code, or the generated random code. May be an empty string (custom untouched / no random
-   * generated yet); {@link codeValid} then governs whether the buttons are enabled.
+   * The EFFECTIVE code Host/Join act on: the trimmed typed text when non-empty, else the placeholder.
+   * Never empty in practice (the placeholder is always a valid generated code), so an untouched input
+   * hosts/joins the offered random room.
    */
   readonly effectiveCode: string;
   /**
    * The CANONICAL (trimmed, upper-cased) effective code when it validates, or `null` when it does
-   * not — this is exactly what the widget stashes via `setPendingJoinCode` and records into the C.1
-   * store, so the panel never hands a malformed code to the transport or the store.
+   * not — exactly what the widget stashes via `setPendingJoinCode` and records into the C.1 store, so
+   * the panel never hands a malformed code to the transport or the store.
    */
   readonly canonicalCode: string | null;
   /** Whether the effective code validates (so Host + Join are enabled). */
   readonly codeValid: boolean;
   /**
-   * The human error for the effective code when it is invalid, or `null` when valid. Reuses the SAME
-   * {@link CODE_ERROR_TEXT} labels the inline join validation uses (SSOT), so the panel and the join
-   * path never disagree on why a code is rejected.
+   * The human error for the TYPED code when it is invalid, or `null` when valid. Reuses the SAME
+   * {@link CODE_ERROR_TEXT} labels the inline join validation uses (SSOT). Only a non-empty typed
+   * code can be invalid — an empty input falls back to the always-valid placeholder, so there is no
+   * error to show then.
    */
   readonly codeError: string | null;
 }
 
 /**
- * Derive the {@link NetPanelModel} from the picker {@link NetPanelState} + the recent-codes list.
- * Pure and deterministic:
- *   - **effectiveCode** — the field feeding Host/Join for the active source: `custom` → the raw typed
- *     text; `saved` → the chosen saved code (or `''` when none is chosen); `random` → the generated
- *     code (or `''` before one is generated).
+ * Derive the {@link NetPanelModel} from the combobox {@link NetPanelState}. Pure and deterministic:
+ *   - **effectiveCode** — `state.text.trim()` when non-empty, else `state.placeholder`. So an
+ *     untouched input uses the offered random code; typing overrides it.
  *   - **canonicalCode / codeValid / codeError** — run the effective code through the SAME
- *     {@link validateGameCode} the join path uses. A valid code yields its canonical form and
- *     enables the buttons; an invalid one yields `null` + the human reason and disables them.
- *   - **savedOptions** — the recent codes verbatim (already newest-first, deduped, canonical from the
- *     C.1 store), each flagged if it is the chosen saved code.
+ *     {@link validateGameCode} the join path uses. A valid code yields its canonical form and enables
+ *     the buttons; an invalid one yields `null` + the human reason and disables them. The placeholder
+ *     is valid by construction, so only a bad TYPED code can disable the buttons.
+ *   - **recentRows** — the recent codes verbatim (already newest-first, deduped, canonical from the
+ *     C.1 store), one row each for the dropdown.
  *
- * @param state The picker state.
- * @param recentCodes The recent codes (newest-first, canonical) from the C.1 store.
+ * @param state The combobox state.
  * @returns The serializable model the DOM renders.
  */
-export function deriveNetPanel(
-  state: NetPanelState,
-  recentCodes: readonly string[],
-): NetPanelModel {
-  const effectiveCode = effectiveCodeFor(state);
+export function deriveNetPanel(state: NetPanelState): NetPanelModel {
+  const typed = state.text.trim();
+  const effectiveCode = typed !== '' ? typed : state.placeholder;
+
   const validation = validateGameCode(effectiveCode);
   const codeValid = validation.ok;
   const canonicalCode = validation.ok ? validation.code : null;
   const codeError = validation.ok ? null : codeErrorText(validation.reason);
 
-  const savedOptions: NetPanelSavedOption[] = recentCodes.map((code) => ({
-    code,
-    selected: code === state.saved,
-  }));
+  const recentRows: NetPanelRecentRow[] = state.recent.map((code) => ({ code }));
 
   return {
-    source: state.source,
-    customText: state.custom,
-    savedOptions,
-    randomCode: state.random,
+    text: state.text,
+    placeholder: state.placeholder,
+    recentRows,
     effectiveCode,
     canonicalCode,
     codeValid,
     codeError,
   };
-}
-
-/** The effective code for the active source (the branch-per-source core of {@link deriveNetPanel}). */
-function effectiveCodeFor(state: NetPanelState): string {
-  switch (state.source) {
-    case 'custom':
-      return state.custom;
-    case 'saved':
-      return state.saved ?? '';
-    case 'random':
-      return state.random ?? '';
-  }
 }
 
 /** Map a validation reason to its human label (SSOT: the same table the inline join error uses). */

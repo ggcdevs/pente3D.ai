@@ -301,11 +301,12 @@ export default defineConfig({
           functions: 100,
           lines: 100,
         },
-        // Pure Network-Game-panel view-model (Task C.2, issue #13 picker): the picker state (custom /
-        // saved / random) + recent codes → the effective code, its validation/canonicalization, and
-        // Host/Join button enablement. THREE-free / DOM-free — the DOM/dispatch + scope-push widget
-        // glue (`widgets/netPanel.ts`) is the Playwright-verified IO boundary, excluded above. In the
-        // mutation scope and held to the hard 100% floor. Do not weaken (agent-principles #6).
+        // Pure Network-Game-panel view-model (issue #13 / #16 combobox): the combobox state (typed
+        // text + random placeholder + recent list) → the effective code (typed || placeholder), its
+        // validation/canonicalization, Host/Join button enablement, and the recent-row helpers.
+        // THREE-free / DOM-free — the DOM/dispatch + scope-push widget glue (`widgets/netPanel.ts`) is
+        // the Playwright-verified IO boundary, excluded above. In the mutation scope and held to the
+        // hard 100% floor. Do not weaken (agent-principles #6).
         'src/ui/widgets/netPanelModel.ts': {
           statements: 100,
           branches: 100,

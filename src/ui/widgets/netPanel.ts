@@ -1,38 +1,45 @@
 /**
- * Network-Game drawer panel widget (Task C.2 — GitHub issue #13) — the DOM/dispatch + input-scope IO
- * glue for the pure {@link deriveNetPanel} view-model (`netPanelModel.ts`). Picker design resolved on
- * issue #13; plan of record `planning/2026-07-21-menu-live-settings-batch.md` step 7 (Increment C).
+ * Network-Game drawer panel widget (issue #13 / #16) — the DOM/dispatch + input-scope IO glue for the
+ * pure {@link deriveNetPanel} view-model (`netPanelModel.ts`). Picker SIMPLIFIED on issue #16 from the
+ * three-source (custom/saved/random) tabs to ONE unified combobox; plan of record
+ * `planning/2026-07-21-menu-live-settings-batch.md`.
  *
  * It relocates the Host/Join INITIATION out of the always-on `connectionStatus` overlay INTO the
  * non-blocking drawer (issue #13 / #24): the menu's "Network Game" entry dispatches `openNetwork`,
- * which opens THIS panel. The panel carries a SINGLE game-code field fed by a picker with three
- * sources (custom / saved / random), then a Host button (create this room) and a Join button (enter
- * this room). It reuses Increment B's non-blocking-panel-in-drawer pattern EXACTLY (mirrors
- * `settings.ts`): opening PUSHES a NON-blocking scope ({@link NET_PANEL_SCOPE_BLOCKING} === false) so
- * the board stays interactive under it, and closing POPS it — every close path (Escape, outside-click,
- * the ✕ button, choosing Host/Join) pops exactly once, so the stack never leaks.
+ * which opens THIS panel. The panel carries a SINGLE game-code COMBOBOX — a text input plus a dropdown
+ * of recently-used codes — then a Host button (create this room) and a Join button (enter this room).
+ * It reuses Increment B's non-blocking-panel-in-drawer pattern EXACTLY (mirrors `settings.ts`):
+ * opening PUSHES a NON-blocking scope ({@link NET_PANEL_SCOPE_BLOCKING} === false) so the board stays
+ * interactive under it, and closing POPS it — every close path (Escape, outside-click, the ✕ button,
+ * choosing Host/Join) pops exactly once, so the stack never leaks.
+ *
+ * The combobox input shows a FRESH random code as its PLACEHOLDER (generated via `generateGameCode`
+ * when the panel opens — greyed, NOT the value). The EFFECTIVE code Host/Join act on is the typed
+ * text when non-empty, else that placeholder (so hosting without typing uses the offered random
+ * room). The dropdown lists the recent codes (newest-first from the C.1 store); clicking a row fills
+ * the input, and each row's remove control deletes just that code from the store. All these DECISIONS
+ * (effective code, validation, button enablement) live in the pure model; this file only paints the
+ * model onto DOM, forwards clicks, generates the random placeholder via the injected rng, and
+ * mutates the C.1 store.
  *
  * It DISPATCHES the SAME command ids a keybinding / the old inline controls fired (design Principle 3,
  * one action layer): Host → {@link HOST_GAME_COMMAND}; Join → stash the validated code via
  * `setPendingJoinCode` THEN dispatch {@link JOIN_GAME_COMMAND}. It does NOT reimplement the net
  * session/transport — that stays in `session.ts`/`appSession.ts`. On host/join it records the used
- * code into the C.1 recent-codes store (`recordRecentCode`) so it feeds the "saved" dropdown next
- * time. The picker DECISIONS (effective code, validation, button enablement) all live in the pure
- * model; this file only paints the model onto DOM, forwards clicks, and generates a random code via
- * the injected rng. It touches `document`, so it is the Playwright-verified IO boundary (asserted on
- * `window.__pente` getNet() + real interactions + screenshots), not unit/mutation-gated. `data-testid`s
- * expose the rendered model + open state for readback (agent-principles #3: observable behavior).
+ * code into the C.1 recent-codes store (`recordRecentCode`) so it feeds the dropdown next time. It
+ * touches `document`, so it is the Playwright-verified IO boundary (asserted on `window.__pente`
+ * getNet() + real interactions + screenshots), not unit/mutation-gated. `data-testid`s expose the
+ * rendered model + open state for readback (agent-principles #3: observable behavior).
  */
 
 import type { Widget, WidgetFactory } from '../registry.ts';
 import { HOST_GAME_COMMAND, JOIN_GAME_COMMAND, generateGameCode } from './netModel.ts';
-import { listRecentCodes, recordRecentCode } from './recentCodes.ts';
+import { listRecentCodes, recordRecentCode, removeRecentCode } from './recentCodes.ts';
 import {
   initialNetPanel,
-  setPanelSource,
-  setPanelCustom,
-  setPanelSaved,
-  setPanelRandom,
+  setPanelText,
+  chooseRecent,
+  removeRecent,
   deriveNetPanel,
   type NetPanelState,
 } from './netPanelModel.ts';
@@ -89,7 +96,7 @@ function netPanelScope(): NetPanelScope {
 /**
  * Build the Network-Game-panel {@link WidgetFactory}. The mounted element is a hidden left-edge
  * drawer panel (no visible trigger — opened by the `openNetwork` command). It is (re)populated from
- * the pure model each time it opens (fresh recent codes + a fresh random code), so the "saved"
+ * the pure model each time it opens (a fresh random placeholder + the current recent codes), so the
  * dropdown always reflects the current store and a fresh code is offered each open.
  */
 export function netPanelWidget(): WidgetFactory {
@@ -122,38 +129,41 @@ export function netPanelWidget(): WidgetFactory {
       closeButton.textContent = '✕';
       panel.appendChild(closeButton);
 
-      // --- Source picker: three radio-like buttons (custom / saved / random). --------------------
-      const sources = doc.createElement('div');
-      sources.className = 'pente-netpanel-sources';
-      const customBtn = sourceButton(doc, sources, 'custom', 'Custom');
-      const savedBtn = sourceButton(doc, sources, 'saved', 'Saved');
-      const randomBtn = sourceButton(doc, sources, 'random', 'Random');
-      panel.appendChild(sources);
+      // --- The unified combobox: a text input + a dropdown-toggle chevron. -------------------------
+      const combo = doc.createElement('div');
+      combo.className = 'pente-netpanel-combo';
 
-      // --- The single game-code field feeding Host/Join. Editing it selects the custom source. ---
       const codeInput = doc.createElement('input');
       codeInput.type = 'text';
       codeInput.className = 'pente-netpanel-code-input';
       codeInput.setAttribute('data-testid', 'netpanel-code-input');
-      codeInput.setAttribute('placeholder', 'Game code');
       codeInput.setAttribute('aria-label', 'Game code');
-      panel.appendChild(codeInput);
+      codeInput.setAttribute('autocomplete', 'off');
+      combo.appendChild(codeInput);
 
-      // --- The saved-code dropdown (shown when the saved source is active). ----------------------
-      const savedSelect = doc.createElement('select');
-      savedSelect.className = 'pente-netpanel-saved';
-      savedSelect.setAttribute('data-testid', 'netpanel-saved');
-      savedSelect.setAttribute('aria-label', 'Saved game codes');
-      panel.appendChild(savedSelect);
+      const toggle = doc.createElement('button');
+      toggle.type = 'button';
+      toggle.className = 'pente-netpanel-toggle';
+      toggle.setAttribute('data-testid', 'netpanel-toggle');
+      toggle.setAttribute('aria-label', 'Show recent codes');
+      toggle.setAttribute('aria-expanded', 'false');
+      toggle.setAttribute('aria-controls', 'netpanel-recent-list');
+      toggle.textContent = '▾';
+      combo.appendChild(toggle);
 
-      // --- Regenerate button (shown when the random source is active). ---------------------------
-      const regenBtn = doc.createElement('button');
-      regenBtn.className = 'pente-netpanel-regen';
-      regenBtn.setAttribute('data-testid', 'netpanel-regen');
-      regenBtn.textContent = 'New random code';
-      panel.appendChild(regenBtn);
+      panel.appendChild(combo);
 
-      // --- Inline validation error (invalid effective code). -------------------------------------
+      // --- The recent-codes dropdown (revealed by the toggle). ------------------------------------
+      const recentList = doc.createElement('ul');
+      recentList.className = 'pente-netpanel-recent';
+      recentList.id = 'netpanel-recent-list';
+      recentList.setAttribute('data-testid', 'netpanel-recent');
+      recentList.setAttribute('role', 'listbox');
+      recentList.setAttribute('aria-label', 'Recent game codes');
+      recentList.hidden = true;
+      panel.appendChild(recentList);
+
+      // --- Inline validation error (invalid typed code). -----------------------------------------
       const error = doc.createElement('div');
       error.className = 'pente-netpanel-error';
       error.setAttribute('data-testid', 'netpanel-error');
@@ -178,47 +188,26 @@ export function netPanelWidget(): WidgetFactory {
       element.appendChild(panel);
 
       let open = false;
-      // The picker state (the single source of truth the pure model reads). Rebuilt on each open.
-      let state: NetPanelState = initialNetPanel();
+      let dropdownOpen = false;
+      // The combobox state (the single source of truth the pure model reads). Rebuilt on each open.
+      let state: NetPanelState = initialNetPanel(generateGameCode(Math.random), listRecentCodes());
 
-      /** Rebuild the DOM from the pure model derived off the picker state + the live recent codes. */
+      /** Rebuild the DOM from the pure model derived off the combobox state. */
       function render(): void {
-        const model = deriveNetPanel(state, listRecentCodes());
+        const model = deriveNetPanel(state);
 
-        element.setAttribute('data-source', model.source);
+        // The input shows the raw typed text as its VALUE and the fresh random code as its PLACEHOLDER
+        // (greyed, not the value) — an untouched input hosts/joins the placeholder (agent-principles
+        // #3: the placeholder is observable via the input's `placeholder` attribute).
+        if (codeInput.value !== model.text) codeInput.value = model.text;
+        codeInput.setAttribute('placeholder', model.placeholder);
 
-        // Highlight the active source button.
-        for (const [btn, src] of [
-          [customBtn, 'custom'],
-          [savedBtn, 'saved'],
-          [randomBtn, 'random'],
-        ] as const) {
-          btn.setAttribute('data-active', String(model.source === src));
+        // Rebuild the dropdown rows: each row is a clickable code + a remove control.
+        recentList.replaceChildren();
+        for (const row of model.recentRows) {
+          recentList.appendChild(recentRow(doc, row.code, chooseCode, removeCode));
         }
-
-        // The single field shows the effective code; only DIRECTLY editable in the custom source
-        // (saved/random drive it). Keeping it read-only elsewhere prevents an edit that would silently
-        // desync from the chosen source without also switching to custom.
-        codeInput.value = model.effectiveCode;
-        codeInput.readOnly = model.source !== 'custom';
-
-        // Saved dropdown: rebuild options from the store; shown only in the saved source.
-        savedSelect.replaceChildren();
-        const placeholder = doc.createElement('option');
-        placeholder.value = '';
-        placeholder.textContent =
-          model.savedOptions.length === 0 ? 'No saved codes yet' : 'Pick a saved code…';
-        placeholder.selected = model.savedOptions.every((o) => !o.selected);
-        savedSelect.appendChild(placeholder);
-        for (const opt of model.savedOptions) {
-          const o = doc.createElement('option');
-          o.value = opt.code;
-          o.textContent = opt.code;
-          o.selected = opt.selected;
-          savedSelect.appendChild(o);
-        }
-        savedSelect.hidden = model.source !== 'saved';
-        regenBtn.hidden = model.source !== 'random';
+        toggle.disabled = model.recentRows.length === 0;
 
         // Error line + button enablement come straight from the pure model.
         if (model.codeError !== null) {
@@ -231,42 +220,43 @@ export function netPanelWidget(): WidgetFactory {
         hostButton.disabled = !model.codeValid;
         joinButton.disabled = !model.codeValid;
         element.setAttribute('data-code-valid', String(model.codeValid));
+        element.setAttribute('data-recent-count', String(model.recentRows.length));
       }
 
-      /** Regenerate the random code from the injected rng and re-render. */
-      function regenerate(): void {
-        state = setPanelRandom(state, generateGameCode(Math.random));
+      /** Show/hide the recent dropdown (reflected on the toggle's aria-expanded). */
+      function setDropdown(nextOpen: boolean): void {
+        dropdownOpen = nextOpen;
+        recentList.hidden = !nextOpen;
+        toggle.setAttribute('aria-expanded', String(nextOpen));
+        element.setAttribute('data-dropdown-open', String(nextOpen));
+      }
+
+      /** Fill the input from a chosen recent code, then collapse the dropdown. */
+      function chooseCode(code: string): void {
+        state = chooseRecent(state, code);
         render();
+        setDropdown(false);
+        codeInput.focus();
+      }
+
+      /** Remove a recent code from BOTH the C.1 store and the rendered model, keeping them in sync. */
+      function removeCode(code: string): void {
+        removeRecentCode(code);
+        state = removeRecent(state, code);
+        render();
+        // Collapse if the list just emptied (the toggle is now disabled and nothing is left to show).
+        if (state.recent.length === 0) setDropdown(false);
       }
 
       // --- Wiring ---------------------------------------------------------------------------------
-      customBtn.addEventListener('click', () => {
-        state = setPanelSource(state, 'custom');
-        render();
-        codeInput.focus();
-      });
-      savedBtn.addEventListener('click', () => {
-        state = setPanelSource(state, 'saved');
-        render();
-      });
-      randomBtn.addEventListener('click', () => {
-        // Selecting random with no code yet generates one; otherwise keep the current random code.
-        if (state.random === null) regenerate();
-        else {
-          state = setPanelSource(state, 'random');
-          render();
-        }
-      });
       codeInput.addEventListener('input', () => {
-        state = setPanelCustom(state, codeInput.value);
+        state = setPanelText(state, codeInput.value);
         render();
       });
-      savedSelect.addEventListener('change', () => {
-        if (savedSelect.value === '') return; // the placeholder — no choice made
-        state = setPanelSaved(state, savedSelect.value);
-        render();
+      toggle.addEventListener('click', () => {
+        if (toggle.disabled) return;
+        setDropdown(!dropdownOpen);
       });
-      regenBtn.addEventListener('click', () => regenerate());
 
       hostButton.addEventListener('click', () => act(HOST_GAME_COMMAND));
       joinButton.addEventListener('click', () => act(JOIN_GAME_COMMAND));
@@ -280,10 +270,10 @@ export function netPanelWidget(): WidgetFactory {
        * (agent-principles: never dispatch an empty/malformed code to the transport).
        */
       function act(commandId: string): void {
-        const model = deriveNetPanel(state, listRecentCodes());
+        const model = deriveNetPanel(state);
         if (model.canonicalCode === null) return; // invalid — never dispatch (buttons are disabled)
         const canonical = model.canonicalCode;
-        // Remember the code for next time (feeds the "saved" dropdown). Canonical → the store keeps it.
+        // Remember the code for next time (feeds the dropdown). Canonical → the store keeps it.
         recordRecentCode(canonical);
         // Stash the chosen code for BOTH actions: Host creates this room, Join enters it (the app's
         // host/join hooks consume the stashed code). The command id itself stays argument-free.
@@ -311,8 +301,9 @@ export function netPanelWidget(): WidgetFactory {
       function openPanel(): void {
         if (open) return; // idempotent — a second open must not push a second scope
         open = true;
-        // Fresh picker each open: a fresh random code offered, and the saved list re-read from the store.
-        state = setPanelRandom(initialNetPanel(), generateGameCode(Math.random));
+        // Fresh combobox each open: a fresh random placeholder generated, the recent list re-read.
+        state = initialNetPanel(generateGameCode(Math.random), listRecentCodes());
+        setDropdown(false);
         render();
         element.classList.add('pente-netpanel-modal--open');
         element.setAttribute('data-open', 'true');
@@ -324,6 +315,7 @@ export function netPanelWidget(): WidgetFactory {
       function close(): void {
         if (!open) return; // idempotent — closing when closed must not pop a scope
         open = false;
+        setDropdown(false);
         element.classList.remove('pente-netpanel-modal--open');
         element.setAttribute('data-open', 'false');
         doc.removeEventListener('keydown', onKeyDown);
@@ -339,7 +331,7 @@ export function netPanelWidget(): WidgetFactory {
 
       return {
         element,
-        // The panel is driven by its own picker state, not the game state — `update` is a no-op (the
+        // The panel is driven by its own combobox state, not the game state — `update` is a no-op (the
         // open panel is rebuilt from the store on open; nothing to repaint on a board change).
         update(): void {},
         dispose(): void {
@@ -350,18 +342,38 @@ export function netPanelWidget(): WidgetFactory {
   };
 }
 
-/** Append a source-selector button to `parent`; returns it for wiring + active-state marking. */
-function sourceButton(
+/**
+ * Build one recent-code dropdown row: a clickable code cell (fills the input) plus a remove control
+ * (drops just that code). The remove button carries an accessible label naming the code it removes.
+ */
+function recentRow(
   doc: Document,
-  parent: HTMLElement,
-  source: string,
-  label: string,
-): HTMLButtonElement {
-  const btn = doc.createElement('button');
-  btn.className = `pente-netpanel-source pente-netpanel-source--${source}`;
-  btn.setAttribute('data-testid', `netpanel-source-${source}`);
-  btn.setAttribute('data-source', source);
-  btn.textContent = label;
-  parent.appendChild(btn);
-  return btn;
+  code: string,
+  onChoose: (code: string) => void,
+  onRemove: (code: string) => void,
+): HTMLLIElement {
+  const li = doc.createElement('li');
+  li.className = 'pente-netpanel-recent-row';
+  li.setAttribute('role', 'option');
+  li.setAttribute('data-testid', 'netpanel-recent-row');
+  li.setAttribute('data-code', code);
+
+  const codeBtn = doc.createElement('button');
+  codeBtn.type = 'button';
+  codeBtn.className = 'pente-netpanel-recent-code';
+  codeBtn.setAttribute('data-testid', 'netpanel-recent-code');
+  codeBtn.textContent = code;
+  codeBtn.addEventListener('click', () => onChoose(code));
+  li.appendChild(codeBtn);
+
+  const removeBtn = doc.createElement('button');
+  removeBtn.type = 'button';
+  removeBtn.className = 'pente-netpanel-recent-remove';
+  removeBtn.setAttribute('data-testid', 'netpanel-recent-remove');
+  removeBtn.setAttribute('aria-label', `Remove ${code} from recent codes`);
+  removeBtn.textContent = '×';
+  removeBtn.addEventListener('click', () => onRemove(code));
+  li.appendChild(removeBtn);
+
+  return li;
 }

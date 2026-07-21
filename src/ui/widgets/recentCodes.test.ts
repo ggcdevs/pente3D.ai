@@ -3,6 +3,7 @@ import fc from 'fast-check';
 import {
   listRecentCodes,
   recordRecentCode,
+  removeRecentCode,
   clearRecentCodes,
   RECENT_CODES_CAP,
   RECENT_CODES_KEY,
@@ -190,6 +191,79 @@ describe('recentCodes — cap', () => {
     const b = code(1);
     storage.setItem(RECENT_CODES_KEY, JSON.stringify([a, b, a, b, a]));
     expect(listRecentCodes(storage)).toEqual([a, b]);
+  });
+});
+
+describe('removeRecentCode — drops exactly one, keeps the rest ordered', () => {
+  it('removes the named code, leaving the others in newest-first order', () => {
+    const a = code(0);
+    const b = code(1);
+    const c = code(2);
+    recordRecentCode(a, storage);
+    recordRecentCode(b, storage);
+    recordRecentCode(c, storage); // list is now [c, b, a]
+    removeRecentCode(b, storage);
+    expect(listRecentCodes(storage)).toEqual([c, a]);
+  });
+
+  it('removes the FIRST (newest) code', () => {
+    const a = code(0);
+    const b = code(1);
+    recordRecentCode(a, storage);
+    recordRecentCode(b, storage); // [b, a]
+    removeRecentCode(b, storage);
+    expect(listRecentCodes(storage)).toEqual([a]);
+  });
+
+  it('removes the LAST (oldest) code', () => {
+    const a = code(0);
+    const b = code(1);
+    recordRecentCode(a, storage);
+    recordRecentCode(b, storage); // [b, a]
+    removeRecentCode(a, storage);
+    expect(listRecentCodes(storage)).toEqual([b]);
+  });
+
+  it('matches a differently-cased / padded target against the stored canonical code', () => {
+    const a = code(0);
+    const b = code(1);
+    recordRecentCode(a, storage);
+    recordRecentCode(b, storage); // [b, a]
+    removeRecentCode(`  ${a.toLowerCase()}  `, storage);
+    expect(listRecentCodes(storage)).toEqual([b]);
+  });
+
+  it('removing an absent code leaves the list unchanged (drops nothing)', () => {
+    const a = code(0);
+    const b = code(1);
+    recordRecentCode(a, storage);
+    recordRecentCode(b, storage); // [b, a]
+    removeRecentCode(code(5), storage);
+    expect(listRecentCodes(storage)).toEqual([b, a]);
+  });
+
+  it('a non-validating target matches nothing and drops nothing (rewrites the list intact)', () => {
+    const a = code(0);
+    recordRecentCode(a, storage); // [a]
+    removeRecentCode('ABC', storage); // too short → no canonical form → matches nothing
+    expect(listRecentCodes(storage)).toEqual([a]);
+  });
+
+  it('removing the only code empties the list', () => {
+    const a = code(0);
+    recordRecentCode(a, storage);
+    removeRecentCode(a, storage);
+    expect(listRecentCodes(storage)).toEqual([]);
+    // The record persists as an empty array (not removed), still reading as [].
+    expect(JSON.parse(storage.getItem(RECENT_CODES_KEY) as string)).toEqual([]);
+  });
+
+  it('is a no-op with a null store (no throw, nothing persisted)', () => {
+    expect(() => removeRecentCode(code(0), null)).not.toThrow();
+    // Prove it did not touch the injected storage either.
+    recordRecentCode(code(1), storage);
+    removeRecentCode(code(1), null);
+    expect(listRecentCodes(storage)).toEqual([code(1)]);
   });
 });
 

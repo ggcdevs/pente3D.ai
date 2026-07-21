@@ -152,9 +152,9 @@ export const CODE_ERROR_TEXT: Record<CodeError, string> = {
  * Derive the {@link NetModel} from the live {@link NetSessionState}. Pure and deterministic:
  *   - **panel** — `offline` → `controls`; `conflict` → `conflict`; otherwise (`connecting` /
  *     `connected`) → `status`.
- *   - **statusText** — offline: a prompt to host or join; connecting: `Connecting…`; connected:
- *     `Opponent connected` iff the peer is present, else `Waiting for opponent…`; conflict: a
- *     stopped-game message.
+ *   - **statusText** — offline: empty (the board shows nothing while offline, issue #16 — no board
+ *     advertisement); connecting: `Connecting…`; connected: `Opponent connected` iff the peer is
+ *     present, else `Waiting for opponent…`; conflict: a stopped-game message.
  *   - **seatText** — `You are White` / `You are Black` once a seat is held, else `null`.
  *   - **conflict** — true iff the phase is `conflict`; `conflictText` carries the banner copy then.
  *   - **joinErrorText** — the human label for a post-dispatch `joinError`, else `null`.
@@ -184,7 +184,10 @@ export function deriveNet(state: NetSessionState): NetModel {
 function deriveStatusText(state: NetSessionState): string {
   switch (state.phase) {
     case 'offline':
-      return 'Open the menu → Network Game to host or join.';
+      // No board advertisement (issue #16): the board shows NOTHING while offline — no menu feature
+      // advertises itself on the board. The Network-Game panel (menu → Network Game) is where a game
+      // is hosted/joined; this widget only reflects a LIVE session's status once one exists.
+      return '';
     case 'connecting':
       return 'Connecting…';
     case 'connected':

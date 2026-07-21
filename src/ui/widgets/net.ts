@@ -16,8 +16,9 @@
  * Task C.2 / issue #13: the Host/Join INITIATION controls have MOVED into the non-blocking drawer's
  * "Network Game" panel (`netPanel.ts`) with a code picker. This widget no longer HOSTS/JOINS — it is
  * now the PERSISTENT connection/seat/turn/conflict STATUS display that must stay visible on the board
- * (it must NOT be buried in the transient drawer). While offline it shows a passive prompt pointing at
- * the menu; once connected it shows the live code/seat/status; a fork shows the conflict banner.
+ * (it must NOT be buried in the transient drawer). While offline it shows NOTHING (issue #16 removed
+ * the passive "open the menu" board hint — no menu feature advertises itself on the board); once
+ * connected it shows the live code/seat/status; a fork shows the conflict banner.
  *
  * All panel/label/banner DECISIONS live in the pure model; this file only paints the model onto DOM
  * and copies the code to the clipboard. It touches `document`, so it is the Playwright-verified IO
@@ -79,17 +80,13 @@ export function netWidget(): WidgetFactory {
       element.className = 'pente-widget pente-widget--net';
       element.setAttribute('data-testid', 'net-widget');
 
-      // --- Controls panel (offline): a PASSIVE prompt pointing at the menu (Task C.2 / issue #13 —
-      //     Host/Join initiation moved to the drawer's Network-Game panel; this widget no longer
-      //     initiates, it only reflects status). The status line below carries the offline prompt copy;
-      //     this panel is otherwise empty of controls now.
+      // --- Controls panel (offline): EMPTY (issue #16). Host/Join initiation moved to the drawer's
+      //     Network-Game panel (Task C.2 / issue #13), and the passive "open the menu" board hint was
+      //     removed (issue #16 — no menu feature advertises itself on the board). While offline this
+      //     panel simply shows nothing; the widget reflects status only once a session is live.
       const controls = doc.createElement('div');
       controls.className = 'pente-net-controls';
       controls.setAttribute('data-testid', 'net-controls');
-      const offlinePrompt = doc.createElement('div');
-      offlinePrompt.className = 'pente-net-offline-prompt';
-      offlinePrompt.setAttribute('data-testid', 'net-offline-prompt');
-      controls.appendChild(offlinePrompt);
       element.appendChild(controls);
 
       // --- Status panel (connecting/connected): the game code + copy, status line, seat. --------
@@ -152,9 +149,8 @@ export function netWidget(): WidgetFactory {
         status.hidden = model.panel !== 'status';
         conflict.hidden = model.panel !== 'conflict';
 
-        // Offline prompt (controls panel): the same status copy, pointing the user at the menu where
-        // Host/Join now live (Task C.2). The status panel's own line carries connecting/connected copy.
-        offlinePrompt.textContent = model.statusText;
+        // Status line (status panel): the connecting/connected copy. Offline yields an empty
+        // statusText (issue #16 removed the board hint), and the controls panel it drives is empty.
         statusLine.textContent = model.statusText;
 
         // Code + copy row: shown only when there is a code to show.

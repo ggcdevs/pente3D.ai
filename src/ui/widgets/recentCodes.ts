@@ -141,6 +141,35 @@ function dedupeCap(codes: string[]): string[] {
 }
 
 /**
+ * Remove exactly one code from the stored recent list (the picker's per-row "remove" affordance —
+ * issue #16), leaving every other code in its newest-first position, and persist the shortened list.
+ * Pure of surprises:
+ *   - the code to drop is canonicalized (via {@link validateGameCode}) before comparing, so a
+ *     differently-cased or padded `code` still matches the stored canonical entry; a code that does
+ *     not validate matches nothing (the store only ever holds canonical codes) and the list is
+ *     rewritten unchanged;
+ *   - the list is read through the same validating reader (so a corrupt record can't poison the
+ *     write) and only the matching entry is filtered out — at most one, since the store is deduped;
+ *   - with no store available (`resolveStorage` → null) the call is a no-op, exactly like the other
+ *     writers.
+ *
+ * @param code The code to remove (any case / surrounding whitespace tolerated).
+ * @param storage Backing store; omit to use `globalThis.localStorage`, pass `null` to force no-op.
+ */
+export function removeRecentCode(code: string, storage?: Storage | null): void {
+  const store = resolveStorage(storage);
+  if (store === null) return;
+
+  // Canonicalize the target so a differently-cased remove still matches the stored canonical entry.
+  // A non-validating `code` yields no canonical form; comparing against `null` then drops nothing.
+  const result = validateGameCode(code);
+  const target = result.ok ? result.code : null;
+
+  const remaining = listRecentCodes(store).filter((c) => c !== target);
+  store.setItem(RECENT_CODES_KEY, JSON.stringify(remaining));
+}
+
+/**
  * Remove the stored recent-codes record entirely (e.g. a "clear history" affordance). With no store
  * available the call does nothing. Mirrors config.ts `resetConfig`'s `removeItem` no-op-on-absent.
  */
