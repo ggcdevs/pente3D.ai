@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import mqtt from 'mqtt';
 import relay from '../src/config/defaults/relay.json' with { type: 'json' };
+import { NET_PANEL_SCOPE_ID } from '../src/ui/widgets/netPanel.ts';
 
 /**
  * Task 6.7 e2e — the TWO-BROWSER, LIVE-RELAY cross-component integration test (issues #4/#5).
@@ -14,6 +15,17 @@ import relay from '../src/config/defaults/relay.json' with { type: 'json' };
  * localStorage → distinct `playerId` → distinct seats), talking over the *real* MQTT broker
  * (`relay.json`) with NO test transport injected. That is exactly the seam the wiring bug lived in, so
  * this spec is the one that bites if the 6.1 render-adoption / session-route wiring regresses.
+ *
+ * ## Driven through the C.2 drawer Network-Game panel (issue #13, Task C.3)
+ *
+ * Host and Join are initiated the way a real user does it — through the NON-blocking drawer's
+ * "Network Game" panel (`netPanel.ts`), NOT by dispatching the raw `hostGame`/`joinGame` commands.
+ * `host()` opens the menu → "Network Game", takes the panel's RANDOM code, and clicks the panel's Host
+ * button; `join()` opens the panel on the ISOLATED second context, types the host's code into the
+ * panel's CUSTOM field, and clicks its Join button. So this spec now also bites if the C.2 panel wiring
+ * (the menu `openNetwork` → panel open, the Host/Join buttons → `setPendingJoinCode` + command dispatch)
+ * regresses: a broken picker→session seam yields no connection, no seat, no cross-context move — every
+ * downstream assertion here fails, not just the panel's own hermetic `netPanel.spec.ts`.
  *
  * Every assertion is proof-by-BEHAVIOR, never a log line (agent-principles #3): the *other* context's
  * rendered board (`getState`/`getPieces`) actually receiving the move over the live relay, both
@@ -78,6 +90,7 @@ type Pente = {
   getHeadHash(): string | null;
   getNet(): { phase: string; seat: string | null; code: string | null } | null;
   getTurnGate(): { offTurnBlocks: number } | null;
+  getInput(): { scopes: string[] } | null;
   place(coords: [number, number, number]): unknown;
   dispatch(id: string): boolean | null;
   resync(): void;
@@ -111,7 +124,11 @@ async function bootIsolated(browser: Browser): Promise<{ context: BrowserContext
       typeof p.getNet === 'function' &&
       typeof p.getHeadHash === 'function' &&
       typeof p.place === 'function' &&
-      typeof p.resync === 'function'
+      typeof p.resync === 'function' &&
+      // Host/Join are driven through the drawer, so the menu button + the Network-Game panel must be
+      // mounted before a test opens them (Task C.3).
+      !!document.querySelector('[data-widget-id="menuButton"]') &&
+      !!document.querySelector('[data-testid="netpanel-modal"]')
     );
   });
   // The session wires up async (opens IndexedDB); wait until it reports an (offline) readout.
@@ -120,6 +137,30 @@ async function bootIsolated(browser: Browser): Promise<{ context: BrowserContext
     return !!p && p.getNet() !== null;
   });
   return { context, page };
+}
+
+/**
+ * Open the drawer's "Network Game" panel the real-user way: click the menu button, choose the
+ * "Network Game" entry (dispatches `openNetwork`), and wait for the panel to slide open. Asserts the
+ * NON-blocking `networkGame` scope is on the input stack (the board stays live under it) so a broken
+ * `openNetwork` → panel-open wiring bites here.
+ */
+async function openNetPanel(page: Page): Promise<void> {
+  const menu = page.locator('[data-widget-id="menuButton"]');
+  await menu.locator('[data-testid="menu-button"]').click();
+  await menu.locator('[data-testid="menu-entry-network"]').click();
+  const panel = page.locator('[data-testid="netpanel-modal"]');
+  await expect(panel).toHaveClass(/pente-netpanel-modal--open/);
+  await page.waitForFunction(
+    (scopeId: string) => {
+      const scopes =
+        (window as unknown as { __pente: { getInput(): { scopes: string[] } | null } }).__pente
+          .getInput()
+          ?.scopes ?? [];
+      return scopes.includes(scopeId);
+    },
+    NET_PANEL_SCOPE_ID,
+  );
 }
 
 /** Wait until `page`'s session reports `connected` (host or join reached the room). */
@@ -156,24 +197,43 @@ async function waitObservedWithResync(
   }
 }
 
-/** Host on `page`: dispatch hostGame, wait connected, return the generated room code. */
+/**
+ * Host on `page` through the C.2 drawer panel (issue #13, Task C.3): open the "Network Game" panel,
+ * take the panel's default RANDOM code, click the panel's Host button, wait until the session reports
+ * `connected`, and return the room code the session actually claimed. Driving the real panel DOM (not
+ * a raw `dispatch('hostGame')`) makes the picker → `setPendingJoinCode` → `hostGame` seam load-bearing
+ * here: if it regresses the host never connects and this function's `waitConnected` times out.
+ */
 async function host(page: Page): Promise<string> {
-  await page.evaluate(() => (window as unknown as { __pente: Pente }).__pente.dispatch('hostGame'));
+  await openNetPanel(page);
+  const panel = page.locator('[data-testid="netpanel-modal"]');
+  // The panel opens on RANDOM with a valid code already in the field; grab it, then click Host.
+  await expect(panel).toHaveAttribute('data-source', 'random');
+  const picked = await panel.locator('[data-testid="netpanel-code-input"]').inputValue();
+  expect(picked, 'the panel must offer a random code on open').not.toBe('');
+  await panel.locator('[data-testid="netpanel-host"]').click();
   await waitConnected(page);
   const code = (await net(page))?.code;
-  expect(code, 'host must generate a room code').not.toBeNull();
+  expect(code, 'host must claim a room code').not.toBeNull();
+  // The code the session hosted is exactly the one the panel showed (the picker fed the session).
+  expect(code, 'the hosted room is the code the panel picked').toBe(picked);
   return code!;
 }
 
-/** Join `code` on `page` via the net widget's real DOM path (stash code, click Join). */
+/**
+ * Join `code` on `page` through the C.2 drawer panel (Task C.3): open the panel, switch to CUSTOM,
+ * type the host's code, and click the panel's Join button. This exercises the real user's join path —
+ * the panel validates the typed code, stashes it via `setPendingJoinCode`, and dispatches `joinGame`.
+ */
 async function join(page: Page, code: string): Promise<void> {
-  await page.evaluate((c: string) => {
-    // Task C.2: Host/Join initiation moved to the drawer's Network-Game panel; join via the SAME
-    // seam+command the panel uses (stash the validated code, then dispatch the argument-free joinGame).
-    const pente = (window as unknown as { __pente: { setPendingJoinCode(x: string): void; dispatch(id: string): boolean } }).__pente;
-    pente.setPendingJoinCode(c);
-    pente.dispatch('joinGame');
-  }, code);
+  await openNetPanel(page);
+  const panel = page.locator('[data-testid="netpanel-modal"]');
+  await panel.locator('[data-testid="netpanel-source-custom"]').click();
+  await panel.locator('[data-testid="netpanel-code-input"]').fill(code);
+  // A valid code enables Join; a broken validation seam would leave it disabled and the click would
+  // no-op (the test would then fail at waitConnected — the gate bites).
+  await expect(panel).toHaveAttribute('data-code-valid', 'true');
+  await panel.locator('[data-testid="netpanel-join"]').click();
   await waitConnected(page);
 }
 
