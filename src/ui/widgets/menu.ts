@@ -108,7 +108,14 @@ export function menuWidget(): WidgetFactory {
       button.className = 'pente-menu-button';
       button.setAttribute('data-testid', 'menu-button');
       button.setAttribute('aria-haspopup', 'menu');
-      button.textContent = 'Menu';
+      // Hamburger icon (inline SVG — no icon-font dependency). The button has no visible text, so
+      // aria-label carries its accessible name; the SVG is decorative (aria-hidden).
+      button.setAttribute('aria-label', 'Menu');
+      button.innerHTML =
+        '<svg class="pente-hamburger" viewBox="0 0 24 24" width="20" height="20" ' +
+        'aria-hidden="true" focusable="false">' +
+        '<path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="2" ' +
+        'stroke-linecap="round"/></svg>';
       element.appendChild(button);
 
       // The slide-in drawer panel: a labelled list of one button per menu item, anchored to the

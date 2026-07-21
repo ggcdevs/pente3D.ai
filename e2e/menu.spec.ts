@@ -91,8 +91,8 @@ test('the menu button mounts in its configured zone and the modal starts closed'
   await ready(page);
 
   // Placement is pure config — assert the button lands in the zone the tracked layout names.
-  expect(layoutDefault.widgets.menuButton.zone).toBe('top-right');
-  const inZone = page.locator(`[data-zone="top-right"] [data-widget-id="${MENU_ID}"]`);
+  expect(layoutDefault.widgets.menuButton.zone).toBe('top-left');
+  const inZone = page.locator(`[data-zone="top-left"] [data-widget-id="${MENU_ID}"]`);
   await expect(inZone).toHaveCount(1);
 
   // The drawer exists but is slid off-screen (closed) until the button is clicked; no `menu` scope

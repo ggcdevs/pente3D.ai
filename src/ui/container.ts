@@ -67,7 +67,9 @@ const UI_STYLESHEET = `
 .pente-banner-controls { display: flex; gap: 6px; }
 .pente-banner-button { cursor: pointer; }
 .pente-banner-button:disabled { cursor: default; opacity: 0.45; }
-.pente-menu-button { cursor: pointer; padding: 6px 14px; border-radius: 6px; border: none; background: rgba(16,16,20,0.72); color: #e6e6ea; font-family: system-ui, sans-serif; font-size: 14px; }
+.pente-menu-button { cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 8px; border-radius: 6px; border: none; background: rgba(16,16,20,0.72); color: #e6e6ea; }
+.pente-menu-button:hover { background: rgba(32,32,40,0.85); }
+.pente-menu-button .pente-hamburger { display: block; }
 /* #24/#16 slide-in DRAWER: a LEFT-edge panel that OVERLAYS the live canvas (no backdrop, no reflow —
    the board stays visible + interactive to its right). Anchored to the LEFT viewport edge and
    SLID off-screen to the left when closed; sliding in on open. Toggled by the --open class (NOT the
