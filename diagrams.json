@@ -1,0 +1,8 @@
+{
+  "scanDirs": ["src"],
+  "diagramsDir": "docs/diagrams",
+  "extensions": [".ts", ".tsx"],
+  "excludePatterns": ["\\.test\\.", "\\.spec\\."],
+  "tsconfig": "tsconfig.json",
+  "renderSvg": false
+}

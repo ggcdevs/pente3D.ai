@@ -33,6 +33,7 @@ config-driven UI. **v1 is complete, gated, and deployed live.**
 | `planning/2026-07-18-testing-strategy.md` | The testing doctrine (below). |
 | `planning/review-log.md` | Learning log — what adversarial reviews caught + instruction tweaks. Append after each gate. |
 | `README.md` | Local dev, incl. supplying your own relay via a localStorage override. |
+| **`docs/diagrams/`** | Auto-generated **class-hierarchy** + **module-dependency** diagrams from `src/` (TS AST → Mermaid). Skim these first for the architecture shape; regenerate with `npm run diagrams` (CI staleness-checks `main`/`test`). |
 
 **Source layout:** `src/core` (pure rules — imports nothing from render/net/ui, eslint-enforced),
 `src/config` (layered config: JSON defaults + localStorage override), `src/persist` (IndexedDB +

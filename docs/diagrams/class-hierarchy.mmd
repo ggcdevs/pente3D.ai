@@ -1,0 +1,1336 @@
+classDiagram
+    class ArchiveActions {
+        <<interface>>
+        +readonly canResume: boolean
+        +readonly canReview: boolean
+    }
+    note for ArchiveActions "src/ui/widgets/archiveModel.ts"
+    class ArchiveDeps {
+        <<interface>>
+        +readonly doc: Document
+        +listArchive(): Promise~readonly ArchiveListing[]~
+        +popScope(): void
+        +pushScope(scope: ArchiveScope): void
+        +registerOpenArchive(open: () =~ void): void
+        +resumeArchived(id: string): Promise~void~
+        +reviewArchived(id: string): Promise~void~
+    }
+    note for ArchiveDeps "src/ui/widgets/archive.ts"
+    class ArchivedMeta {
+        <<interface>>
+        +readonly players: Readonly~Record~string, string~~
+        +readonly result: string
+        +readonly startedAt: number
+    }
+    note for ArchivedMeta "src/persist/archive.ts"
+    class ArchiveInspect {
+        <<interface>>
+        +listArchive(): Promise~readonly ArchiveListing[]~
+    }
+    note for ArchiveInspect "src/debug/window.ts"
+    class ArchiveItem {
+        <<interface>>
+        +readonly canResume: boolean
+        +readonly canReview: boolean
+        +readonly conflicted: boolean
+        +readonly headHash: string
+        +readonly id: string
+        +readonly playersLabel: string
+        +readonly result: string
+        +readonly startedAt: number
+    }
+    note for ArchiveItem "src/ui/widgets/archiveModel.ts"
+    class ArchiveListing {
+        <<interface>>
+        +readonly id: string
+        +readonly meta: ArchiveListingMeta
+    }
+    note for ArchiveListing "src/ui/widgets/archiveModel.ts"
+    class ArchiveListingMeta {
+        <<interface>>
+        +readonly headHash: string
+        +readonly players: Readonly~Record~string, string~~
+        +readonly result: string
+        +readonly startedAt: number
+    }
+    note for ArchiveListingMeta "src/ui/widgets/archiveModel.ts"
+    class ArchiveModel {
+        <<interface>>
+        +readonly isEmpty: boolean
+        +readonly items: readonly ArchiveItem[]
+    }
+    note for ArchiveModel "src/ui/widgets/archiveModel.ts"
+    class ArchiveScope {
+        <<interface>>
+        +readonly bindings: Readonly~Record~string, string~~
+        +readonly blocking: true
+        +readonly id: string
+    }
+    note for ArchiveScope "src/ui/widgets/archive.ts"
+    class Axis {
+        <<interface>>
+        +readonly category: LineCategory
+        +readonly vec: Coord
+    }
+    note for Axis "src/core/axes.ts"
+    class BannerButton {
+        <<interface>>
+        +readonly commandId: string
+        +readonly enabled: boolean
+        +readonly label: string
+    }
+    note for BannerButton "src/ui/widgets/bannerModel.ts"
+    class BannerContext {
+        <<interface>>
+        +readonly history: BannerHistory
+        +readonly offTurnBlocks: number
+    }
+    note for BannerContext "src/ui/widgets/banner.ts"
+    class BannerDeps {
+        <<interface>>
+        +readonly doc: Document
+        +dispatch(commandId: string): boolean
+    }
+    note for BannerDeps "src/ui/widgets/banner.ts"
+    class BannerHistory {
+        <<interface>>
+        +readonly canRedo: boolean
+        +readonly canReset: boolean
+        +readonly canUndo: boolean
+    }
+    note for BannerHistory "src/ui/widgets/bannerModel.ts"
+    class BannerModel {
+        <<interface>>
+        +readonly blackCaptures: number
+        +readonly buttons: readonly BannerButton[]
+        +readonly player: Player
+        +readonly status: 'turn' | 'winner'
+        +readonly whiteCaptures: number
+    }
+    note for BannerModel "src/ui/widgets/bannerModel.ts"
+    class BoardConfig {
+        <<interface>>
+        +readonly size: number
+    }
+    note for BoardConfig "src/ui/widgets/settingsModel.ts"
+    class CameraPresetReadout {
+        <<interface>>
+        +maxDistance: number
+        +minDistance: number
+        +name: string
+        +orbitButton: 'LEFT' | 'MIDDLE' | 'RIGHT'
+        +panButton: 'LEFT' | 'MIDDLE' | 'RIGHT'
+        +panSpeed: number
+        +rotateSpeed: number
+        +zoomSpeed: number
+        +zoomToCursor: boolean
+    }
+    note for CameraPresetReadout "src/render/cameraControls.ts"
+    class CameraReadout {
+        <<interface>>
+        +position: Object
+        +target: Object
+    }
+    note for CameraReadout "src/render/scene.ts"
+    class ColorFieldModel {
+        <<interface>>
+        +readonly key: string
+        +readonly label: string
+        +readonly value: string
+    }
+    note for ColorFieldModel "src/ui/widgets/settingsModel.ts"
+    class ColorsPreview {
+        <<interface>>
+        +background: string
+        +lineFaceDiagonal: string
+        +lineOpacity: number
+        +lineOrthogonal: string
+        +lineSpaceDiagonal: string
+    }
+    note for ColorsPreview "src/render/scene.ts"
+    class ColorsReadout {
+        <<interface>>
+        +background: string
+        +lineFaceDiagonal: string
+        +lineOpacity: number
+        +lineOrthogonal: string
+        +lineSpaceDiagonal: string
+    }
+    note for ColorsReadout "src/render/scene.ts"
+    class Command {
+        <<interface>>
+        +readonly id: CommandId
+        +run(ctx: CommandContext): void
+    }
+    note for Command "src/input/commands.ts"
+    class CommandRegistry {
+        <<interface>>
+        +dispatch(id: CommandId, ctx: CommandContext): boolean
+        +get(id: CommandId): Command | undefined
+        +has(id: CommandId): boolean
+        +ids(): CommandId[]
+    }
+    note for CommandRegistry "src/input/commands.ts"
+    class ConfirmResult {
+        <<interface>>
+        +readonly commit: Coord | null
+        +readonly next: TempPlacement
+    }
+    note for ConfirmResult "src/input/placement.ts"
+    class ConflictedGame {
+        <<interface>>
+        +readonly mine: Game
+        +readonly theirs: Game
+    }
+    note for ConflictedGame "src/persist/archive.ts"
+    class ConflictedRecord {
+        <<interface>>
+        +readonly forks: Object
+        +readonly size: number
+    }
+    note for ConflictedRecord "src/persist/archive.ts"
+    class ConflictInput {
+        <<interface>>
+        +readonly meta: ArchivedMeta
+        +readonly mineLog: EventLog
+        +readonly size: number
+        +readonly theirsLog: EventLog
+    }
+    note for ConflictInput "src/persist/archive.ts"
+    class ConnectOptions {
+        <<interface>>
+        +readonly password: string
+    }
+    note for ConnectOptions "src/net/transport.ts"
+    class ControlPreset {
+        <<interface>>
+        +readonly invertY: boolean
+        +readonly maxDistance: number
+        +readonly minDistance: number
+        +readonly orbit: Gesture
+        +readonly orbitSpeed: number
+        +readonly pan: Gesture
+        +readonly panSpeed: number
+        +readonly zoom: Gesture
+        +readonly zoomSpeed: number
+        +readonly zoomToCursor: boolean
+    }
+    note for ControlPreset "src/render/cameraPresets.ts"
+    class ControlsConfig {
+        <<interface>>
+        +readonly preset: string
+        +readonly presets: Readonly~Record~string, ControlPreset~~
+    }
+    note for ControlsConfig "src/render/cameraPresets.ts"
+    class ControlsConfig {
+        <<interface>>
+        +readonly preset: string
+        +readonly presets: Readonly~Record~string, unknown~~
+    }
+    note for ControlsConfig "src/ui/widgets/settingsModel.ts"
+    class DragGuardConfig {
+        <<interface>>
+        +readonly enabled: boolean
+        +readonly thresholdPx: number
+    }
+    note for DragGuardConfig "src/input/pointerGesture.ts"
+    class EventLog {
+        <<interface>>
+        +readonly entries: readonly LogEntry[]
+    }
+    note for EventLog "src/core/eventLog.ts"
+    class GameExport {
+        <<interface>>
+        +readonly log: readonly Event[]
+        +readonly settings: GameSettings
+        +readonly size: number
+    }
+    note for GameExport "src/core/serialize.ts"
+    class GameMeta {
+        <<interface>>
+        +readonly headHash: string
+        +readonly players: Readonly~Record~string, string~~
+        +readonly result: string
+        +readonly startedAt: number
+    }
+    note for GameMeta "src/persist/db.ts"
+    class GameRecord {
+        <<interface>>
+        +readonly id: string
+        +readonly log: readonly Readonly~Record~string, unknown~~[]
+        +readonly meta: GameMeta
+    }
+    note for GameRecord "src/persist/db.ts"
+    class GameState {
+        <<interface>>
+        +readonly captures: Readonly~Record~Player, number~~
+        +readonly pieces: Readonly~Record~NodeKey, Player~~
+        +readonly size: number
+        +readonly turn: Player
+        +readonly winner: Player | null
+        +readonly winningLine: readonly NodeKey[]
+    }
+    note for GameState "src/core/gameState.ts"
+    class GenerateLineResult {
+        <<interface>>
+        +readonly line: Line
+        +readonly ok: boolean
+        +readonly warning: string
+    }
+    note for GenerateLineResult "src/core/lines.ts"
+    class HelpDeps {
+        <<interface>>
+        +readonly doc: Document
+        +getHelpSources(): HelpSources
+        +popScope(): void
+        +pushScope(scope: HelpScope): void
+        +registerOpenHelp(open: () =~ void): void
+    }
+    note for HelpDeps "src/ui/widgets/help.ts"
+    class HelpModel {
+        <<interface>>
+        +readonly rows: readonly HelpRow[]
+    }
+    note for HelpModel "src/ui/widgets/helpModel.ts"
+    class HelpRow {
+        <<interface>>
+        +readonly commandId: string
+        +readonly keys: readonly string[]
+        +readonly label: string
+    }
+    note for HelpRow "src/ui/widgets/helpModel.ts"
+    class HelpScope {
+        <<interface>>
+        +readonly bindings: Readonly~Record~string, string~~
+        +readonly blocking: true
+        +readonly id: string
+    }
+    note for HelpScope "src/ui/widgets/help.ts"
+    class HelpSources {
+        <<interface>>
+        +readonly bindings: Readonly~Record~string, string~~
+        +readonly commandIds: readonly string[]
+        +readonly labels: Readonly~Record~string, string~~
+    }
+    note for HelpSources "src/ui/widgets/helpModel.ts"
+    class HistoryFacts {
+        <<interface>>
+        +readonly maxPly: number
+        +readonly viewedPly: number
+    }
+    note for HistoryFacts "src/ui/widgets/sliderModel.ts"
+    class HistoryReadout {
+        <<interface>>
+        +maxPly: number
+        +scrubbing: boolean
+        +viewedPly: number
+    }
+    note for HistoryReadout "src/render/scene.ts"
+    class HistorySliderDeps {
+        <<interface>>
+        +readonly doc: Document
+        +getHistory(): HistoryFacts
+        +scrubTo(k: number): void
+    }
+    note for HistorySliderDeps "src/ui/widgets/historySlider.ts"
+    class HoverLookup {
+        <<interface>>
+        +readonly byId: ReadonlyMap~LineId, LineRef~
+        +readonly linesThrough: ReadonlyMap~NodeKey, readonly LineRef[]~
+    }
+    note for HoverLookup "src/render/hover.ts"
+    class HoverTarget {
+        <<interface>>
+        +readonly lines: readonly LineId[]
+        +readonly nodes: readonly NodeKey[]
+        +readonly pieces: readonly NodeKey[]
+    }
+    note for HoverTarget "src/render/hover.ts"
+    class InputHandle {
+        <<interface>>
+        +readonly registry: CommandRegistry
+        +dispatch(id: string): boolean
+        +dispose(): void
+        +handleChord(chord: string): KeyResolution
+        +pop(): void
+        +push(scope: Scope): void
+        +readout(): InputReadout
+        +stack(): ScopeStack
+    }
+    note for InputHandle "src/input/setup.ts"
+    class InputReadout {
+        <<interface>>
+        +commands: string[]
+        +scopes: string[]
+    }
+    note for InputReadout "src/input/setup.ts"
+    class InstanceRange {
+        <<interface>>
+        +readonly count: number
+        +readonly start: number
+    }
+    note for InstanceRange "src/render/linesLayout.ts"
+    class KeybindingRow {
+        <<interface>>
+        +readonly commandId: string
+        +readonly key: string
+    }
+    note for KeybindingRow "src/ui/widgets/settingsModel.ts"
+    class KeyChordEvent {
+        <<interface>>
+        +readonly altKey: boolean
+        +readonly ctrlKey: boolean
+        +readonly key: string
+        +readonly metaKey: boolean
+        +readonly shiftKey: boolean
+    }
+    note for KeyChordEvent "src/input/keybindings.ts"
+    class KeyResolution {
+        <<interface>>
+        +readonly commandId: CommandId | null
+        +readonly handled: boolean
+        +readonly scopeId: string | null
+    }
+    note for KeyResolution "src/input/scopes.ts"
+    class LayoutConfig {
+        <<interface>>
+        +readonly widgets: Readonly~Record~string, WidgetPlacement~~
+    }
+    note for LayoutConfig "src/ui/layout.ts"
+    class LayoutReadout {
+        <<interface>>
+        +zones: Record~string, string[]~
+    }
+    note for LayoutReadout "src/ui/container.ts"
+    class LifecycleObservation {
+        <<interface>>
+        +readonly generation: number
+        +readonly hasWinner: boolean
+        +readonly ply: number
+    }
+    note for LifecycleObservation "src/persist/gameLifecycle.ts"
+    class LifecycleState {
+        <<interface>>
+        +readonly finalized: boolean
+        +readonly generation: number
+        +readonly ply: number
+    }
+    note for LifecycleState "src/persist/gameLifecycle.ts"
+    class LifecycleTransition {
+        <<interface>>
+        +readonly finalizeCurrent: boolean
+        +readonly mintFresh: boolean
+        +readonly next: LifecycleState
+    }
+    note for LifecycleTransition "src/persist/gameLifecycle.ts"
+    class LightingConfig {
+        <<interface>>
+        +ambient: Object
+        +directional: Object
+    }
+    note for LightingConfig "src/render/sceneConfig.ts"
+    class LightingReadout {
+        <<interface>>
+        +ambient: Object
+        +background: number
+        +directional: Object
+    }
+    note for LightingReadout "src/render/scene.ts"
+    class Line {
+        <<interface>>
+        +readonly axisIndex: number
+        +readonly category: LineCategory
+        +readonly entryNode: Coord
+        +readonly id: LineId
+        +readonly nodes: Coord[]
+    }
+    note for Line "src/core/lines.ts"
+    class LineColorsConfig {
+        <<interface>>
+        +hoverHighlight: string
+        +lineFaceDiagonal: string
+        +lineOpacity: number
+        +lineOrthogonal: string
+        +lineSpaceDiagonal: string
+    }
+    note for LineColorsConfig "src/render/lines.ts"
+    class LineGeometryConfig {
+        <<interface>>
+        +lineThickness: number
+        +spacing: number
+    }
+    note for LineGeometryConfig "src/render/lines.ts"
+    class LineGroup {
+        <<interface>>
+        +readonly lines: readonly Line[]
+        +readonly rangeOf: ReadonlyMap~LineId, InstanceRange~
+        +readonly segmentCount: number
+        +readonly segments: readonly LineSegment[]
+    }
+    note for LineGroup "src/render/linesLayout.ts"
+    class LineGroupReadout {
+        <<interface>>
+        +blending: BlendMode
+        +category: LineCategory
+        +highlightedSegmentCount: number
+        +lineCount: number
+        +segmentCount: number
+        +visible: boolean
+    }
+    note for LineGroupReadout "src/render/lines.ts"
+    class LineRef {
+        <<interface>>
+        +readonly category: LineCategory
+        +readonly id: LineId
+        +readonly nodeKeys: readonly NodeKey[]
+    }
+    note for LineRef "src/render/hover.ts"
+    class LineSegment {
+        <<interface>>
+        +readonly a: Coord
+        +readonly b: Coord
+        +readonly lineId: LineId
+    }
+    note for LineSegment "src/render/linesLayout.ts"
+    class LinesHandle {
+        <<interface>>
+        +readonly object: THREE.Group
+        +dispose(): void
+        +getVisibleLines(): LineGroupReadout[]
+        +highlight(lineIds: readonly LineId[]): void
+        +pickables(): Object[]
+        +rangeOf(category: LineCategory, lineId: LineId): Object | null
+        +setBaseColor(category: LineCategory, hex: string): string
+        +setOpacity(opacity: number): number
+        +setVisible(category: LineCategory, visible: boolean): void
+    }
+    note for LinesHandle "src/render/lines.ts"
+    class LogEntry {
+        <<interface>>
+        +readonly event: Event
+        +readonly hash: string
+    }
+    note for LogEntry "src/core/eventLog.ts"
+    class Logger {
+        <<interface>>
+        +debug(args: unknown[]): void
+        +error(args: unknown[]): void
+        +info(args: unknown[]): void
+        +trace(args: unknown[]): void
+        +warn(args: unknown[]): void
+    }
+    note for Logger "src/debug/log.ts"
+    class MarkerColorsConfig {
+        <<interface>>
+        +emptySphere: string
+        +hoverHighlight: string
+    }
+    note for MarkerColorsConfig "src/render/markers.ts"
+    class MarkerGeometryConfig {
+        <<interface>>
+        +markerRadius: number
+        +sphereSegments: Object
+    }
+    note for MarkerGeometryConfig "src/render/markers.ts"
+    class MarkerIndex {
+        <<interface>>
+        +readonly count: number
+        +readonly instanceIdOf: ReadonlyMap~NodeKey, number~
+        +readonly nodeOfInstance: readonly NodeKey[]
+    }
+    note for MarkerIndex "src/render/markersLayout.ts"
+    class MarkerMaterialsConfig {
+        <<interface>>
+        +markerDepthWrite: boolean
+        +markerOpacity: number
+    }
+    note for MarkerMaterialsConfig "src/render/markers.ts"
+    class MarkerNodeReadout {
+        <<interface>>
+        +highlighted: boolean
+        +instanceColorHex: string
+        +instanceId: number
+        +node: NodeKey
+        +visible: boolean
+    }
+    note for MarkerNodeReadout "src/render/markers.ts"
+    class MarkerRenderingConfig {
+        <<interface>>
+        +marker: Object
+    }
+    note for MarkerRenderingConfig "src/render/markers.ts"
+    class MarkersHandle {
+        <<interface>>
+        +readonly object: THREE.Group
+        +dispose(): void
+        +getMarkers(query: readonly NodeKey[]): MarkersReadout
+        +highlight(nodes: readonly NodeKey[]): void
+        +sync(state: GameState): void
+    }
+    note for MarkersHandle "src/render/markers.ts"
+    class MarkersReadout {
+        <<interface>>
+        +count: number
+        +highlightedCount: number
+        +materialEmissiveIntensity: number
+        +nodes: MarkerNodeReadout[]
+        +visibleCount: number
+    }
+    note for MarkersReadout "src/render/markers.ts"
+    class MenuDeps {
+        <<interface>>
+        +readonly doc: Document
+        +readonly entries: readonly MenuEntrySpec[]
+        +dispatch(commandId: string): boolean
+        +popScope(): void
+        +pushScope(scope: MenuScope): void
+    }
+    note for MenuDeps "src/ui/widgets/menu.ts"
+    class MenuEntrySpec {
+        <<interface>>
+        +readonly commandId: string
+        +readonly id: string
+        +readonly label: string
+        +readonly order: number
+        +readonly visible: boolean
+    }
+    note for MenuEntrySpec "src/ui/widgets/menuModel.ts"
+    class MenuItem {
+        <<interface>>
+        +readonly commandId: string
+        +readonly id: string
+        +readonly label: string
+    }
+    note for MenuItem "src/ui/widgets/menuModel.ts"
+    class MenuModel {
+        <<interface>>
+        +readonly items: readonly MenuItem[]
+    }
+    note for MenuModel "src/ui/widgets/menuModel.ts"
+    class MenuScope {
+        <<interface>>
+        +readonly bindings: Readonly~Record~string, string~~
+        +readonly blocking: true
+        +readonly id: string
+    }
+    note for MenuScope "src/ui/widgets/menu.ts"
+    class MqttClientLike {
+        <<interface>>
+        +end(): this
+        +on(event: 'connect', cb: () =~ void): this
+        +on(event: 'error', cb: (err: Error) =~ void): this
+        +on(event: 'message', cb: (topic: string, payload: Uint8Array, packet: Object) =~ void): this
+        +on(event: string, cb: (...args: never[]) =~ void): this
+        +publish(topic: string, payload: string, opts: MqttPublishOptions, cb: () =~ void): this
+        +subscribe(topics: string[], cb: (err: Error | null) =~ void): this
+    }
+    note for MqttClientLike "src/net/mqttTransport.ts"
+    class MqttConnectOptions {
+        <<interface>>
+        +readonly clientId: string
+        +readonly connectTimeout: number
+        +readonly password: string
+        +readonly reconnectPeriod: number
+        +readonly username: string
+        +readonly will: MqttWill
+    }
+    note for MqttConnectOptions "src/net/mqttTransport.ts"
+    class MqttPublishOptions {
+        <<interface>>
+        +readonly qos: 0 | 1 | 2
+        +readonly retain: boolean
+    }
+    note for MqttPublishOptions "src/net/mqttTransport.ts"
+    class MqttTransportDeps {
+        <<interface>>
+        +readonly connect: MqttConnectFn
+        +readonly peerId: string
+    }
+    note for MqttTransportDeps "src/net/mqttTransport.ts"
+    class MqttWill {
+        <<interface>>
+        +readonly payload: string
+        +readonly qos: 0 | 1 | 2
+        +readonly retain: boolean
+        +readonly topic: string
+    }
+    note for MqttWill "src/net/mqttTransport.ts"
+    class NetDeps {
+        <<interface>>
+        +readonly doc: Document
+        +copyToClipboard(text: string): Promise~void~
+        +dispatch(commandId: string): boolean
+        +getNet(): NetSessionState
+        +setPendingJoinCode(code: string): void
+    }
+    note for NetDeps "src/ui/widgets/net.ts"
+    class NetHooks {
+        <<interface>>
+        +canPlace(): boolean
+        +getNet(): NetSessionState
+        +getNetGameState(): GameState | null
+        +getNetHeadHash(): string | null
+        +host(): void
+        +join(): void
+        +place(coords: Coord): GameState
+        +resync(): void
+        +setPendingJoinCode(code: string): void
+    }
+    note for NetHooks "src/render/scene.ts"
+    class NetModel {
+        <<interface>>
+        +readonly code: string | null
+        +readonly conflict: boolean
+        +readonly conflictText: string | null
+        +readonly joinErrorText: string | null
+        +readonly panel: NetPanel
+        +readonly seatText: string | null
+        +readonly statusText: string
+    }
+    note for NetModel "src/ui/widgets/netModel.ts"
+    class NetSessionDeps {
+        <<interface>>
+        +now: () =~ number
+        +rand: () =~ number
+        +readonly db: IDBDatabase
+        +readonly playerId: string
+        +readonly size: number
+        +createTransport(): Transport
+    }
+    note for NetSessionDeps "src/net/session.ts"
+    class NetSessionState {
+        <<interface>>
+        +readonly code: string | null
+        +readonly joinError: JoinErrorReason | null
+        +readonly peerPresent: boolean
+        +readonly phase: NetPhase
+        +readonly seat: NetSeat
+    }
+    note for NetSessionState "src/ui/widgets/netModel.ts"
+    class OpacityFieldModel {
+        <<interface>>
+        +readonly key: string
+        +readonly label: string
+        +readonly value: number
+    }
+    note for OpacityFieldModel "src/ui/widgets/settingsModel.ts"
+    class PenteInspect {
+        <<interface>>
+        +clickAt(ndcX: number, ndcY: number): GameState | null
+        +dispatch(id: string): boolean | null
+        +getArchive(): Promise~readonly ArchiveListing[]~
+        +getBannerContext(): BannerContext | null
+        +getCamera(): CameraReadout | null
+        +getCameraPreset(): CameraPresetReadout | null
+        +getColors(): ColorsReadout | null
+        +getHeadHash(): string | null
+        +getHelpSources(): HelpSources | null
+        +getHistory(): HistoryReadout | null
+        +getHoverTarget(): HoverTarget | null
+        +getInput(): InputReadout | null
+        +getLayout(): LayoutReadout | null
+        +getLighting(): LightingReadout | null
+        +getMarkers(query: readonly string[]): MarkersReadout | null
+        +getNet(): NetSessionState | null
+        +getPieces(): PieceReadout[] | null
+        +getState(): GameState | null
+        +getTemp(): TempReadout | null
+        +getTurnGate(): TurnGateReadout | null
+        +getViewportSize(): ViewportReadout | null
+        +getVisibleLines(): LineGroupReadout[] | null
+        +getWinLine(): WinLineReadout | null
+        +hoverAt(ndcX: number, ndcY: number): HoverTarget | null
+        +pickAt(ndcX: number, ndcY: number): RaycastHit | null
+        +place(coords: Coord): GameState | null
+        +pressKey(chord: string): KeyResolution | null
+        +radiusOf(node: Coord): number | null
+        +rayNodeDistances(ndcX: number, ndcY: number): Object[]
+        +resync(): void
+        +scrubTo(k: number): void
+        +setCamera(position: Object, target: Object): void
+    }
+    note for PenteInspect "src/debug/window.ts"
+    class PickableLineMesh {
+        <<interface>>
+        +readonly category: LineCategory
+        +readonly mesh: THREE.Object3D
+    }
+    note for PickableLineMesh "src/render/picking.ts"
+    class PickGeometryConfig {
+        <<interface>>
+        +markerRadius: number
+        +pickPadding: number
+        +pieceRadius: number
+        +spacing: number
+    }
+    note for PickGeometryConfig "src/render/picking.ts"
+    class PickingHandle {
+        <<interface>>
+        +readonly object: THREE.Group
+        +dispose(): void
+        +pickAt(ndcX: number, ndcY: number, camera: THREE.Camera, state: GameState, lineMeshes: readonly PickableLineMesh[]): RaycastHit | null
+        +radiusOf(node: Coord): number | null
+        +sync(state: GameState): void
+        +worldOf(node: Coord): Object
+    }
+    note for PickingHandle "src/render/picking.ts"
+    class PickRadiusInput {
+        <<interface>>
+        +readonly markerRadius: number
+        +readonly occupied: boolean
+        +readonly padding: number
+        +readonly pieceRadius: number
+        +readonly spacing: number
+    }
+    note for PickRadiusInput "src/render/pickRadius.ts"
+    class PieceAdd {
+        <<interface>>
+        +readonly node: NodeKey
+        +readonly owner: Player
+    }
+    note for PieceAdd "src/render/piecesDiff.ts"
+    class PieceColorsConfig {
+        <<interface>>
+        +blackPiece: string
+        +whitePiece: string
+    }
+    note for PieceColorsConfig "src/render/pieces.ts"
+    class PieceDiff {
+        <<interface>>
+        +readonly adds: readonly PieceAdd[]
+        +readonly recolors: readonly PieceRecolor[]
+        +readonly removes: readonly NodeKey[]
+    }
+    note for PieceDiff "src/render/piecesDiff.ts"
+    class PieceEntry {
+        <<interface>>
+        +fadeDir: -1 | 0 | 1
+        +material: THREE.MeshStandardMaterial
+        +mesh: THREE.Mesh
+        +owner: Player
+        +targetOpacity: number
+    }
+    note for PieceEntry "src/render/pieces.ts"
+    class PieceGeometryConfig {
+        <<interface>>
+        +pieceRadius: number
+        +spacing: number
+        +sphereSegments: Object
+    }
+    note for PieceGeometryConfig "src/render/pieces.ts"
+    class PieceMaterialsConfig {
+        <<interface>>
+        +pieceOpacity: number
+    }
+    note for PieceMaterialsConfig "src/render/pieces.ts"
+    class PieceReadout {
+        <<interface>>
+        +emissiveIntensity: number
+        +fadingOut: boolean
+        +node: NodeKey
+        +opacity: number
+        +owner: Player
+        +position: Object
+    }
+    note for PieceReadout "src/render/pieces.ts"
+    class PieceRecolor {
+        <<interface>>
+        +readonly from: Player
+        +readonly node: NodeKey
+        +readonly to: Player
+    }
+    note for PieceRecolor "src/render/piecesDiff.ts"
+    class PieceRenderingConfig {
+        <<interface>>
+        +piece: Object
+        +pieceFadeMs: number
+    }
+    note for PieceRenderingConfig "src/render/pieces.ts"
+    class PiecesHandle {
+        <<interface>>
+        +readonly object: THREE.Group
+        +count(): number
+        +dispose(): void
+        +getPieces(): PieceReadout[]
+        +highlight(nodes: readonly NodeKey[], color: string, boost: number): void
+        +sync(state: GameState): void
+        +tick(deltaMs: number): void
+    }
+    note for PiecesHandle "src/render/pieces.ts"
+    class PlaceEvent {
+        <<interface>>
+        +readonly node: NodeKey
+        +readonly type: 'place'
+    }
+    note for PlaceEvent "src/core/eventLog.ts"
+    class PointerPos {
+        <<interface>>
+        +readonly x: number
+        +readonly y: number
+    }
+    note for PointerPos "src/input/pointerGesture.ts"
+    class PresenceSignal {
+        <<interface>>
+        +readonly kind: PresenceKind
+        +readonly peerId: string
+    }
+    note for PresenceSignal "src/net/presence.ts"
+    class RedoEvent {
+        <<interface>>
+        +readonly type: 'redo'
+    }
+    note for RedoEvent "src/core/eventLog.ts"
+    class RelayConfig {
+        <<interface>>
+        +readonly password: string
+        +readonly topicRoot: string
+        +readonly username: string
+        +readonly wssUrl: string
+    }
+    note for RelayConfig "src/config/config.ts"
+    class ResolvedCameraPreset {
+        <<interface>>
+        +readonly name: string
+    }
+    note for ResolvedCameraPreset "src/render/cameraPresets.ts"
+    class ResolvedLayout {
+        <<interface>>
+        +readonly zones: Readonly~Record~string, readonly ResolvedWidget[]~~
+    }
+    note for ResolvedLayout "src/ui/layout.ts"
+    class ResolvedLineGroup {
+        <<interface>>
+        +readonly blending: BlendMode
+        +readonly visible: boolean
+    }
+    note for ResolvedLineGroup "src/render/linesLayout.ts"
+    class ResolvedSceneConfig {
+        <<interface>>
+        +ambient: Object
+        +background: number
+        +directional: Object
+    }
+    note for ResolvedSceneConfig "src/render/sceneConfig.ts"
+    class ResolvedWidget {
+        <<interface>>
+        +readonly id: string
+        +readonly offset: Object
+        +readonly order: number
+    }
+    note for ResolvedWidget "src/ui/layout.ts"
+    class SceneColorsConfig {
+        <<interface>>
+        +background: string
+    }
+    note for SceneColorsConfig "src/render/sceneConfig.ts"
+    class SceneHandle {
+        <<interface>>
+        +camera: THREE.PerspectiveCamera
+        +controls: OrbitControls
+        +renderer: THREE.WebGLRenderer
+        +scene: THREE.Scene
+        +adoptNetState(): void
+        +applyColors(preview: ColorsPreview): ColorsReadout
+        +clickAt(ndcX: number, ndcY: number): GameState | null
+        +dispatch(id: string): boolean
+        +dispose(): void
+        +getBannerContext(): BannerContext
+        +getCamera(): CameraReadout
+        +getCameraPreset(): CameraPresetReadout
+        +getColors(): ColorsReadout
+        +getGame(): Game
+        +getHeadHash(): string
+        +getHelpSources(): HelpSources
+        +getHistory(): HistoryReadout
+        +getHoverTarget(): HoverTarget | null
+        +getInput(): InputReadout
+        +getLighting(): LightingReadout
+        +getMarkers(query: readonly string[]): MarkersReadout
+        +getNet(): NetSessionState
+        +getPieces(): PieceReadout[]
+        +getState(): GameState
+        +getTemp(): TempReadout
+        +getTurnGate(): TurnGateReadout
+        +getViewportSize(): ViewportReadout
+        +getVisibleLines(): LineGroupReadout[]
+        +getWinLine(): WinLineReadout
+        +hoverAt(ndcX: number, ndcY: number): HoverTarget | null
+        +loadGame(loaded: Game): void
+        +onNewGame(listener: () =~ void): () =~ void
+        +onStateChange(listener: () =~ void): () =~ void
+        +pickAt(ndcX: number, ndcY: number): RaycastHit | null
+        +pickRadiusOf(node: Coord): number | null
+        +place(coords: Coord): GameState
+        +popScope(): void
+        +pressKey(chord: string): KeyResolution
+        +pushScope(scope: Scope): void
+        +rayNodeDistances(ndcX: number, ndcY: number): Object[]
+        +resync(): void
+        +scrubTo(k: number): void
+        +setCamera(position: Object, target: Object): void
+        +setNetHooks(hooks: NetHooks): void
+        +setOpenArchive(open: () =~ void): void
+        +setOpenHelp(open: () =~ void): void
+        +setOpenSettings(open: () =~ void): void
+        +setPendingJoinCode(code: string): void
+    }
+    note for SceneHandle "src/render/scene.ts"
+    class Scope {
+        <<interface>>
+        +readonly bindings: Readonly~Record~string, CommandId~~
+        +readonly blocking: boolean
+        +readonly id: string
+    }
+    note for Scope "src/input/scopes.ts"
+    class ScopeStack {
+        <<interface>>
+        +readonly scopes: readonly Scope[]
+    }
+    note for ScopeStack "src/input/scopes.ts"
+    class ScrubResolution {
+        <<interface>>
+        +readonly atLive: boolean
+        +readonly viewedPly: number
+    }
+    note for ScrubResolution "src/ui/widgets/sliderModel.ts"
+    class SeatMap {
+        <<interface>>
+        +readonly black: string | null
+        +readonly white: string | null
+    }
+    note for SeatMap "src/net/seats.ts"
+    class SelectOption {
+        <<interface>>
+        +readonly selected: boolean
+        +readonly value: T
+    }
+    note for SelectOption "src/ui/widgets/settingsModel.ts"
+    class SettingsColorsPreview {
+        <<interface>>
+        +background: string
+        +lineFaceDiagonal: string
+        +lineOpacity: number
+        +lineOrthogonal: string
+        +lineSpaceDiagonal: string
+    }
+    note for SettingsColorsPreview "src/ui/widgets/settings.ts"
+    class SettingsDeps {
+        <<interface>>
+        +readonly doc: Document
+        +applyColors(preview: SettingsColorsPreview): void
+        +popScope(): void
+        +pushScope(scope: SettingsScope): void
+        +registerOpener(open: () =~ void): void
+    }
+    note for SettingsDeps "src/ui/widgets/settings.ts"
+    class SettingsModel {
+        <<interface>>
+        +readonly boardSizeOptions: readonly SelectOption~number~[]
+        +readonly colorFields: readonly ColorFieldModel[]
+        +readonly keybindingRows: readonly KeybindingRow[]
+        +readonly opacityField: OpacityFieldModel
+        +readonly presetOptions: readonly SelectOption~string~[]
+    }
+    note for SettingsModel "src/ui/widgets/settingsModel.ts"
+    class SettingsScope {
+        <<interface>>
+        +readonly bindings: Readonly~Record~string, string~~
+        +readonly blocking: true
+        +readonly id: string
+    }
+    note for SettingsScope "src/ui/widgets/settings.ts"
+    class SettingsSources {
+        <<interface>>
+        +readonly board: BoardConfig
+        +readonly colors: ColorsConfig
+        +readonly controls: ControlsConfig
+        +readonly keybindings: KeybindingsConfig
+    }
+    note for SettingsSources "src/ui/widgets/settingsModel.ts"
+    class SliderModel {
+        <<interface>>
+        +readonly atLive: boolean
+        +readonly enabled: boolean
+        +readonly label: string
+        +readonly max: number
+        +readonly min: number
+        +readonly value: number
+    }
+    note for SliderModel "src/ui/widgets/sliderModel.ts"
+    class SyncMessage {
+        <<interface>>
+        +readonly headHash: string
+        +readonly log: readonly Event[]
+        +readonly version: number
+    }
+    note for SyncMessage "src/net/sync.ts"
+    class TempPlacement {
+        <<interface>>
+        +readonly active: boolean
+        +readonly preview: NodeKey | null
+    }
+    note for TempPlacement "src/input/placement.ts"
+    class TempReadout {
+        <<interface>>
+        +active: boolean
+        +preview: string | null
+        +previewOpacity: number
+    }
+    note for TempReadout "src/render/scene.ts"
+    class Transport {
+        <<interface>>
+        +connect(roomCode: string, opts: ConnectOptions): Promise~void~
+        +disconnect(): void
+        +onMessage(cb: MessageHandler): void
+        +onPresence(cb: PresenceHandler): void
+        +publish(msg: TransportMessage): void
+    }
+    note for Transport "src/net/transport.ts"
+    class TurnGateReadout {
+        <<interface>>
+        +offTurnBlocks: number
+    }
+    note for TurnGateReadout "src/render/scene.ts"
+    class UiContainerHandle {
+        <<interface>>
+        +readonly root: HTMLElement
+        +dispose(): void
+        +getLayout(): LayoutReadout
+        +update(state: unknown, config: unknown): void
+    }
+    note for UiContainerHandle "src/ui/container.ts"
+    class UiDeps {
+        <<interface>>
+        +applyColors(preview: SettingsColorsPreview): void
+        +copyToClipboard(text: string): Promise~void~
+        +dispatch(commandId: string): boolean
+        +getHelpSources(): HelpSources
+        +getHistory(): HistoryFacts
+        +getNet(): NetSessionState
+        +listArchive(): Promise~readonly ArchiveListing[]~
+        +popScope(): void
+        +pushScope(scope: MenuScope | SettingsScope | HelpScope | ArchiveScope): void
+        +registerOpenArchive(open: () =~ void): void
+        +registerOpenHelp(open: () =~ void): void
+        +registerOpener(open: () =~ void): void
+        +resumeArchived(id: string): Promise~void~
+        +reviewArchived(id: string): Promise~void~
+        +scrubTo(k: number): void
+        +setPendingJoinCode(code: string): void
+    }
+    note for UiDeps "src/ui/setup.ts"
+    class UiHandle {
+        <<interface>>
+        +readonly container: UiContainerHandle
+        +getLayout(): LayoutReadout
+    }
+    note for UiHandle "src/ui/setup.ts"
+    class UndoEvent {
+        <<interface>>
+        +readonly type: 'undo'
+    }
+    note for UndoEvent "src/core/eventLog.ts"
+    class Vec3 {
+        <<interface>>
+        +x: number
+        +y: number
+        +z: number
+    }
+    note for Vec3 "src/render/sceneConfig.ts"
+    class ViewportReadout {
+        <<interface>>
+        +aspect: number
+        +height: number
+        +width: number
+    }
+    note for ViewportReadout "src/render/scene.ts"
+    class Widget {
+        <<interface>>
+        +readonly element: HTMLElement
+        +dispose(): void
+        +update(state: unknown, config: unknown): void
+    }
+    note for Widget "src/ui/registry.ts"
+    class WidgetFactory {
+        <<interface>>
+        +readonly id: WidgetId
+        +mount(deps: unknown): Widget
+    }
+    note for WidgetFactory "src/ui/registry.ts"
+    class WidgetPlacement {
+        <<interface>>
+        +readonly offset: Object
+        +readonly order: number
+        +readonly visible: boolean
+        +readonly zone: string
+    }
+    note for WidgetPlacement "src/ui/layout.ts"
+    class WidgetRegistry {
+        <<interface>>
+        +get(id: WidgetId): WidgetFactory | undefined
+        +has(id: WidgetId): boolean
+        +ids(): WidgetId[]
+        +knownIds(): Set~WidgetId~
+    }
+    note for WidgetRegistry "src/ui/registry.ts"
+    class Window {
+        <<interface>>
+        +__pente: PenteInspect
+    }
+    note for Window "src/debug/window.ts"
+    class Window {
+        <<interface>>
+        +__penteRematchPrompt: () =~ boolean
+    }
+    note for Window "src/main.ts"
+    class Window {
+        <<interface>>
+        +__penteNetTransportFactory: () =~ Transport
+    }
+    note for Window "src/net/appSession.ts"
+    class Window {
+        <<interface>>
+        +__penteDbName: string
+    }
+    note for Window "src/persist/db.ts"
+    class WinLineColorsConfig {
+        <<interface>>
+        +winningLine: string
+    }
+    note for WinLineColorsConfig "src/render/winLine.ts"
+    class WinLineGeometryConfig {
+        <<interface>>
+        +lineThickness: number
+        +spacing: number
+    }
+    note for WinLineGeometryConfig "src/render/winLine.ts"
+    class WinLineHandle {
+        <<interface>>
+        +readonly object: THREE.Group
+        +dispose(): void
+        +getWinLine(): WinLineReadout
+        +sync(state: GameState): void
+    }
+    note for WinLineHandle "src/render/winLine.ts"
+    class WinLinePlan {
+        <<interface>>
+        +readonly nodes: readonly Coord[]
+        +readonly segments: readonly WinSegment[]
+    }
+    note for WinLinePlan "src/render/winLineLayout.ts"
+    class WinLineReadout {
+        <<interface>>
+        +color: number
+        +nodes: string[]
+        +opacity: number
+        +segmentCount: number
+        +visible: boolean
+    }
+    note for WinLineReadout "src/render/winLine.ts"
+    class WinLineRenderingConfig {
+        <<interface>>
+        +winLineOpacity: number
+        +winLineThickness: number
+    }
+    note for WinLineRenderingConfig "src/render/winLine.ts"
+    class WinSegment {
+        <<interface>>
+        +readonly a: Coord
+        +readonly b: Coord
+    }
+    note for WinSegment "src/render/winLineLayout.ts"
+    class ArchiveError {
+    }
+    note for ArchiveError "src/persist/archive.ts"
+    class ExportError {
+    }
+    note for ExportError "src/core/serialize.ts"
+    class Game {
+        +canRedo(): boolean
+        +canUndo(): boolean
+        +get log(): EventLog
+        +place(coords: Coord): void
+        +ply(): number
+        +redo(): void
+        +state(): GameState
+        +stateAt(k: number): GameState
+        +static fromLog(size: number, log: EventLog): Game
+        +undo(): void
+    }
+    note for Game "src/core/game.ts"
+    class IllegalMove {
+    }
+    note for IllegalMove "src/core/gameState.ts"
+    class MockRelayHub {
+        +join(room: string, peer: MockTransport): void
+        +leave(room: string, peer: MockTransport): void
+        +peerIds(room: string): string[]
+        +publish(room: string, sender: MockTransport, msg: TransportMessage): void
+    }
+    note for MockRelayHub "src/net/transport.ts"
+    class MockTransport {
+        +readonly peerId: string
+        +connect(roomCode: string, _opts: ConnectOptions): Promise~void~
+        +deliver(msg: TransportMessage): void
+        +disconnect(): void
+        +onMessage(cb: MessageHandler): void
+        +onPresence(cb: PresenceHandler): void
+        +presenceChanged(peers: readonly string[]): void
+        +publish(msg: TransportMessage): void
+    }
+    note for MockTransport "src/net/transport.ts"
+    class MqttTransport {
+        +readonly peerId: string
+        +connect(roomCode: string, _opts: ConnectOptions): Promise~void~
+        +disconnect(): void
+        +onMessage(cb: MessageHandler): void
+        +onPresence(cb: PresenceHandler): void
+        +publish(msg: TransportMessage): void
+    }
+    note for MqttTransport "src/net/mqttTransport.ts"
+    class NetSession {
+        +canPlace(): boolean
+        +disconnect(): void
+        +gameState(): GameState | null
+        +host(): Promise~void~
+        +join(rawCode: string): Promise~boolean~
+        +onChange(listener: NetChangeListener): () =~ void
+        +place(coords: Coord): void
+        +state(): NetSessionState
+        +syncEngine(): SyncEngine | null
+        +undo(): void
+    }
+    note for NetSession "src/net/session.ts"
+    class PresenceTracker {
+        +apply(signal: PresenceSignal): boolean
+        +candidatePeers(): string[]
+        +hasLivePeer(): boolean
+        +livePeers(): string[]
+    }
+    note for PresenceTracker "src/net/presence.ts"
+    class SyncEngine {
+        +conflictForks(): Object | null
+        +connect(roomCode: string): Promise~void~
+        +game(): Game
+        +onChange(listener: () =~ void): () =~ void
+        +place(coords: Coord): void
+        +placeLocalOnly(coords: Coord): void
+        +publishState(): void
+        +receive(msg: SyncMessage): void
+        +status(): SyncStatus
+        +undo(): void
+        +whenSettled(): Promise~void~
+    }
+    note for SyncEngine "src/net/sync.ts"
+    class SyncError {
+    }
+    note for SyncError "src/net/sync.ts"
+    ControlPreset <|-- ResolvedCameraPreset
+    Error <|-- ArchiveError
+    Error <|-- ExportError
+    Error <|-- IllegalMove
+    Error <|-- SyncError
+    GameRecord <|-- ConflictedRecord
+    LineGroup <|-- ResolvedLineGroup
+    Transport <|.. MockTransport
+    Transport <|.. MqttTransport

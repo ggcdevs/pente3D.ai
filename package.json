@@ -12,7 +12,9 @@
     "coverage": "vitest run --coverage",
     "lint": "eslint .",
     "mutate": "stryker run",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "diagrams": "node tools/generate-diagrams.mjs",
+    "diagrams:check": "node tools/generate-diagrams.mjs --check"
   },
   "devDependencies": {
     "@playwright/test": "^1.48.0",

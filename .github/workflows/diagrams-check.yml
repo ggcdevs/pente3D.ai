@@ -1,0 +1,34 @@
+# Architecture-diagram staleness check.
+#
+# Fails if the committed diagrams under docs/diagrams/ no longer match what the
+# generator produces from src/ — i.e. someone changed structure without running
+# `npm run diagrams`. Scoped to the polished branches only: `dev` is intentionally
+# allowed to carry slightly-stale diagrams so day-to-day work there isn't gated.
+#
+# To fix a failure: run `npm run diagrams`, commit the regenerated files.
+name: diagrams-check
+
+on:
+  push:
+    branches: [main, test]
+  pull_request:
+    branches: [main, test]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check architecture diagrams are up-to-date
+        run: npm run diagrams:check

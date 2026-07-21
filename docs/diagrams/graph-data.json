@@ -1,0 +1,5356 @@
+{
+  "src/config/config.ts": {
+    "exports": [
+      "CONFIG_SECTIONS",
+      "ConfigOf",
+      "ConfigSection",
+      "OVERRIDE_KEY_PREFIX",
+      "RelayConfig",
+      "getConfig",
+      "getDefault",
+      "overrideStorageKey",
+      "resetConfig",
+      "setConfig"
+    ],
+    "imports": [
+      {
+        "source": "./defaults/blending.json",
+        "target": "src/config/defaults/blending.json",
+        "specifiers": [
+          "default"
+        ]
+      },
+      {
+        "source": "./defaults/board.json",
+        "target": "src/config/defaults/board.json",
+        "specifiers": [
+          "default"
+        ]
+      },
+      {
+        "source": "./defaults/colors.json",
+        "target": "src/config/defaults/colors.json",
+        "specifiers": [
+          "default"
+        ]
+      },
+      {
+        "source": "./defaults/controls.json",
+        "target": "src/config/defaults/controls.json",
+        "specifiers": [
+          "default"
+        ]
+      },
+      {
+        "source": "./defaults/geometry.json",
+        "target": "src/config/defaults/geometry.json",
+        "specifiers": [
+          "default"
+        ]
+      },
+      {
+        "source": "./defaults/interaction.json",
+        "target": "src/config/defaults/interaction.json",
+        "specifiers": [
+          "default"
+        ]
+      },
+      {
+        "source": "./defaults/keybindings.json",
+        "target": "src/config/defaults/keybindings.json",
+        "specifiers": [
+          "default"
+        ]
+      },
+      {
+        "source": "./defaults/layout.json",
+        "target": "src/config/defaults/layout.json",
+        "specifiers": [
+          "default"
+        ]
+      },
+      {
+        "source": "./defaults/lighting.json",
+        "target": "src/config/defaults/lighting.json",
+        "specifiers": [
+          "default"
+        ]
+      },
+      {
+        "source": "./defaults/lineVisibility.json",
+        "target": "src/config/defaults/lineVisibility.json",
+        "specifiers": [
+          "default"
+        ]
+      },
+      {
+        "source": "./defaults/materials.json",
+        "target": "src/config/defaults/materials.json",
+        "specifiers": [
+          "default"
+        ]
+      },
+      {
+        "source": "./defaults/relay.json",
+        "target": "src/config/defaults/relay.json",
+        "specifiers": [
+          "default"
+        ]
+      },
+      {
+        "source": "./defaults/rendering.json",
+        "target": "src/config/defaults/rendering.json",
+        "specifiers": [
+          "default"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "RelayConfig",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly password: string",
+          "readonly topicRoot: string",
+          "readonly username: string",
+          "readonly wssUrl: string"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [
+      {
+        "name": "ConfigSection",
+        "type": "keyof typeof DEFAULTS"
+      },
+      {
+        "name": "ConfigOf",
+        "type": "(typeof DEFAULTS)[S]"
+      },
+      {
+        "name": "JsonRecord",
+        "type": "Record<string, unknown>"
+      }
+    ],
+    "functions": [
+      "clone",
+      "deepMerge",
+      "getConfig",
+      "getDefault",
+      "isPlainObject",
+      "overrideStorageKey",
+      "readOverride",
+      "resetConfig",
+      "resolveStorage",
+      "setConfig"
+    ]
+  },
+  "src/core/axes.ts": {
+    "exports": [
+      "AXES",
+      "Axis",
+      "DIRECTIONS",
+      "LineCategory"
+    ],
+    "imports": [
+      {
+        "source": "./coords",
+        "target": "src/core/coords.ts",
+        "specifiers": [
+          "Coord"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "Axis",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly category: LineCategory",
+          "readonly vec: Coord"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [
+      {
+        "name": "LineCategory",
+        "type": "'orthogonal' | 'face' | 'space'"
+      }
+    ],
+    "functions": [
+      "buildAxes",
+      "categoryOf",
+      "firstNonZero",
+      "nonZeroCount"
+    ]
+  },
+  "src/core/coords.ts": {
+    "exports": [
+      "Coord",
+      "NodeKey",
+      "coordsOf",
+      "inBounds",
+      "keyOf"
+    ],
+    "imports": [],
+    "classes": [],
+    "interfaces": [],
+    "enums": [],
+    "typeAliases": [
+      {
+        "name": "Coord",
+        "type": "[number, number, number]"
+      },
+      {
+        "name": "NodeKey",
+        "type": "string"
+      }
+    ],
+    "functions": [
+      "coordsOf",
+      "inBounds",
+      "keyOf"
+    ]
+  },
+  "src/core/eventLog.ts": {
+    "exports": [
+      "Event",
+      "EventLog",
+      "LogEntry",
+      "PlaceEvent",
+      "RedoEvent",
+      "UndoEvent",
+      "append",
+      "emptyLog",
+      "firstDivergence",
+      "headHash",
+      "isPrefix"
+    ],
+    "imports": [
+      {
+        "source": "./coords",
+        "target": "src/core/coords.ts",
+        "specifiers": [
+          "NodeKey"
+        ]
+      },
+      {
+        "source": "./hash",
+        "target": "src/core/hash.ts",
+        "specifiers": [
+          "hashStep"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "PlaceEvent",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly node: NodeKey",
+          "readonly type: 'place'"
+        ]
+      },
+      {
+        "name": "UndoEvent",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly type: 'undo'"
+        ]
+      },
+      {
+        "name": "RedoEvent",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly type: 'redo'"
+        ]
+      },
+      {
+        "name": "LogEntry",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly event: Event",
+          "readonly hash: string"
+        ]
+      },
+      {
+        "name": "EventLog",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly entries: readonly LogEntry[]"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [
+      {
+        "name": "Event",
+        "type": "PlaceEvent | UndoEvent | RedoEvent"
+      }
+    ],
+    "functions": [
+      "append",
+      "emptyLog",
+      "firstDivergence",
+      "headHash",
+      "isPrefix",
+      "serializeEvent"
+    ]
+  },
+  "src/core/game.ts": {
+    "exports": [
+      "Game"
+    ],
+    "imports": [
+      {
+        "source": "./coords",
+        "target": "src/core/coords.ts",
+        "specifiers": [
+          "Coord",
+          "coordsOf",
+          "keyOf"
+        ]
+      },
+      {
+        "source": "./eventLog",
+        "target": "src/core/eventLog.ts",
+        "specifiers": [
+          "Event",
+          "EventLog",
+          "append",
+          "emptyLog"
+        ]
+      },
+      {
+        "source": "./gameState",
+        "target": "src/core/gameState.ts",
+        "specifiers": [
+          "GameState",
+          "IllegalMove",
+          "initialState"
+        ]
+      },
+      {
+        "source": "./placePiece",
+        "target": "src/core/placePiece.ts",
+        "specifiers": [
+          "placePiece"
+        ]
+      }
+    ],
+    "classes": [
+      {
+        "name": "Game",
+        "extends": null,
+        "implements": [],
+        "methods": [
+          "canRedo(): boolean",
+          "canUndo(): boolean",
+          "get log(): EventLog",
+          "place(coords: Coord): void",
+          "ply(): number",
+          "redo(): void",
+          "state(): GameState",
+          "stateAt(k: number): GameState",
+          "static fromLog(size: number, log: EventLog): Game",
+          "undo(): void"
+        ],
+        "properties": [],
+        "isAbstract": false
+      }
+    ],
+    "interfaces": [],
+    "enums": [],
+    "typeAliases": [],
+    "functions": []
+  },
+  "src/core/gameState.ts": {
+    "exports": [
+      "GameState",
+      "IllegalMove",
+      "Player",
+      "initialState",
+      "opponent"
+    ],
+    "imports": [
+      {
+        "source": "./coords",
+        "target": "src/core/coords.ts",
+        "specifiers": [
+          "NodeKey"
+        ]
+      }
+    ],
+    "classes": [
+      {
+        "name": "IllegalMove",
+        "extends": "Error",
+        "implements": [],
+        "methods": [],
+        "properties": [],
+        "isAbstract": false
+      }
+    ],
+    "interfaces": [
+      {
+        "name": "GameState",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly captures: Readonly<Record<Player, number>>",
+          "readonly pieces: Readonly<Record<NodeKey, Player>>",
+          "readonly size: number",
+          "readonly turn: Player",
+          "readonly winner: Player | null",
+          "readonly winningLine: readonly NodeKey[]"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [
+      {
+        "name": "Player",
+        "type": "'white' | 'black'"
+      }
+    ],
+    "functions": [
+      "initialState",
+      "opponent"
+    ]
+  },
+  "src/core/hash.ts": {
+    "exports": [
+      "hashStep"
+    ],
+    "imports": [],
+    "classes": [],
+    "interfaces": [],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "fnv1a",
+      "hashStep"
+    ]
+  },
+  "src/core/lines.ts": {
+    "exports": [
+      "GenerateLineResult",
+      "Line",
+      "LineCategory",
+      "LineId",
+      "assertUnitStep",
+      "buildLinesThroughNode",
+      "generateAllLines",
+      "generateFullLine",
+      "generatePartialLine",
+      "linesThroughNode"
+    ],
+    "imports": [
+      {
+        "source": "./axes",
+        "target": "src/core/axes.ts",
+        "specifiers": [
+          "AXES"
+        ]
+      },
+      {
+        "source": "./coords",
+        "target": "src/core/coords.ts",
+        "specifiers": [
+          "Coord",
+          "NodeKey",
+          "inBounds",
+          "keyOf"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "Line",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly axisIndex: number",
+          "readonly category: LineCategory",
+          "readonly entryNode: Coord",
+          "readonly id: LineId",
+          "readonly nodes: Coord[]"
+        ]
+      },
+      {
+        "name": "GenerateLineResult",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly line: Line",
+          "readonly ok: boolean",
+          "readonly warning: string"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [
+      {
+        "name": "LineId",
+        "type": "string"
+      },
+      {
+        "name": "LineCategory",
+        "type": "(typeof AXES)[number]['category']"
+      }
+    ],
+    "functions": [
+      "add",
+      "assertUnitStep",
+      "buildLinesThroughNode",
+      "canonicalFullLineThrough",
+      "collinearAxis",
+      "generateAllLines",
+      "generateFullLine",
+      "generatePartialLine",
+      "lineId",
+      "linesThroughNode",
+      "onFace",
+      "scale",
+      "sub",
+      "walkFullLine"
+    ]
+  },
+  "src/core/placePiece.ts": {
+    "exports": [
+      "placePiece"
+    ],
+    "imports": [
+      {
+        "source": "./axes",
+        "target": "src/core/axes.ts",
+        "specifiers": [
+          "AXES",
+          "DIRECTIONS"
+        ]
+      },
+      {
+        "source": "./coords",
+        "target": "src/core/coords.ts",
+        "specifiers": [
+          "Coord",
+          "inBounds",
+          "keyOf"
+        ]
+      },
+      {
+        "source": "./gameState",
+        "target": "src/core/gameState.ts",
+        "specifiers": [
+          "GameState",
+          "IllegalMove",
+          "Player",
+          "opponent"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "checkWin",
+      "placePiece",
+      "resolveCaptures"
+    ]
+  },
+  "src/core/serialize.ts": {
+    "exports": [
+      "ExportError",
+      "GameExport",
+      "GameSettings",
+      "deserializeGame",
+      "exportGame",
+      "importGame",
+      "serializeGame"
+    ],
+    "imports": [
+      {
+        "source": "./coords",
+        "target": "src/core/coords.ts",
+        "specifiers": [
+          "NodeKey",
+          "coordsOf",
+          "inBounds",
+          "keyOf"
+        ]
+      },
+      {
+        "source": "./eventLog",
+        "target": "src/core/eventLog.ts",
+        "specifiers": [
+          "Event",
+          "EventLog",
+          "append",
+          "emptyLog"
+        ]
+      },
+      {
+        "source": "./game",
+        "target": "src/core/game.ts",
+        "specifiers": [
+          "Game"
+        ]
+      },
+      {
+        "source": "./gameState",
+        "target": "src/core/gameState.ts",
+        "specifiers": [
+          "IllegalMove"
+        ]
+      }
+    ],
+    "classes": [
+      {
+        "name": "ExportError",
+        "extends": "Error",
+        "implements": [],
+        "methods": [],
+        "properties": [],
+        "isAbstract": false
+      }
+    ],
+    "interfaces": [
+      {
+        "name": "GameExport",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly log: readonly Event[]",
+          "readonly settings: GameSettings",
+          "readonly size: number"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [
+      {
+        "name": "GameSettings",
+        "type": "Readonly<Record<string, unknown>>"
+      }
+    ],
+    "functions": [
+      "assertValidNodeKey",
+      "deserializeGame",
+      "exportGame",
+      "importGame",
+      "serializeGame",
+      "validateEvent",
+      "validateLog",
+      "validateSize"
+    ]
+  },
+  "src/debug/log.ts": {
+    "exports": [
+      "LogLevel",
+      "Logger",
+      "createLogger",
+      "refreshDebugSpec",
+      "setDebugSpec"
+    ],
+    "imports": [],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "Logger",
+        "extends": [],
+        "methods": [
+          "debug(args: unknown[]): void",
+          "error(args: unknown[]): void",
+          "info(args: unknown[]): void",
+          "trace(args: unknown[]): void",
+          "warn(args: unknown[]): void"
+        ],
+        "properties": []
+      }
+    ],
+    "enums": [],
+    "typeAliases": [
+      {
+        "name": "LogLevel",
+        "type": "'trace' | 'debug' | 'info' | 'warn' | 'error'"
+      }
+    ],
+    "functions": [
+      "compilePatterns",
+      "createLogger",
+      "emit",
+      "isEnabled",
+      "patterns",
+      "readSpec",
+      "refreshDebugSpec",
+      "setDebugSpec"
+    ]
+  },
+  "src/debug/window.ts": {
+    "exports": [
+      "ArchiveInspect",
+      "PenteInspect",
+      "installInspectApi"
+    ],
+    "imports": [
+      {
+        "source": "../core/coords.ts",
+        "target": "src/core/coords.ts",
+        "specifiers": [
+          "Coord"
+        ]
+      },
+      {
+        "source": "../core/gameState.ts",
+        "target": "src/core/gameState.ts",
+        "specifiers": [
+          "GameState"
+        ]
+      },
+      {
+        "source": "../input/scopes.ts",
+        "target": "src/input/scopes.ts",
+        "specifiers": [
+          "KeyResolution"
+        ]
+      },
+      {
+        "source": "../input/setup.ts",
+        "target": "src/input/setup.ts",
+        "specifiers": [
+          "InputReadout"
+        ]
+      },
+      {
+        "source": "../render/cameraControls.ts",
+        "target": "src/render/cameraControls.ts",
+        "specifiers": [
+          "CameraPresetReadout"
+        ]
+      },
+      {
+        "source": "../render/hover.ts",
+        "target": "src/render/hover.ts",
+        "specifiers": [
+          "HoverTarget",
+          "RaycastHit"
+        ]
+      },
+      {
+        "source": "../render/lines.ts",
+        "target": "src/render/lines.ts",
+        "specifiers": [
+          "LineGroupReadout"
+        ]
+      },
+      {
+        "source": "../render/markers.ts",
+        "target": "src/render/markers.ts",
+        "specifiers": [
+          "MarkersReadout"
+        ]
+      },
+      {
+        "source": "../render/pieces.ts",
+        "target": "src/render/pieces.ts",
+        "specifiers": [
+          "PieceReadout"
+        ]
+      },
+      {
+        "source": "../render/scene.ts",
+        "target": "src/render/scene.ts",
+        "specifiers": [
+          "CameraReadout",
+          "ColorsReadout",
+          "HistoryReadout",
+          "LightingReadout",
+          "SceneHandle",
+          "TempReadout",
+          "TurnGateReadout",
+          "ViewportReadout"
+        ]
+      },
+      {
+        "source": "../render/winLine.ts",
+        "target": "src/render/winLine.ts",
+        "specifiers": [
+          "WinLineReadout"
+        ]
+      },
+      {
+        "source": "../ui/container.ts",
+        "target": "src/ui/container.ts",
+        "specifiers": [
+          "LayoutReadout"
+        ]
+      },
+      {
+        "source": "../ui/setup.ts",
+        "target": "src/ui/setup.ts",
+        "specifiers": [
+          "UiHandle"
+        ]
+      },
+      {
+        "source": "../ui/widgets/archiveModel.ts",
+        "target": "src/ui/widgets/archiveModel.ts",
+        "specifiers": [
+          "ArchiveListing"
+        ]
+      },
+      {
+        "source": "../ui/widgets/banner.ts",
+        "target": "src/ui/widgets/banner.ts",
+        "specifiers": [
+          "BannerContext"
+        ]
+      },
+      {
+        "source": "../ui/widgets/helpModel.ts",
+        "target": "src/ui/widgets/helpModel.ts",
+        "specifiers": [
+          "HelpSources"
+        ]
+      },
+      {
+        "source": "../ui/widgets/netModel.ts",
+        "target": "src/ui/widgets/netModel.ts",
+        "specifiers": [
+          "NetSessionState"
+        ]
+      },
+      {
+        "source": "./log.ts",
+        "target": "src/debug/log.ts",
+        "specifiers": [
+          "createLogger"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "PenteInspect",
+        "extends": [],
+        "methods": [
+          "clickAt(ndcX: number, ndcY: number): GameState | null",
+          "dispatch(id: string): boolean | null",
+          "getArchive(): Promise<readonly ArchiveListing[]>",
+          "getBannerContext(): BannerContext | null",
+          "getCamera(): CameraReadout | null",
+          "getCameraPreset(): CameraPresetReadout | null",
+          "getColors(): ColorsReadout | null",
+          "getHeadHash(): string | null",
+          "getHelpSources(): HelpSources | null",
+          "getHistory(): HistoryReadout | null",
+          "getHoverTarget(): HoverTarget | null",
+          "getInput(): InputReadout | null",
+          "getLayout(): LayoutReadout | null",
+          "getLighting(): LightingReadout | null",
+          "getMarkers(query: readonly string[]): MarkersReadout | null",
+          "getNet(): NetSessionState | null",
+          "getPieces(): PieceReadout[] | null",
+          "getState(): GameState | null",
+          "getTemp(): TempReadout | null",
+          "getTurnGate(): TurnGateReadout | null",
+          "getViewportSize(): ViewportReadout | null",
+          "getVisibleLines(): LineGroupReadout[] | null",
+          "getWinLine(): WinLineReadout | null",
+          "hoverAt(ndcX: number, ndcY: number): HoverTarget | null",
+          "pickAt(ndcX: number, ndcY: number): RaycastHit | null",
+          "place(coords: Coord): GameState | null",
+          "pressKey(chord: string): KeyResolution | null",
+          "radiusOf(node: Coord): number | null",
+          "rayNodeDistances(ndcX: number, ndcY: number): { node: string; distance: number; depth: number }[]",
+          "resync(): void",
+          "scrubTo(k: number): void",
+          "setCamera(position: { x: number; y: number; z: number }, target: { x: number; y: number; z: number }): void"
+        ],
+        "properties": []
+      },
+      {
+        "name": "ArchiveInspect",
+        "extends": [],
+        "methods": [
+          "listArchive(): Promise<readonly ArchiveListing[]>"
+        ],
+        "properties": []
+      },
+      {
+        "name": "Window",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "__pente: PenteInspect"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "installInspectApi"
+    ]
+  },
+  "src/input/commands.ts": {
+    "exports": [
+      "Command",
+      "CommandContext",
+      "CommandId",
+      "CommandRegistry",
+      "createRegistry"
+    ],
+    "imports": [],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "Command",
+        "extends": [],
+        "methods": [
+          "run(ctx: CommandContext): void"
+        ],
+        "properties": [
+          "readonly id: CommandId"
+        ]
+      },
+      {
+        "name": "CommandRegistry",
+        "extends": [],
+        "methods": [
+          "dispatch(id: CommandId, ctx: CommandContext): boolean",
+          "get(id: CommandId): Command | undefined",
+          "has(id: CommandId): boolean",
+          "ids(): CommandId[]"
+        ],
+        "properties": []
+      }
+    ],
+    "enums": [],
+    "typeAliases": [
+      {
+        "name": "CommandId",
+        "type": "string"
+      },
+      {
+        "name": "CommandContext",
+        "type": "unknown"
+      }
+    ],
+    "functions": [
+      "createRegistry"
+    ]
+  },
+  "src/input/keybindings.ts": {
+    "exports": [
+      "KeyChordEvent",
+      "chordOf",
+      "scopeFromBindings"
+    ],
+    "imports": [
+      {
+        "source": "./scopes.ts",
+        "target": "src/input/scopes.ts",
+        "specifiers": [
+          "CommandId",
+          "Scope"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "KeyChordEvent",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly altKey: boolean",
+          "readonly ctrlKey: boolean",
+          "readonly key: string",
+          "readonly metaKey: boolean",
+          "readonly shiftKey: boolean"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "chordOf",
+      "scopeFromBindings"
+    ]
+  },
+  "src/input/placement.ts": {
+    "exports": [
+      "CONFIRM_TEMP_COMMAND",
+      "ConfirmResult",
+      "ENTER_TEMP_COMMAND",
+      "EXIT_TEMP_COMMAND",
+      "TEMP_SCOPE_ID",
+      "TempPlacement",
+      "confirmTemp",
+      "enterTemp",
+      "exitTemp",
+      "initialTemp",
+      "placementFromHit",
+      "setTempPreview",
+      "tempPlacementScope"
+    ],
+    "imports": [
+      {
+        "source": "../core/coords.ts",
+        "target": "src/core/coords.ts",
+        "specifiers": [
+          "Coord",
+          "coordsOf"
+        ]
+      },
+      {
+        "source": "../core/coords.ts",
+        "target": "src/core/coords.ts",
+        "specifiers": [
+          "NodeKey"
+        ]
+      },
+      {
+        "source": "../render/hover.ts",
+        "target": "src/render/hover.ts",
+        "specifiers": [
+          "RaycastHit"
+        ]
+      },
+      {
+        "source": "./scopes.ts",
+        "target": "src/input/scopes.ts",
+        "specifiers": [
+          "CommandId",
+          "Scope"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "TempPlacement",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly active: boolean",
+          "readonly preview: NodeKey | null"
+        ]
+      },
+      {
+        "name": "ConfirmResult",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly commit: Coord | null",
+          "readonly next: TempPlacement"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "confirmTemp",
+      "enterTemp",
+      "exitTemp",
+      "initialTemp",
+      "placementFromHit",
+      "setTempPreview",
+      "tempPlacementScope"
+    ]
+  },
+  "src/input/pointerGesture.ts": {
+    "exports": [
+      "DragGuardConfig",
+      "PointerPos",
+      "shouldPlaceFromPointer"
+    ],
+    "imports": [],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "PointerPos",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly x: number",
+          "readonly y: number"
+        ]
+      },
+      {
+        "name": "DragGuardConfig",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly enabled: boolean",
+          "readonly thresholdPx: number"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "shouldPlaceFromPointer"
+    ]
+  },
+  "src/input/scopes.ts": {
+    "exports": [
+      "CommandId",
+      "KeyResolution",
+      "Scope",
+      "ScopeStack",
+      "emptyStack",
+      "popScope",
+      "pushScope",
+      "resolveKey"
+    ],
+    "imports": [],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "Scope",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly bindings: Readonly<Record<string, CommandId>>",
+          "readonly blocking: boolean",
+          "readonly id: string"
+        ]
+      },
+      {
+        "name": "ScopeStack",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly scopes: readonly Scope[]"
+        ]
+      },
+      {
+        "name": "KeyResolution",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly commandId: CommandId | null",
+          "readonly handled: boolean",
+          "readonly scopeId: string | null"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [
+      {
+        "name": "CommandId",
+        "type": "string"
+      }
+    ],
+    "functions": [
+      "emptyStack",
+      "popScope",
+      "pushScope",
+      "resolveKey"
+    ]
+  },
+  "src/input/setup.ts": {
+    "exports": [
+      "InputHandle",
+      "InputReadout",
+      "createInput"
+    ],
+    "imports": [
+      {
+        "source": "./commands.ts",
+        "target": "src/input/commands.ts",
+        "specifiers": [
+          "Command",
+          "CommandContext",
+          "CommandRegistry",
+          "createRegistry"
+        ]
+      },
+      {
+        "source": "./keybindings.ts",
+        "target": "src/input/keybindings.ts",
+        "specifiers": [
+          "KeyChordEvent",
+          "chordOf",
+          "scopeFromBindings"
+        ]
+      },
+      {
+        "source": "./scopes.ts",
+        "target": "src/input/scopes.ts",
+        "specifiers": [
+          "KeyResolution",
+          "Scope",
+          "ScopeStack",
+          "emptyStack",
+          "pushScope",
+          "resolveKey"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "InputReadout",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "commands: string[]",
+          "scopes: string[]"
+        ]
+      },
+      {
+        "name": "InputHandle",
+        "extends": [],
+        "methods": [
+          "dispatch(id: string): boolean",
+          "dispose(): void",
+          "handleChord(chord: string): KeyResolution",
+          "pop(): void",
+          "push(scope: Scope): void",
+          "readout(): InputReadout",
+          "stack(): ScopeStack"
+        ],
+        "properties": [
+          "readonly registry: CommandRegistry"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "createInput",
+      "dispatch",
+      "handleChord",
+      "onKeyDown"
+    ]
+  },
+  "src/main.ts": {
+    "exports": [],
+    "imports": [
+      {
+        "source": "./core/eventLog.ts",
+        "target": "src/core/eventLog.ts",
+        "specifiers": [
+          "headHash"
+        ]
+      },
+      {
+        "source": "./core/game.ts",
+        "target": "src/core/game.ts",
+        "specifiers": [
+          "Game"
+        ]
+      },
+      {
+        "source": "./debug/log.ts",
+        "target": "src/debug/log.ts",
+        "specifiers": [
+          "createLogger"
+        ]
+      },
+      {
+        "source": "./debug/window.ts",
+        "target": "src/debug/window.ts",
+        "specifiers": [
+          "installInspectApi"
+        ]
+      },
+      {
+        "source": "./net/appSession.ts",
+        "target": "src/net/appSession.ts",
+        "specifiers": [
+          "createAppNetSession"
+        ]
+      },
+      {
+        "source": "./net/netRouting.ts",
+        "target": "src/net/netRouting.ts",
+        "specifiers": [
+          "shouldRenderSessionGame"
+        ]
+      },
+      {
+        "source": "./net/rematch.ts",
+        "target": "src/net/rematch.ts",
+        "specifiers": [
+          "shouldArchiveBeforeNetStart",
+          "shouldPromptRematch"
+        ]
+      },
+      {
+        "source": "./persist/archive.ts",
+        "target": "src/persist/archive.ts",
+        "specifiers": [
+          "ArchivedMeta",
+          "listArchivedGames",
+          "loadConflicted",
+          "loadGame",
+          "saveGame"
+        ]
+      },
+      {
+        "source": "./persist/db.ts",
+        "target": "src/persist/db.ts",
+        "specifiers": [
+          "openDatabase",
+          "resolveDbName"
+        ]
+      },
+      {
+        "source": "./persist/gameLifecycle.ts",
+        "target": "src/persist/gameLifecycle.ts",
+        "specifiers": [
+          "LifecycleState",
+          "initialLifecycle",
+          "nextLifecycle",
+          "observeLifecycle"
+        ]
+      },
+      {
+        "source": "./render/scene.ts",
+        "target": "src/render/scene.ts",
+        "specifiers": [
+          "createScene"
+        ]
+      },
+      {
+        "source": "./ui/setup.ts",
+        "target": "src/ui/setup.ts",
+        "specifiers": [
+          "createUi"
+        ]
+      },
+      {
+        "source": "./ui/widgets/archiveModel.ts",
+        "target": "src/ui/widgets/archiveModel.ts",
+        "specifiers": [
+          "ArchiveListing"
+        ]
+      },
+      {
+        "source": "./util/randomId.ts",
+        "target": "src/util/randomId.ts",
+        "specifiers": [
+          "randomId"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "Window",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "__penteRematchPrompt: () => boolean"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "authoritativeGame",
+      "autosaveMeta",
+      "autosaveTick",
+      "bumpGeneration",
+      "currentGeneration",
+      "listArchive",
+      "loadArchivedIntoScene",
+      "loadConflictedIfAny",
+      "refreshUi",
+      "rematchPrompt",
+      "resolveAutosaveId",
+      "resumeArchived",
+      "reviewArchived"
+    ]
+  },
+  "src/net/appSession.ts": {
+    "exports": [
+      "PLAYER_ID_KEY",
+      "createAppNetSession",
+      "resolvePlayerId",
+      "resolveTransportFactory"
+    ],
+    "imports": [
+      {
+        "source": "../config/config",
+        "target": "src/config/config.ts",
+        "specifiers": [
+          "getConfig"
+        ]
+      },
+      {
+        "source": "../config/config",
+        "target": "src/config/config.ts",
+        "specifiers": [
+          "RelayConfig"
+        ]
+      },
+      {
+        "source": "../debug/log",
+        "target": "src/debug/log.ts",
+        "specifiers": [
+          "createLogger"
+        ]
+      },
+      {
+        "source": "../persist/db",
+        "target": "src/persist/db.ts",
+        "specifiers": [
+          "openDatabase",
+          "resolveDbName"
+        ]
+      },
+      {
+        "source": "../util/randomId",
+        "target": "src/util/randomId.ts",
+        "specifiers": [
+          "randomId"
+        ]
+      },
+      {
+        "source": "./mqttTransport",
+        "target": "src/net/mqttTransport.ts",
+        "specifiers": [
+          "MqttConnectFn",
+          "MqttTransport"
+        ]
+      },
+      {
+        "source": "./session",
+        "target": "src/net/session.ts",
+        "specifiers": [
+          "NetSession"
+        ]
+      },
+      {
+        "source": "./transport",
+        "target": "src/net/transport.ts",
+        "specifiers": [
+          "Transport"
+        ]
+      },
+      {
+        "source": "mqtt",
+        "target": null,
+        "specifiers": [
+          "default"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "Window",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "__penteNetTransportFactory: () => Transport"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "createAppNetSession",
+      "resolvePlayerId",
+      "resolveTransportFactory"
+    ]
+  },
+  "src/net/mqttTransport.ts": {
+    "exports": [
+      "MqttClientLike",
+      "MqttConnectFn",
+      "MqttConnectOptions",
+      "MqttPublishOptions",
+      "MqttTransport",
+      "MqttTransportDeps",
+      "MqttWill"
+    ],
+    "imports": [
+      {
+        "source": "../config/config",
+        "target": "src/config/config.ts",
+        "specifiers": [
+          "RelayConfig"
+        ]
+      },
+      {
+        "source": "./presence",
+        "target": "src/net/presence.ts",
+        "specifiers": [
+          "PresenceTracker"
+        ]
+      },
+      {
+        "source": "./transport",
+        "target": "src/net/transport.ts",
+        "specifiers": [
+          "ConnectOptions",
+          "MessageHandler",
+          "PresenceHandler",
+          "Transport",
+          "TransportMessage",
+          "roomTopic"
+        ]
+      }
+    ],
+    "classes": [
+      {
+        "name": "MqttTransport",
+        "extends": null,
+        "implements": [
+          "Transport"
+        ],
+        "methods": [
+          "connect(roomCode: string, _opts: ConnectOptions): Promise<void>",
+          "disconnect(): void",
+          "onMessage(cb: MessageHandler): void",
+          "onPresence(cb: PresenceHandler): void",
+          "publish(msg: TransportMessage): void"
+        ],
+        "properties": [
+          "readonly peerId: string"
+        ],
+        "isAbstract": false
+      }
+    ],
+    "interfaces": [
+      {
+        "name": "MqttPublishOptions",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly qos: 0 | 1 | 2",
+          "readonly retain: boolean"
+        ]
+      },
+      {
+        "name": "MqttWill",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly payload: string",
+          "readonly qos: 0 | 1 | 2",
+          "readonly retain: boolean",
+          "readonly topic: string"
+        ]
+      },
+      {
+        "name": "MqttConnectOptions",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly clientId: string",
+          "readonly connectTimeout: number",
+          "readonly password: string",
+          "readonly reconnectPeriod: number",
+          "readonly username: string",
+          "readonly will: MqttWill"
+        ]
+      },
+      {
+        "name": "MqttClientLike",
+        "extends": [],
+        "methods": [
+          "end(): this",
+          "on(event: 'connect', cb: () => void): this",
+          "on(event: 'error', cb: (err: Error) => void): this",
+          "on(event: 'message', cb: (topic: string, payload: Uint8Array, packet: { retain: boolean }) => void): this",
+          "on(event: string, cb: (...args: never[]) => void): this",
+          "publish(topic: string, payload: string, opts: MqttPublishOptions, cb: () => void): this",
+          "subscribe(topics: string[], cb: (err: Error | null) => void): this"
+        ],
+        "properties": []
+      },
+      {
+        "name": "MqttTransportDeps",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly connect: MqttConnectFn",
+          "readonly peerId: string"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [
+      {
+        "name": "MqttConnectFn",
+        "type": "(\n  url: string,\n  opts: MqttConnectOptions,\n) => MqttClientLike"
+      }
+    ],
+    "functions": [
+      "decode",
+      "randomPeerId"
+    ]
+  },
+  "src/net/netRouting.ts": {
+    "exports": [
+      "PlacementRoute",
+      "placementRoute",
+      "shouldRenderSessionGame"
+    ],
+    "imports": [
+      {
+        "source": "../ui/widgets/netModel",
+        "target": "src/ui/widgets/netModel.ts",
+        "specifiers": [
+          "NetSessionState"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [],
+    "enums": [],
+    "typeAliases": [
+      {
+        "name": "PlacementRoute",
+        "type": "| 'session'\n  /** No live session — the placement mutates the scene-local game (single-player / stopped). */\n  | 'local'"
+      }
+    ],
+    "functions": [
+      "placementRoute",
+      "shouldRenderSessionGame"
+    ]
+  },
+  "src/net/presence.ts": {
+    "exports": [
+      "PresenceKind",
+      "PresenceSignal",
+      "PresenceTracker"
+    ],
+    "imports": [],
+    "classes": [
+      {
+        "name": "PresenceTracker",
+        "extends": null,
+        "implements": [],
+        "methods": [
+          "apply(signal: PresenceSignal): boolean",
+          "candidatePeers(): string[]",
+          "hasLivePeer(): boolean",
+          "livePeers(): string[]"
+        ],
+        "properties": [],
+        "isAbstract": false
+      }
+    ],
+    "interfaces": [
+      {
+        "name": "PresenceSignal",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly kind: PresenceKind",
+          "readonly peerId: string"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [
+      {
+        "name": "PresenceKind",
+        "type": "| 'retained'\n  /** A fresh, non-retained presence publish seen while subscribed. Promotes the peer to live. */\n  | 'live'\n  /** An empty payload: a graceful leave or a fired Last-Will. Removes the peer entirely. */\n  | 'absent'"
+      }
+    ],
+    "functions": []
+  },
+  "src/net/rematch.ts": {
+    "exports": [
+      "shouldArchiveBeforeNetStart",
+      "shouldPromptRematch"
+    ],
+    "imports": [
+      {
+        "source": "../core/gameState",
+        "target": "src/core/gameState.ts",
+        "specifiers": [
+          "GameState"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "shouldArchiveBeforeNetStart",
+      "shouldPromptRematch"
+    ]
+  },
+  "src/net/seats.ts": {
+    "exports": [
+      "ClaimRejection",
+      "ClaimResult",
+      "SeatColor",
+      "SeatMap",
+      "claimSeat",
+      "emptySeatMap",
+      "isFull",
+      "occupantOf",
+      "releaseSeat",
+      "seatOf"
+    ],
+    "imports": [],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "SeatMap",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly black: string | null",
+          "readonly white: string | null"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [
+      {
+        "name": "SeatColor",
+        "type": "'white' | 'black'"
+      },
+      {
+        "name": "ClaimRejection",
+        "type": "'room-full'"
+      },
+      {
+        "name": "ClaimResult",
+        "type": "| { readonly ok: true; readonly color: SeatColor; readonly seatMap: SeatMap }\n  | {\n      readonly ok: false;\n      readonly reason: ClaimRejection;\n      readonly seatMap: SeatMap;\n    }"
+      }
+    ],
+    "functions": [
+      "claimSeat",
+      "cloneSeatMap",
+      "emptySeatMap",
+      "isFull",
+      "occupantOf",
+      "releaseSeat",
+      "seatOf"
+    ]
+  },
+  "src/net/session.ts": {
+    "exports": [
+      "NetChangeListener",
+      "NetSession",
+      "NetSessionDeps"
+    ],
+    "imports": [
+      {
+        "source": "../core/coords",
+        "target": "src/core/coords.ts",
+        "specifiers": [
+          "Coord"
+        ]
+      },
+      {
+        "source": "../core/game",
+        "target": "src/core/game.ts",
+        "specifiers": [
+          "Game"
+        ]
+      },
+      {
+        "source": "../core/gameState",
+        "target": "src/core/gameState.ts",
+        "specifiers": [
+          "GameState",
+          "Player"
+        ]
+      },
+      {
+        "source": "../persist/archive",
+        "target": "src/persist/archive.ts",
+        "specifiers": [
+          "ArchivedMeta"
+        ]
+      },
+      {
+        "source": "../ui/widgets/netModel",
+        "target": "src/ui/widgets/netModel.ts",
+        "specifiers": [
+          "JoinErrorReason",
+          "NetPhase",
+          "NetSeat",
+          "NetSessionState",
+          "generateGameCode",
+          "normalizeGameCode",
+          "validateGameCode"
+        ]
+      },
+      {
+        "source": "./seats",
+        "target": "src/net/seats.ts",
+        "specifiers": [
+          "SeatColor",
+          "SeatMap",
+          "claimSeat",
+          "emptySeatMap"
+        ]
+      },
+      {
+        "source": "./sync",
+        "target": "src/net/sync.ts",
+        "specifiers": [
+          "SyncEngine"
+        ]
+      },
+      {
+        "source": "./transport",
+        "target": "src/net/transport.ts",
+        "specifiers": [
+          "Transport"
+        ]
+      },
+      {
+        "source": "./turnGate",
+        "target": "src/net/turnGate.ts",
+        "specifiers": [
+          "canPlaceForSeat"
+        ]
+      }
+    ],
+    "classes": [
+      {
+        "name": "NetSession",
+        "extends": null,
+        "implements": [],
+        "methods": [
+          "canPlace(): boolean",
+          "disconnect(): void",
+          "gameState(): GameState | null",
+          "host(): Promise<void>",
+          "join(rawCode: string): Promise<boolean>",
+          "onChange(listener: NetChangeListener): () => void",
+          "place(coords: Coord): void",
+          "state(): NetSessionState",
+          "syncEngine(): SyncEngine | null",
+          "undo(): void"
+        ],
+        "properties": [],
+        "isAbstract": false
+      }
+    ],
+    "interfaces": [
+      {
+        "name": "NetSessionDeps",
+        "extends": [],
+        "methods": [
+          "createTransport(): Transport"
+        ],
+        "properties": [
+          "now: () => number",
+          "rand: () => number",
+          "readonly db: IDBDatabase",
+          "readonly playerId: string",
+          "readonly size: number"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [
+      {
+        "name": "NetChangeListener",
+        "type": "(state: NetSessionState) => void"
+      }
+    ],
+    "functions": []
+  },
+  "src/net/sync.ts": {
+    "exports": [
+      "MetaProvider",
+      "SYNC_VERSION",
+      "SyncDecision",
+      "SyncEngine",
+      "SyncError",
+      "SyncMessage",
+      "SyncStatus",
+      "UndoDecision",
+      "UndoRejection",
+      "decideSync",
+      "decideUndo",
+      "parseSyncMessage",
+      "toSyncMessage"
+    ],
+    "imports": [
+      {
+        "source": "../core/coords",
+        "target": "src/core/coords.ts",
+        "specifiers": [
+          "Coord"
+        ]
+      },
+      {
+        "source": "../core/eventLog",
+        "target": "src/core/eventLog.ts",
+        "specifiers": [
+          "Event",
+          "EventLog",
+          "append",
+          "emptyLog",
+          "firstDivergence",
+          "headHash",
+          "isPrefix"
+        ]
+      },
+      {
+        "source": "../core/game",
+        "target": "src/core/game.ts",
+        "specifiers": [
+          "Game"
+        ]
+      },
+      {
+        "source": "../core/gameState",
+        "target": "src/core/gameState.ts",
+        "specifiers": [
+          "GameState",
+          "Player",
+          "opponent"
+        ]
+      },
+      {
+        "source": "../persist/archive",
+        "target": "src/persist/archive.ts",
+        "specifiers": [
+          "ArchivedMeta",
+          "flagConflicted"
+        ]
+      },
+      {
+        "source": "./transport",
+        "target": "src/net/transport.ts",
+        "specifiers": [
+          "Transport",
+          "TransportMessage"
+        ]
+      }
+    ],
+    "classes": [
+      {
+        "name": "SyncError",
+        "extends": "Error",
+        "implements": [],
+        "methods": [],
+        "properties": [],
+        "isAbstract": false
+      },
+      {
+        "name": "SyncEngine",
+        "extends": null,
+        "implements": [],
+        "methods": [
+          "conflictForks(): { readonly mine: EventLog; readonly theirs: EventLog } | null",
+          "connect(roomCode: string): Promise<void>",
+          "game(): Game",
+          "onChange(listener: () => void): () => void",
+          "place(coords: Coord): void",
+          "placeLocalOnly(coords: Coord): void",
+          "publishState(): void",
+          "receive(msg: SyncMessage): void",
+          "status(): SyncStatus",
+          "undo(): void",
+          "whenSettled(): Promise<void>"
+        ],
+        "properties": [],
+        "isAbstract": false
+      }
+    ],
+    "interfaces": [
+      {
+        "name": "SyncMessage",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly headHash: string",
+          "readonly log: readonly Event[]",
+          "readonly version: number"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [
+      {
+        "name": "SyncDecision",
+        "type": "| { readonly action: 'adopt' }\n  | { readonly action: 'ignore' }\n  | { readonly action: 'conflict'; readonly divergePly: number }"
+      },
+      {
+        "name": "UndoDecision",
+        "type": "| { readonly ok: true }\n  | { readonly ok: false; readonly reason: UndoRejection }"
+      },
+      {
+        "name": "UndoRejection",
+        "type": "'nothing-to-undo' | 'not-your-move'"
+      },
+      {
+        "name": "SyncStatus",
+        "type": "| { readonly kind: 'ok' }\n  | { readonly kind: 'conflict'; readonly conflictId: string; readonly divergePly: number }"
+      },
+      {
+        "name": "MetaProvider",
+        "type": "() => Omit<ArchivedMeta, 'result'>"
+      }
+    ],
+    "functions": [
+      "decideSync",
+      "decideUndo",
+      "parseSyncMessage",
+      "toSyncMessage"
+    ]
+  },
+  "src/net/transport.ts": {
+    "exports": [
+      "ConnectOptions",
+      "MessageHandler",
+      "MockRelayHub",
+      "MockTransport",
+      "PresenceHandler",
+      "Transport",
+      "TransportMessage",
+      "roomTopic"
+    ],
+    "imports": [],
+    "classes": [
+      {
+        "name": "MockRelayHub",
+        "extends": null,
+        "implements": [],
+        "methods": [
+          "join(room: string, peer: MockTransport): void",
+          "leave(room: string, peer: MockTransport): void",
+          "peerIds(room: string): string[]",
+          "publish(room: string, sender: MockTransport, msg: TransportMessage): void"
+        ],
+        "properties": [],
+        "isAbstract": false
+      },
+      {
+        "name": "MockTransport",
+        "extends": null,
+        "implements": [
+          "Transport"
+        ],
+        "methods": [
+          "connect(roomCode: string, _opts: ConnectOptions): Promise<void>",
+          "deliver(msg: TransportMessage): void",
+          "disconnect(): void",
+          "onMessage(cb: MessageHandler): void",
+          "onPresence(cb: PresenceHandler): void",
+          "presenceChanged(peers: readonly string[]): void",
+          "publish(msg: TransportMessage): void"
+        ],
+        "properties": [
+          "readonly peerId: string"
+        ],
+        "isAbstract": false
+      }
+    ],
+    "interfaces": [
+      {
+        "name": "ConnectOptions",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly password: string"
+        ]
+      },
+      {
+        "name": "Transport",
+        "extends": [],
+        "methods": [
+          "connect(roomCode: string, opts: ConnectOptions): Promise<void>",
+          "disconnect(): void",
+          "onMessage(cb: MessageHandler): void",
+          "onPresence(cb: PresenceHandler): void",
+          "publish(msg: TransportMessage): void"
+        ],
+        "properties": []
+      }
+    ],
+    "enums": [],
+    "typeAliases": [
+      {
+        "name": "TransportMessage",
+        "type": "unknown"
+      },
+      {
+        "name": "MessageHandler",
+        "type": "(msg: TransportMessage) => void"
+      },
+      {
+        "name": "PresenceHandler",
+        "type": "(peers: readonly string[]) => void"
+      }
+    ],
+    "functions": [
+      "randomPeerId",
+      "roomTopic"
+    ]
+  },
+  "src/net/turnGate.ts": {
+    "exports": [
+      "canPlaceForSeat"
+    ],
+    "imports": [
+      {
+        "source": "../core/gameState",
+        "target": "src/core/gameState.ts",
+        "specifiers": [
+          "Player"
+        ]
+      },
+      {
+        "source": "../ui/widgets/netModel",
+        "target": "src/ui/widgets/netModel.ts",
+        "specifiers": [
+          "NetSeat"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "canPlaceForSeat"
+    ]
+  },
+  "src/persist/archive.ts": {
+    "exports": [
+      "ArchiveError",
+      "ArchivedMeta",
+      "ConflictInput",
+      "ConflictedGame",
+      "flagConflicted",
+      "listArchivedGames",
+      "loadConflicted",
+      "loadGame",
+      "saveGame"
+    ],
+    "imports": [
+      {
+        "source": "../core/eventLog",
+        "target": "src/core/eventLog.ts",
+        "specifiers": [
+          "Event",
+          "EventLog",
+          "headHash"
+        ]
+      },
+      {
+        "source": "../core/game",
+        "target": "src/core/game.ts",
+        "specifiers": [
+          "Game"
+        ]
+      },
+      {
+        "source": "../core/serialize",
+        "target": "src/core/serialize.ts",
+        "specifiers": [
+          "GameExport",
+          "importGame"
+        ]
+      },
+      {
+        "source": "./db",
+        "target": "src/persist/db.ts",
+        "specifiers": [
+          "GameListing",
+          "GameRecord",
+          "getGame",
+          "listGames",
+          "putGame"
+        ]
+      }
+    ],
+    "classes": [
+      {
+        "name": "ArchiveError",
+        "extends": "Error",
+        "implements": [],
+        "methods": [],
+        "properties": [],
+        "isAbstract": false
+      }
+    ],
+    "interfaces": [
+      {
+        "name": "ArchivedMeta",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly players: Readonly<Record<string, string>>",
+          "readonly result: string",
+          "readonly startedAt: number"
+        ]
+      },
+      {
+        "name": "ConflictedRecord",
+        "extends": [
+          "GameRecord"
+        ],
+        "methods": [],
+        "properties": [
+          "readonly forks: {\n    readonly mine: StoredLog;\n    readonly theirs: StoredLog;\n  }",
+          "readonly size: number"
+        ]
+      },
+      {
+        "name": "ConflictedGame",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly mine: Game",
+          "readonly theirs: Game"
+        ]
+      },
+      {
+        "name": "ConflictInput",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly meta: ArchivedMeta",
+          "readonly mineLog: EventLog",
+          "readonly size: number",
+          "readonly theirsLog: EventLog"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [
+      {
+        "name": "StoredLog",
+        "type": "readonly Readonly<Record<string, unknown>>[]"
+      }
+    ],
+    "functions": [
+      "flagConflicted",
+      "gameFromStoredLog",
+      "listArchivedGames",
+      "loadConflicted",
+      "loadGame",
+      "saveGame",
+      "toPlainLog"
+    ]
+  },
+  "src/persist/db.ts": {
+    "exports": [
+      "DB_VERSION",
+      "DEFAULT_DB_NAME",
+      "GAMES_STORE",
+      "GameListing",
+      "GameMeta",
+      "GameRecord",
+      "deleteGame",
+      "getGame",
+      "listGames",
+      "openDatabase",
+      "putGame",
+      "resolveDbName"
+    ],
+    "imports": [],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "Window",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "__penteDbName: string"
+        ]
+      },
+      {
+        "name": "GameMeta",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly headHash: string",
+          "readonly players: Readonly<Record<string, string>>",
+          "readonly result: string",
+          "readonly startedAt: number"
+        ]
+      },
+      {
+        "name": "GameRecord",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly id: string",
+          "readonly log: readonly Readonly<Record<string, unknown>>[]",
+          "readonly meta: GameMeta"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [
+      {
+        "name": "GameListing",
+        "type": "Omit<GameRecord, 'log'>"
+      }
+    ],
+    "functions": [
+      "deleteGame",
+      "getGame",
+      "listGames",
+      "openDatabase",
+      "putGame",
+      "requestToPromise",
+      "resolveDbName",
+      "transactionToPromise"
+    ]
+  },
+  "src/persist/gameLifecycle.ts": {
+    "exports": [
+      "LifecycleObservation",
+      "LifecycleState",
+      "LifecycleTransition",
+      "initialLifecycle",
+      "nextLifecycle",
+      "observeLifecycle"
+    ],
+    "imports": [
+      {
+        "source": "../core/gameState",
+        "target": "src/core/gameState.ts",
+        "specifiers": [
+          "GameState"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "LifecycleObservation",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly generation: number",
+          "readonly hasWinner: boolean",
+          "readonly ply: number"
+        ]
+      },
+      {
+        "name": "LifecycleState",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly finalized: boolean",
+          "readonly generation: number",
+          "readonly ply: number"
+        ]
+      },
+      {
+        "name": "LifecycleTransition",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly finalizeCurrent: boolean",
+          "readonly mintFresh: boolean",
+          "readonly next: LifecycleState"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "initialLifecycle",
+      "nextLifecycle",
+      "observeLifecycle"
+    ]
+  },
+  "src/render/cameraControls.ts": {
+    "exports": [
+      "CameraPresetReadout",
+      "applyCameraPreset"
+    ],
+    "imports": [
+      {
+        "source": "./cameraPresets.ts",
+        "target": "src/render/cameraPresets.ts",
+        "specifiers": [
+          "ResolvedCameraPreset"
+        ]
+      },
+      {
+        "source": "three",
+        "target": null,
+        "specifiers": [
+          "*"
+        ]
+      },
+      {
+        "source": "three/examples/jsm/controls/OrbitControls.js",
+        "target": null,
+        "specifiers": [
+          "OrbitControls"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "CameraPresetReadout",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "maxDistance: number",
+          "minDistance: number",
+          "name: string",
+          "orbitButton: 'LEFT' | 'MIDDLE' | 'RIGHT'",
+          "panButton: 'LEFT' | 'MIDDLE' | 'RIGHT'",
+          "panSpeed: number",
+          "rotateSpeed: number",
+          "zoomSpeed: number",
+          "zoomToCursor: boolean"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [
+      {
+        "name": "ButtonToken",
+        "type": "'LEFT' | 'MIDDLE' | 'RIGHT'"
+      }
+    ],
+    "functions": [
+      "applyCameraPreset",
+      "buttonOf"
+    ]
+  },
+  "src/render/cameraPresets.ts": {
+    "exports": [
+      "ControlPreset",
+      "ControlsConfig",
+      "Gesture",
+      "ResolvedCameraPreset",
+      "resolveCameraPreset"
+    ],
+    "imports": [],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "ControlPreset",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly invertY: boolean",
+          "readonly maxDistance: number",
+          "readonly minDistance: number",
+          "readonly orbit: Gesture",
+          "readonly orbitSpeed: number",
+          "readonly pan: Gesture",
+          "readonly panSpeed: number",
+          "readonly zoom: Gesture",
+          "readonly zoomSpeed: number",
+          "readonly zoomToCursor: boolean"
+        ]
+      },
+      {
+        "name": "ControlsConfig",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly preset: string",
+          "readonly presets: Readonly<Record<string, ControlPreset>>"
+        ]
+      },
+      {
+        "name": "ResolvedCameraPreset",
+        "extends": [
+          "ControlPreset"
+        ],
+        "methods": [],
+        "properties": [
+          "readonly name: string"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [
+      {
+        "name": "Gesture",
+        "type": "string"
+      }
+    ],
+    "functions": [
+      "requireBoolean",
+      "requireFiniteNumber",
+      "requireGesture",
+      "resolveCameraPreset"
+    ]
+  },
+  "src/render/hover.ts": {
+    "exports": [
+      "HoverLookup",
+      "HoverTarget",
+      "RaycastHit",
+      "buildHoverLookup",
+      "computeHoverTarget"
+    ],
+    "imports": [
+      {
+        "source": "../core/coords.ts",
+        "target": "src/core/coords.ts",
+        "specifiers": [
+          "NodeKey",
+          "keyOf"
+        ]
+      },
+      {
+        "source": "../core/gameState.ts",
+        "target": "src/core/gameState.ts",
+        "specifiers": [
+          "GameState"
+        ]
+      },
+      {
+        "source": "../core/lines.ts",
+        "target": "src/core/lines.ts",
+        "specifiers": [
+          "Line",
+          "LineCategory",
+          "LineId"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "HoverTarget",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly lines: readonly LineId[]",
+          "readonly nodes: readonly NodeKey[]",
+          "readonly pieces: readonly NodeKey[]"
+        ]
+      },
+      {
+        "name": "LineRef",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly category: LineCategory",
+          "readonly id: LineId",
+          "readonly nodeKeys: readonly NodeKey[]"
+        ]
+      },
+      {
+        "name": "HoverLookup",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly byId: ReadonlyMap<LineId, LineRef>",
+          "readonly linesThrough: ReadonlyMap<NodeKey, readonly LineRef[]>"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [
+      {
+        "name": "RaycastHit",
+        "type": "| { readonly kind: 'empty-node'; readonly node: NodeKey }\n  | { readonly kind: 'placed-sphere'; readonly node: NodeKey }\n  | { readonly kind: 'line'; readonly lineId: LineId }"
+      }
+    ],
+    "functions": [
+      "buildHoverLookup",
+      "computeHoverTarget",
+      "piecesOnLine",
+      "visibleLinesAndPieces"
+    ]
+  },
+  "src/render/lines.ts": {
+    "exports": [
+      "LineColorsConfig",
+      "LineGeometryConfig",
+      "LineGroupReadout",
+      "LinesHandle",
+      "createLines"
+    ],
+    "imports": [
+      {
+        "source": "../config/config.ts",
+        "target": "src/config/config.ts",
+        "specifiers": [
+          "getConfig"
+        ]
+      },
+      {
+        "source": "../core/coords.ts",
+        "target": "src/core/coords.ts",
+        "specifiers": [
+          "Coord"
+        ]
+      },
+      {
+        "source": "../core/lines.ts",
+        "target": "src/core/lines.ts",
+        "specifiers": [
+          "LineCategory",
+          "LineId"
+        ]
+      },
+      {
+        "source": "./linesLayout.ts",
+        "target": "src/render/linesLayout.ts",
+        "specifiers": [
+          "BlendMode",
+          "BlendingConfig",
+          "LINE_CATEGORIES",
+          "LineSegment",
+          "ResolvedLineLayout",
+          "resolveLineLayout"
+        ]
+      },
+      {
+        "source": "three",
+        "target": null,
+        "specifiers": [
+          "*"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "LineColorsConfig",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "hoverHighlight: string",
+          "lineFaceDiagonal: string",
+          "lineOpacity: number",
+          "lineOrthogonal: string",
+          "lineSpaceDiagonal: string"
+        ]
+      },
+      {
+        "name": "LineGeometryConfig",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "lineThickness: number",
+          "spacing: number"
+        ]
+      },
+      {
+        "name": "LineGroupReadout",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "blending: BlendMode",
+          "category: LineCategory",
+          "highlightedSegmentCount: number",
+          "lineCount: number",
+          "segmentCount: number",
+          "visible: boolean"
+        ]
+      },
+      {
+        "name": "LinesHandle",
+        "extends": [],
+        "methods": [
+          "dispose(): void",
+          "getVisibleLines(): LineGroupReadout[]",
+          "highlight(lineIds: readonly LineId[]): void",
+          "pickables(): { category: LineCategory; mesh: THREE.InstancedMesh }[]",
+          "rangeOf(category: LineCategory, lineId: LineId): { start: number; count: number } | null",
+          "setBaseColor(category: LineCategory, hex: string): string",
+          "setOpacity(opacity: number): number",
+          "setVisible(category: LineCategory, visible: boolean): void"
+        ],
+        "properties": [
+          "readonly object: THREE.Group"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "buildGroupMesh",
+      "colorKeyOf",
+      "createLines",
+      "dispose",
+      "getVisibleLines",
+      "highlight",
+      "pickables",
+      "rangeOf",
+      "segmentMatrix",
+      "setBaseColor",
+      "setOpacity",
+      "setVisible",
+      "spacing",
+      "threeBlending",
+      "worldOf"
+    ]
+  },
+  "src/render/linesLayout.ts": {
+    "exports": [
+      "BlendMode",
+      "BlendingConfig",
+      "ByCategory",
+      "InstanceRange",
+      "LINE_CATEGORIES",
+      "LineGroup",
+      "LineGroups",
+      "LineSegment",
+      "LineVisibilityConfig",
+      "ResolvedLineGroup",
+      "ResolvedLineLayout",
+      "VisibilityKey",
+      "buildLineGroups",
+      "resolveLineBlending",
+      "resolveLineLayout",
+      "resolveLineVisibility",
+      "visibilityKeyOf"
+    ],
+    "imports": [
+      {
+        "source": "../core/coords.ts",
+        "target": "src/core/coords.ts",
+        "specifiers": [
+          "Coord"
+        ]
+      },
+      {
+        "source": "../core/lines.ts",
+        "target": "src/core/lines.ts",
+        "specifiers": [
+          "Line",
+          "LineCategory",
+          "LineId",
+          "generateAllLines"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "LineSegment",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly a: Coord",
+          "readonly b: Coord",
+          "readonly lineId: LineId"
+        ]
+      },
+      {
+        "name": "InstanceRange",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly count: number",
+          "readonly start: number"
+        ]
+      },
+      {
+        "name": "LineGroup",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly lines: readonly Line[]",
+          "readonly rangeOf: ReadonlyMap<LineId, InstanceRange>",
+          "readonly segmentCount: number",
+          "readonly segments: readonly LineSegment[]"
+        ]
+      },
+      {
+        "name": "ResolvedLineGroup",
+        "extends": [
+          "LineGroup"
+        ],
+        "methods": [],
+        "properties": [
+          "readonly blending: BlendMode",
+          "readonly visible: boolean"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [
+      {
+        "name": "VisibilityKey",
+        "type": "'orthogonal' | 'faceDiagonal' | 'spaceDiagonal'"
+      },
+      {
+        "name": "LineVisibilityConfig",
+        "type": "Record<VisibilityKey, boolean>"
+      },
+      {
+        "name": "BlendMode",
+        "type": "'additive' | 'normal'"
+      },
+      {
+        "name": "BlendingConfig",
+        "type": "Record<VisibilityKey, BlendMode>"
+      },
+      {
+        "name": "ByCategory",
+        "type": "Record<LineCategory, T>"
+      },
+      {
+        "name": "LineGroups",
+        "type": "ByCategory<LineGroup>"
+      },
+      {
+        "name": "ResolvedLineLayout",
+        "type": "ByCategory<ResolvedLineGroup>"
+      }
+    ],
+    "functions": [
+      "buildLineGroups",
+      "resolveLineBlending",
+      "resolveLineLayout",
+      "resolveLineVisibility",
+      "visibilityKeyOf"
+    ]
+  },
+  "src/render/markers.ts": {
+    "exports": [
+      "MarkerColorsConfig",
+      "MarkerGeometryConfig",
+      "MarkerMaterialsConfig",
+      "MarkerNodeReadout",
+      "MarkerRenderingConfig",
+      "MarkersHandle",
+      "MarkersReadout",
+      "createMarkers"
+    ],
+    "imports": [
+      {
+        "source": "../config/config.ts",
+        "target": "src/config/config.ts",
+        "specifiers": [
+          "getConfig"
+        ]
+      },
+      {
+        "source": "../core/coords.ts",
+        "target": "src/core/coords.ts",
+        "specifiers": [
+          "Coord",
+          "NodeKey"
+        ]
+      },
+      {
+        "source": "../core/gameState.ts",
+        "target": "src/core/gameState.ts",
+        "specifiers": [
+          "GameState"
+        ]
+      },
+      {
+        "source": "./markersLayout.ts",
+        "target": "src/render/markersLayout.ts",
+        "specifiers": [
+          "MarkerIndex",
+          "buildMarkerIndex",
+          "markerInstancesFor",
+          "resolveMarkerVisibility"
+        ]
+      },
+      {
+        "source": "three",
+        "target": null,
+        "specifiers": [
+          "*"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "MarkerColorsConfig",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "emptySphere: string",
+          "hoverHighlight: string"
+        ]
+      },
+      {
+        "name": "MarkerGeometryConfig",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "markerRadius: number",
+          "sphereSegments: { width: number; height: number }"
+        ]
+      },
+      {
+        "name": "MarkerMaterialsConfig",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "markerDepthWrite: boolean",
+          "markerOpacity: number"
+        ]
+      },
+      {
+        "name": "MarkerRenderingConfig",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "marker: { roughness: number; metalness: number }"
+        ]
+      },
+      {
+        "name": "MarkerNodeReadout",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "highlighted: boolean",
+          "instanceColorHex: string",
+          "instanceId: number",
+          "node: NodeKey",
+          "visible: boolean"
+        ]
+      },
+      {
+        "name": "MarkersReadout",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "count: number",
+          "highlightedCount: number",
+          "materialEmissiveIntensity: number",
+          "nodes: MarkerNodeReadout[]",
+          "visibleCount: number"
+        ]
+      },
+      {
+        "name": "MarkersHandle",
+        "extends": [],
+        "methods": [
+          "dispose(): void",
+          "getMarkers(query: readonly NodeKey[]): MarkersReadout",
+          "highlight(nodes: readonly NodeKey[]): void",
+          "sync(state: GameState): void"
+        ],
+        "properties": [
+          "readonly object: THREE.Group"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "createMarkers",
+      "defaultWorldOf",
+      "dispose",
+      "getMarkers",
+      "highlight",
+      "instanceColorHexOf",
+      "sync"
+    ]
+  },
+  "src/render/markersLayout.ts": {
+    "exports": [
+      "MarkerIndex",
+      "buildMarkerIndex",
+      "markerInstancesFor",
+      "resolveMarkerVisibility"
+    ],
+    "imports": [
+      {
+        "source": "../core/coords.ts",
+        "target": "src/core/coords.ts",
+        "specifiers": [
+          "Coord",
+          "NodeKey",
+          "keyOf"
+        ]
+      },
+      {
+        "source": "../core/gameState.ts",
+        "target": "src/core/gameState.ts",
+        "specifiers": [
+          "Player"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "MarkerIndex",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly count: number",
+          "readonly instanceIdOf: ReadonlyMap<NodeKey, number>",
+          "readonly nodeOfInstance: readonly NodeKey[]"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "buildMarkerIndex",
+      "markerInstancesFor",
+      "resolveMarkerVisibility"
+    ]
+  },
+  "src/render/pickRadius.ts": {
+    "exports": [
+      "PickRadiusInput",
+      "resolveNodePickRadius"
+    ],
+    "imports": [],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "PickRadiusInput",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly markerRadius: number",
+          "readonly occupied: boolean",
+          "readonly padding: number",
+          "readonly pieceRadius: number",
+          "readonly spacing: number"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "resolveNodePickRadius"
+    ]
+  },
+  "src/render/picking.ts": {
+    "exports": [
+      "PickGeometryConfig",
+      "PickableLineMesh",
+      "PickingHandle",
+      "createPicking"
+    ],
+    "imports": [
+      {
+        "source": "../core/coords.ts",
+        "target": "src/core/coords.ts",
+        "specifiers": [
+          "Coord",
+          "NodeKey",
+          "keyOf"
+        ]
+      },
+      {
+        "source": "../core/gameState.ts",
+        "target": "src/core/gameState.ts",
+        "specifiers": [
+          "GameState"
+        ]
+      },
+      {
+        "source": "../core/lines.ts",
+        "target": "src/core/lines.ts",
+        "specifiers": [
+          "LineCategory",
+          "LineId"
+        ]
+      },
+      {
+        "source": "./hover.ts",
+        "target": "src/render/hover.ts",
+        "specifiers": [
+          "RaycastHit"
+        ]
+      },
+      {
+        "source": "./linesLayout.ts",
+        "target": "src/render/linesLayout.ts",
+        "specifiers": [
+          "LINE_CATEGORIES",
+          "LineGroups",
+          "buildLineGroups"
+        ]
+      },
+      {
+        "source": "./pickRadius.ts",
+        "target": "src/render/pickRadius.ts",
+        "specifiers": [
+          "resolveNodePickRadius"
+        ]
+      },
+      {
+        "source": "three",
+        "target": null,
+        "specifiers": [
+          "*"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "PickGeometryConfig",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "markerRadius: number",
+          "pickPadding: number",
+          "pieceRadius: number",
+          "spacing: number"
+        ]
+      },
+      {
+        "name": "PickableLineMesh",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly category: LineCategory",
+          "readonly mesh: THREE.Object3D"
+        ]
+      },
+      {
+        "name": "PickingHandle",
+        "extends": [],
+        "methods": [
+          "dispose(): void",
+          "pickAt(ndcX: number, ndcY: number, camera: THREE.Camera, state: GameState, lineMeshes: readonly PickableLineMesh[]): RaycastHit | null",
+          "radiusOf(node: Coord): number | null",
+          "sync(state: GameState): void",
+          "worldOf(node: Coord): { x: number; y: number; z: number }"
+        ],
+        "properties": [
+          "readonly object: THREE.Group"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "buildSegmentLineIndex",
+      "createPicking",
+      "dispose",
+      "pickAt",
+      "radiusFor",
+      "radiusOf",
+      "setInstanceRadius",
+      "sync",
+      "worldOf",
+      "worldVec"
+    ]
+  },
+  "src/render/pieces.ts": {
+    "exports": [
+      "PieceColorsConfig",
+      "PieceGeometryConfig",
+      "PieceMaterialsConfig",
+      "PieceReadout",
+      "PieceRenderingConfig",
+      "PiecesHandle",
+      "createPieces"
+    ],
+    "imports": [
+      {
+        "source": "../config/config.ts",
+        "target": "src/config/config.ts",
+        "specifiers": [
+          "getConfig"
+        ]
+      },
+      {
+        "source": "../core/coords.ts",
+        "target": "src/core/coords.ts",
+        "specifiers": [
+          "NodeKey",
+          "coordsOf"
+        ]
+      },
+      {
+        "source": "../core/gameState.ts",
+        "target": "src/core/gameState.ts",
+        "specifiers": [
+          "GameState",
+          "Player"
+        ]
+      },
+      {
+        "source": "./piecesDiff.ts",
+        "target": "src/render/piecesDiff.ts",
+        "specifiers": [
+          "diffPieces"
+        ]
+      },
+      {
+        "source": "three",
+        "target": null,
+        "specifiers": [
+          "*"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "PieceColorsConfig",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "blackPiece: string",
+          "whitePiece: string"
+        ]
+      },
+      {
+        "name": "PieceGeometryConfig",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "pieceRadius: number",
+          "spacing: number",
+          "sphereSegments: { width: number; height: number }"
+        ]
+      },
+      {
+        "name": "PieceMaterialsConfig",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "pieceOpacity: number"
+        ]
+      },
+      {
+        "name": "PieceRenderingConfig",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "piece: { roughness: number; metalness: number }",
+          "pieceFadeMs: number"
+        ]
+      },
+      {
+        "name": "PieceReadout",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "emissiveIntensity: number",
+          "fadingOut: boolean",
+          "node: NodeKey",
+          "opacity: number",
+          "owner: Player",
+          "position: { x: number; y: number; z: number }"
+        ]
+      },
+      {
+        "name": "PiecesHandle",
+        "extends": [],
+        "methods": [
+          "count(): number",
+          "dispose(): void",
+          "getPieces(): PieceReadout[]",
+          "highlight(nodes: readonly NodeKey[], color: string, boost: number): void",
+          "sync(state: GameState): void",
+          "tick(deltaMs: number): void"
+        ],
+        "properties": [
+          "readonly object: THREE.Group"
+        ]
+      },
+      {
+        "name": "PieceEntry",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "fadeDir: -1 | 0 | 1",
+          "material: THREE.MeshStandardMaterial",
+          "mesh: THREE.Mesh",
+          "owner: Player",
+          "targetOpacity: number"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "addPiece",
+      "colorKeyOf",
+      "count",
+      "createPieces",
+      "dispose",
+      "disposeEntry",
+      "getPieces",
+      "highlight",
+      "makeMaterial",
+      "recolorPiece",
+      "startFadeOut",
+      "sync",
+      "tick",
+      "worldOf"
+    ]
+  },
+  "src/render/piecesDiff.ts": {
+    "exports": [
+      "PieceAdd",
+      "PieceDiff",
+      "PieceRecolor",
+      "diffPieces"
+    ],
+    "imports": [
+      {
+        "source": "../core/coords.ts",
+        "target": "src/core/coords.ts",
+        "specifiers": [
+          "NodeKey"
+        ]
+      },
+      {
+        "source": "../core/gameState.ts",
+        "target": "src/core/gameState.ts",
+        "specifiers": [
+          "Player"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "PieceAdd",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly node: NodeKey",
+          "readonly owner: Player"
+        ]
+      },
+      {
+        "name": "PieceRecolor",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly from: Player",
+          "readonly node: NodeKey",
+          "readonly to: Player"
+        ]
+      },
+      {
+        "name": "PieceDiff",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly adds: readonly PieceAdd[]",
+          "readonly recolors: readonly PieceRecolor[]",
+          "readonly removes: readonly NodeKey[]"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "diffPieces"
+    ]
+  },
+  "src/render/scene.ts": {
+    "exports": [
+      "CameraReadout",
+      "ColorsPreview",
+      "ColorsReadout",
+      "HistoryReadout",
+      "LightingReadout",
+      "NetHooks",
+      "SceneHandle",
+      "TempReadout",
+      "TurnGateReadout",
+      "ViewportReadout",
+      "createScene"
+    ],
+    "imports": [
+      {
+        "source": "../config/config.ts",
+        "target": "src/config/config.ts",
+        "specifiers": [
+          "getConfig"
+        ]
+      },
+      {
+        "source": "../core/coords.ts",
+        "target": "src/core/coords.ts",
+        "specifiers": [
+          "Coord",
+          "NodeKey",
+          "keyOf"
+        ]
+      },
+      {
+        "source": "../core/eventLog.ts",
+        "target": "src/core/eventLog.ts",
+        "specifiers": [
+          "headHash"
+        ]
+      },
+      {
+        "source": "../core/game.ts",
+        "target": "src/core/game.ts",
+        "specifiers": [
+          "Game"
+        ]
+      },
+      {
+        "source": "../core/gameState.ts",
+        "target": "src/core/gameState.ts",
+        "specifiers": [
+          "GameState"
+        ]
+      },
+      {
+        "source": "../core/lines.ts",
+        "target": "src/core/lines.ts",
+        "specifiers": [
+          "LineCategory",
+          "generateAllLines"
+        ]
+      },
+      {
+        "source": "../debug/log.ts",
+        "target": "src/debug/log.ts",
+        "specifiers": [
+          "createLogger"
+        ]
+      },
+      {
+        "source": "../input/commands.ts",
+        "target": "src/input/commands.ts",
+        "specifiers": [
+          "Command"
+        ]
+      },
+      {
+        "source": "../input/placement.ts",
+        "target": "src/input/placement.ts",
+        "specifiers": [
+          "TEMP_SCOPE_ID",
+          "TempPlacement",
+          "confirmTemp",
+          "enterTemp",
+          "exitTemp",
+          "initialTemp",
+          "placementFromHit",
+          "setTempPreview",
+          "tempPlacementScope"
+        ]
+      },
+      {
+        "source": "../input/pointerGesture.ts",
+        "target": "src/input/pointerGesture.ts",
+        "specifiers": [
+          "DragGuardConfig",
+          "PointerPos",
+          "shouldPlaceFromPointer"
+        ]
+      },
+      {
+        "source": "../input/scopes.ts",
+        "target": "src/input/scopes.ts",
+        "specifiers": [
+          "KeyResolution",
+          "Scope"
+        ]
+      },
+      {
+        "source": "../input/setup.ts",
+        "target": "src/input/setup.ts",
+        "specifiers": [
+          "InputHandle",
+          "InputReadout",
+          "createInput"
+        ]
+      },
+      {
+        "source": "../ui/widgets/banner.ts",
+        "target": "src/ui/widgets/banner.ts",
+        "specifiers": [
+          "BannerContext"
+        ]
+      },
+      {
+        "source": "../ui/widgets/helpModel.ts",
+        "target": "src/ui/widgets/helpModel.ts",
+        "specifiers": [
+          "HelpSources"
+        ]
+      },
+      {
+        "source": "../ui/widgets/netModel.ts",
+        "target": "src/ui/widgets/netModel.ts",
+        "specifiers": [
+          "NetSessionState"
+        ]
+      },
+      {
+        "source": "./cameraControls.ts",
+        "target": "src/render/cameraControls.ts",
+        "specifiers": [
+          "CameraPresetReadout",
+          "applyCameraPreset"
+        ]
+      },
+      {
+        "source": "./cameraPresets.ts",
+        "target": "src/render/cameraPresets.ts",
+        "specifiers": [
+          "ControlsConfig",
+          "resolveCameraPreset"
+        ]
+      },
+      {
+        "source": "./hover.ts",
+        "target": "src/render/hover.ts",
+        "specifiers": [
+          "HoverLookup",
+          "HoverTarget",
+          "RaycastHit",
+          "buildHoverLookup",
+          "computeHoverTarget"
+        ]
+      },
+      {
+        "source": "./lines.ts",
+        "target": "src/render/lines.ts",
+        "specifiers": [
+          "LineGroupReadout",
+          "LinesHandle",
+          "createLines"
+        ]
+      },
+      {
+        "source": "./markers.ts",
+        "target": "src/render/markers.ts",
+        "specifiers": [
+          "MarkersHandle",
+          "MarkersReadout",
+          "createMarkers"
+        ]
+      },
+      {
+        "source": "./picking.ts",
+        "target": "src/render/picking.ts",
+        "specifiers": [
+          "PickGeometryConfig",
+          "PickingHandle",
+          "createPicking"
+        ]
+      },
+      {
+        "source": "./pieces.ts",
+        "target": "src/render/pieces.ts",
+        "specifiers": [
+          "PieceReadout",
+          "PiecesHandle",
+          "createPieces"
+        ]
+      },
+      {
+        "source": "./sceneConfig.ts",
+        "target": "src/render/sceneConfig.ts",
+        "specifiers": [
+          "ResolvedSceneConfig",
+          "Vec3",
+          "resolveSceneConfig"
+        ]
+      },
+      {
+        "source": "./winLine.ts",
+        "target": "src/render/winLine.ts",
+        "specifiers": [
+          "WinLineHandle",
+          "WinLineReadout",
+          "createWinLine"
+        ]
+      },
+      {
+        "source": "three",
+        "target": null,
+        "specifiers": [
+          "*"
+        ]
+      },
+      {
+        "source": "three/examples/jsm/controls/OrbitControls.js",
+        "target": null,
+        "specifiers": [
+          "OrbitControls"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "CameraReadout",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "position: { x: number; y: number; z: number }",
+          "target: { x: number; y: number; z: number }"
+        ]
+      },
+      {
+        "name": "LightingReadout",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "ambient: { color: number; intensity: number }",
+          "background: number",
+          "directional: { color: number; intensity: number; position: Vec3 }"
+        ]
+      },
+      {
+        "name": "ViewportReadout",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "aspect: number",
+          "height: number",
+          "width: number"
+        ]
+      },
+      {
+        "name": "ColorsPreview",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "background: string",
+          "lineFaceDiagonal: string",
+          "lineOpacity: number",
+          "lineOrthogonal: string",
+          "lineSpaceDiagonal: string"
+        ]
+      },
+      {
+        "name": "ColorsReadout",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "background: string",
+          "lineFaceDiagonal: string",
+          "lineOpacity: number",
+          "lineOrthogonal: string",
+          "lineSpaceDiagonal: string"
+        ]
+      },
+      {
+        "name": "TempReadout",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "active: boolean",
+          "preview: string | null",
+          "previewOpacity: number"
+        ]
+      },
+      {
+        "name": "HistoryReadout",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "maxPly: number",
+          "scrubbing: boolean",
+          "viewedPly: number"
+        ]
+      },
+      {
+        "name": "TurnGateReadout",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "offTurnBlocks: number"
+        ]
+      },
+      {
+        "name": "NetHooks",
+        "extends": [],
+        "methods": [
+          "canPlace(): boolean",
+          "getNet(): NetSessionState",
+          "getNetGameState(): GameState | null",
+          "getNetHeadHash(): string | null",
+          "host(): void",
+          "join(): void",
+          "place(coords: Coord): GameState",
+          "resync(): void",
+          "setPendingJoinCode(code: string): void"
+        ],
+        "properties": []
+      },
+      {
+        "name": "SceneHandle",
+        "extends": [],
+        "methods": [
+          "adoptNetState(): void",
+          "applyColors(preview: ColorsPreview): ColorsReadout",
+          "clickAt(ndcX: number, ndcY: number): GameState | null",
+          "dispatch(id: string): boolean",
+          "dispose(): void",
+          "getBannerContext(): BannerContext",
+          "getCamera(): CameraReadout",
+          "getCameraPreset(): CameraPresetReadout",
+          "getColors(): ColorsReadout",
+          "getGame(): Game",
+          "getHeadHash(): string",
+          "getHelpSources(): HelpSources",
+          "getHistory(): HistoryReadout",
+          "getHoverTarget(): HoverTarget | null",
+          "getInput(): InputReadout",
+          "getLighting(): LightingReadout",
+          "getMarkers(query: readonly string[]): MarkersReadout",
+          "getNet(): NetSessionState",
+          "getPieces(): PieceReadout[]",
+          "getState(): GameState",
+          "getTemp(): TempReadout",
+          "getTurnGate(): TurnGateReadout",
+          "getViewportSize(): ViewportReadout",
+          "getVisibleLines(): LineGroupReadout[]",
+          "getWinLine(): WinLineReadout",
+          "hoverAt(ndcX: number, ndcY: number): HoverTarget | null",
+          "loadGame(loaded: Game): void",
+          "onNewGame(listener: () => void): () => void",
+          "onStateChange(listener: () => void): () => void",
+          "pickAt(ndcX: number, ndcY: number): RaycastHit | null",
+          "pickRadiusOf(node: Coord): number | null",
+          "place(coords: Coord): GameState",
+          "popScope(): void",
+          "pressKey(chord: string): KeyResolution",
+          "pushScope(scope: Scope): void",
+          "rayNodeDistances(ndcX: number, ndcY: number): { node: NodeKey; distance: number; depth: number }[]",
+          "resync(): void",
+          "scrubTo(k: number): void",
+          "setCamera(position: { x: number; y: number; z: number }, target: { x: number; y: number; z: number }): void",
+          "setNetHooks(hooks: NetHooks): void",
+          "setOpenArchive(open: () => void): void",
+          "setOpenHelp(open: () => void): void",
+          "setOpenSettings(open: () => void): void",
+          "setPendingJoinCode(code: string): void"
+        ],
+        "properties": [
+          "camera: THREE.PerspectiveCamera",
+          "controls: OrbitControls",
+          "renderer: THREE.WebGLRenderer",
+          "scene: THREE.Scene"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "adoptNetState",
+      "applyColors",
+      "applyHoverHighlight",
+      "clickAt",
+      "commitLive",
+      "createScene",
+      "dispatch",
+      "dispose",
+      "doConfirmTemp",
+      "doEnterTemp",
+      "doExitTemp",
+      "getBannerContext",
+      "getCamera",
+      "getCameraPreset",
+      "getColors",
+      "getGame",
+      "getHeadHash",
+      "getHelpSources",
+      "getHistory",
+      "getHoverTarget",
+      "getInput",
+      "getLighting",
+      "getMarkers",
+      "getNet",
+      "getPieces",
+      "getState",
+      "getTemp",
+      "getTurnGate",
+      "getViewportSize",
+      "getVisibleLines",
+      "getWinLine",
+      "hoverAt",
+      "loadGame",
+      "notifyNewGame",
+      "notifyStateChanged",
+      "onNewGame",
+      "onPointerDown",
+      "onPointerMove",
+      "onPointerUp",
+      "onResize",
+      "onStateChange",
+      "pickAt",
+      "pickRadiusOf",
+      "place",
+      "popScope",
+      "pressKey",
+      "pushScope",
+      "rayNodeDistances",
+      "renderLoop",
+      "renderNetState",
+      "renderState",
+      "resync",
+      "scrubTo",
+      "setCamera",
+      "setNetHooks",
+      "setOpenArchive",
+      "setOpenHelp",
+      "setOpenSettings",
+      "setPendingJoinCode",
+      "syncBoard",
+      "syncTempPreview",
+      "toggleCategory",
+      "visibleCategories",
+      "worldOfNode"
+    ]
+  },
+  "src/render/sceneConfig.ts": {
+    "exports": [
+      "LightingConfig",
+      "ResolvedSceneConfig",
+      "SceneColorsConfig",
+      "Vec3",
+      "hexToInt",
+      "resolveSceneConfig"
+    ],
+    "imports": [],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "Vec3",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "x: number",
+          "y: number",
+          "z: number"
+        ]
+      },
+      {
+        "name": "LightingConfig",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "ambient: { color: string; intensity: number }",
+          "directional: { color: string; intensity: number; position: Vec3 }"
+        ]
+      },
+      {
+        "name": "SceneColorsConfig",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "background: string"
+        ]
+      },
+      {
+        "name": "ResolvedSceneConfig",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "ambient: { color: number; intensity: number }",
+          "background: number",
+          "directional: { color: number; intensity: number; position: Vec3 }"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "hexToInt",
+      "requireFinite",
+      "resolvePosition",
+      "resolveSceneConfig"
+    ]
+  },
+  "src/render/winLine.ts": {
+    "exports": [
+      "WinLineColorsConfig",
+      "WinLineGeometryConfig",
+      "WinLineHandle",
+      "WinLineReadout",
+      "WinLineRenderingConfig",
+      "createWinLine"
+    ],
+    "imports": [
+      {
+        "source": "../config/config.ts",
+        "target": "src/config/config.ts",
+        "specifiers": [
+          "getConfig"
+        ]
+      },
+      {
+        "source": "../core/coords.ts",
+        "target": "src/core/coords.ts",
+        "specifiers": [
+          "Coord"
+        ]
+      },
+      {
+        "source": "../core/gameState.ts",
+        "target": "src/core/gameState.ts",
+        "specifiers": [
+          "GameState"
+        ]
+      },
+      {
+        "source": "./winLineLayout.ts",
+        "target": "src/render/winLineLayout.ts",
+        "specifiers": [
+          "WinSegment",
+          "resolveWinLine"
+        ]
+      },
+      {
+        "source": "three",
+        "target": null,
+        "specifiers": [
+          "*"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "WinLineColorsConfig",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "winningLine: string"
+        ]
+      },
+      {
+        "name": "WinLineGeometryConfig",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "lineThickness: number",
+          "spacing: number"
+        ]
+      },
+      {
+        "name": "WinLineRenderingConfig",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "winLineOpacity: number",
+          "winLineThickness: number"
+        ]
+      },
+      {
+        "name": "WinLineReadout",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "color: number",
+          "nodes: string[]",
+          "opacity: number",
+          "segmentCount: number",
+          "visible: boolean"
+        ]
+      },
+      {
+        "name": "WinLineHandle",
+        "extends": [],
+        "methods": [
+          "dispose(): void",
+          "getWinLine(): WinLineReadout",
+          "sync(state: GameState): void"
+        ],
+        "properties": [
+          "readonly object: THREE.Group"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "clearMesh",
+      "createWinLine",
+      "dispose",
+      "getWinLine",
+      "segmentMatrix",
+      "sync",
+      "worldOf"
+    ]
+  },
+  "src/render/winLineLayout.ts": {
+    "exports": [
+      "WinLinePlan",
+      "WinSegment",
+      "resolveWinLine"
+    ],
+    "imports": [
+      {
+        "source": "../core/coords.ts",
+        "target": "src/core/coords.ts",
+        "specifiers": [
+          "Coord",
+          "NodeKey",
+          "coordsOf"
+        ]
+      },
+      {
+        "source": "../core/lines.ts",
+        "target": "src/core/lines.ts",
+        "specifiers": [
+          "*"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "WinSegment",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly a: Coord",
+          "readonly b: Coord"
+        ]
+      },
+      {
+        "name": "WinLinePlan",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly nodes: readonly Coord[]",
+          "readonly segments: readonly WinSegment[]"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "resolveWinLine"
+    ]
+  },
+  "src/ui/container.ts": {
+    "exports": [
+      "LayoutReadout",
+      "UI_STYLE_ID",
+      "UiContainerHandle",
+      "WIDGET_ID_ATTR",
+      "ZONE_ATTR",
+      "createUiContainer"
+    ],
+    "imports": [
+      {
+        "source": "../debug/log.ts",
+        "target": "src/debug/log.ts",
+        "specifiers": [
+          "createLogger"
+        ]
+      },
+      {
+        "source": "./layout.ts",
+        "target": "src/ui/layout.ts",
+        "specifiers": [
+          "LayoutConfig",
+          "resolveLayout"
+        ]
+      },
+      {
+        "source": "./registry.ts",
+        "target": "src/ui/registry.ts",
+        "specifiers": [
+          "Widget",
+          "WidgetRegistry"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "LayoutReadout",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "zones: Record<string, string[]>"
+        ]
+      },
+      {
+        "name": "UiContainerHandle",
+        "extends": [],
+        "methods": [
+          "dispose(): void",
+          "getLayout(): LayoutReadout",
+          "update(state: unknown, config: unknown): void"
+        ],
+        "properties": [
+          "readonly root: HTMLElement"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "createUiContainer",
+      "dispose",
+      "ensureStyles",
+      "getLayout",
+      "update"
+    ]
+  },
+  "src/ui/layout.ts": {
+    "exports": [
+      "LayoutConfig",
+      "ResolvedLayout",
+      "ResolvedWidget",
+      "WidgetPlacement",
+      "resolveLayout"
+    ],
+    "imports": [],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "WidgetPlacement",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly offset: { readonly x: number; readonly y: number }",
+          "readonly order: number",
+          "readonly visible: boolean",
+          "readonly zone: string"
+        ]
+      },
+      {
+        "name": "LayoutConfig",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly widgets: Readonly<Record<string, WidgetPlacement>>"
+        ]
+      },
+      {
+        "name": "ResolvedWidget",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly id: string",
+          "readonly offset: { readonly x: number; readonly y: number }",
+          "readonly order: number"
+        ]
+      },
+      {
+        "name": "ResolvedLayout",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly zones: Readonly<Record<string, readonly ResolvedWidget[]>>"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "resolveLayout"
+    ]
+  },
+  "src/ui/registry.ts": {
+    "exports": [
+      "Widget",
+      "WidgetFactory",
+      "WidgetId",
+      "WidgetRegistry",
+      "createWidgetRegistry"
+    ],
+    "imports": [],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "Widget",
+        "extends": [],
+        "methods": [
+          "dispose(): void",
+          "update(state: unknown, config: unknown): void"
+        ],
+        "properties": [
+          "readonly element: HTMLElement"
+        ]
+      },
+      {
+        "name": "WidgetFactory",
+        "extends": [],
+        "methods": [
+          "mount(deps: unknown): Widget"
+        ],
+        "properties": [
+          "readonly id: WidgetId"
+        ]
+      },
+      {
+        "name": "WidgetRegistry",
+        "extends": [],
+        "methods": [
+          "get(id: WidgetId): WidgetFactory | undefined",
+          "has(id: WidgetId): boolean",
+          "ids(): WidgetId[]",
+          "knownIds(): Set<WidgetId>"
+        ],
+        "properties": []
+      }
+    ],
+    "enums": [],
+    "typeAliases": [
+      {
+        "name": "WidgetId",
+        "type": "string"
+      }
+    ],
+    "functions": [
+      "createWidgetRegistry"
+    ]
+  },
+  "src/ui/setup.ts": {
+    "exports": [
+      "UiDeps",
+      "UiHandle",
+      "createUi",
+      "defaultWidgetFactories"
+    ],
+    "imports": [
+      {
+        "source": "../config/config.ts",
+        "target": "src/config/config.ts",
+        "specifiers": [
+          "getConfig"
+        ]
+      },
+      {
+        "source": "./container.ts",
+        "target": "src/ui/container.ts",
+        "specifiers": [
+          "LayoutReadout",
+          "UiContainerHandle",
+          "createUiContainer"
+        ]
+      },
+      {
+        "source": "./layout.ts",
+        "target": "src/ui/layout.ts",
+        "specifiers": [
+          "LayoutConfig"
+        ]
+      },
+      {
+        "source": "./registry.ts",
+        "target": "src/ui/registry.ts",
+        "specifiers": [
+          "WidgetFactory",
+          "createWidgetRegistry"
+        ]
+      },
+      {
+        "source": "./widgets/archive.ts",
+        "target": "src/ui/widgets/archive.ts",
+        "specifiers": [
+          "ArchiveScope",
+          "archiveWidget"
+        ]
+      },
+      {
+        "source": "./widgets/archiveModel.ts",
+        "target": "src/ui/widgets/archiveModel.ts",
+        "specifiers": [
+          "ArchiveListing"
+        ]
+      },
+      {
+        "source": "./widgets/banner.ts",
+        "target": "src/ui/widgets/banner.ts",
+        "specifiers": [
+          "bannerWidget"
+        ]
+      },
+      {
+        "source": "./widgets/help.ts",
+        "target": "src/ui/widgets/help.ts",
+        "specifiers": [
+          "HelpScope",
+          "helpWidget"
+        ]
+      },
+      {
+        "source": "./widgets/helpModel.ts",
+        "target": "src/ui/widgets/helpModel.ts",
+        "specifiers": [
+          "HelpSources"
+        ]
+      },
+      {
+        "source": "./widgets/historySlider.ts",
+        "target": "src/ui/widgets/historySlider.ts",
+        "specifiers": [
+          "historySliderWidget"
+        ]
+      },
+      {
+        "source": "./widgets/menu.ts",
+        "target": "src/ui/widgets/menu.ts",
+        "specifiers": [
+          "MenuScope",
+          "menuWidget"
+        ]
+      },
+      {
+        "source": "./widgets/net.ts",
+        "target": "src/ui/widgets/net.ts",
+        "specifiers": [
+          "netWidget"
+        ]
+      },
+      {
+        "source": "./widgets/netModel.ts",
+        "target": "src/ui/widgets/netModel.ts",
+        "specifiers": [
+          "NetSessionState"
+        ]
+      },
+      {
+        "source": "./widgets/settings.ts",
+        "target": "src/ui/widgets/settings.ts",
+        "specifiers": [
+          "SettingsColorsPreview",
+          "SettingsScope",
+          "settingsWidget"
+        ]
+      },
+      {
+        "source": "./widgets/sliderModel.ts",
+        "target": "src/ui/widgets/sliderModel.ts",
+        "specifiers": [
+          "HistoryFacts"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "UiDeps",
+        "extends": [],
+        "methods": [
+          "applyColors(preview: SettingsColorsPreview): void",
+          "copyToClipboard(text: string): Promise<void>",
+          "dispatch(commandId: string): boolean",
+          "getHelpSources(): HelpSources",
+          "getHistory(): HistoryFacts",
+          "getNet(): NetSessionState",
+          "listArchive(): Promise<readonly ArchiveListing[]>",
+          "popScope(): void",
+          "pushScope(scope: MenuScope | SettingsScope | HelpScope | ArchiveScope): void",
+          "registerOpenArchive(open: () => void): void",
+          "registerOpenHelp(open: () => void): void",
+          "registerOpener(open: () => void): void",
+          "resumeArchived(id: string): Promise<void>",
+          "reviewArchived(id: string): Promise<void>",
+          "scrubTo(k: number): void",
+          "setPendingJoinCode(code: string): void"
+        ],
+        "properties": []
+      },
+      {
+        "name": "UiHandle",
+        "extends": [],
+        "methods": [
+          "getLayout(): LayoutReadout"
+        ],
+        "properties": [
+          "readonly container: UiContainerHandle"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "createUi",
+      "defaultWidgetFactories"
+    ]
+  },
+  "src/ui/widgets/archive.ts": {
+    "exports": [
+      "ARCHIVE_SCOPE_ID",
+      "ARCHIVE_WIDGET_ID",
+      "ArchiveDeps",
+      "ArchiveScope",
+      "archiveWidget"
+    ],
+    "imports": [
+      {
+        "source": "../registry.ts",
+        "target": "src/ui/registry.ts",
+        "specifiers": [
+          "Widget",
+          "WidgetFactory"
+        ]
+      },
+      {
+        "source": "./archiveModel.ts",
+        "target": "src/ui/widgets/archiveModel.ts",
+        "specifiers": [
+          "ArchiveListing",
+          "deriveArchive"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "ArchiveScope",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly bindings: Readonly<Record<string, string>>",
+          "readonly blocking: true",
+          "readonly id: string"
+        ]
+      },
+      {
+        "name": "ArchiveDeps",
+        "extends": [],
+        "methods": [
+          "listArchive(): Promise<readonly ArchiveListing[]>",
+          "popScope(): void",
+          "pushScope(scope: ArchiveScope): void",
+          "registerOpenArchive(open: () => void): void",
+          "resumeArchived(id: string): Promise<void>",
+          "reviewArchived(id: string): Promise<void>"
+        ],
+        "properties": [
+          "readonly doc: Document"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "archiveScope",
+      "archiveWidget",
+      "close",
+      "formatDate",
+      "onKeyDown",
+      "onOutsidePointer",
+      "openModal",
+      "renderRows"
+    ]
+  },
+  "src/ui/widgets/archiveModel.ts": {
+    "exports": [
+      "ArchiveActions",
+      "ArchiveItem",
+      "ArchiveListing",
+      "ArchiveListingMeta",
+      "ArchiveModel",
+      "CONFLICTED_RESULT",
+      "IN_PROGRESS_RESULT",
+      "PLAYERS_LABEL_SEPARATOR",
+      "PLAYER_SEAT_ORDER",
+      "UNKNOWN_PLAYER",
+      "deriveArchive",
+      "playersLabel",
+      "resolveArchiveActions"
+    ],
+    "imports": [],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "ArchiveListingMeta",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly headHash: string",
+          "readonly players: Readonly<Record<string, string>>",
+          "readonly result: string",
+          "readonly startedAt: number"
+        ]
+      },
+      {
+        "name": "ArchiveListing",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly id: string",
+          "readonly meta: ArchiveListingMeta"
+        ]
+      },
+      {
+        "name": "ArchiveItem",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly canResume: boolean",
+          "readonly canReview: boolean",
+          "readonly conflicted: boolean",
+          "readonly headHash: string",
+          "readonly id: string",
+          "readonly playersLabel: string",
+          "readonly result: string",
+          "readonly startedAt: number"
+        ]
+      },
+      {
+        "name": "ArchiveModel",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly isEmpty: boolean",
+          "readonly items: readonly ArchiveItem[]"
+        ]
+      },
+      {
+        "name": "ArchiveActions",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly canResume: boolean",
+          "readonly canReview: boolean"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "deriveArchive",
+      "playersLabel",
+      "resolveArchiveActions"
+    ]
+  },
+  "src/ui/widgets/banner.ts": {
+    "exports": [
+      "BANNER_WIDGET_ID",
+      "BannerContext",
+      "BannerDeps",
+      "bannerWidget"
+    ],
+    "imports": [
+      {
+        "source": "../../core/gameState.ts",
+        "target": "src/core/gameState.ts",
+        "specifiers": [
+          "GameState"
+        ]
+      },
+      {
+        "source": "../registry.ts",
+        "target": "src/ui/registry.ts",
+        "specifiers": [
+          "Widget",
+          "WidgetFactory"
+        ]
+      },
+      {
+        "source": "./bannerModel.ts",
+        "target": "src/ui/widgets/bannerModel.ts",
+        "specifiers": [
+          "BannerHistory",
+          "BannerModel",
+          "deriveBanner"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "BannerDeps",
+        "extends": [],
+        "methods": [
+          "dispatch(commandId: string): boolean"
+        ],
+        "properties": [
+          "readonly doc: Document"
+        ]
+      },
+      {
+        "name": "BannerContext",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly history: BannerHistory",
+          "readonly offTurnBlocks: number"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "bannerWidget",
+      "cap",
+      "emptyStateFallback",
+      "flashOffTurn",
+      "render"
+    ]
+  },
+  "src/ui/widgets/bannerModel.ts": {
+    "exports": [
+      "BANNER_COMMANDS",
+      "BannerButton",
+      "BannerHistory",
+      "BannerModel",
+      "deriveBanner"
+    ],
+    "imports": [
+      {
+        "source": "../../core/gameState.ts",
+        "target": "src/core/gameState.ts",
+        "specifiers": [
+          "GameState",
+          "Player"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "BannerHistory",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly canRedo: boolean",
+          "readonly canReset: boolean",
+          "readonly canUndo: boolean"
+        ]
+      },
+      {
+        "name": "BannerButton",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly commandId: string",
+          "readonly enabled: boolean",
+          "readonly label: string"
+        ]
+      },
+      {
+        "name": "BannerModel",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly blackCaptures: number",
+          "readonly buttons: readonly BannerButton[]",
+          "readonly player: Player",
+          "readonly status: 'turn' | 'winner'",
+          "readonly whiteCaptures: number"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "deriveBanner"
+    ]
+  },
+  "src/ui/widgets/help.ts": {
+    "exports": [
+      "HELP_WIDGET_ID",
+      "HelpDeps",
+      "HelpScope",
+      "helpWidget"
+    ],
+    "imports": [
+      {
+        "source": "../registry.ts",
+        "target": "src/ui/registry.ts",
+        "specifiers": [
+          "Widget",
+          "WidgetFactory"
+        ]
+      },
+      {
+        "source": "./helpModel.ts",
+        "target": "src/ui/widgets/helpModel.ts",
+        "specifiers": [
+          "HELP_SCOPE_ID",
+          "HelpSources",
+          "deriveHelp"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "HelpScope",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly bindings: Readonly<Record<string, string>>",
+          "readonly blocking: true",
+          "readonly id: string"
+        ]
+      },
+      {
+        "name": "HelpDeps",
+        "extends": [],
+        "methods": [
+          "getHelpSources(): HelpSources",
+          "popScope(): void",
+          "pushScope(scope: HelpScope): void",
+          "registerOpenHelp(open: () => void): void"
+        ],
+        "properties": [
+          "readonly doc: Document"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "close",
+      "helpScope",
+      "helpWidget",
+      "onKeyDown",
+      "onOutsidePointer",
+      "openModal",
+      "renderRows"
+    ]
+  },
+  "src/ui/widgets/helpModel.ts": {
+    "exports": [
+      "DEFAULT_COMMAND_LABELS",
+      "HELP_SCOPE_ID",
+      "HelpModel",
+      "HelpRow",
+      "HelpSources",
+      "SHOW_HELP_COMMAND",
+      "deriveHelp"
+    ],
+    "imports": [],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "HelpSources",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly bindings: Readonly<Record<string, string>>",
+          "readonly commandIds: readonly string[]",
+          "readonly labels: Readonly<Record<string, string>>"
+        ]
+      },
+      {
+        "name": "HelpRow",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly commandId: string",
+          "readonly keys: readonly string[]",
+          "readonly label: string"
+        ]
+      },
+      {
+        "name": "HelpModel",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly rows: readonly HelpRow[]"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "deriveHelp"
+    ]
+  },
+  "src/ui/widgets/historySlider.ts": {
+    "exports": [
+      "HISTORY_SLIDER_WIDGET_ID",
+      "HistorySliderDeps",
+      "historySliderWidget"
+    ],
+    "imports": [
+      {
+        "source": "../registry.ts",
+        "target": "src/ui/registry.ts",
+        "specifiers": [
+          "Widget",
+          "WidgetFactory"
+        ]
+      },
+      {
+        "source": "./sliderModel.ts",
+        "target": "src/ui/widgets/sliderModel.ts",
+        "specifiers": [
+          "HistoryFacts",
+          "SliderModel",
+          "deriveSlider",
+          "resolveScrub"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "HistorySliderDeps",
+        "extends": [],
+        "methods": [
+          "getHistory(): HistoryFacts",
+          "scrubTo(k: number): void"
+        ],
+        "properties": [
+          "readonly doc: Document"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "historySliderWidget",
+      "refresh",
+      "render"
+    ]
+  },
+  "src/ui/widgets/menu.ts": {
+    "exports": [
+      "MENU_WIDGET_ID",
+      "MenuDeps",
+      "MenuScope",
+      "menuWidget"
+    ],
+    "imports": [
+      {
+        "source": "../registry.ts",
+        "target": "src/ui/registry.ts",
+        "specifiers": [
+          "Widget",
+          "WidgetFactory"
+        ]
+      },
+      {
+        "source": "./menuModel.ts",
+        "target": "src/ui/widgets/menuModel.ts",
+        "specifiers": [
+          "MENU_SCOPE_ID",
+          "MenuEntrySpec",
+          "deriveMenu"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "MenuScope",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly bindings: Readonly<Record<string, string>>",
+          "readonly blocking: true",
+          "readonly id: string"
+        ]
+      },
+      {
+        "name": "MenuDeps",
+        "extends": [],
+        "methods": [
+          "dispatch(commandId: string): boolean",
+          "popScope(): void",
+          "pushScope(scope: MenuScope): void"
+        ],
+        "properties": [
+          "readonly doc: Document",
+          "readonly entries: readonly MenuEntrySpec[]"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "close",
+      "menuScope",
+      "menuWidget",
+      "onKeyDown",
+      "onOutsidePointer",
+      "open_"
+    ]
+  },
+  "src/ui/widgets/menuModel.ts": {
+    "exports": [
+      "DEFAULT_MENU_ENTRIES",
+      "MENU_SCOPE_ID",
+      "MenuEntrySpec",
+      "MenuItem",
+      "MenuModel",
+      "deriveMenu"
+    ],
+    "imports": [],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "MenuEntrySpec",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly commandId: string",
+          "readonly id: string",
+          "readonly label: string",
+          "readonly order: number",
+          "readonly visible: boolean"
+        ]
+      },
+      {
+        "name": "MenuItem",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly commandId: string",
+          "readonly id: string",
+          "readonly label: string"
+        ]
+      },
+      {
+        "name": "MenuModel",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly items: readonly MenuItem[]"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "deriveMenu"
+    ]
+  },
+  "src/ui/widgets/net.ts": {
+    "exports": [
+      "NET_WIDGET_ID",
+      "NetDeps",
+      "netWidget"
+    ],
+    "imports": [
+      {
+        "source": "../registry.ts",
+        "target": "src/ui/registry.ts",
+        "specifiers": [
+          "Widget",
+          "WidgetFactory"
+        ]
+      },
+      {
+        "source": "./netModel.ts",
+        "target": "src/ui/widgets/netModel.ts",
+        "specifiers": [
+          "CODE_ERROR_TEXT",
+          "HOST_GAME_COMMAND",
+          "JOIN_GAME_COMMAND",
+          "NetModel",
+          "NetSessionState",
+          "deriveNet",
+          "validateGameCode"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "NetDeps",
+        "extends": [],
+        "methods": [
+          "copyToClipboard(text: string): Promise<void>",
+          "dispatch(commandId: string): boolean",
+          "getNet(): NetSessionState",
+          "setPendingJoinCode(code: string): void"
+        ],
+        "properties": [
+          "readonly doc: Document"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "attemptJoin",
+      "clearJoinError",
+      "netWidget",
+      "refresh",
+      "render",
+      "showJoinError"
+    ]
+  },
+  "src/ui/widgets/netModel.ts": {
+    "exports": [
+      "CODE_ALPHABET",
+      "CODE_ERROR_TEXT",
+      "CODE_LENGTH",
+      "CodeError",
+      "CodeValidation",
+      "HOST_GAME_COMMAND",
+      "JOIN_GAME_COMMAND",
+      "JoinErrorReason",
+      "NetModel",
+      "NetPanel",
+      "NetPhase",
+      "NetSeat",
+      "NetSessionState",
+      "deriveNet",
+      "generateGameCode",
+      "normalizeGameCode",
+      "validateGameCode"
+    ],
+    "imports": [],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "NetSessionState",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly code: string | null",
+          "readonly joinError: JoinErrorReason | null",
+          "readonly peerPresent: boolean",
+          "readonly phase: NetPhase",
+          "readonly seat: NetSeat"
+        ]
+      },
+      {
+        "name": "NetModel",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly code: string | null",
+          "readonly conflict: boolean",
+          "readonly conflictText: string | null",
+          "readonly joinErrorText: string | null",
+          "readonly panel: NetPanel",
+          "readonly seatText: string | null",
+          "readonly statusText: string"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [
+      {
+        "name": "NetPhase",
+        "type": "| 'offline'\n  /** A host/join is in flight (transport connecting / claiming a seat). */\n  | 'connecting'\n  /** In a room with a claimed seat: the connection/seat status line is shown. */\n  | 'connected'\n  /** The logs forked (GLOSSARY \"Conflict\"): the game is stopped and the conflict banner is shown. */\n  | 'conflict'"
+      },
+      {
+        "name": "NetSeat",
+        "type": "'white' | 'black' | null"
+      },
+      {
+        "name": "JoinErrorReason",
+        "type": "| 'room-full'\n  /** The transport could not connect (relay unreachable / rejected). */\n  | 'connect-failed'"
+      },
+      {
+        "name": "CodeError",
+        "type": "| 'empty'\n  /** Fewer than {@link CODE_LENGTH} characters. */\n  | 'too-short'\n  /** Contains a character outside {@link CODE_ALPHABET} (after upper-casing). */\n  | 'bad-chars'"
+      },
+      {
+        "name": "CodeValidation",
+        "type": "| { readonly ok: true; readonly code: string }\n  | { readonly ok: false; readonly reason: CodeError }"
+      },
+      {
+        "name": "NetPanel",
+        "type": "| 'controls'\n  /** Connection + seat status line (connecting / connected). */\n  | 'status'\n  /** The conflict banner (conflict). */\n  | 'conflict'"
+      }
+    ],
+    "functions": [
+      "deriveNet",
+      "deriveStatusText",
+      "generateGameCode",
+      "normalizeGameCode",
+      "validateGameCode"
+    ]
+  },
+  "src/ui/widgets/settings.ts": {
+    "exports": [
+      "SETTINGS_WIDGET_ID",
+      "SettingsColorsPreview",
+      "SettingsDeps",
+      "SettingsScope",
+      "settingsWidget"
+    ],
+    "imports": [
+      {
+        "source": "../../config/config.ts",
+        "target": "src/config/config.ts",
+        "specifiers": [
+          "ConfigSection",
+          "getConfig",
+          "resetConfig",
+          "setConfig"
+        ]
+      },
+      {
+        "source": "../registry.ts",
+        "target": "src/ui/registry.ts",
+        "specifiers": [
+          "Widget",
+          "WidgetFactory"
+        ]
+      },
+      {
+        "source": "./settingsModel.ts",
+        "target": "src/ui/widgets/settingsModel.ts",
+        "specifiers": [
+          "BoardConfig",
+          "ColorsConfig",
+          "ControlsConfig",
+          "KeybindingsConfig",
+          "RESET_SECTIONS",
+          "SETTINGS_SCOPE_ID",
+          "SettingsSources",
+          "boardSizePatch",
+          "colorPatch",
+          "deriveSettings",
+          "opacityPatch",
+          "presetPatch"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "SettingsScope",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly bindings: Readonly<Record<string, string>>",
+          "readonly blocking: true",
+          "readonly id: string"
+        ]
+      },
+      {
+        "name": "SettingsColorsPreview",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "background: string",
+          "lineFaceDiagonal: string",
+          "lineOpacity: number",
+          "lineOrthogonal: string",
+          "lineSpaceDiagonal: string"
+        ]
+      },
+      {
+        "name": "SettingsDeps",
+        "extends": [],
+        "methods": [
+          "applyColors(preview: SettingsColorsPreview): void",
+          "popScope(): void",
+          "pushScope(scope: SettingsScope): void",
+          "registerOpener(open: () => void): void"
+        ],
+        "properties": [
+          "readonly doc: Document"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "close",
+      "labelledColor",
+      "labelledRange",
+      "labelledSelect",
+      "onKeyDown",
+      "onOutsidePointer",
+      "openModal",
+      "readSources",
+      "renderBody",
+      "settingsScope",
+      "settingsWidget"
+    ]
+  },
+  "src/ui/widgets/settingsModel.ts": {
+    "exports": [
+      "BOARD_SIZE_OPTIONS",
+      "BoardConfig",
+      "COLOR_FIELDS",
+      "ColorFieldModel",
+      "ColorsConfig",
+      "ControlsConfig",
+      "KeybindingRow",
+      "KeybindingsConfig",
+      "OPACITY_FIELD_KEY",
+      "OPEN_SETTINGS_COMMAND",
+      "OpacityFieldModel",
+      "RESET_SECTIONS",
+      "SETTINGS_SCOPE_ID",
+      "SelectOption",
+      "SettingsModel",
+      "SettingsSources",
+      "boardSizePatch",
+      "colorPatch",
+      "deriveSettings",
+      "opacityPatch",
+      "presetPatch"
+    ],
+    "imports": [],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "SelectOption",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly selected: boolean",
+          "readonly value: T"
+        ]
+      },
+      {
+        "name": "ColorFieldModel",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly key: string",
+          "readonly label: string",
+          "readonly value: string"
+        ]
+      },
+      {
+        "name": "OpacityFieldModel",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly key: string",
+          "readonly label: string",
+          "readonly value: number"
+        ]
+      },
+      {
+        "name": "KeybindingRow",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly commandId: string",
+          "readonly key: string"
+        ]
+      },
+      {
+        "name": "SettingsModel",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly boardSizeOptions: readonly SelectOption<number>[]",
+          "readonly colorFields: readonly ColorFieldModel[]",
+          "readonly keybindingRows: readonly KeybindingRow[]",
+          "readonly opacityField: OpacityFieldModel",
+          "readonly presetOptions: readonly SelectOption<string>[]"
+        ]
+      },
+      {
+        "name": "ControlsConfig",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly preset: string",
+          "readonly presets: Readonly<Record<string, unknown>>"
+        ]
+      },
+      {
+        "name": "BoardConfig",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly size: number"
+        ]
+      },
+      {
+        "name": "SettingsSources",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly board: BoardConfig",
+          "readonly colors: ColorsConfig",
+          "readonly controls: ControlsConfig",
+          "readonly keybindings: KeybindingsConfig"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [
+      {
+        "name": "ColorsConfig",
+        "type": "Record<string, string | number>"
+      },
+      {
+        "name": "KeybindingsConfig",
+        "type": "Readonly<Record<string, string>>"
+      }
+    ],
+    "functions": [
+      "boardSizePatch",
+      "colorPatch",
+      "deriveSettings",
+      "opacityPatch",
+      "presetPatch"
+    ]
+  },
+  "src/ui/widgets/sliderModel.ts": {
+    "exports": [
+      "HistoryFacts",
+      "ScrubResolution",
+      "SliderModel",
+      "deriveSlider",
+      "resolveScrub"
+    ],
+    "imports": [],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "HistoryFacts",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly maxPly: number",
+          "readonly viewedPly: number"
+        ]
+      },
+      {
+        "name": "SliderModel",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly atLive: boolean",
+          "readonly enabled: boolean",
+          "readonly label: string",
+          "readonly max: number",
+          "readonly min: number",
+          "readonly value: number"
+        ]
+      },
+      {
+        "name": "ScrubResolution",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly atLive: boolean",
+          "readonly viewedPly: number"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "deriveSlider",
+      "resolveScrub"
+    ]
+  },
+  "src/util/randomId.ts": {
+    "exports": [
+      "randomId"
+    ],
+    "imports": [],
+    "classes": [],
+    "interfaces": [],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "formatV4",
+      "randomId"
+    ]
+  }
+}

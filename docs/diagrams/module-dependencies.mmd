@@ -1,0 +1,272 @@
+graph LR
+    subgraph src
+        src_main_ts["main.ts"]
+    end
+    subgraph src/config
+        src_config_config_ts["config.ts"]
+    end
+    subgraph src/core
+        src_core_axes_ts["axes.ts"]
+        src_core_coords_ts["coords.ts"]
+        src_core_eventLog_ts["eventLog.ts"]
+        src_core_game_ts["game.ts"]
+        src_core_gameState_ts["gameState.ts"]
+        src_core_hash_ts["hash.ts"]
+        src_core_lines_ts["lines.ts"]
+        src_core_placePiece_ts["placePiece.ts"]
+        src_core_serialize_ts["serialize.ts"]
+    end
+    subgraph src/debug
+        src_debug_log_ts["log.ts"]
+        src_debug_window_ts["window.ts"]
+    end
+    subgraph src/input
+        src_input_commands_ts["commands.ts"]
+        src_input_keybindings_ts["keybindings.ts"]
+        src_input_placement_ts["placement.ts"]
+        src_input_pointerGesture_ts["pointerGesture.ts"]
+        src_input_scopes_ts["scopes.ts"]
+        src_input_setup_ts["setup.ts"]
+    end
+    subgraph src/net
+        src_net_appSession_ts["appSession.ts"]
+        src_net_mqttTransport_ts["mqttTransport.ts"]
+        src_net_netRouting_ts["netRouting.ts"]
+        src_net_presence_ts["presence.ts"]
+        src_net_rematch_ts["rematch.ts"]
+        src_net_seats_ts["seats.ts"]
+        src_net_session_ts["session.ts"]
+        src_net_sync_ts["sync.ts"]
+        src_net_transport_ts["transport.ts"]
+        src_net_turnGate_ts["turnGate.ts"]
+    end
+    subgraph src/persist
+        src_persist_archive_ts["archive.ts"]
+        src_persist_db_ts["db.ts"]
+        src_persist_gameLifecycle_ts["gameLifecycle.ts"]
+    end
+    subgraph src/render
+        src_render_cameraControls_ts["cameraControls.ts"]
+        src_render_cameraPresets_ts["cameraPresets.ts"]
+        src_render_hover_ts["hover.ts"]
+        src_render_lines_ts["lines.ts"]
+        src_render_linesLayout_ts["linesLayout.ts"]
+        src_render_markers_ts["markers.ts"]
+        src_render_markersLayout_ts["markersLayout.ts"]
+        src_render_pickRadius_ts["pickRadius.ts"]
+        src_render_picking_ts["picking.ts"]
+        src_render_pieces_ts["pieces.ts"]
+        src_render_piecesDiff_ts["piecesDiff.ts"]
+        src_render_scene_ts["scene.ts"]
+        src_render_sceneConfig_ts["sceneConfig.ts"]
+        src_render_winLine_ts["winLine.ts"]
+        src_render_winLineLayout_ts["winLineLayout.ts"]
+    end
+    subgraph src/ui
+        src_ui_container_ts["container.ts"]
+        src_ui_layout_ts["layout.ts"]
+        src_ui_registry_ts["registry.ts"]
+        src_ui_setup_ts["setup.ts"]
+    end
+    subgraph src/ui/widgets
+        src_ui_widgets_archive_ts["archive.ts"]
+        src_ui_widgets_archiveModel_ts["archiveModel.ts"]
+        src_ui_widgets_banner_ts["banner.ts"]
+        src_ui_widgets_bannerModel_ts["bannerModel.ts"]
+        src_ui_widgets_help_ts["help.ts"]
+        src_ui_widgets_helpModel_ts["helpModel.ts"]
+        src_ui_widgets_historySlider_ts["historySlider.ts"]
+        src_ui_widgets_menu_ts["menu.ts"]
+        src_ui_widgets_menuModel_ts["menuModel.ts"]
+        src_ui_widgets_net_ts["net.ts"]
+        src_ui_widgets_netModel_ts["netModel.ts"]
+        src_ui_widgets_settings_ts["settings.ts"]
+        src_ui_widgets_settingsModel_ts["settingsModel.ts"]
+        src_ui_widgets_sliderModel_ts["sliderModel.ts"]
+    end
+    subgraph src/util
+        src_util_randomId_ts["randomId.ts"]
+    end
+    src_core_axes_ts --> src_core_coords_ts
+    src_core_eventLog_ts --> src_core_coords_ts
+    src_core_eventLog_ts --> src_core_hash_ts
+    src_core_game_ts --> src_core_coords_ts
+    src_core_game_ts --> src_core_eventLog_ts
+    src_core_game_ts --> src_core_gameState_ts
+    src_core_game_ts --> src_core_placePiece_ts
+    src_core_gameState_ts --> src_core_coords_ts
+    src_core_lines_ts --> src_core_axes_ts
+    src_core_lines_ts --> src_core_coords_ts
+    src_core_placePiece_ts --> src_core_axes_ts
+    src_core_placePiece_ts --> src_core_coords_ts
+    src_core_placePiece_ts --> src_core_gameState_ts
+    src_core_serialize_ts --> src_core_coords_ts
+    src_core_serialize_ts --> src_core_eventLog_ts
+    src_core_serialize_ts --> src_core_game_ts
+    src_core_serialize_ts --> src_core_gameState_ts
+    src_debug_window_ts --> src_core_coords_ts
+    src_debug_window_ts --> src_core_gameState_ts
+    src_debug_window_ts --> src_debug_log_ts
+    src_debug_window_ts --> src_input_scopes_ts
+    src_debug_window_ts --> src_input_setup_ts
+    src_debug_window_ts --> src_render_cameraControls_ts
+    src_debug_window_ts --> src_render_hover_ts
+    src_debug_window_ts --> src_render_lines_ts
+    src_debug_window_ts --> src_render_markers_ts
+    src_debug_window_ts --> src_render_pieces_ts
+    src_debug_window_ts --> src_render_scene_ts
+    src_debug_window_ts --> src_render_winLine_ts
+    src_debug_window_ts --> src_ui_container_ts
+    src_debug_window_ts --> src_ui_setup_ts
+    src_debug_window_ts --> src_ui_widgets_archiveModel_ts
+    src_debug_window_ts --> src_ui_widgets_banner_ts
+    src_debug_window_ts --> src_ui_widgets_helpModel_ts
+    src_debug_window_ts --> src_ui_widgets_netModel_ts
+    src_input_keybindings_ts --> src_input_scopes_ts
+    src_input_placement_ts --> src_core_coords_ts
+    src_input_placement_ts --> src_input_scopes_ts
+    src_input_placement_ts --> src_render_hover_ts
+    src_input_setup_ts --> src_input_commands_ts
+    src_input_setup_ts --> src_input_keybindings_ts
+    src_input_setup_ts --> src_input_scopes_ts
+    src_main_ts --> src_core_eventLog_ts
+    src_main_ts --> src_core_game_ts
+    src_main_ts --> src_debug_log_ts
+    src_main_ts --> src_debug_window_ts
+    src_main_ts --> src_net_appSession_ts
+    src_main_ts --> src_net_netRouting_ts
+    src_main_ts --> src_net_rematch_ts
+    src_main_ts --> src_persist_archive_ts
+    src_main_ts --> src_persist_db_ts
+    src_main_ts --> src_persist_gameLifecycle_ts
+    src_main_ts --> src_render_scene_ts
+    src_main_ts --> src_ui_setup_ts
+    src_main_ts --> src_ui_widgets_archiveModel_ts
+    src_main_ts --> src_util_randomId_ts
+    src_net_appSession_ts --> src_config_config_ts
+    src_net_appSession_ts --> src_debug_log_ts
+    src_net_appSession_ts --> src_net_mqttTransport_ts
+    src_net_appSession_ts --> src_net_session_ts
+    src_net_appSession_ts --> src_net_transport_ts
+    src_net_appSession_ts --> src_persist_db_ts
+    src_net_appSession_ts --> src_util_randomId_ts
+    src_net_mqttTransport_ts --> src_config_config_ts
+    src_net_mqttTransport_ts --> src_net_presence_ts
+    src_net_mqttTransport_ts --> src_net_transport_ts
+    src_net_netRouting_ts --> src_ui_widgets_netModel_ts
+    src_net_rematch_ts --> src_core_gameState_ts
+    src_net_session_ts --> src_core_coords_ts
+    src_net_session_ts --> src_core_game_ts
+    src_net_session_ts --> src_core_gameState_ts
+    src_net_session_ts --> src_net_seats_ts
+    src_net_session_ts --> src_net_sync_ts
+    src_net_session_ts --> src_net_transport_ts
+    src_net_session_ts --> src_net_turnGate_ts
+    src_net_session_ts --> src_persist_archive_ts
+    src_net_session_ts --> src_ui_widgets_netModel_ts
+    src_net_sync_ts --> src_core_coords_ts
+    src_net_sync_ts --> src_core_eventLog_ts
+    src_net_sync_ts --> src_core_game_ts
+    src_net_sync_ts --> src_core_gameState_ts
+    src_net_sync_ts --> src_net_transport_ts
+    src_net_sync_ts --> src_persist_archive_ts
+    src_net_turnGate_ts --> src_core_gameState_ts
+    src_net_turnGate_ts --> src_ui_widgets_netModel_ts
+    src_persist_archive_ts --> src_core_eventLog_ts
+    src_persist_archive_ts --> src_core_game_ts
+    src_persist_archive_ts --> src_core_serialize_ts
+    src_persist_archive_ts --> src_persist_db_ts
+    src_persist_gameLifecycle_ts --> src_core_gameState_ts
+    src_render_cameraControls_ts --> src_render_cameraPresets_ts
+    src_render_hover_ts --> src_core_coords_ts
+    src_render_hover_ts --> src_core_gameState_ts
+    src_render_hover_ts --> src_core_lines_ts
+    src_render_lines_ts --> src_config_config_ts
+    src_render_lines_ts --> src_core_coords_ts
+    src_render_lines_ts --> src_core_lines_ts
+    src_render_lines_ts --> src_render_linesLayout_ts
+    src_render_linesLayout_ts --> src_core_coords_ts
+    src_render_linesLayout_ts --> src_core_lines_ts
+    src_render_markers_ts --> src_config_config_ts
+    src_render_markers_ts --> src_core_coords_ts
+    src_render_markers_ts --> src_core_gameState_ts
+    src_render_markers_ts --> src_render_markersLayout_ts
+    src_render_markersLayout_ts --> src_core_coords_ts
+    src_render_markersLayout_ts --> src_core_gameState_ts
+    src_render_picking_ts --> src_core_coords_ts
+    src_render_picking_ts --> src_core_gameState_ts
+    src_render_picking_ts --> src_core_lines_ts
+    src_render_picking_ts --> src_render_hover_ts
+    src_render_picking_ts --> src_render_linesLayout_ts
+    src_render_picking_ts --> src_render_pickRadius_ts
+    src_render_pieces_ts --> src_config_config_ts
+    src_render_pieces_ts --> src_core_coords_ts
+    src_render_pieces_ts --> src_core_gameState_ts
+    src_render_pieces_ts --> src_render_piecesDiff_ts
+    src_render_piecesDiff_ts --> src_core_coords_ts
+    src_render_piecesDiff_ts --> src_core_gameState_ts
+    src_render_scene_ts --> src_config_config_ts
+    src_render_scene_ts --> src_core_coords_ts
+    src_render_scene_ts --> src_core_eventLog_ts
+    src_render_scene_ts --> src_core_game_ts
+    src_render_scene_ts --> src_core_gameState_ts
+    src_render_scene_ts --> src_core_lines_ts
+    src_render_scene_ts --> src_debug_log_ts
+    src_render_scene_ts --> src_input_commands_ts
+    src_render_scene_ts --> src_input_placement_ts
+    src_render_scene_ts --> src_input_pointerGesture_ts
+    src_render_scene_ts --> src_input_scopes_ts
+    src_render_scene_ts --> src_input_setup_ts
+    src_render_scene_ts --> src_render_cameraControls_ts
+    src_render_scene_ts --> src_render_cameraPresets_ts
+    src_render_scene_ts --> src_render_hover_ts
+    src_render_scene_ts --> src_render_lines_ts
+    src_render_scene_ts --> src_render_markers_ts
+    src_render_scene_ts --> src_render_picking_ts
+    src_render_scene_ts --> src_render_pieces_ts
+    src_render_scene_ts --> src_render_sceneConfig_ts
+    src_render_scene_ts --> src_render_winLine_ts
+    src_render_scene_ts --> src_ui_widgets_banner_ts
+    src_render_scene_ts --> src_ui_widgets_helpModel_ts
+    src_render_scene_ts --> src_ui_widgets_netModel_ts
+    src_render_winLine_ts --> src_config_config_ts
+    src_render_winLine_ts --> src_core_coords_ts
+    src_render_winLine_ts --> src_core_gameState_ts
+    src_render_winLine_ts --> src_render_winLineLayout_ts
+    src_render_winLineLayout_ts --> src_core_coords_ts
+    src_render_winLineLayout_ts --> src_core_lines_ts
+    src_ui_container_ts --> src_debug_log_ts
+    src_ui_container_ts --> src_ui_layout_ts
+    src_ui_container_ts --> src_ui_registry_ts
+    src_ui_setup_ts --> src_config_config_ts
+    src_ui_setup_ts --> src_ui_container_ts
+    src_ui_setup_ts --> src_ui_layout_ts
+    src_ui_setup_ts --> src_ui_registry_ts
+    src_ui_setup_ts --> src_ui_widgets_archive_ts
+    src_ui_setup_ts --> src_ui_widgets_archiveModel_ts
+    src_ui_setup_ts --> src_ui_widgets_banner_ts
+    src_ui_setup_ts --> src_ui_widgets_help_ts
+    src_ui_setup_ts --> src_ui_widgets_helpModel_ts
+    src_ui_setup_ts --> src_ui_widgets_historySlider_ts
+    src_ui_setup_ts --> src_ui_widgets_menu_ts
+    src_ui_setup_ts --> src_ui_widgets_net_ts
+    src_ui_setup_ts --> src_ui_widgets_netModel_ts
+    src_ui_setup_ts --> src_ui_widgets_settings_ts
+    src_ui_setup_ts --> src_ui_widgets_sliderModel_ts
+    src_ui_widgets_archive_ts --> src_ui_registry_ts
+    src_ui_widgets_archive_ts --> src_ui_widgets_archiveModel_ts
+    src_ui_widgets_banner_ts --> src_core_gameState_ts
+    src_ui_widgets_banner_ts --> src_ui_registry_ts
+    src_ui_widgets_banner_ts --> src_ui_widgets_bannerModel_ts
+    src_ui_widgets_bannerModel_ts --> src_core_gameState_ts
+    src_ui_widgets_help_ts --> src_ui_registry_ts
+    src_ui_widgets_help_ts --> src_ui_widgets_helpModel_ts
+    src_ui_widgets_historySlider_ts --> src_ui_registry_ts
+    src_ui_widgets_historySlider_ts --> src_ui_widgets_sliderModel_ts
+    src_ui_widgets_menu_ts --> src_ui_registry_ts
+    src_ui_widgets_menu_ts --> src_ui_widgets_menuModel_ts
+    src_ui_widgets_net_ts --> src_ui_registry_ts
+    src_ui_widgets_net_ts --> src_ui_widgets_netModel_ts
+    src_ui_widgets_settings_ts --> src_config_config_ts
+    src_ui_widgets_settings_ts --> src_ui_registry_ts
+    src_ui_widgets_settings_ts --> src_ui_widgets_settingsModel_ts
