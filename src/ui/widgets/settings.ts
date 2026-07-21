@@ -14,11 +14,18 @@
  * It READS/WRITES the layered config store directly (`src/ui` may import `src/config`): each field
  * is seeded from `getConfig`, and an edit persists via `setConfig` (validated first by the pure
  * normalizers — a malformed value is refused, never stored). "Reset to defaults" clears every
- * owned section via `resetConfig` ({@link RESET_SECTIONS}). Board size / preset / keybindings and
- * most colours take effect on RELOAD (the documented config contract — the board and instanced
- * buffers are built once from config); the previewable colours (background, line opacity, the three
- * line colours) update LIVE via `deps.applyColors` (the scene's `applyColors` seam) so the user
- * sees the change immediately (agent-principles #1: the reload contract is stated, not disguised).
+ * owned section via `resetConfig` ({@link RESET_SECTIONS}).
+ *
+ * LIVE APPLY (Task A.4, issue #15): an edit does NOT paint the scene itself. It writes via
+ * `setConfig`/`resetConfig`, whose emit drives the app's SINGLE `onConfigChange` loop
+ * (`main.ts`) → `scene.applyConfig(section)` — the one path that live-applies every live-able
+ * section (colours/opacity/lighting/materials/…). The widget therefore never calls `applyColors`
+ * directly: doing both would DOUBLE-APPLY the same edit. Board size takes effect on the NEXT GAME
+ * (the board + instanced buffers are built once from config at construction — the documented config
+ * contract, stated in the field label, not disguised — agent-principles #1). Because config is the
+ * SSOT and the loop repaints every widget, an OPEN modal also re-reads live config on `update` (so
+ * a programmatic/networked writer, e.g. #9's opponent-changed-board-size, is reflected without a
+ * reload), mirroring how the net widget re-reads the session readout each update.
  *
  * The open modal is a MODE change in the input layer: opening PUSHES a `blocking` scope
  * (GLOSSARY "Blocking scope") and closing POPS it — every close path (Escape, outside-click, the ✕
@@ -56,20 +63,15 @@ export interface SettingsScope {
   readonly blocking: true;
 }
 
-/** The live-previewable colour subset the widget hands to the scene's `applyColors` seam. */
-export interface SettingsColorsPreview {
-  background?: string;
-  lineOpacity?: number;
-  lineOrthogonal?: string;
-  lineFaceDiagonal?: string;
-  lineSpaceDiagonal?: string;
-}
-
 /**
  * The deps a settings widget needs: a document to build in (injected for testability), the scope-
- * stack `pushScope`/`popScope` (the open modal pushes/pops the blocking `settings` scope),
- * `registerOpener` (the widget hands its `open()` back so the `openSettings` command can call it),
- * and `applyColors` (the scene's live-preview seam). Config reads/writes go straight to the store.
+ * stack `pushScope`/`popScope` (the open modal pushes/pops the blocking `settings` scope), and
+ * `registerOpener` (the widget hands its `open()` back so the `openSettings` command can call it).
+ *
+ * NO `applyColors` seam (Task A.4): the widget writes config via `setConfig`/`resetConfig` and the
+ * app's single `onConfigChange` loop live-applies it (`scene.applyConfig`). The widget never paints
+ * the scene itself — that would double-apply the same edit. Config reads/writes go straight to the
+ * store (the SSOT), so the modal re-reads live config on `update` too.
  */
 export interface SettingsDeps {
   readonly doc: Document;
@@ -79,8 +81,6 @@ export interface SettingsDeps {
   popScope(): void;
   /** Register the widget's `open()` so the `openSettings` command opens this modal. */
   registerOpener(open: () => void): void;
-  /** Live-apply a colour preview to the scene (background / line opacity / line colours). */
-  applyColors(preview: SettingsColorsPreview): void;
 }
 
 /** Build the blocking `settings` scope the open modal pushes (id `settings`, no bindings). */
@@ -144,13 +144,38 @@ export function settingsWidget(): WidgetFactory {
 
       let open = false;
 
+      // Re-entrancy guard for the SINGLE live-apply path (Task A.4). A local edit writes config,
+      // whose emit runs the app's onConfigChange loop SYNCHRONOUSLY → container.update → this
+      // widget's update → renderBody. Rebuilding the body mid-edit would drop the field the user is
+      // actively dragging/picking. So while THIS widget performs a write we suppress its own
+      // self-rebuild (the field already shows the value it just wrote); an EXTERNAL write (not
+      // wrapped here — e.g. a networked/opponent change, #9) is NOT suppressed and DOES rebuild the
+      // open modal, which is the point of live re-read.
+      let writingLocally = false;
+
+      /** Perform a config write, suppressing the widget's own self-rebuild from the emit it causes. */
+      function write(fn: () => void): void {
+        writingLocally = true;
+        try {
+          fn();
+        } finally {
+          writingLocally = false;
+        }
+      }
+
       /** Rebuild the form body from the pure model derived off live config. */
       function renderBody(): void {
         const model = deriveSettings(readSources());
         body.replaceChildren();
 
-        // --- Board size (a <select>; takes effect on reload). ------------------------------------
-        const boardSelect = labelledSelect(doc, body, 'Board size', 'settings-board-size');
+        // --- Board size (a <select>; takes effect NEXT GAME — the board + instanced buffers are
+        //     built once from config at construction, so a live resize is deferred by design #15). --
+        const boardSelect = labelledSelect(
+          doc,
+          body,
+          'Board size (takes effect next game)',
+          'settings-board-size',
+        );
         for (const opt of model.boardSizeOptions) {
           const o = doc.createElement('option');
           o.value = String(opt.value);
@@ -160,7 +185,7 @@ export function settingsWidget(): WidgetFactory {
         }
         boardSelect.addEventListener('change', () => {
           const patch = boardSizePatch(boardSelect.value);
-          if (patch !== null) setConfig('board', patch);
+          if (patch !== null) write(() => setConfig('board', patch));
         });
 
         // --- Control preset (a <select>; takes effect on reload). --------------------------------
@@ -175,30 +200,30 @@ export function settingsWidget(): WidgetFactory {
         }
         presetSelect.addEventListener('change', () => {
           const patch = presetPatch(presetSelect.value, presetIds);
-          if (patch !== null) setConfig('controls', patch);
+          if (patch !== null) write(() => setConfig('controls', patch));
         });
 
-        // --- Colours (each an <input type=color>; background + line colours preview LIVE). -------
+        // --- Colours (each an <input type=color>; background + line colours apply LIVE). ---------
+        // The edit only WRITES config; the app's single onConfigChange loop live-applies it via
+        // scene.applyConfig('colors') (Task A.4). No direct applyColors call here — that would
+        // double-apply the same edit through two paths.
         for (const field of model.colorFields) {
           const input = labelledColor(doc, body, field.label, `settings-color-${field.key}`);
           input.value = field.value;
           input.addEventListener('input', () => {
             const patch = colorPatch(field.key, input.value);
             if (patch === null) return;
-            setConfig('colors', patch);
-            // Live-preview the subset the scene can apply without a reload.
-            deps.applyColors({ [field.key]: patch[field.key] } as SettingsColorsPreview);
+            write(() => setConfig('colors', patch));
           });
         }
 
-        // --- Line opacity (a 0..1 range slider; previews LIVE). ----------------------------------
+        // --- Line opacity (a 0..1 range slider; applies LIVE via the config loop). ----------------
         const opacity = labelledRange(doc, body, model.opacityField.label, 'settings-opacity');
         opacity.value = String(model.opacityField.value);
         opacity.addEventListener('input', () => {
           const patch = opacityPatch(opacity.value);
           if (patch === null) return;
-          setConfig('colors', patch);
-          deps.applyColors({ lineOpacity: patch.lineOpacity });
+          write(() => setConfig('colors', patch));
         });
 
         // --- Keybindings (read-only rows here; rebinding UI is the help-overlay's remit, 5.7). ---
@@ -228,23 +253,13 @@ export function settingsWidget(): WidgetFactory {
         reset.addEventListener('click', () => {
           // Clear every section the modal owns — the single list lives in the pure model
           // (RESET_SECTIONS), so the widget and its tests never drift on which sections reset.
-          for (const section of RESET_SECTIONS) {
-            resetConfig(section as ConfigSection);
-          }
-          // Re-apply the (now-default) previewable colours live, then rebuild the form fields.
-          const c = getConfig('colors') as unknown as {
-            background: string;
-            lineOpacity: number;
-            lineOrthogonal: string;
-            lineFaceDiagonal: string;
-            lineSpaceDiagonal: string;
-          };
-          deps.applyColors({
-            background: c.background,
-            lineOpacity: c.lineOpacity,
-            lineOrthogonal: c.lineOrthogonal,
-            lineFaceDiagonal: c.lineFaceDiagonal,
-            lineSpaceDiagonal: c.lineSpaceDiagonal,
+          // Each resetConfig emits, so the app's onConfigChange loop live-applies the now-default
+          // section (colours back to default paint immediately — Task A.4). No direct applyColors
+          // here: that would double-apply. Then rebuild the form from the (now-default) config.
+          write(() => {
+            for (const section of RESET_SECTIONS) {
+              resetConfig(section as ConfigSection);
+            }
           });
           renderBody();
         });
@@ -294,8 +309,15 @@ export function settingsWidget(): WidgetFactory {
 
       return {
         element,
-        // Settings reads config on open, not on every board change — `update` is a no-op.
-        update(): void {},
+        // Re-read live config on every shell repaint (Task A.4). The app's onConfigChange loop
+        // calls container.update → this update, so an OPEN modal reflects a config change made
+        // ANYWHERE — the local edit, a reset, or a programmatic/networked writer (#9's
+        // opponent-changed-board-size) — with no reload. It re-derives the form fields from live
+        // config (the SSOT via getConfig), exactly as the net widget re-reads getNet() each update.
+        // Closed → no-op (nothing to repaint; open is rebuilt from live config on the next open).
+        update(): void {
+          if (open && !writingLocally) renderBody();
+        },
         dispose(): void {
           if (open) close();
         },

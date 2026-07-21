@@ -22,11 +22,7 @@ import { createWidgetRegistry, type WidgetFactory } from './registry.ts';
 import { createUiContainer, type LayoutReadout, type UiContainerHandle } from './container.ts';
 import { bannerWidget } from './widgets/banner.ts';
 import { menuWidget, type MenuScope } from './widgets/menu.ts';
-import {
-  settingsWidget,
-  type SettingsScope,
-  type SettingsColorsPreview,
-} from './widgets/settings.ts';
+import { settingsWidget, type SettingsScope } from './widgets/settings.ts';
 import { netWidget } from './widgets/net.ts';
 import type { NetSessionState } from './widgets/netModel.ts';
 import { historySliderWidget } from './widgets/historySlider.ts';
@@ -96,13 +92,6 @@ export interface UiDeps {
    * list (design Part 6; agent-principles #8).
    */
   getHelpSources(): HelpSources;
-  /**
-   * Live-apply a colour preview to the scene (Task 5.4) — the settings modal's colour/opacity live
-   * preview. Supplied by the app (the scene's `applyColors` seam) so the UI shell never imports
-   * render. Only the previewable subset (background / line opacity / line colours) applies live;
-   * the rest of `colors` takes effect on reload (the documented config contract).
-   */
-  applyColors(preview: SettingsColorsPreview): void;
   /**
    * The live networking-session readout (Task 5.5) the net widget renders — the scene's `getNet`,
    * produced off the app's net session (SyncEngine + seat manager). Supplied by the app so the UI
@@ -190,7 +179,6 @@ export function createUi(container: HTMLElement, deps: UiDeps): UiHandle {
       reviewArchived: deps.reviewArchived,
       resumeArchived: deps.resumeArchived,
       getHelpSources: deps.getHelpSources,
-      applyColors: deps.applyColors,
       getNet: deps.getNet,
       setPendingJoinCode: deps.setPendingJoinCode,
       copyToClipboard: deps.copyToClipboard,

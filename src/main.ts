@@ -524,9 +524,6 @@ const ui = createUi(container, {
   reviewArchived: (id) => reviewArchived(id),
   resumeArchived: (id) => resumeArchived(id),
   getHelpSources: () => scene.getHelpSources(),
-  // Live colour preview: the settings modal drives the scene's applyColors seam so a colour /
-  // opacity edit updates the rendered scene immediately (background + line opacity + line colours).
-  applyColors: (preview) => scene.applyColors(preview),
   // Networking (Task 5.5): the net widget reads the live session readout via the scene's getNet,
   // stashes a validated join code via setPendingJoinCode, and copies the game code to the clipboard.
   getNet: () => scene.getNet(),
@@ -547,14 +544,22 @@ refreshUi();
 // stay live regardless of whether the change came from a button, a hotkey, or a canvas click.
 scene.onStateChange(refreshUi);
 
-// Live settings apply with NO reload (Task A.3, issue #15): on every config-section change — whether
-// from the local settings UI or a programmatic/networked writer — re-apply it to the running scene AND
-// repaint the config-reading widgets. `setConfig`/`resetConfig` emit the SECTION NAME only (the SSOT is
-// getConfig, which the appliers re-read), so no value is duplicated onto the event. `applyConfig` is a
-// documented no-op for the reload/next-game sections (board/controls/geometry), so this loop is safe to
-// fire for any section. We NEVER write config from inside this listener (that would re-emit → loop);
-// we react by re-reading + re-applying only (design guardrail). The scene owns teardown of its own
-// objects; this app-level subscription lives for the page's lifetime alongside the scene.
+// Live settings apply with NO reload (Task A.3/A.4, issue #15): on every config-section change —
+// whether from the local settings UI or a programmatic/networked writer — do BOTH halves of the
+// single notification path:
+//   1. scene.applyConfig(section): re-read the section (SSOT) onto the running Three.js objects so
+//      the BOARD reflects the change live (A.3). A documented no-op for the reload/next-game
+//      sections (board/controls/geometry), so firing it for any section is safe.
+//   2. refreshUi(): repaint every widget via container.update. Config-READING widgets (the settings
+//      modal) re-read live config in their own update() — mirroring how the net widget re-reads the
+//      session readout — so an OPEN modal reflects a config change made ANYWHERE (a local edit, a
+//      reset, or an opponent's networked change, #9) with no reload. This is the A.4 wiring seam:
+//      the settings UI writes config, and this ONE loop is what applies it to board AND widgets.
+// `setConfig`/`resetConfig` emit the SECTION NAME only (the SSOT is getConfig, which the appliers +
+// widgets re-read), so no value is duplicated onto the event. We NEVER write config from inside this
+// listener (that would re-emit → loop); we react by re-reading + re-applying only (design guardrail).
+// The scene owns teardown of its own objects; this app-level subscription lives for the page's
+// lifetime alongside the scene.
 onConfigChange((section) => {
   scene.applyConfig(section);
   refreshUi();
