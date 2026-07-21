@@ -13,21 +13,26 @@ import {
 } from '../src/ui/widgets/settingsModel.ts';
 
 /**
- * Task 5.4 e2e — the settings-modal widget is the DOM/config-write + input-scope IO boundary,
- * verified by driving the REAL app and asserting on `window.__pente` real state (getInput /
- * getColors), the persisted localStorage overrides (a real getConfig round-trip), and the rendered
- * DOM (agent-principles #3: observable behavior, never a log line). The PURE view-model
+ * Task 5.4 / B.2 (#24) e2e — the settings-panel widget is the DOM/config-write + input-scope IO
+ * boundary, verified by driving the REAL app and asserting on `window.__pente` real state (getInput /
+ * getColors / getCamera), the persisted localStorage overrides (a real getConfig round-trip), and
+ * the rendered DOM (agent-principles #3: observable behavior, never a log line). The PURE view-model
  * (`settingsModel.ts`) is mutation-gated in Vitest; here we prove the WIRING:
- *   - the modal starts HIDDEN with no `settings` scope on the stack;
+ *   - the panel starts HIDDEN with no `settings` scope on the stack;
  *   - dispatching the `openSettings` COMMAND (the SAME id the menu's Settings entry / a keybinding
- *     fires — design Principle 3) OPENS the modal, populates the form from live config, and PUSHES
- *     a BLOCKING `settings` scope (proven by a key being SWALLOWED);
+ *     fires — design Principle 3) OPENS the panel, populates the form from live config, and PUSHES
+ *     a NON-blocking `settings` scope (#24 / Increment B) — proven by an otherwise-bound key FALLING
+ *     THROUGH to the game scope (NOT swallowed), the opposite of the old centered blocking modal;
+ *   - #24 MONEY-SHOT: with the panel OPEN, editing a colour / light-intensity applies to the board
+ *     LIVE while the board stays VISIBLE + interactive (a camera-orbit drag on the canvas under the
+ *     open panel STILL moves the camera) — the whole point of "edit while watching the board";
  *   - editing the control-preset / a colour / line opacity PERSISTS a real config override (read
  *     back off localStorage), and the previewable colours change the RENDERED scene LIVE
  *     (getColors reflects the edit before any reload);
  *   - reset-to-defaults CLEARS the overrides (config back to the tracked default) and re-applies
  *     the default colours live;
- *   - Escape / outside-click / the ✕ button each CLOSE the modal and POP the scope (no leak).
+ *   - Escape / outside-click (on the live board) / the ✕ button each CLOSE the panel and POP the
+ *     scope (no leak).
  * The widget id / zone / options / entries derive from the config + model so nothing is hardcoded
  * (agent-principles #8).
  */
@@ -53,11 +58,16 @@ interface ColorsReadout {
   lineFaceDiagonal: string;
   lineSpaceDiagonal: string;
 }
+interface CameraReadout {
+  position: { x: number; y: number; z: number };
+  target: { x: number; y: number; z: number };
+}
 type Pente = {
   getInput(): InputReadout | null;
   pressKey(chord: string): KeyResolution | null;
   dispatch(id: string): boolean | null;
   getColors(): ColorsReadout | null;
+  getCamera(): CameraReadout | null;
 };
 
 async function ready(page: import('@playwright/test').Page) {
@@ -113,7 +123,7 @@ test('the settings modal mounts hidden with no settings scope on the stack', asy
   expect(input0.scopes).not.toContain(SETTINGS_SCOPE_ID);
 });
 
-test('dispatching openSettings opens the modal, fills it from config, and pushes a blocking scope', async ({
+test('dispatching openSettings opens the panel, fills it from config, and pushes a NON-blocking scope', async ({
   page,
 }) => {
   await ready(page);
@@ -150,16 +160,88 @@ test('dispatching openSettings opens the modal, fills it from config, and pushes
     );
   }
 
-  // Opening PUSHED the blocking `settings` scope onto the scene's stack.
+  // Opening PUSHED the NON-blocking `settings` scope onto the scene's stack.
   const input = await get(page, (p) => p.getInput()!);
   expect(input.scopes[input.scopes.length - 1]).toBe(SETTINGS_SCOPE_ID);
 
-  // Proof the scope BLOCKS: an otherwise-bound key (`u` → undo) is SWALLOWED (resolved in the
-  // settings scope, no command) instead of falling through to the game scope.
-  const swallowed = await get(page, (p) => p.pressKey('u'));
-  expect(swallowed).toEqual({ commandId: null, scopeId: SETTINGS_SCOPE_ID, handled: true });
+  // #24 / Increment B NON-BLOCKING proof (key path): an otherwise-bound key is NOT swallowed by the
+  // `settings` scope — it FALLS THROUGH to the game scope below and resolves its command (`u` →
+  // `undo`). This is the exact OPPOSITE of the old centered blocking modal, which reported
+  // {scopeId:'settings', commandId:null}. The scope that decides is `game`, not `settings`.
+  const fellThrough = await get(page, (p) => p.pressKey('u'));
+  expect(fellThrough.scopeId).toBe('game');
+  expect(fellThrough.commandId).toBe('undo');
+  expect(fellThrough.handled).toBe(true);
 
   const shot = resolve('e2e/artifacts/settings-open.png');
+  mkdirSync(dirname(shot), { recursive: true });
+  await page.screenshot({ path: shot });
+});
+
+test('#24 MONEY-SHOT: with the settings panel OPEN, a colour edit updates the board LIVE while the board stays VISIBLE + interactive (no reload)', async ({
+  page,
+}) => {
+  // The whole point of Increment B (#24): open Settings WITHIN the drawer context and EDIT WHILE
+  // WATCHING the board. This asserts BOTH halves at once, off real render/camera state (never a log
+  // line — agent-principles #3):
+  //   1. a colour edit made through the settings UI reflects on the LIVE board immediately (getColors
+  //      reads back the real Three.js scene background), with NO reload — reusing Increment A's
+  //      setConfig → onConfigChange → scene.applyConfig path;
+  //   2. the board is STILL INTERACTIVE under the open panel — a camera-orbit drag on the canvas
+  //      moves the camera (getCamera delta). Under the OLD blocking modal the full-viewport backdrop
+  //      swallowed this drag (delta ~0) and the settings scope swallowed every key.
+  await ready(page);
+
+  expect(await dispatch(page, OPEN_SETTINGS_COMMAND)).toBe(true);
+  await expect(modal(page)).toBeVisible();
+
+  // The panel really is open (its scope is on the stack) AND the board stays live under it.
+  const openInput = await get(page, (p) => p.getInput()!);
+  expect(openInput.scopes[openInput.scopes.length - 1]).toBe(SETTINGS_SCOPE_ID);
+
+  // --- Half 1: edit a colour through the UI; the LIVE board reflects it with no reload. ---------
+  const before = await get(page, (p) => p.getColors()!);
+  const target = '#ff8800';
+  expect(target).not.toBe(before.background);
+  await modal(page).locator('[data-testid="settings-color-background"]').evaluate((el) => {
+    const input = el as HTMLInputElement;
+    input.value = '#ff8800';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  const afterEdit = await get(page, (p) => p.getColors()!);
+  expect(afterEdit.background).toBe(target); // the real scene background changed LIVE
+
+  // --- Half 2: the board is still interactive — orbit the canvas UNDER the open panel. ----------
+  const camBefore = await get(page, (p) => p.getCamera()!);
+  expect(Number.isFinite(camBefore.position.x)).toBe(true);
+
+  const canvas = page.locator('canvas');
+  const box = await canvas.boundingBox();
+  if (!box) throw new Error('canvas has no bounding box');
+  // Drag on the LEFT of the canvas, well clear of the 320px right-edge settings panel.
+  const cx = box.x + box.width * 0.3;
+  const cy = box.y + box.height / 2;
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx + 220, cy + 120, { steps: 24 });
+  await page.mouse.up();
+  await page.waitForTimeout(200);
+
+  const camAfter = await get(page, (p) => p.getCamera()!);
+  const moved = Math.hypot(
+    camAfter.position.x - camBefore.position.x,
+    camAfter.position.y - camBefore.position.y,
+    camAfter.position.z - camBefore.position.z,
+  );
+  // The camera MUST have moved — proof the panel is non-blocking (board live under it).
+  expect(moved).toBeGreaterThan(0.01);
+
+  // The LIVE edit survives the interaction — the board still shows the edited colour (no reload).
+  const stillEdited = await get(page, (p) => p.getColors()!);
+  expect(stillEdited.background).toBe(target);
+
+  // Money-shot: the board (edited to #ff8800) visible + live with the settings panel open over it.
+  const shot = resolve('e2e/artifacts/settings-live-while-open.png');
   mkdirSync(dirname(shot), { recursive: true });
   await page.screenshot({ path: shot });
 });
@@ -277,7 +359,7 @@ test('reset-to-defaults clears every override and re-applies the default colours
   );
 });
 
-test('Escape closes the modal and pops the blocking scope', async ({ page }) => {
+test('Escape closes the panel and pops the settings scope', async ({ page }) => {
   await ready(page);
   await dispatch(page, OPEN_SETTINGS_COMMAND);
   await expect(modal(page)).toBeVisible();
@@ -293,13 +375,17 @@ test('Escape closes the modal and pops the blocking scope', async ({ page }) => 
   expect(afterEscape.commandId).toBe('undo');
 });
 
-test('an outside click closes the modal and pops the scope', async ({ page }) => {
+test('an outside click (on the live board) closes the panel and pops the scope', async ({ page }) => {
   await ready(page);
   await dispatch(page, OPEN_SETTINGS_COMMAND);
   await expect(modal(page)).toBeVisible();
 
-  // Click the backdrop far outside the centered panel.
-  await modal(page).click({ position: { x: 5, y: 5 } });
+  // #24: there is NO backdrop (the panel overlays only the right edge). Click the canvas/board on
+  // the LEFT — well clear of the 320px right-edge panel — which is "outside" and closes the panel.
+  const canvas = page.locator('canvas');
+  const box = await canvas.boundingBox();
+  if (!box) throw new Error('canvas has no bounding box');
+  await page.mouse.click(box.x + box.width * 0.2, box.y + box.height * 0.5);
 
   await expect(modal(page)).toBeHidden();
   const closed = await get(page, (p) => p.getInput()!);

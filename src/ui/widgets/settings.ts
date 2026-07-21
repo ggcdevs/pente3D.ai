@@ -27,9 +27,12 @@
  * a programmatic/networked writer, e.g. #9's opponent-changed-board-size, is reflected without a
  * reload), mirroring how the net widget re-reads the session readout each update.
  *
- * The open modal is a MODE change in the input layer: opening PUSHES a `blocking` scope
- * (GLOSSARY "Blocking scope") and closing POPS it — every close path (Escape, outside-click, the ✕
- * button) pops exactly once, so the stack never leaks. It touches `document`, so it is the
+ * The open panel is a MODE change in the input layer: opening PUSHES a NON-blocking scope
+ * ({@link SETTINGS_SCOPE_BLOCKING} === false, #24 / Increment B — settings open WITHIN the drawer
+ * context over the LIVE board, so unbound keys fall THROUGH to the camera/game scopes below and the
+ * board stays interactive while you edit and watch it update) and closing POPS it — every close path
+ * (Escape, outside-click, the ✕ button) pops exactly once, so the stack never leaks. It touches
+ * `document`, so it is the
  * Playwright-verified IO boundary (asserted on `window.__pente` getInput()/getColors() +
  * getConfig round-trips + real interactions), not unit/mutation-gated. `data-testid`s expose the
  * rendered model + open state for readback (agent-principles #3: observable behavior, never a log).
@@ -44,6 +47,7 @@ import {
   colorPatch,
   opacityPatch,
   SETTINGS_SCOPE_ID,
+  SETTINGS_SCOPE_BLOCKING,
   RESET_SECTIONS,
   type SettingsSources,
   type ColorsConfig,
@@ -55,17 +59,19 @@ import {
 /** The stable widget id — matches the `settings` entry in the tracked `layout` default. */
 export const SETTINGS_WIDGET_ID = 'settings';
 
-/** A minimal blocking scope shape the widget pushes (mirrors `input/scopes.ts` `Scope` without
- * importing it, exactly as the menu widget does). No bindings: it swallows every stray key. */
+/** A minimal scope shape the widget pushes (mirrors `input/scopes.ts` `Scope` without importing it,
+ * exactly as the menu widget does). No bindings; NON-blocking ({@link SETTINGS_SCOPE_BLOCKING} ===
+ * false, #24 / Increment B) so unbound keys fall THROUGH to the camera/game scopes below — the board
+ * stays interactive + live under the panel while you edit and watch it update. */
 export interface SettingsScope {
   readonly id: string;
   readonly bindings: Readonly<Record<string, string>>;
-  readonly blocking: true;
+  readonly blocking: boolean;
 }
 
 /**
  * The deps a settings widget needs: a document to build in (injected for testability), the scope-
- * stack `pushScope`/`popScope` (the open modal pushes/pops the blocking `settings` scope), and
+ * stack `pushScope`/`popScope` (the open panel pushes/pops the NON-blocking `settings` scope), and
  * `registerOpener` (the widget hands its `open()` back so the `openSettings` command can call it).
  *
  * NO `applyColors` seam (Task A.4): the widget writes config via `setConfig`/`resetConfig` and the
@@ -75,7 +81,7 @@ export interface SettingsScope {
  */
 export interface SettingsDeps {
   readonly doc: Document;
-  /** Push the blocking `settings` scope when the modal opens. */
+  /** Push the NON-blocking `settings` scope when the panel opens (#24: board stays live under it). */
   pushScope(scope: SettingsScope): void;
   /** Pop the topmost input scope (the `settings` scope) when the modal closes. */
   popScope(): void;
@@ -83,9 +89,11 @@ export interface SettingsDeps {
   registerOpener(open: () => void): void;
 }
 
-/** Build the blocking `settings` scope the open modal pushes (id `settings`, no bindings). */
+/** Build the NON-blocking `settings` scope the open panel pushes (id `settings`, no bindings;
+ * blocking is the pure {@link SETTINGS_SCOPE_BLOCKING} policy so unbound keys fall through to the
+ * live board — #24 / Increment B). */
 function settingsScope(): SettingsScope {
-  return { id: SETTINGS_SCOPE_ID, bindings: {}, blocking: true };
+  return { id: SETTINGS_SCOPE_ID, bindings: {}, blocking: SETTINGS_SCOPE_BLOCKING };
 }
 
 /** Read the four owned config sections into the pure model's sources shape. */

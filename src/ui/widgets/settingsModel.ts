@@ -23,10 +23,22 @@
  * malformed edit is never silently persisted (agent-principles: genuine tests, negative cases).
  */
 
-/** The stable input scope id the open settings modal pushes — a BLOCKING scope (GLOSSARY
- * "Blocking scope": a modal swallows stray keys so they never fall through to the game/camera
- * scopes below). Distinct from the `menu` scope so the two never collide on the stack. */
+/** The stable input scope id the open settings panel pushes. Distinct from the `menu` scope so the
+ * two never collide on the stack. */
 export const SETTINGS_SCOPE_ID = 'settings';
+
+/**
+ * Whether the settings panel's input scope BLOCKS unhandled keys. `false` (non-blocking, #24 /
+ * Increment B): settings open WITHIN the drawer context as a non-blocking right-edge panel over the
+ * LIVE board — stray keys fall THROUGH to the camera/game scopes below, so orbit/pan/zoom and
+ * placement keep working while you edit and WATCH the board update live (render-ui design Part 5:
+ * modes don't block, mirroring `tempPlacementScope` and the menu drawer's `MENU_SCOPE_BLOCKING`).
+ * This is what makes the live preview visible — the board must stay interactive under the panel, the
+ * exact regression the old centered *blocking* settings modal had (it swallowed every key + drew a
+ * full-viewport backdrop that ate board clicks). A single named constant so the panel's blocking
+ * policy is one testable fact, not a literal buried in the glue.
+ */
+export const SETTINGS_SCOPE_BLOCKING = false;
 
 /** The command id the menu's "Settings" entry dispatches to open this modal (design Principle 3:
  * the same id a `showSettings` keybinding would fire). Kept beside the model so the widget and any

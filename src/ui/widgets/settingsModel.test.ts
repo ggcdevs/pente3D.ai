@@ -10,6 +10,7 @@ import {
   OPACITY_FIELD_KEY,
   RESET_SECTIONS,
   SETTINGS_SCOPE_ID,
+  SETTINGS_SCOPE_BLOCKING,
   OPEN_SETTINGS_COMMAND,
   type SettingsSources,
 } from './settingsModel.ts';
@@ -286,6 +287,14 @@ describe('opacityPatch — accept + reject', () => {
 describe('exported constants', () => {
   it('SETTINGS_SCOPE_ID is the stable "settings" scope id the modal pushes', () => {
     expect(SETTINGS_SCOPE_ID).toBe('settings');
+  });
+
+  it('SETTINGS_SCOPE_BLOCKING is false — the settings panel is NON-blocking (#24 / Increment B)', () => {
+    // The whole point of opening settings within the drawer context (issue #24): the board stays
+    // interactive + live under the panel while you edit. A blocking scope would swallow every stray
+    // key and freeze that live preview — the exact regression the old centered modal had. Asserted
+    // as a literal `false` (not compared to itself) so flipping the constant to `true` fails here.
+    expect(SETTINGS_SCOPE_BLOCKING).toBe(false);
   });
 
   it('OPEN_SETTINGS_COMMAND matches the menu entry the design wires (openSettings)', () => {

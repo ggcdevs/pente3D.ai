@@ -251,9 +251,10 @@ test('choosing "Settings" pops the menu scope and opens the settings modal (Task
   await button(page).click();
   await expect(modal(page)).toBeVisible();
 
-  // Choosing Settings dispatches `openSettings` (now registered in 5.4): the menu modal closes and
-  // its scope pops, AND the settings modal opens, pushing the blocking `settings` scope on top of
-  // the game scope. This proves the one-action-layer wiring end-to-end (design Principle 3).
+  // Choosing Settings dispatches `openSettings` (now registered in 5.4): the menu drawer closes and
+  // its scope pops, AND the settings panel opens, pushing the NON-blocking `settings` scope (#24 /
+  // Increment B) on top of the game scope. This proves the one-action-layer wiring end-to-end
+  // (design Principle 3).
   await menu(page).locator('[data-testid="menu-entry-settings"]').click();
 
   await expect(modal(page)).toBeHidden();

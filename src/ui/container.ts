@@ -75,9 +75,15 @@ const UI_STYLESHEET = `
 .pente-menu-close { position: absolute; top: 16px; right: 16px; cursor: pointer; border: none; background: transparent; color: #e6e6ea; font-size: 16px; line-height: 1; }
 .pente-menu-entry { cursor: pointer; text-align: left; padding: 8px 12px; border-radius: 6px; border: none; background: rgba(255,255,255,0.06); color: #e6e6ea; font-size: 14px; }
 .pente-menu-entry:hover { background: rgba(255,255,255,0.14); }
+/* #24 / Increment B: settings open WITHIN the drawer context as a right-edge NON-blocking panel
+   over the LIVE board — NO full-viewport backdrop (a backdrop would eat the very board clicks the
+   non-blocking scope preserves), NO reflow. The board stays visible + interactive to its left so
+   you can WATCH it update live while editing (colour/opacity apply immediately via the A.4 loop).
+   Mirrors the menu drawer: fixed to the right edge, pointer-events only on the panel itself so the
+   rest of the viewport stays click-through to the canvas. Sits above the menu drawer (z 40 > 20). */
 .pente-settings-modal[hidden] { display: none; }
-.pente-settings-modal { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.45); pointer-events: auto; z-index: 30; }
-.pente-settings-panel { position: relative; display: flex; flex-direction: column; gap: 10px; min-width: 320px; max-height: 80vh; overflow-y: auto; padding: 24px; border-radius: 10px; background: #1a1a20; color: #e6e6ea; font-family: system-ui, sans-serif; box-shadow: 0 8px 32px rgba(0,0,0,0.5); }
+.pente-settings-modal { position: fixed; top: 0; right: 0; bottom: 0; display: flex; align-items: stretch; pointer-events: none; z-index: 40; }
+.pente-settings-panel { position: relative; display: flex; flex-direction: column; gap: 10px; width: 320px; padding: 24px; overflow-y: auto; background: rgba(20,20,26,0.94); backdrop-filter: blur(6px); color: #e6e6ea; font-family: system-ui, sans-serif; border-left: 1px solid rgba(255,255,255,0.08); box-shadow: -8px 0 32px rgba(0,0,0,0.45); pointer-events: auto; }
 .pente-settings-title { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
 .pente-settings-subtitle { font-size: 14px; font-weight: 600; margin-top: 8px; }
 .pente-settings-close { position: absolute; top: 16px; right: 16px; cursor: pointer; border: none; background: transparent; color: #e6e6ea; font-size: 16px; line-height: 1; }
