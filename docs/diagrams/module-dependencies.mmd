@@ -85,8 +85,10 @@ graph LR
         src_ui_widgets_sliderModel_ts["sliderModel.ts"]
     end
     subgraph src/util
+        src_util_emitter_ts["emitter.ts"]
         src_util_randomId_ts["randomId.ts"]
     end
+    src_config_config_ts --> src_util_emitter_ts
     src_core_axes_ts --> src_core_coords_ts
     src_core_eventLog_ts --> src_core_coords_ts
     src_core_eventLog_ts --> src_core_hash_ts
@@ -104,9 +106,11 @@ graph LR
     src_core_serialize_ts --> src_core_eventLog_ts
     src_core_serialize_ts --> src_core_game_ts
     src_core_serialize_ts --> src_core_gameState_ts
+    src_debug_window_ts --> src_config_config_ts
     src_debug_window_ts --> src_core_coords_ts
     src_debug_window_ts --> src_core_gameState_ts
     src_debug_window_ts --> src_debug_log_ts
+    src_debug_window_ts --> src_input_pointerGesture_ts
     src_debug_window_ts --> src_input_scopes_ts
     src_debug_window_ts --> src_input_setup_ts
     src_debug_window_ts --> src_render_cameraControls_ts
@@ -129,6 +133,7 @@ graph LR
     src_input_setup_ts --> src_input_commands_ts
     src_input_setup_ts --> src_input_keybindings_ts
     src_input_setup_ts --> src_input_scopes_ts
+    src_main_ts --> src_config_config_ts
     src_main_ts --> src_core_eventLog_ts
     src_main_ts --> src_core_game_ts
     src_main_ts --> src_debug_log_ts
@@ -221,6 +226,7 @@ graph LR
     src_render_scene_ts --> src_render_cameraPresets_ts
     src_render_scene_ts --> src_render_hover_ts
     src_render_scene_ts --> src_render_lines_ts
+    src_render_scene_ts --> src_render_linesLayout_ts
     src_render_scene_ts --> src_render_markers_ts
     src_render_scene_ts --> src_render_picking_ts
     src_render_scene_ts --> src_render_pieces_ts

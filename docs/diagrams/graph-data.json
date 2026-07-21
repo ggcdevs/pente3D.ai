@@ -8,11 +8,19 @@
       "RelayConfig",
       "getConfig",
       "getDefault",
+      "onConfigChange",
       "overrideStorageKey",
       "resetConfig",
       "setConfig"
     ],
     "imports": [
+      {
+        "source": "../util/emitter",
+        "target": "src/util/emitter.ts",
+        "specifiers": [
+          "createEmitter"
+        ]
+      },
       {
         "source": "./defaults/blending.json",
         "target": "src/config/defaults/blending.json",
@@ -140,6 +148,7 @@
       "getConfig",
       "getDefault",
       "isPlainObject",
+      "onConfigChange",
       "overrideStorageKey",
       "readOverride",
       "resetConfig",
@@ -707,6 +716,15 @@
     ],
     "imports": [
       {
+        "source": "../config/config.ts",
+        "target": "src/config/config.ts",
+        "specifiers": [
+          "ConfigOf",
+          "ConfigSection",
+          "setConfig"
+        ]
+      },
+      {
         "source": "../core/coords.ts",
         "target": "src/core/coords.ts",
         "specifiers": [
@@ -718,6 +736,13 @@
         "target": "src/core/gameState.ts",
         "specifiers": [
           "GameState"
+        ]
+      },
+      {
+        "source": "../input/pointerGesture.ts",
+        "target": "src/input/pointerGesture.ts",
+        "specifiers": [
+          "DragGuardConfig"
         ]
       },
       {
@@ -847,6 +872,7 @@
         "name": "PenteInspect",
         "extends": [],
         "methods": [
+          "applyConfig(section: ConfigSection): void",
           "clickAt(ndcX: number, ndcY: number): GameState | null",
           "dispatch(id: string): boolean | null",
           "getArchive(): Promise<readonly ArchiveListing[]>",
@@ -859,6 +885,7 @@
           "getHistory(): HistoryReadout | null",
           "getHoverTarget(): HoverTarget | null",
           "getInput(): InputReadout | null",
+          "getInteraction(): DragGuardConfig | null",
           "getLayout(): LayoutReadout | null",
           "getLighting(): LightingReadout | null",
           "getMarkers(query: readonly string[]): MarkersReadout | null",
@@ -878,7 +905,8 @@
           "rayNodeDistances(ndcX: number, ndcY: number): { node: string; distance: number; depth: number }[]",
           "resync(): void",
           "scrubTo(k: number): void",
-          "setCamera(position: { x: number; y: number; z: number }, target: { x: number; y: number; z: number }): void"
+          "setCamera(position: { x: number; y: number; z: number }, target: { x: number; y: number; z: number }): void",
+          "setConfig(section: ConfigSection, partial: Record<string, unknown>): void"
         ],
         "properties": []
       },
@@ -1242,6 +1270,13 @@
   "src/main.ts": {
     "exports": [],
     "imports": [
+      {
+        "source": "./config/config.ts",
+        "target": "src/config/config.ts",
+        "specifiers": [
+          "onConfigChange"
+        ]
+      },
       {
         "source": "./core/eventLog.ts",
         "target": "src/core/eventLog.ts",
@@ -2377,8 +2412,10 @@
   },
   "src/render/cameraControls.ts": {
     "exports": [
+      "AppliedPresetTag",
       "CameraPresetReadout",
-      "applyCameraPreset"
+      "applyCameraPreset",
+      "readCameraPreset"
     ],
     "imports": [
       {
@@ -2412,6 +2449,7 @@
         "properties": [
           "maxDistance: number",
           "minDistance: number",
+          "mouseButtons: { LEFT: number | undefined; MIDDLE: number | undefined; RIGHT: number | undefined }",
           "name: string",
           "orbitButton: 'LEFT' | 'MIDDLE' | 'RIGHT'",
           "panButton: 'LEFT' | 'MIDDLE' | 'RIGHT'",
@@ -2419,6 +2457,16 @@
           "rotateSpeed: number",
           "zoomSpeed: number",
           "zoomToCursor: boolean"
+        ]
+      },
+      {
+        "name": "AppliedPresetTag",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "name: string",
+          "orbitButton: ButtonToken",
+          "panButton: ButtonToken"
         ]
       }
     ],
@@ -2431,7 +2479,8 @@
     ],
     "functions": [
       "applyCameraPreset",
-      "buttonOf"
+      "buttonOf",
+      "readCameraPreset"
     ]
   },
   "src/render/cameraPresets.ts": {
@@ -2673,6 +2722,7 @@
           "pickables(): { category: LineCategory; mesh: THREE.InstancedMesh }[]",
           "rangeOf(category: LineCategory, lineId: LineId): { start: number; count: number } | null",
           "setBaseColor(category: LineCategory, hex: string): string",
+          "setBlending(category: LineCategory, mode: BlendMode): BlendMode",
           "setOpacity(opacity: number): number",
           "setVisible(category: LineCategory, visible: boolean): void"
         ],
@@ -2694,6 +2744,7 @@
       "rangeOf",
       "segmentMatrix",
       "setBaseColor",
+      "setBlending",
       "setOpacity",
       "setVisible",
       "spacing",
@@ -2932,7 +2983,10 @@
           "count: number",
           "highlightedCount: number",
           "materialEmissiveIntensity: number",
+          "metalness: number",
           "nodes: MarkerNodeReadout[]",
+          "opacity: number",
+          "roughness: number",
           "visibleCount: number"
         ]
       },
@@ -2943,6 +2997,7 @@
           "dispose(): void",
           "getMarkers(query: readonly NodeKey[]): MarkersReadout",
           "highlight(nodes: readonly NodeKey[]): void",
+          "setMaterial(params: { roughness?: number; metalness?: number; opacity?: number }): void",
           "sync(state: GameState): void"
         ],
         "properties": [
@@ -2959,6 +3014,7 @@
       "getMarkers",
       "highlight",
       "instanceColorHexOf",
+      "setMaterial",
       "sync"
     ]
   },
@@ -3244,10 +3300,12 @@
         "properties": [
           "emissiveIntensity: number",
           "fadingOut: boolean",
+          "metalness: number",
           "node: NodeKey",
           "opacity: number",
           "owner: Player",
-          "position: { x: number; y: number; z: number }"
+          "position: { x: number; y: number; z: number }",
+          "roughness: number"
         ]
       },
       {
@@ -3258,6 +3316,7 @@
           "dispose(): void",
           "getPieces(): PieceReadout[]",
           "highlight(nodes: readonly NodeKey[], color: string, boost: number): void",
+          "setMaterial(params: { roughness?: number; metalness?: number; opacity?: number }): void",
           "sync(state: GameState): void",
           "tick(deltaMs: number): void"
         ],
@@ -3291,6 +3350,7 @@
       "highlight",
       "makeMaterial",
       "recolorPiece",
+      "setMaterial",
       "startFadeOut",
       "sync",
       "tick",
@@ -3377,6 +3437,7 @@
         "source": "../config/config.ts",
         "target": "src/config/config.ts",
         "specifiers": [
+          "ConfigSection",
           "getConfig"
         ]
       },
@@ -3498,8 +3559,10 @@
         "source": "./cameraControls.ts",
         "target": "src/render/cameraControls.ts",
         "specifiers": [
+          "AppliedPresetTag",
           "CameraPresetReadout",
-          "applyCameraPreset"
+          "applyCameraPreset",
+          "readCameraPreset"
         ]
       },
       {
@@ -3528,6 +3591,17 @@
           "LineGroupReadout",
           "LinesHandle",
           "createLines"
+        ]
+      },
+      {
+        "source": "./linesLayout.ts",
+        "target": "src/render/linesLayout.ts",
+        "specifiers": [
+          "BlendingConfig",
+          "LINE_CATEGORIES",
+          "LineVisibilityConfig",
+          "resolveLineBlending",
+          "resolveLineVisibility"
         ]
       },
       {
@@ -3695,6 +3769,7 @@
         "methods": [
           "adoptNetState(): void",
           "applyColors(preview: ColorsPreview): ColorsReadout",
+          "applyConfig(section: ConfigSection): void",
           "clickAt(ndcX: number, ndcY: number): GameState | null",
           "dispatch(id: string): boolean",
           "dispose(): void",
@@ -3708,6 +3783,7 @@
           "getHistory(): HistoryReadout",
           "getHoverTarget(): HoverTarget | null",
           "getInput(): InputReadout",
+          "getInteraction(): DragGuardConfig",
           "getLighting(): LightingReadout",
           "getMarkers(query: readonly string[]): MarkersReadout",
           "getNet(): NetSessionState",
@@ -3750,8 +3826,15 @@
     "typeAliases": [],
     "functions": [
       "adoptNetState",
+      "applyBlending",
       "applyColors",
+      "applyColorsSection",
+      "applyConfig",
       "applyHoverHighlight",
+      "applyInteraction",
+      "applyLighting",
+      "applyLineVisibility",
+      "applyMaterials",
       "clickAt",
       "commitLive",
       "createScene",
@@ -3770,6 +3853,7 @@
       "getHistory",
       "getHoverTarget",
       "getInput",
+      "getInteraction",
       "getLighting",
       "getMarkers",
       "getNet",
@@ -4323,7 +4407,6 @@
         "source": "./widgets/settings.ts",
         "target": "src/ui/widgets/settings.ts",
         "specifiers": [
-          "SettingsColorsPreview",
           "SettingsScope",
           "settingsWidget"
         ]
@@ -4342,7 +4425,6 @@
         "name": "UiDeps",
         "extends": [],
         "methods": [
-          "applyColors(preview: SettingsColorsPreview): void",
           "copyToClipboard(text: string): Promise<void>",
           "dispatch(commandId: string): boolean",
           "getHelpSources(): HelpSources",
@@ -5067,7 +5149,6 @@
   "src/ui/widgets/settings.ts": {
     "exports": [
       "SETTINGS_WIDGET_ID",
-      "SettingsColorsPreview",
       "SettingsDeps",
       "SettingsScope",
       "settingsWidget"
@@ -5123,22 +5204,9 @@
         ]
       },
       {
-        "name": "SettingsColorsPreview",
-        "extends": [],
-        "methods": [],
-        "properties": [
-          "background: string",
-          "lineFaceDiagonal: string",
-          "lineOpacity: number",
-          "lineOrthogonal: string",
-          "lineSpaceDiagonal: string"
-        ]
-      },
-      {
         "name": "SettingsDeps",
         "extends": [],
         "methods": [
-          "applyColors(preview: SettingsColorsPreview): void",
           "popScope(): void",
           "pushScope(scope: SettingsScope): void",
           "registerOpener(open: () => void): void"
@@ -5161,7 +5229,8 @@
       "readSources",
       "renderBody",
       "settingsScope",
-      "settingsWidget"
+      "settingsWidget",
+      "write"
     ]
   },
   "src/ui/widgets/settingsModel.ts": {
@@ -5337,6 +5406,38 @@
     "functions": [
       "deriveSlider",
       "resolveScrub"
+    ]
+  },
+  "src/util/emitter.ts": {
+    "exports": [
+      "Emitter",
+      "createEmitter"
+    ],
+    "imports": [],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "Emitter",
+        "extends": [],
+        "methods": [
+          "emit(payload: T): void",
+          "subscribe(fn: (payload: T) => void): () => void"
+        ],
+        "properties": []
+      },
+      {
+        "name": "Entry",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "fn: (payload: T) => void"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "createEmitter"
     ]
   },
   "src/util/randomId.ts": {

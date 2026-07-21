@@ -1,4 +1,11 @@
 classDiagram
+    class AppliedPresetTag {
+        <<interface>>
+        +name: string
+        +orbitButton: ButtonToken
+        +panButton: ButtonToken
+    }
+    note for AppliedPresetTag "src/render/cameraControls.ts"
     class ArchiveActions {
         <<interface>>
         +readonly canResume: boolean
@@ -117,6 +124,7 @@ classDiagram
         <<interface>>
         +maxDistance: number
         +minDistance: number
+        +mouseButtons: Object
         +name: string
         +orbitButton: 'LEFT' | 'MIDDLE' | 'RIGHT'
         +panButton: 'LEFT' | 'MIDDLE' | 'RIGHT'
@@ -234,6 +242,17 @@ classDiagram
         +readonly thresholdPx: number
     }
     note for DragGuardConfig "src/input/pointerGesture.ts"
+    class Emitter {
+        <<interface>>
+        +emit(payload: T): void
+        +subscribe(fn: (payload: T) =~ void): () =~ void
+    }
+    note for Emitter "src/util/emitter.ts"
+    class Entry {
+        <<interface>>
+        +fn: (payload: T) =~ void
+    }
+    note for Entry "src/util/emitter.ts"
     class EventLog {
         <<interface>>
         +readonly entries: readonly LogEntry[]
@@ -501,6 +520,7 @@ classDiagram
         +pickables(): Object[]
         +rangeOf(category: LineCategory, lineId: LineId): Object | null
         +setBaseColor(category: LineCategory, hex: string): string
+        +setBlending(category: LineCategory, mode: BlendMode): BlendMode
         +setOpacity(opacity: number): number
         +setVisible(category: LineCategory, visible: boolean): void
     }
@@ -565,6 +585,7 @@ classDiagram
         +dispose(): void
         +getMarkers(query: readonly NodeKey[]): MarkersReadout
         +highlight(nodes: readonly NodeKey[]): void
+        +setMaterial(params: Object): void
         +sync(state: GameState): void
     }
     note for MarkersHandle "src/render/markers.ts"
@@ -573,7 +594,10 @@ classDiagram
         +count: number
         +highlightedCount: number
         +materialEmissiveIntensity: number
+        +metalness: number
         +nodes: MarkerNodeReadout[]
+        +opacity: number
+        +roughness: number
         +visibleCount: number
     }
     note for MarkersReadout "src/render/markers.ts"
@@ -716,6 +740,7 @@ classDiagram
     note for OpacityFieldModel "src/ui/widgets/settingsModel.ts"
     class PenteInspect {
         <<interface>>
+        +applyConfig(section: ConfigSection): void
         +clickAt(ndcX: number, ndcY: number): GameState | null
         +dispatch(id: string): boolean | null
         +getArchive(): Promise~readonly ArchiveListing[]~
@@ -728,6 +753,7 @@ classDiagram
         +getHistory(): HistoryReadout | null
         +getHoverTarget(): HoverTarget | null
         +getInput(): InputReadout | null
+        +getInteraction(): DragGuardConfig | null
         +getLayout(): LayoutReadout | null
         +getLighting(): LightingReadout | null
         +getMarkers(query: readonly string[]): MarkersReadout | null
@@ -748,6 +774,7 @@ classDiagram
         +resync(): void
         +scrubTo(k: number): void
         +setCamera(position: Object, target: Object): void
+        +setConfig(section: ConfigSection, partial: Record~string, unknown~): void
     }
     note for PenteInspect "src/debug/window.ts"
     class PickableLineMesh {
@@ -827,10 +854,12 @@ classDiagram
         <<interface>>
         +emissiveIntensity: number
         +fadingOut: boolean
+        +metalness: number
         +node: NodeKey
         +opacity: number
         +owner: Player
         +position: Object
+        +roughness: number
     }
     note for PieceReadout "src/render/pieces.ts"
     class PieceRecolor {
@@ -853,6 +882,7 @@ classDiagram
         +dispose(): void
         +getPieces(): PieceReadout[]
         +highlight(nodes: readonly NodeKey[], color: string, boost: number): void
+        +setMaterial(params: Object): void
         +sync(state: GameState): void
         +tick(deltaMs: number): void
     }
@@ -931,6 +961,7 @@ classDiagram
         +scene: THREE.Scene
         +adoptNetState(): void
         +applyColors(preview: ColorsPreview): ColorsReadout
+        +applyConfig(section: ConfigSection): void
         +clickAt(ndcX: number, ndcY: number): GameState | null
         +dispatch(id: string): boolean
         +dispose(): void
@@ -944,6 +975,7 @@ classDiagram
         +getHistory(): HistoryReadout
         +getHoverTarget(): HoverTarget | null
         +getInput(): InputReadout
+        +getInteraction(): DragGuardConfig
         +getLighting(): LightingReadout
         +getMarkers(query: readonly string[]): MarkersReadout
         +getNet(): NetSessionState
@@ -1005,19 +1037,9 @@ classDiagram
         +readonly value: T
     }
     note for SelectOption "src/ui/widgets/settingsModel.ts"
-    class SettingsColorsPreview {
-        <<interface>>
-        +background: string
-        +lineFaceDiagonal: string
-        +lineOpacity: number
-        +lineOrthogonal: string
-        +lineSpaceDiagonal: string
-    }
-    note for SettingsColorsPreview "src/ui/widgets/settings.ts"
     class SettingsDeps {
         <<interface>>
         +readonly doc: Document
-        +applyColors(preview: SettingsColorsPreview): void
         +popScope(): void
         +pushScope(scope: SettingsScope): void
         +registerOpener(open: () =~ void): void
@@ -1101,7 +1123,6 @@ classDiagram
     note for UiContainerHandle "src/ui/container.ts"
     class UiDeps {
         <<interface>>
-        +applyColors(preview: SettingsColorsPreview): void
         +copyToClipboard(text: string): Promise~void~
         +dispatch(commandId: string): boolean
         +getHelpSources(): HelpSources
