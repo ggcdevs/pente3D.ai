@@ -100,6 +100,13 @@ export default {
     // so a dead room shows no phantom opponent. Separated from the mqtt transport glue so it is
     // mutation-gated like the other pure net logic.
     'src/net/presence.ts',
+    // Pure ask/accept handshake state machine (N.1, issues #12/#18): the action-agnostic
+    // out-of-band pending-proposal machine — propose/receiveProposal(dedup)/respond/receiveResponse
+    // (no double-resolve), cancel + auto-cancel (game-advanced / peer-gone), the at-most-one
+    // supersede rule, and the pure selectors + `canPropose` guard. Held out-of-band, never touches
+    // the move-log. Separated from the SyncEngine/session IO glue so it is mutation-gated like the
+    // other pure net logic.
+    'src/net/handshake.ts',
     '!src/net/**/*.test.ts',
     // Pure render resolvers only (THREE-free). The Three.js scene GLUE (`scene.ts`,
     // `lines.ts`) is NOT mutated — it is an IO boundary verified by Playwright (build
