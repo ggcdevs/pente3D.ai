@@ -118,7 +118,13 @@ test('the settings modal mounts hidden with no settings scope on the stack', asy
   const inZone = page.locator(`[data-zone="top-right"] [data-widget-id="${SETTINGS_ID}"]`);
   await expect(inZone).toHaveCount(1);
 
+  // Closed = hidden, NO `--open` class, and slid fully off the LEFT edge (its right edge at/left of
+  // x=0), which is what makes it non-interactive + out of the a11y tree (#16).
   await expect(modal(page)).toBeHidden();
+  await expect(modal(page)).not.toHaveClass(/pente-settings-modal--open/);
+  await expect
+    .poll(() => modal(page).evaluate((el) => el.getBoundingClientRect().right))
+    .toBeLessThanOrEqual(1); // slid off the left edge (translateX(-100%))
   const input0 = await get(page, (p) => p.getInput()!);
   expect(input0.scopes).not.toContain(SETTINGS_SCOPE_ID);
 });
@@ -132,7 +138,14 @@ test('dispatching openSettings opens the panel, fills it from config, and pushes
   const ran = await dispatch(page, OPEN_SETTINGS_COMMAND);
   expect(ran).toBe(true);
 
+  // Open = visible, the `--open` class, and slid ON-screen anchored to the LEFT edge (translateX(0)).
   await expect(modal(page)).toBeVisible();
+  await expect(modal(page)).toHaveClass(/pente-settings-modal--open/);
+  // Poll the resting position so the slide-in transition (~200ms) has settled to translateX(0)
+  // (left ≈ 0). Polling proves the panel ANIMATES in from off-screen rather than popping.
+  await expect
+    .poll(() => modal(page).evaluate((el) => el.getBoundingClientRect().left))
+    .toBeCloseTo(0, 0);
 
   // Board-size options come from the model (BOARD_SIZE_OPTIONS); the tracked default is selected.
   const boardValues = await modal(page)
@@ -219,7 +232,7 @@ test('#24 MONEY-SHOT: with the settings panel OPEN, a colour edit updates the bo
   // WATCHING the board WITH the drawer open and the board visible"). The `settings` scope is still
   // on the stack and the panel is still visible, so the artifact genuinely shows the edited (#ff8800)
   // board LIVE with the panel open OVER it — not proof-by-inference on a post-close capture. The orbit
-  // in Half 2 fires a capture-phase pointerdown OUTSIDE the 320px right-edge panel, which (by design —
+  // in Half 2 fires a capture-phase pointerdown OUTSIDE the 320px LEFT-edge panel, which (by design —
   // outside-click close) pops the scope and hides the panel; screenshotting after it would show the
   // panel ABSENT and mislabel the money-shot. Assert the open state at capture time so the artifact
   // can never silently drift back to a closed panel.
@@ -237,8 +250,8 @@ test('#24 MONEY-SHOT: with the settings panel OPEN, a colour edit updates the bo
   const canvas = page.locator('canvas');
   const box = await canvas.boundingBox();
   if (!box) throw new Error('canvas has no bounding box');
-  // Drag on the LEFT of the canvas, well clear of the 320px right-edge settings panel.
-  const cx = box.x + box.width * 0.3;
+  // Drag on the RIGHT of the canvas, well clear of the 320px LEFT-edge settings panel.
+  const cx = box.x + box.width * 0.7;
   const cy = box.y + box.height / 2;
   await page.mouse.move(cx, cy);
   await page.mouse.down();
@@ -398,14 +411,15 @@ test('an outside click (on the live board) closes the panel and pops the scope',
   await dispatch(page, OPEN_SETTINGS_COMMAND);
   await expect(modal(page)).toBeVisible();
 
-  // #24: there is NO backdrop (the panel overlays only the right edge). Click the canvas/board on
-  // the LEFT — well clear of the 320px right-edge panel — which is "outside" and closes the panel.
+  // #24/#16: there is NO backdrop (the panel overlays only the LEFT edge). Click the canvas/board on
+  // the RIGHT — well clear of the 320px LEFT-edge panel — which is "outside" and closes the panel.
   const canvas = page.locator('canvas');
   const box = await canvas.boundingBox();
   if (!box) throw new Error('canvas has no bounding box');
-  await page.mouse.click(box.x + box.width * 0.2, box.y + box.height * 0.5);
+  await page.mouse.click(box.x + box.width * 0.8, box.y + box.height * 0.5);
 
   await expect(modal(page)).toBeHidden();
+  await expect(modal(page)).not.toHaveClass(/pente-settings-modal--open/);
   const closed = await get(page, (p) => p.getInput()!);
   expect(closed.scopes).not.toContain(SETTINGS_SCOPE_ID);
 });

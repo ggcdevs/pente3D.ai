@@ -28,7 +28,7 @@ export const MENU_SCOPE_ID = 'menu';
 
 /**
  * Whether the drawer's input scope BLOCKS unhandled keys. `false` (non-blocking, #24): the drawer
- * slides in over the right edge of the live board WITHOUT freezing it — stray keys fall THROUGH to
+ * slides in over the left edge of the live board WITHOUT freezing it — stray keys fall THROUGH to
  * the camera/game scopes below, so orbit/pan/zoom and placement keep working while the drawer is
  * open (render-ui design Part 5: modes don't block, mirroring `tempPlacementScope`). This is the
  * exact regression the old centered *blocking* modal had — it swallowed every key. A single named

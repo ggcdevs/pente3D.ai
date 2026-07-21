@@ -118,14 +118,15 @@ export function settingsWidget(): WidgetFactory {
       const deps = rawDeps as SettingsDeps;
       const doc = deps.doc;
 
-      // Root is the modal overlay itself (hidden until opened). Placement is irrelevant — it is a
-      // fixed full-viewport overlay — but it still mounts into its layout zone as a widget.
+      // Root is the LEFT-edge slide-in panel itself (slid off-screen + hidden until opened, mirroring
+      // the menu drawer). Placement is irrelevant — it is a fixed edge-anchored overlay — but it
+      // still mounts into its layout zone as a widget. Toggled by the `--open` class (NOT `[hidden]`/
+      // `display:none`, which is not animatable and would kill the slide, #16).
       const element = doc.createElement('div');
       element.className = 'pente-settings-modal';
       element.setAttribute('data-testid', 'settings-modal');
       element.setAttribute('role', 'dialog');
       element.setAttribute('aria-label', 'Settings');
-      element.hidden = true;
 
       const panel = doc.createElement('div');
       panel.className = 'pente-settings-panel';
@@ -292,7 +293,9 @@ export function settingsWidget(): WidgetFactory {
         if (open) return; // idempotent — a second open must not push a second scope
         open = true;
         renderBody(); // rebuild from live config every open
-        element.hidden = false;
+        // Slide in by toggling the `--open` class (CSS animates transform + visibility). NOT the
+        // `[hidden]` attribute — `display:none` is not animatable and would kill the slide (#16).
+        element.classList.add('pente-settings-modal--open');
         element.setAttribute('data-open', 'true');
         deps.pushScope(settingsScope());
         doc.addEventListener('keydown', onKeyDown);
@@ -302,7 +305,10 @@ export function settingsWidget(): WidgetFactory {
       function close(): void {
         if (!open) return; // idempotent — closing when closed must not pop a scope
         open = false;
-        element.hidden = true;
+        // Slide out by removing the `--open` class (CSS animates back to translateX(-100%) and, at
+        // the end of the tween, visibility:hidden — non-interactive + out of the a11y tree once
+        // closed, without the display:none that would prevent the animation, #16).
+        element.classList.remove('pente-settings-modal--open');
         element.setAttribute('data-open', 'false');
         doc.removeEventListener('keydown', onKeyDown);
         doc.removeEventListener('pointerdown', onOutsidePointer, true);

@@ -10,7 +10,7 @@
  * menu entry fires the exact same command a keybinding would, via the deps-supplied `dispatch` —
  * the scene's command registry).
  *
- * #24: the menu is a **right-edge, NON-blocking slide-in drawer**, not a centered blocking modal.
+ * #24/#16: the menu is a **left-edge, NON-blocking slide-in drawer**, not a centered blocking modal.
  * Opening PUSHES a NON-blocking input scope ({@link MENU_SCOPE_BLOCKING} `=== false`) so stray keys
  * fall THROUGH to the camera/game scopes below — the board stays fully interactive (orbit/pan/zoom
  * + placement keep working) WHILE the drawer is open. That is the whole point of the drawer: you
@@ -19,7 +19,7 @@
  * **Escape** or an **outside-click**, and every close path (Escape, outside-click, choosing an
  * entry, the ✕ button) pops the scope exactly once, so the stack can never leak a scope.
  *
- * The drawer OVERLAYS the right edge of the full-viewport canvas — it does NOT reflow the board and
+ * The drawer OVERLAYS the left edge of the full-viewport canvas — it does NOT reflow the board and
  * has NO full-viewport backdrop (a backdrop would eat the very board clicks the non-blocking scope
  * is meant to preserve). Outside-click detection is therefore a document-level "was the click
  * outside our button + panel?" check while open.
@@ -112,15 +112,16 @@ export function menuWidget(): WidgetFactory {
       element.appendChild(button);
 
       // The slide-in drawer panel: a labelled list of one button per menu item, anchored to the
-      // right viewport edge (CSS in container.ts). NO backdrop — the board stays visible + live to
-      // its left. Hidden (and translated off-screen by CSS) until open. `data-testid` stays
+      // LEFT viewport edge (CSS in container.ts). NO backdrop — the board stays visible + live to
+      // its right. Slid off-screen (translateX(-100%)) + non-interactive + hidden from the a11y tree
+      // via CSS until the `--open` class is toggled on. NOT `[hidden]`/`display:none` — `display` is
+      // not animatable, so the toggle is a CLASS to allow the slide (#16). `data-testid` stays
       // `menu-modal` so existing wiring/tests keep their handle; the class carries the drawer role.
       const panelWrap = doc.createElement('div');
       panelWrap.className = 'pente-menu-drawer';
       panelWrap.setAttribute('data-testid', 'menu-modal');
       panelWrap.setAttribute('role', 'menu');
       panelWrap.setAttribute('aria-label', 'Menu');
-      panelWrap.hidden = true;
 
       const panel = doc.createElement('div');
       panel.className = 'pente-menu-panel';
@@ -185,7 +186,9 @@ export function menuWidget(): WidgetFactory {
       function open_(): void {
         if (state.open) return; // idempotent — a second open must not push a second scope
         state = toggleMenu(state);
-        panelWrap.hidden = false;
+        // Slide in by toggling the `--open` class (CSS animates transform + visibility). NOT the
+        // `[hidden]` attribute — `display:none` is not animatable and would kill the slide (#16).
+        panelWrap.classList.add('pente-menu-drawer--open');
         element.setAttribute('data-open', 'true');
         button.setAttribute('aria-expanded', 'true');
         // Push the NON-blocking scope: unbound keys fall THROUGH to the board (#24), so orbit/pan/
@@ -200,7 +203,10 @@ export function menuWidget(): WidgetFactory {
       function close(): void {
         if (!state.open) return; // idempotent — closing when already closed must not pop a scope
         state = closeMenu(state);
-        panelWrap.hidden = true;
+        // Slide out by removing the `--open` class (CSS animates back to translateX(-100%) and,
+        // at the end of the tween, visibility:hidden — so the panel is non-interactive + out of the
+        // a11y tree once closed, without the display:none that would prevent the animation, #16).
+        panelWrap.classList.remove('pente-menu-drawer--open');
         element.setAttribute('data-open', 'false');
         button.setAttribute('aria-expanded', 'false');
         doc.removeEventListener('keydown', onKeyDown);

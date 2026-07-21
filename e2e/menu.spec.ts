@@ -95,8 +95,15 @@ test('the menu button mounts in its configured zone and the modal starts closed'
   const inZone = page.locator(`[data-zone="top-right"] [data-widget-id="${MENU_ID}"]`);
   await expect(inZone).toHaveCount(1);
 
-  // The modal exists but is hidden until the button is clicked; no `menu` scope on the stack yet.
+  // The drawer exists but is slid off-screen (closed) until the button is clicked; no `menu` scope
+  // on the stack yet. Closed = NO `--open` class AND translated fully off the LEFT edge (its right
+  // edge is at or left of x=0), which is what makes it non-interactive + hidden (#16). Playwright's
+  // toBeHidden() confirms the CSS visibility:hidden that the closed state carries.
   await expect(modal(page)).toBeHidden();
+  await expect(modal(page)).not.toHaveClass(/pente-menu-drawer--open/);
+  await expect
+    .poll(() => modal(page).evaluate((el) => el.getBoundingClientRect().right))
+    .toBeLessThanOrEqual(1); // slid off the left edge (translateX(-100%): right edge at/left of x=0)
   await expect(button(page)).toHaveAttribute('aria-expanded', 'false');
   const input0 = await get(page, (p) => p.getInput()!);
   expect(input0.scopes).not.toContain(MENU_SCOPE_ID);
@@ -113,8 +120,16 @@ test('clicking the button opens the drawer with the design entries and pushes a 
 
   await button(page).click();
 
-  // The drawer is now visible and every design entry is present, each carrying its command id.
+  // The drawer is now visible, slid ON-screen (open = the `--open` class + its left edge snapped to
+  // x=0, no longer translated off-screen), and every design entry is present with its command id.
   await expect(modal(page)).toBeVisible();
+  await expect(modal(page)).toHaveClass(/pente-menu-drawer--open/);
+  // Poll the resting position so the slide-in transition (~200ms) has settled: anchored to the LEFT
+  // edge, slid fully in (translateX(0) → left ≈ 0). Polling (not a one-shot read) is what proves the
+  // panel ANIMATES from off-screen to on-screen rather than popping — a mid-tween read would be < 0.
+  await expect
+    .poll(() => modal(page).evaluate((el) => el.getBoundingClientRect().left))
+    .toBeCloseTo(0, 0);
   await expect(button(page)).toHaveAttribute('aria-expanded', 'true');
   for (const entry of DEFAULT_MENU_ENTRIES) {
     const el = menu(page).locator(`[data-testid="menu-entry-${entry.id}"]`);
@@ -138,7 +153,7 @@ test('clicking the button opens the drawer with the design entries and pushes a 
   expect(fellThrough.handled).toBe(true);
 
   // Screenshot the OPEN drawer over the live board (the board fills the viewport to the drawer's
-  // left; the drawer overlays only the right edge).
+  // right; the drawer overlays only the LEFT edge).
   const shot = resolve('e2e/artifacts/menu-open.png');
   mkdirSync(dirname(shot), { recursive: true });
   await page.screenshot({ path: shot });
@@ -153,6 +168,7 @@ test('#24: with the drawer OPEN, a camera-orbit drag STILL moves the camera (boa
   // full-viewport backdrop that ate this drag; the non-blocking drawer must let it through.
   await button(page).click();
   await expect(modal(page)).toBeVisible();
+  await expect(modal(page)).toHaveClass(/pente-menu-drawer--open/);
   const input = await get(page, (p) => p.getInput()!);
   expect(input.scopes).toContain(MENU_SCOPE_ID); // the drawer really is open (scope on the stack)
 
@@ -162,8 +178,8 @@ test('#24: with the drawer OPEN, a camera-orbit drag STILL moves the camera (boa
   const canvas = page.locator('canvas');
   const box = await canvas.boundingBox();
   if (!box) throw new Error('canvas has no bounding box');
-  // Drag on the LEFT portion of the canvas, well clear of the right-edge drawer (264px wide).
-  const cx = box.x + box.width * 0.3;
+  // Drag on the RIGHT portion of the canvas, well clear of the LEFT-edge drawer (264px wide).
+  const cx = box.x + box.width * 0.7;
   const cy = box.y + box.height / 2;
   await page.mouse.move(cx, cy);
   await page.mouse.down();
@@ -196,6 +212,7 @@ test('Escape closes the drawer and pops the scope', async ({ page }) => {
   await page.keyboard.press('Escape');
 
   await expect(modal(page)).toBeHidden();
+  await expect(modal(page)).not.toHaveClass(/pente-menu-drawer--open/);
   await expect(button(page)).toHaveAttribute('aria-expanded', 'false');
   // The `menu` scope is POPPED — the stack no longer carries it, and `u` still resolves to the
   // game scope's `undo` (it fell through even while open — asserted above — and still does now).
@@ -213,14 +230,15 @@ test('an outside click (on the live board) closes the drawer and pops the scope'
   await button(page).click();
   await expect(modal(page)).toBeVisible();
 
-  // There is NO backdrop (the drawer overlays only the right edge). Click the canvas/board on the
-  // LEFT — well clear of the 264px right-edge panel — which is "outside" and closes the drawer.
+  // There is NO backdrop (the drawer overlays only the LEFT edge). Click the canvas/board on the
+  // RIGHT — well clear of the 264px LEFT-edge panel — which is "outside" and closes the drawer.
   const canvas = page.locator('canvas');
   const box = await canvas.boundingBox();
   if (!box) throw new Error('canvas has no bounding box');
-  await page.mouse.click(box.x + box.width * 0.2, box.y + box.height * 0.5);
+  await page.mouse.click(box.x + box.width * 0.8, box.y + box.height * 0.5);
 
   await expect(modal(page)).toBeHidden();
+  await expect(modal(page)).not.toHaveClass(/pente-menu-drawer--open/);
   const closed = await get(page, (p) => p.getInput()!);
   expect(closed.scopes).not.toContain(MENU_SCOPE_ID);
 });

@@ -68,26 +68,40 @@ const UI_STYLESHEET = `
 .pente-banner-button { cursor: pointer; }
 .pente-banner-button:disabled { cursor: default; opacity: 0.45; }
 .pente-menu-button { cursor: pointer; padding: 6px 14px; border-radius: 6px; border: none; background: rgba(16,16,20,0.72); color: #e6e6ea; font-family: system-ui, sans-serif; font-size: 14px; }
-/* #24 slide-in DRAWER: a right-edge panel that OVERLAYS the live canvas (no backdrop, no reflow —
-   the board stays visible + interactive to its left). Anchored to the right viewport edge and
-   translated off-screen when closed; sliding in on open. pointer-events:auto only on the panel
-   itself so the rest of the viewport stays click-through to the board (the non-blocking goal). */
-.pente-menu-drawer[hidden] { display: none; }
-.pente-menu-drawer { position: fixed; top: 0; right: 0; bottom: 0; display: flex; align-items: stretch; pointer-events: none; z-index: 20; transform: translateX(0); transition: transform 220ms cubic-bezier(0.4, 0, 0.2, 1); }
-.pente-menu-panel { position: relative; display: flex; flex-direction: column; gap: 8px; width: 264px; padding: 20px 18px; background: rgba(20,20,26,0.94); backdrop-filter: blur(6px); color: #e6e6ea; font-family: system-ui, sans-serif; border-left: 1px solid rgba(255,255,255,0.08); box-shadow: -8px 0 32px rgba(0,0,0,0.45); pointer-events: auto; overflow-y: auto; }
+/* #24/#16 slide-in DRAWER: a LEFT-edge panel that OVERLAYS the live canvas (no backdrop, no reflow —
+   the board stays visible + interactive to its right). Anchored to the LEFT viewport edge and
+   SLID off-screen to the left when closed; sliding in on open. Toggled by the --open class (NOT the
+   hidden attribute / display:none — display is not animatable, which would kill the slide). Closed
+   it is translated fully off-screen (translateX(-100%)) AND made non-interactive + out of the a11y
+   tree (visibility:hidden + pointer-events:none); open restores both. visibility is transitioned
+   ALONGSIDE transform so on CLOSE the panel stays visible through the slide-out and only flips to
+   hidden at the end (a visible visibility value applies immediately, so OPEN shows instantly and
+   slides in). pointer-events:auto only on the panel itself so the rest of the viewport stays
+   click-through to the board (the non-blocking goal). */
+.pente-menu-drawer { position: fixed; top: 0; left: 0; bottom: 0; display: flex; align-items: stretch; pointer-events: none; visibility: hidden; z-index: 20; transform: translateX(-100%); transition: transform 200ms cubic-bezier(0.4, 0, 0.2, 1), visibility 200ms; }
+.pente-menu-drawer--open { transform: translateX(0); visibility: visible; }
+.pente-menu-panel { position: relative; display: flex; flex-direction: column; gap: 8px; width: 264px; padding: 20px 18px; background: rgba(20,20,26,0.94); backdrop-filter: blur(6px); color: #e6e6ea; font-family: system-ui, sans-serif; border-right: 1px solid rgba(255,255,255,0.08); box-shadow: 8px 0 32px rgba(0,0,0,0.45); pointer-events: auto; overflow-y: auto; }
 .pente-menu-title { font-size: 16px; font-weight: 600; margin-bottom: 8px; padding-right: 28px; }
 .pente-menu-close { position: absolute; top: 16px; right: 16px; cursor: pointer; border: none; background: transparent; color: #e6e6ea; font-size: 16px; line-height: 1; }
 .pente-menu-entry { cursor: pointer; text-align: left; padding: 8px 12px; border-radius: 6px; border: none; background: rgba(255,255,255,0.06); color: #e6e6ea; font-size: 14px; }
 .pente-menu-entry:hover { background: rgba(255,255,255,0.14); }
-/* #24 / Increment B: settings open WITHIN the drawer context as a right-edge NON-blocking panel
+/* #24/#16 / Increment B: settings open WITHIN the drawer context as a LEFT-edge NON-blocking panel
    over the LIVE board — NO full-viewport backdrop (a backdrop would eat the very board clicks the
-   non-blocking scope preserves), NO reflow. The board stays visible + interactive to its left so
+   non-blocking scope preserves), NO reflow. The board stays visible + interactive to its right so
    you can WATCH it update live while editing (colour/opacity apply immediately via the A.4 loop).
-   Mirrors the menu drawer: fixed to the right edge, pointer-events only on the panel itself so the
-   rest of the viewport stays click-through to the canvas. Sits above the menu drawer (z 40 > 20). */
-.pente-settings-modal[hidden] { display: none; }
-.pente-settings-modal { position: fixed; top: 0; right: 0; bottom: 0; display: flex; align-items: stretch; pointer-events: none; z-index: 40; }
-.pente-settings-panel { position: relative; display: flex; flex-direction: column; gap: 10px; width: 320px; padding: 24px; overflow-y: auto; background: rgba(20,20,26,0.94); backdrop-filter: blur(6px); color: #e6e6ea; font-family: system-ui, sans-serif; border-left: 1px solid rgba(255,255,255,0.08); box-shadow: -8px 0 32px rgba(0,0,0,0.45); pointer-events: auto; }
+   Mirrors the menu drawer EXACTLY: fixed to the LEFT edge, slid off-screen (translateX(-100%)) +
+   non-interactive + out of the a11y tree when closed, sliding in on the --open class (NOT the
+   hidden attribute / display:none, which is not animatable). pointer-events only on the panel itself
+   so the rest of the viewport stays click-through to the canvas. Sits above the menu drawer (z 40 > 20). */
+.pente-settings-modal { position: fixed; top: 0; left: 0; bottom: 0; display: flex; align-items: stretch; pointer-events: none; visibility: hidden; z-index: 40; transform: translateX(-100%); transition: transform 200ms cubic-bezier(0.4, 0, 0.2, 1), visibility 200ms; }
+.pente-settings-modal--open { transform: translateX(0); visibility: visible; }
+.pente-settings-panel { position: relative; display: flex; flex-direction: column; gap: 10px; width: 320px; padding: 24px; overflow-y: auto; background: rgba(20,20,26,0.94); backdrop-filter: blur(6px); color: #e6e6ea; font-family: system-ui, sans-serif; border-right: 1px solid rgba(255,255,255,0.08); box-shadow: 8px 0 32px rgba(0,0,0,0.45); pointer-events: auto; }
+/* Accessibility: users who ask for reduced motion get an instant show/hide, no slide. Disabling
+   BOTH transitions means the panel still ends off-screen/hidden when closed and on-screen/visible
+   when open (same end states) — just without the animated tween. */
+@media (prefers-reduced-motion: reduce) {
+  .pente-menu-drawer, .pente-settings-modal { transition: none; }
+}
 .pente-settings-title { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
 .pente-settings-subtitle { font-size: 14px; font-weight: 600; margin-top: 8px; }
 .pente-settings-close { position: absolute; top: 16px; right: 16px; cursor: pointer; border: none; background: transparent; color: #e6e6ea; font-size: 16px; line-height: 1; }

@@ -29,7 +29,7 @@ export const SETTINGS_SCOPE_ID = 'settings';
 
 /**
  * Whether the settings panel's input scope BLOCKS unhandled keys. `false` (non-blocking, #24 /
- * Increment B): settings open WITHIN the drawer context as a non-blocking right-edge panel over the
+ * Increment B): settings open WITHIN the drawer context as a non-blocking left-edge panel over the
  * LIVE board — stray keys fall THROUGH to the camera/game scopes below, so orbit/pan/zoom and
  * placement keep working while you edit and WATCH the board update live (render-ui design Part 5:
  * modes don't block, mirroring `tempPlacementScope` and the menu drawer's `MENU_SCOPE_BLOCKING`).
