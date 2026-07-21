@@ -14,13 +14,14 @@
  * end-to-end, nothing about the unit under test is mocked.
  */
 
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fc from 'fast-check';
 import {
   getConfig,
   setConfig,
   resetConfig,
   getDefault,
+  onConfigChange,
   overrideStorageKey,
   OVERRIDE_KEY_PREFIX,
   CONFIG_SECTIONS,
@@ -532,5 +533,176 @@ describe('property: merge invariants', () => {
   it('ConfigSection type covers every runtime section', () => {
     const sections: ConfigSection[] = [...CONFIG_SECTIONS];
     expect(sections.length).toBe(CONFIG_SECTIONS.length);
+  });
+});
+
+describe('onConfigChange — config-change notification (Task A.2, issue #15)', () => {
+  // The change emitter is MODULE-GLOBAL (one config-owned notifier). Every subscription made in
+  // a test is registered here and torn down after the test so listeners never leak across cases —
+  // a leaked listener would fire on a LATER test's write and corrupt its counts. `track(off)`
+  // returns the unsubscribe so a test can still call it early to exercise the unsubscribe path.
+  let toClean: Array<() => void>;
+  beforeEach(() => {
+    toClean = [];
+  });
+  const track = (off: () => void): (() => void) => {
+    toClean.push(off);
+    return off;
+  };
+  // vitest afterEach via onTestFinished-style cleanup: run every tracked unsubscribe.
+  afterEach(() => {
+    for (const off of toClean) off();
+  });
+
+  it('setConfig notifies subscribers with the changed SECTION NAME after the write', () => {
+    const seen: ConfigSection[] = [];
+    track(onConfigChange((s) => seen.push(s)));
+    setConfig('lineVisibility', { spaceDiagonal: true }, storage);
+    // The delivered payload is the section NAME only — not the value.
+    expect(seen).toEqual(['lineVisibility']);
+  });
+
+  it('the notification fires AFTER the write lands — a subscriber re-reading getConfig sees the NEW value', () => {
+    // Proof-by-behavior: capture what getConfig returns at notification time. If emit ran BEFORE
+    // setItem, the subscriber would still read the old default. It must read the new value.
+    let observedAtNotify: boolean | undefined;
+    track(
+      onConfigChange((s) => {
+        if (s === 'lineVisibility') {
+          observedAtNotify = getConfig('lineVisibility', storage).spaceDiagonal;
+        }
+      }),
+    );
+    setConfig('lineVisibility', { spaceDiagonal: true }, storage);
+    expect(observedAtNotify).toBe(true);
+  });
+
+  it('emits the SECTION NAME ONLY, never the written value (SSOT re-read contract)', () => {
+    // Pin that the payload is exactly the string section id, not the partial/merged object.
+    const payloads: unknown[] = [];
+    track(onConfigChange((s) => payloads.push(s)));
+    setConfig('geometry', { markerRadius: 0.99 }, storage);
+    expect(payloads).toEqual(['geometry']);
+    expect(typeof payloads[0]).toBe('string');
+  });
+
+  it('resetConfig notifies with the section name after removing the override', () => {
+    setConfig('lineVisibility', { orthogonal: false }, storage);
+    const seen: ConfigSection[] = [];
+    track(onConfigChange((s) => seen.push(s)));
+    resetConfig('lineVisibility', storage);
+    expect(seen).toEqual(['lineVisibility']);
+    // And the write really happened — the section is back to its default.
+    expect(getConfig('lineVisibility', storage).orthogonal).toBe(true);
+  });
+
+  it('resetConfig on a store with NO existing override still notifies (the write path ran)', () => {
+    // removeItem executes whether or not a key existed; the reset write path ran, so networked /
+    // programmatic resetters get a notification to re-apply the default. (Distinct from the
+    // null-store case below, where no store means no write and no emit.)
+    const seen: ConfigSection[] = [];
+    track(onConfigChange((s) => seen.push(s)));
+    resetConfig('colors', storage);
+    expect(seen).toEqual(['colors']);
+  });
+
+  it('setConfig with NO store (null) is a no-op that does NOT notify (nothing was written)', () => {
+    const listener = vi.fn();
+    track(onConfigChange(listener));
+    setConfig('lineVisibility', { spaceDiagonal: true }, null);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it('resetConfig with NO store (null) is a no-op that does NOT notify (nothing was written)', () => {
+    const listener = vi.fn();
+    track(onConfigChange(listener));
+    resetConfig('lineVisibility', null);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it('a listener for one section is still called on a DIFFERENT section change (single emitter) — but can filter by name', () => {
+    // The notifier is ONE emitter carrying the section name; listeners self-filter. Prove the
+    // payload lets a listener ignore sections it does not care about (the wiring pattern) while
+    // still being invoked. This pins that the SECTION NAME is what discriminates delivery.
+    const relevant: ConfigSection[] = [];
+    track(
+      onConfigChange((s) => {
+        if (s === 'geometry') relevant.push(s);
+      }),
+    );
+    setConfig('lineVisibility', { spaceDiagonal: true }, storage); // ignored by the filter
+    setConfig('geometry', { markerRadius: 0.5 }, storage); // acted on
+    expect(relevant).toEqual(['geometry']);
+  });
+
+  it('unsubscribe stops delivery — a torn-down listener receives no further notifications', () => {
+    const seen: ConfigSection[] = [];
+    const off = onConfigChange((s) => seen.push(s));
+    setConfig('lineVisibility', { spaceDiagonal: true }, storage);
+    off();
+    setConfig('geometry', { markerRadius: 0.5 }, storage);
+    // Only the pre-unsubscribe write was delivered.
+    expect(seen).toEqual(['lineVisibility']);
+  });
+
+  it('two subscribers both receive the same change; unsubscribing one leaves the other', () => {
+    const a: ConfigSection[] = [];
+    const b: ConfigSection[] = [];
+    const offA = onConfigChange((s) => a.push(s));
+    track(onConfigChange((s) => b.push(s)));
+    setConfig('colors', { background: '#000000' }, storage);
+    expect(a).toEqual(['colors']);
+    expect(b).toEqual(['colors']);
+    offA();
+    resetConfig('colors', storage);
+    expect(a).toEqual(['colors']); // a is gone
+    expect(b).toEqual(['colors', 'colors']); // b still receives
+  });
+
+  it('a listener that THROWS propagates the error out of setConfig (not masked) — and the write already landed', () => {
+    // agent-principles: errors propagate honestly and are never swallowed. The emitter does not
+    // wrap listeners in try/catch, so a broken subscriber surfaces to the writer's caller. Crucially
+    // the WRITE happened first, so the store is NOT corrupted — the throw only signals the bad
+    // subscriber. We assert the EXACT error propagates and the persisted value is intact.
+    const boom = new Error('subscriber blew up');
+    track(
+      onConfigChange(() => {
+        throw boom;
+      }),
+    );
+    expect(() => setConfig('geometry', { markerRadius: 0.77 }, storage)).toThrow(boom);
+    // The write landed before the throw — durable state is correct despite the broken listener.
+    expect(getConfig('geometry', storage).markerRadius).toBe(0.77);
+  });
+
+  it('the pure resolvers do NOT notify — reading config never fires a change (no listener leak into getConfig)', () => {
+    // getConfig / getDefault are pure reads; only the two WRITERS notify. A read firing a change
+    // event would be a side effect leaking into the pure path — assert it does not happen.
+    const listener = vi.fn();
+    track(onConfigChange(listener));
+    getConfig('lineVisibility', storage);
+    getDefault('colors');
+    getConfig('relay', storage);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it('property: every setConfig write on a real store delivers exactly its own section name, once', () => {
+    fc.assert(
+      fc.property(
+        fc.array(fc.constantFrom(...CONFIG_SECTIONS), { minLength: 0, maxLength: 12 }),
+        (sections) => {
+          const s = memoryStorage();
+          const seen: ConfigSection[] = [];
+          const off = onConfigChange((sec) => seen.push(sec));
+          try {
+            for (const sec of sections) setConfig(sec, {}, s);
+            // One notification per write, in order, each carrying its own section name.
+            expect(seen).toEqual(sections);
+          } finally {
+            off();
+          }
+        },
+      ),
+    );
   });
 });

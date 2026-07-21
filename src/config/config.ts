@@ -24,6 +24,7 @@
  * It must not import three/render/ui.
  */
 
+import { createEmitter } from '../util/emitter';
 import keybindingsDefault from './defaults/keybindings.json';
 import controlsDefault from './defaults/controls.json';
 import colorsDefault from './defaults/colors.json';
@@ -79,6 +80,39 @@ export type ConfigOf<S extends ConfigSection> = (typeof DEFAULTS)[S];
 
 /** The list of registered sections, for iteration and validation. */
 export const CONFIG_SECTIONS = Object.keys(DEFAULTS) as ConfigSection[];
+
+/**
+ * The single config-owned change notifier (Menu & live-settings batch, Task A.2 — GitHub
+ * issue #15). Backed by the pure `createEmitter` (A.1). It carries a `ConfigSection` name and
+ * NOTHING ELSE — subscribers re-read the new value via `getConfig`, keeping this module the
+ * single source of truth (no value is duplicated into the event). One shared emitter, not a
+ * per-call-site bus.
+ *
+ * This is module-level notification state deliberately kept OUT of the pure resolvers
+ * (`getConfig`/`deepMerge`/`getDefault`/`readOverride`) — those stay pure and side-effect-free.
+ * Only the two WRITERS (`setConfig`/`resetConfig`) touch it, and only after a successful write.
+ *
+ * Universal to LOCAL and PROGRAMMATIC/NETWORKED writers: a section changed by the local UI and
+ * one changed by an opponent's move arriving over the relay (e.g. #9 opponent-changed-board-size)
+ * both notify through this one seam, for free.
+ */
+const configChangeEmitter = createEmitter<ConfigSection>();
+
+/**
+ * Subscribe to config-section changes. `listener` is invoked with the changed SECTION NAME
+ * after a successful `setConfig`/`resetConfig` write; it re-reads the new value via `getConfig`
+ * (the SSOT — the section name is all that is delivered). Returns an unsubscribe function that
+ * removes exactly this listener; call it on dispose to avoid leaks (idempotent — a second call is
+ * a harmless no-op).
+ *
+ * A listener that throws propagates its error out of the triggering `setConfig`/`resetConfig`
+ * call (errors are never masked — agent-principles "errors propagate honestly"). The write has
+ * already been persisted by then, so the store is not corrupted; the throw only signals a broken
+ * subscriber to its caller.
+ */
+export function onConfigChange(listener: (section: ConfigSection) => void): () => void {
+  return configChangeEmitter.subscribe(listener);
+}
 
 /** The localStorage prefix for stored overrides. Namespaced to avoid collisions. */
 export const OVERRIDE_KEY_PREFIX = 'pente:config:';
@@ -178,7 +212,9 @@ export function getConfig<S extends ConfigSection>(
  * successive edits accumulate rather than clobber. Only the override partial is stored
  * (not the merged whole), so users who tweak one field still inherit future changes to
  * every other default. No-op with a warning path is avoided: with no store available
- * the call simply does nothing (there is nowhere durable to write).
+ * the call simply does nothing (there is nowhere durable to write) and — because no write
+ * happened — it does NOT notify `onConfigChange` subscribers (agent-principles: notify observed
+ * facts only; a no-op wrote nothing to react to).
  */
 export function setConfig<S extends ConfigSection>(
   section: S,
@@ -190,14 +226,22 @@ export function setConfig<S extends ConfigSection>(
   const existing = readOverride(section, store) ?? {};
   const merged = deepMerge(existing, partial as JsonRecord);
   store.setItem(overrideStorageKey(section), JSON.stringify(merged));
+  // Notify AFTER the write lands, so a subscriber that re-reads via getConfig sees the new value.
+  // Emit the section NAME only — never the value (subscribers re-read the SSOT).
+  configChangeEmitter.emit(section);
 }
 
 /**
  * Restore a section to its tracked default by removing its stored override. Removing a
- * section with no override is a no-op (matching `Storage.removeItem`).
+ * section with no override is a no-op (matching `Storage.removeItem`). With no store
+ * available the call does nothing and does NOT notify subscribers (nothing was written).
  */
 export function resetConfig(section: ConfigSection, storage?: Storage | null): void {
   const store = resolveStorage(storage);
   if (store === null) return;
   store.removeItem(overrideStorageKey(section));
+  // The reset write path ran (removeItem executed) — notify subscribers to re-read the now-default
+  // value. Emit the section NAME only, mirroring setConfig; a null store returned above without
+  // emitting (no write happened).
+  configChangeEmitter.emit(section);
 }
