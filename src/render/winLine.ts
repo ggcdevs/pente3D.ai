@@ -66,6 +66,13 @@ export interface WinLineHandle {
   readonly object: THREE.Group;
   /** Reflect `state.winningLine` into the mesh: draw the partial line, or hide it. */
   sync(state: GameState): void;
+  /**
+   * Live-set the winning-line colour (issue #15 `colors.winningLine` live-apply): mutate the shared
+   * material's colour in place. Because the material is reused across every (re)built win-line mesh, a
+   * currently-drawn win line recolours on the next frame AND a future win (built after this call) draws
+   * in the new colour. No rebuild. Returns the applied colour as a hex int (matches `getWinLine().color`).
+   */
+  setColor(hex: string): number;
   /** Plain-number readout of the win line (for `window.__pente`). */
   getWinLine(): WinLineReadout;
   /** Free GPU resources. */
@@ -163,6 +170,16 @@ export function createWinLine(size: number): WinLineHandle {
     drawnNodes = plan.nodes.map((n) => `${n[0]},${n[1]},${n[2]}`);
   }
 
+  /**
+   * Live-set the win-line colour (issue #15): mutate the shared material's colour. The material is reused
+   * across every mesh rebuild, so a drawn win line recolours immediately and a future win draws in the new
+   * colour. Returns the applied colour as a hex int (the same value `getWinLine().color` reports).
+   */
+  function setColor(hex: string): number {
+    material.color.set(hex);
+    return material.color.getHex();
+  }
+
   function getWinLine(): WinLineReadout {
     return {
       visible: mesh !== null,
@@ -179,5 +196,5 @@ export function createWinLine(size: number): WinLineHandle {
     material.dispose();
   }
 
-  return { object, sync, getWinLine, dispose };
+  return { object, sync, setColor, getWinLine, dispose };
 }

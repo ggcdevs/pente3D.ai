@@ -86,6 +86,12 @@ export interface MarkersReadout {
   /** The shared material's current opacity (Task A.3 live `materials` apply readout). */
   opacity: number;
   /**
+   * The current base (non-highlighted) marker colour as a lowercase `#rrggbb` string (issue #15 live
+   * `colors.emptySphere` apply readout). This is the albedo every un-hovered instance draws; a test
+   * asserts it changed after a live `emptySphere` edit — observable render truth, not a log line (#3).
+   */
+  baseColorHex: string;
+  /**
    * The shared material's effective emissive contribution: `emissiveIntensity` if the emissive
    * colour is non-black, else 0 (a black emissive contributes nothing regardless of intensity).
    * The hover glow MUST NOT drive this — any material-level emissive lights every instance at
@@ -117,6 +123,14 @@ export interface MarkersHandle {
    * `getMarkers` (`roughness`/`metalness`/`opacity`) so a test asserts render truth, not a log line.
    */
   setMaterial(params: { roughness?: number; metalness?: number; opacity?: number }): void;
+  /**
+   * Live-set the base (empty-node) marker colour (issue #15 `colors.emptySphere` live-apply): store the
+   * new base and rewrite every NON-highlighted instance's per-instance albedo to it (a currently-glowing
+   * hovered marker keeps the glow and restores to this new base when the hover clears, so the recolour
+   * never fights the highlight). No rebuild — only the `instanceColor` buffer is rewritten and flagged
+   * `needsUpdate`. Returns the applied colour as `#rrggbb` (render truth read back off the THREE.Color).
+   */
+  setColor(hex: string): string;
   /** Plain-number readout; `query` node keys get per-node detail (visibility/highlight/id). */
   getMarkers(query?: readonly NodeKey[]): MarkersReadout;
   /** Free GPU resources. */
@@ -250,6 +264,20 @@ export function createMarkers(
     material.needsUpdate = true;
   }
 
+  /**
+   * Live-set the base marker colour (issue #15): update the shared `baseColor` and rewrite the albedo of
+   * every instance that is NOT currently hover-highlighted (a glowing instance keeps `glowColor` and will
+   * restore to this new base on the next `highlight` clear). Only the per-instance colour buffer changes.
+   */
+  function setColor(hex: string): string {
+    baseColor.set(hex);
+    for (let i = 0; i < index.count; i++) {
+      if (!highlighted[i]) mesh.setColorAt(i, baseColor);
+    }
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    return `#${baseColor.getHexString()}`;
+  }
+
   // Scratch colour reused for every read-back — the real per-instance colour is pulled from the
   // live `instanceColor` buffer via `getColorAt`, so the readout reflects the GPU state actually
   // drawn, never the logical `highlighted` flag.
@@ -291,6 +319,7 @@ export function createMarkers(
       roughness: material.roughness,
       metalness: material.metalness,
       opacity: material.opacity,
+      baseColorHex: `#${baseColor.getHexString()}`,
       materialEmissiveIntensity: emissiveIsBlack ? 0 : material.emissiveIntensity,
       nodes,
     };
@@ -303,5 +332,5 @@ export function createMarkers(
     material.dispose();
   }
 
-  return { object, sync, highlight, setMaterial, getMarkers, dispose };
+  return { object, sync, highlight, setMaterial, setColor, getMarkers, dispose };
 }

@@ -84,13 +84,15 @@ export interface ViewportReadout {
 }
 
 /**
- * A live-applicable subset of the `colors` config (Task 5.4 settings-modal live preview). Every
- * field is optional so the settings modal can preview ONE changed colour at a time. `applyColors`
- * reflects these onto the scene immediately (no reload): `background` → the scene background,
- * `lineOpacity` → the shared gridline opacity, the three `line*` colours → each category's base
- * instance colour. Other `colors` keys (piece/marker/hover/win colours) are baked into instanced
- * buffers at build and take effect on reload like every other config section — that documented
- * contract is honest and unchanged (agent-principles #1: no disguised scaffolding).
+ * A live-applicable subset of the `colors` config (Task 5.4 settings-modal live preview; issue #15
+ * extended it to EVERY colour). Every field is optional so the settings modal can preview ONE changed
+ * colour at a time. `applyColors` reflects each onto the running scene immediately, re-colouring the
+ * EXISTING rendered objects with NO reload: `background` → the scene background, `lineOpacity` → the
+ * shared gridline opacity, the three `line*` colours → each line category's base instance colour,
+ * `hoverHighlight` → the next hover glow, `emptySphere` → the empty-node marker instances, `whitePiece`/
+ * `blackPiece` → every existing + future piece mesh of that owner, `tempPiece` → the translucent
+ * placement-preview mesh, and `winningLine` → the win-line mesh (recoloured if currently shown, and any
+ * future win). ALL ten `colors` keys now apply live (issue #15 closed the marker/piece/temp/win gap).
  */
 export interface ColorsPreview {
   background?: string;
@@ -98,6 +100,12 @@ export interface ColorsPreview {
   lineOrthogonal?: string;
   lineFaceDiagonal?: string;
   lineSpaceDiagonal?: string;
+  hoverHighlight?: string;
+  emptySphere?: string;
+  whitePiece?: string;
+  blackPiece?: string;
+  tempPiece?: string;
+  winningLine?: string;
 }
 
 /**
@@ -115,6 +123,17 @@ export interface ColorsReadout {
   lineOrthogonal: string;
   lineFaceDiagonal: string;
   lineSpaceDiagonal: string;
+  /** The hover-glow colour the next highlight paints, as `#rrggbb` (issue #15 live-apply readout). */
+  hoverHighlight: string;
+  /** The empty-node marker base colour, read back off the live marker instances, as `#rrggbb` (#15). */
+  emptySphere: string;
+  /** The per-owner piece colours every existing + future piece draws, as `#rrggbb` (#15). */
+  whitePiece: string;
+  blackPiece: string;
+  /** The translucent temp/preview-piece colour, read off the live preview material, as `#rrggbb` (#15). */
+  tempPiece: string;
+  /** The winning-line mesh colour (recoloured live if shown, else the colour a future win draws), `#rrggbb` (#15). */
+  winningLine: string;
 }
 
 /**
@@ -238,16 +257,20 @@ export interface SceneHandle {
   /** Per-category gridline readouts (visibility/blending/instance counts) as plain numbers. */
   getVisibleLines(): LineGroupReadout[];
   /**
-   * Live-apply a subset of the `colors` config to the scene (Task 5.4 settings-modal preview):
-   * background, gridline opacity, and the three line colours update on the next frame WITHOUT a
-   * reload. Returns the {@link ColorsReadout} of what is now actually applied (render truth).
+   * Live-apply a subset of the `colors` config to the scene (Task 5.4 settings-modal preview; issue #15
+   * extended it to EVERY colour): background, gridline opacity, the three line colours, the hover glow,
+   * the empty-node markers, the per-owner piece meshes, the temp-preview piece, and the win line all
+   * re-colour on the next frame WITHOUT a reload — existing rendered objects included. Returns the
+   * {@link ColorsReadout} of what is now actually applied (render truth, read off the Three.js objects).
    */
   applyColors(preview: ColorsPreview): ColorsReadout;
   /**
    * Live-apply a whole config SECTION to the running Three.js scene with NO reload (Task A.3, issue
    * #15): RE-READ `getConfig(section)` (the SSOT — no value is passed in) and reflect it onto the live
    * objects. Generalizes {@link applyColors} to every live-able section:
-   *   - `colors`      → background, gridline opacity, the three line colours, and the hover-glow colour;
+   *   - `colors`      → background, gridline opacity, the three line colours, the hover-glow colour, the
+   *                     empty-node markers, both piece colours (every existing + future mesh), the temp-
+   *                     preview piece, and the win line — ALL ten colours apply live (issue #15);
    *   - `lighting`    → ambient/directional light colour + intensity + directional position;
    *   - `materials` / `rendering` → marker/piece surface roughness·metalness·opacity + hover emissive
    *                     boost (each material flags its own `needsUpdate`);
@@ -946,18 +969,21 @@ export function createScene(container: HTMLElement): SceneHandle {
     return lines.getVisibleLines();
   }
 
-  // Live-previewable colour state (Task 5.4). Seeded from the same `colors` config the objects
-  // were built from, then mutated in place by `applyColors` so `getColors` reports render truth
-  // without re-reading the (possibly since-changed) config store. `background`/`lineOpacity`/the
-  // three line colours are the fields that update live; everything else needs a reload.
+  // Live-previewable colour state (Task 5.4; issue #15 extended it to every colour). The line/background
+  // fields are seeded from the `colors` config the objects were built from and mutated in place by
+  // `applyColors` (the instanced lines + scene background hold no single readable "base" the way a mesh
+  // material does, so we cache what we applied). The marker/piece/temp/win colours are NOT cached here —
+  // `getColors` reads them LIVE off the actual Three.js objects (marker base buffer, piece material,
+  // temp-preview material, win-line material), so the readout is render truth even for those.
   const previewColors = getConfig('colors') as unknown as {
     background: string;
     lineOpacity: number;
     lineOrthogonal: string;
     lineFaceDiagonal: string;
     lineSpaceDiagonal: string;
+    hoverHighlight: string;
   };
-  const liveColors: ColorsReadout = {
+  const liveLineColors = {
     background: `#${new THREE.Color(previewColors.background).getHexString()}`,
     lineOpacity: previewColors.lineOpacity,
     lineOrthogonal: `#${new THREE.Color(previewColors.lineOrthogonal).getHexString()}`,
@@ -968,31 +994,63 @@ export function createScene(container: HTMLElement): SceneHandle {
   function applyColors(preview: ColorsPreview): ColorsReadout {
     if (preview.background !== undefined) {
       (scene.background as THREE.Color).set(preview.background);
-      liveColors.background = `#${(scene.background as THREE.Color).getHexString()}`;
+      liveLineColors.background = `#${(scene.background as THREE.Color).getHexString()}`;
     }
     if (preview.lineOpacity !== undefined) {
-      liveColors.lineOpacity = lines.setOpacity(preview.lineOpacity);
+      liveLineColors.lineOpacity = lines.setOpacity(preview.lineOpacity);
     }
     if (preview.lineOrthogonal !== undefined) {
-      liveColors.lineOrthogonal = lines.setBaseColor('orthogonal', preview.lineOrthogonal);
+      liveLineColors.lineOrthogonal = lines.setBaseColor('orthogonal', preview.lineOrthogonal);
     }
     if (preview.lineFaceDiagonal !== undefined) {
-      liveColors.lineFaceDiagonal = lines.setBaseColor('face', preview.lineFaceDiagonal);
+      liveLineColors.lineFaceDiagonal = lines.setBaseColor('face', preview.lineFaceDiagonal);
     }
     if (preview.lineSpaceDiagonal !== undefined) {
-      liveColors.lineSpaceDiagonal = lines.setBaseColor('space', preview.lineSpaceDiagonal);
+      liveLineColors.lineSpaceDiagonal = lines.setBaseColor('space', preview.lineSpaceDiagonal);
     }
+    // Hover glow (issue #15): re-point the next-hover colour AND repaint any active highlight now.
+    if (preview.hoverHighlight !== undefined) {
+      hoverHighlight = preview.hoverHighlight;
+      applyHoverHighlight();
+    }
+    // Empty-node markers (issue #15): recolour every non-hovered marker instance live.
+    if (preview.emptySphere !== undefined) markers.setColor(preview.emptySphere);
+    // Pieces (issue #15): recolour EVERY existing piece mesh of that owner + retarget the template.
+    if (preview.whitePiece !== undefined || preview.blackPiece !== undefined) {
+      pieces.setColors({ whitePiece: preview.whitePiece, blackPiece: preview.blackPiece });
+    }
+    // Temp/preview piece (issue #15): recolour the translucent placement-preview mesh live.
+    if (preview.tempPiece !== undefined) tempMaterial.color.set(preview.tempPiece);
+    // Winning line (issue #15): recolour the win-line material (a shown line recolours; a future win too).
+    if (preview.winningLine !== undefined) winLine.setColor(preview.winningLine);
     return getColors();
   }
 
+  /**
+   * The colours actually applied to the scene, read back off the real Three.js objects (issue #15). The
+   * line/background fields come from the cached applied values (the instanced lines carry no readable
+   * single base); the marker/piece/temp/win/hover fields are read LIVE off the marker instance buffer,
+   * the piece material template, the temp-preview material, the win-line material, and the current hover
+   * colour — so every colour is render truth, never an inferred value (agent-principles #3).
+   */
   function getColors(): ColorsReadout {
-    return { ...liveColors };
+    const pieceColors = pieces.getColors();
+    return {
+      ...liveLineColors,
+      hoverHighlight: `#${new THREE.Color(hoverHighlight).getHexString()}`,
+      emptySphere: markers.getMarkers().baseColorHex,
+      whitePiece: pieceColors.whitePiece,
+      blackPiece: pieceColors.blackPiece,
+      tempPiece: `#${tempMaterial.color.getHexString()}`,
+      winningLine: `#${new THREE.Color(winLine.getWinLine().color).getHexString()}`,
+    };
   }
 
   /**
-   * Re-read + live-apply the `colors` section (Task A.3): the previewable subset (background, gridline
-   * opacity, the three line colours) via {@link applyColors}, PLUS the hover-glow colour so a re-hover
-   * paints the new glow. Reads the whole section from `getConfig` (the SSOT), not a passed-in value.
+   * Re-read + live-apply the WHOLE `colors` section (Task A.3; issue #15 extended it to every colour):
+   * background, gridline opacity, the three line colours, the hover glow, the empty-node markers, both
+   * piece colours (existing + future meshes), the temp-preview piece, and the win line — all through
+   * {@link applyColors}. Reads the whole section from `getConfig` (the SSOT), not a passed-in value.
    */
   function applyColorsSection(): void {
     const c = getConfig('colors') as unknown as {
@@ -1002,6 +1060,11 @@ export function createScene(container: HTMLElement): SceneHandle {
       lineFaceDiagonal: string;
       lineSpaceDiagonal: string;
       hoverHighlight: string;
+      emptySphere: string;
+      whitePiece: string;
+      blackPiece: string;
+      tempPiece: string;
+      winningLine: string;
     };
     applyColors({
       background: c.background,
@@ -1009,8 +1072,13 @@ export function createScene(container: HTMLElement): SceneHandle {
       lineOrthogonal: c.lineOrthogonal,
       lineFaceDiagonal: c.lineFaceDiagonal,
       lineSpaceDiagonal: c.lineSpaceDiagonal,
+      hoverHighlight: c.hoverHighlight,
+      emptySphere: c.emptySphere,
+      whitePiece: c.whitePiece,
+      blackPiece: c.blackPiece,
+      tempPiece: c.tempPiece,
+      winningLine: c.winningLine,
     });
-    hoverHighlight = c.hoverHighlight;
   }
 
   /**

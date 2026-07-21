@@ -96,6 +96,19 @@ export interface PiecesHandle {
    * updated params. Only the provided fields change. Read back via `getPieces` (`roughness`/etc.).
    */
   setMaterial(params: { roughness?: number; metalness?: number; opacity?: number }): void;
+  /**
+   * Live-set the per-owner piece colours (issue #15 `colors.whitePiece`/`blackPiece` live-apply) across
+   * EVERY current AND future piece: update the stored colour template (so new meshes read the new colour)
+   * AND recolour every EXISTING piece mesh's `MeshStandardMaterial.color` to its owner's new colour — the
+   * crux of #15, existing pieces must recolour, not just future ones. No rebuild; only the material albedo
+   * changes. Only the provided owners change. Returns the applied colours as `#rrggbb` (render truth).
+   */
+  setColors(next: { whitePiece?: string; blackPiece?: string }): {
+    whitePiece: string;
+    blackPiece: string;
+  };
+  /** The current per-owner colour template as `#rrggbb` — the colour existing + new pieces draw. */
+  getColors(): { whitePiece: string; blackPiece: string };
   /** Plain-number readout of every live piece (for `window.__pente`). */
   getPieces(): PieceReadout[];
   /** The number of live piece meshes currently in the scene (post-tick). */
@@ -142,7 +155,14 @@ function worldOf(node: NodeKey, size: number, spacing: number): THREE.Vector3 {
  * `window.__pente`.
  */
 export function createPieces(size: number): PiecesHandle {
-  const colors = getConfig('colors') as unknown as PieceColorsConfig;
+  const configColors = getConfig('colors') as unknown as PieceColorsConfig;
+  // LIVE per-owner colour template, seeded from config then mutated by `setColors` (issue #15) so a live
+  // `colors.whitePiece`/`blackPiece` edit applies to EVERY current piece (recoloured below) AND every
+  // FUTURE piece (`makeMaterial`/`recolorPiece` read this template, not the frozen config snapshot).
+  const colors: PieceColorsConfig = {
+    whitePiece: configColors.whitePiece,
+    blackPiece: configColors.blackPiece,
+  };
   const geometry = getConfig('geometry') as unknown as PieceGeometryConfig;
   const materials = getConfig('materials') as unknown as PieceMaterialsConfig;
   const rendering = getConfig('rendering') as unknown as PieceRenderingConfig;
@@ -282,6 +302,40 @@ export function createPieces(size: number): PiecesHandle {
     }
   }
 
+  /**
+   * Live-set the per-owner piece colours (issue #15). Update the stored template so FUTURE pieces read the
+   * new colour, then recolour every EXISTING mesh's material to its owner's new colour (white pieces → the
+   * new white, black pieces → the new black). A mesh fading OUT is left alone — it is a captured piece on
+   * its way to disposal and re-tinting it would be a distracting flicker. Returns the applied `#rrggbb`.
+   */
+  function setColors(next: { whitePiece?: string; blackPiece?: string }): {
+    whitePiece: string;
+    blackPiece: string;
+  } {
+    const changed = new Set<Player>();
+    if (next.whitePiece !== undefined) {
+      colors.whitePiece = next.whitePiece;
+      changed.add('white');
+    }
+    if (next.blackPiece !== undefined) {
+      colors.blackPiece = next.blackPiece;
+      changed.add('black');
+    }
+    for (const entry of entries.values()) {
+      if (entry.fadeDir === -1) continue; // leave a fading-out (captured) piece to complete its fade
+      if (changed.has(entry.owner)) entry.material.color.set(colors[colorKeyOf(entry.owner)]);
+    }
+    return getColors();
+  }
+
+  /** The live per-owner colour template as `#rrggbb` (what existing + new pieces draw). */
+  function getColors(): { whitePiece: string; blackPiece: string } {
+    return {
+      whitePiece: `#${new THREE.Color(colors.whitePiece).getHexString()}`,
+      blackPiece: `#${new THREE.Color(colors.blackPiece).getHexString()}`,
+    };
+  }
+
   function getPieces(): PieceReadout[] {
     const out: PieceReadout[] = [];
     for (const [node, entry] of entries) {
@@ -313,5 +367,16 @@ export function createPieces(size: number): PiecesHandle {
     geo.dispose();
   }
 
-  return { object, sync, tick, highlight, setMaterial, getPieces, count, dispose };
+  return {
+    object,
+    sync,
+    tick,
+    highlight,
+    setMaterial,
+    setColors,
+    getColors,
+    getPieces,
+    count,
+    dispose,
+  };
 }

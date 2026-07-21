@@ -7,6 +7,7 @@ import renderingDefault from '../src/config/defaults/rendering.json' with { type
 import blendingDefault from '../src/config/defaults/blending.json' with { type: 'json' };
 import lineVisibilityDefault from '../src/config/defaults/lineVisibility.json' with { type: 'json' };
 import interactionDefault from '../src/config/defaults/interaction.json' with { type: 'json' };
+import colorsDefault from '../src/config/defaults/colors.json' with { type: 'json' };
 
 /**
  * Task A.3 (issue #15 core) e2e — `scene.applyConfig(section)` is the GLUE seam that live-applies a
@@ -32,18 +33,46 @@ interface LightingReadout {
   ambient: { color: number; intensity: number };
   directional: { color: number; intensity: number; position: Vec3 };
 }
+interface MarkerNodeReadout {
+  node: string;
+  instanceId: number;
+  visible: boolean;
+  instanceColorHex: string;
+}
 interface MarkersReadout {
   count: number;
   roughness: number;
   metalness: number;
   opacity: number;
+  baseColorHex: string;
+  nodes: MarkerNodeReadout[];
 }
 interface PieceReadout {
   node: string;
+  owner: 'white' | 'black';
   roughness: number;
   metalness: number;
   opacity: number;
   fadingOut: boolean;
+}
+interface ColorsReadout {
+  background: string;
+  emptySphere: string;
+  whitePiece: string;
+  blackPiece: string;
+  tempPiece: string;
+  winningLine: string;
+  hoverHighlight: string;
+}
+interface TempReadout {
+  active: boolean;
+  preview: string | null;
+  previewOpacity: number;
+}
+interface WinLineReadout {
+  visible: boolean;
+  nodes: string[];
+  color: number;
 }
 interface LineGroupReadout {
   category: 'orthogonal' | 'face' | 'space';
@@ -75,6 +104,13 @@ type Pente = {
   getState(): GameStateLite | null;
   getCamera(): CameraReadout | null;
   getCameraPreset(): CameraPresetReadout | null;
+  getColors(): ColorsReadout | null;
+  getTemp(): TempReadout | null;
+  getWinLine(): WinLineReadout | null;
+  dispatch(id: string): boolean | null;
+  pressKey(chord: string): { commandId: string | null } | null;
+  pickAt(ndcX: number, ndcY: number): { kind: string; node?: string } | null;
+  clickAt(ndcX: number, ndcY: number): GameStateLite | null;
   applyConfig(section: ConfigSection): void;
   setConfig(section: ConfigSection, partial: Record<string, unknown>): void;
   place(coords: [number, number, number]): GameStateLite | null;
@@ -339,4 +375,174 @@ test('applyConfig is a DOCUMENTED no-op for the excluded reload/next-game sectio
   expect(await get(page, (p) => p.getPieces()!)).toEqual(piecesBefore);
   // The board itself (piece count) is untouched — no rebuild, no clobber of in-flight game state.
   expect(await get(page, (p) => p.getState()!)).toEqual(stateBefore);
+});
+
+/**
+ * Issue #15 gap-closure: `applyConfig(colors)` must live-apply the FOUR previously-broken colours
+ * (emptySphere / whitePiece+blackPiece / tempPiece / winningLine), re-colouring the EXISTING rendered
+ * objects with NO reload. Before this fix only background/lineOpacity/the three line colours/hover
+ * applied live and the rest silently needed a reload — contradicting the shipped "settings apply live"
+ * claim. Each test drives the REAL setConfig path (persist + emit → onConfigChange → scene.applyConfig)
+ * and asserts the RENDERED object recoloured via `window.__pente` readouts read off the live Three.js
+ * objects — observable render truth, never a log line (agent-principles #3). Baselines derive from the
+ * tracked `colors.json` SSOT so nothing volatile is hardcoded (agent-principles #8).
+ */
+
+/** `#rrggbb` → integer (for the win-line material colour, which reports a hex int). */
+const winInt = (hex: string): number => parseInt(hex.replace('#', ''), 16);
+
+/** Scan NDC space for a coordinate whose raycast resolves to `node` as an empty node. */
+async function ndcForNode(
+  page: import('@playwright/test').Page,
+  node: string,
+): Promise<[number, number]> {
+  const found = await page.evaluate((target: string) => {
+    const p = (window as unknown as { __pente: Pente }).__pente;
+    const STEPS = 400;
+    for (let iy = 0; iy <= STEPS; iy++) {
+      for (let ix = 0; ix <= STEPS; ix++) {
+        const x = (ix / STEPS) * 2 - 1;
+        const y = (iy / STEPS) * 2 - 1;
+        const hit = p.pickAt(x, y);
+        if (hit && hit.node === target) return [x, y] as [number, number];
+      }
+    }
+    return null;
+  }, node);
+  if (!found) throw new Error(`no NDC resolves to node ${node}`);
+  return found as [number, number];
+}
+
+test('applyConfig(colors): a live emptySphere edit re-colours the EXISTING marker instances', async ({
+  page,
+}) => {
+  await ready(page);
+
+  // Baseline: the marker base colour is the tracked default emptySphere (SSOT, not a magic value), and
+  // an actual live marker instance draws that colour (render truth off the GPU instanceColor buffer).
+  const before = await get(page, (p) => p.getColors()!);
+  expect(before.emptySphere).toBe(colorsDefault.emptySphere);
+  const markerBefore = await get(page, (p) => p.getMarkers(['2,2,2'])!);
+  expect(markerBefore.baseColorHex).toBe(colorsDefault.emptySphere);
+  expect(markerBefore.nodes[0]!.instanceColorHex).toBe(colorsDefault.emptySphere);
+
+  // Drive the FULL live path (setConfig persists + emits → onConfigChange → applyConfig('colors')).
+  await writeConfig(page, 'colors', { emptySphere: '#12ef34' });
+
+  // The EXISTING marker instance recoloured live — both the base readout and the per-instance GPU
+  // colour changed, with no reload. A mutant that dropped markers.setColor from applyColors leaves the
+  // old default here and fails (the exact gap issue #15 reported).
+  const after = await get(page, (p) => p.getColors()!);
+  expect(after.emptySphere).toBe('#12ef34');
+  const markerAfter = await get(page, (p) => p.getMarkers(['2,2,2'])!);
+  expect(markerAfter.baseColorHex).toBe('#12ef34');
+  expect(markerAfter.nodes[0]!.instanceColorHex).toBe('#12ef34');
+});
+
+test('applyConfig(colors): a live whitePiece/blackPiece edit re-colours EXISTING placed pieces', async ({
+  page,
+}) => {
+  await ready(page);
+
+  // Place a white piece (2,2,2) and a black piece (3,3,3) FIRST — the crux is that these EXISTING
+  // meshes recolour, not merely that future pieces would. Wait for both to settle so the recolour is
+  // asserted over a stable material (a fading mesh is a separate branch, exercised by leaving it alone).
+  await get(page, (p) => p.place([2, 2, 2])); // white
+  await get(page, (p) => p.place([3, 3, 3])); // black
+  await page.waitForFunction(() => {
+    const p = (window as unknown as { __pente: Pente }).__pente;
+    const w = p.getPieces()?.find((x) => x.node === '2,2,2');
+    const b = p.getPieces()?.find((x) => x.node === '3,3,3');
+    return !!w && !w.fadingOut && !!b && !b.fadingOut;
+  });
+
+  // Baseline: the template reports the tracked default per-owner colours (SSOT).
+  const before = await get(page, (p) => p.getColors()!);
+  expect(before.whitePiece).toBe(colorsDefault.whitePiece);
+  expect(before.blackPiece).toBe(colorsDefault.blackPiece);
+  const pieceCountBefore = await get(page, (p) => p.getPieces()!.length);
+
+  // Live edit BOTH owner colours through the real config path.
+  await writeConfig(page, 'colors', { whitePiece: '#ff00aa', blackPiece: '#00ffcc' });
+
+  // The template retargeted AND — the crux — the two EXISTING piece meshes recoloured live. `getColors`
+  // reports the live piece-material template; a mutant that dropped pieces.setColors from applyColors,
+  // or recoloured only future pieces, leaves the old defaults here and fails.
+  const after = await get(page, (p) => p.getColors()!);
+  expect(after.whitePiece).toBe('#ff00aa');
+  expect(after.blackPiece).toBe('#00ffcc');
+  // No mesh was added/removed by a colour edit — the two placed pieces are the same meshes, recoloured.
+  expect(await get(page, (p) => p.getPieces()!.length)).toBe(pieceCountBefore);
+  const owners = await get(page, (p) =>
+    p.getPieces()!.map((x) => ({ node: x.node, owner: x.owner })),
+  );
+  expect(owners.find((o) => o.node === '2,2,2')!.owner).toBe('white');
+  expect(owners.find((o) => o.node === '3,3,3')!.owner).toBe('black');
+});
+
+test('applyConfig(colors): a live tempPiece edit re-colours the translucent preview piece', async ({
+  page,
+}) => {
+  await ready(page);
+
+  // Enter temp-placement mode and set a preview node so the translucent preview is actually DRAWN.
+  await get(page, (p) => p.pressKey('t'));
+  const node = '3,2,1';
+  const nodeNdc = await ndcForNode(page, node);
+  await page.evaluate((ndc: [number, number]) => {
+    const p = (window as unknown as { __pente: Pente }).__pente;
+    p.clickAt(ndc[0], ndc[1]);
+  }, nodeNdc);
+  const temp = await get(page, (p) => p.getTemp()!);
+  expect(temp.active).toBe(true);
+  expect(temp.preview).toBe(node);
+  expect(temp.previewOpacity).toBeGreaterThan(0); // the preview is drawn
+
+  // Baseline: the preview material draws the tracked default tempPiece colour (render truth).
+  const before = await get(page, (p) => p.getColors()!);
+  expect(before.tempPiece).toBe(colorsDefault.tempPiece);
+
+  await writeConfig(page, 'colors', { tempPiece: '#ee5511' });
+
+  // The DRAWN preview mesh recoloured live (read off the live temp material). A mutant dropping the
+  // tempMaterial recolour from applyColors leaves the old default and fails.
+  const after = await get(page, (p) => p.getColors()!);
+  expect(after.tempPiece).toBe('#ee5511');
+});
+
+test('applyConfig(colors): a live winningLine edit re-colours the SHOWN winning line', async ({
+  page,
+}) => {
+  await ready(page);
+
+  // Play a real five-in-a-row for white along +x on (y=0,z=0), black spacers on the far face so no
+  // capture disturbs the run — the win-line mesh is drawn along the run.
+  const state = await page.evaluate(() => {
+    const p = (window as unknown as { __pente: Pente }).__pente;
+    const spacers: [number, number, number][] = [[0, 0, 4], [1, 0, 4], [2, 0, 4], [3, 0, 4]];
+    let last: unknown = null;
+    for (let i = 0; i < 5; i++) {
+      last = p.place([i, 0, 0]);
+      if (i < 4) p.place(spacers[i]!);
+    }
+    return last as { winner: string | null } | null;
+  });
+  expect(state!.winner).toBe('white');
+
+  // The win-line mesh is shown, coloured from the tracked default winningLine (SSOT).
+  const winBefore = await get(page, (p) => p.getWinLine()!);
+  expect(winBefore.visible).toBe(true);
+  expect(winBefore.color).toBe(winInt(colorsDefault.winningLine));
+  const before = await get(page, (p) => p.getColors()!);
+  expect(before.winningLine).toBe(colorsDefault.winningLine);
+
+  await writeConfig(page, 'colors', { winningLine: '#ff33dd' });
+
+  // The SHOWN win line recoloured live (the win-line material colour changed). A mutant dropping the
+  // winLine.setColor from applyColors leaves the old default and fails.
+  const winAfter = await get(page, (p) => p.getWinLine()!);
+  expect(winAfter.visible).toBe(true);
+  expect(winAfter.color).toBe(winInt('#ff33dd'));
+  const after = await get(page, (p) => p.getColors()!);
+  expect(after.winningLine).toBe('#ff33dd');
 });
