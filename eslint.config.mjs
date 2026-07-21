@@ -72,7 +72,7 @@ export default tseslint.config(
     // it behind on an interrupted run. Linting that copy floods `npm run lint` with
     // hundreds of spurious errors on code we didn't write, so it is ignored like the
     // other build-output dirs — this is not a relaxation of any rule on real source.
-    ignores: ['docs/**', 'poc/**', 'node_modules/**', 'coverage/**', 'playwright-report/**', 'test-results/**', '.stryker-tmp/**'],
+    ignores: ['dist/**', 'docs/**', 'poc/**', 'node_modules/**', 'coverage/**', 'playwright-report/**', 'test-results/**', '.stryker-tmp/**'],
   },
   ...tseslint.configs.recommended,
   {

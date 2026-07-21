@@ -231,3 +231,56 @@ the designed max-3-rounds behavior. What happened:
 
 **Verdict:** substantive code is solid (sync.ts 96.43% per-file, net 100% coverage, real-relay
 proven, error contract genuinely tested). Stage 3 complete after the oversight cleanup above.
+
+## live-settings-A (Menu batch, Increment A — #15 core) — reviewers approved after a 4-issue round, Gate escalated on process, main-loop verified & accepted
+
+First post-v1 feature increment: emitter factory → config `onConfigChange` pub/sub → scene
+`applyConfig` live-apply seams → wire+settings+integration. Reviewers found **4 issues in
+round 1** (round 2 clean → `approvedByReviewers:true`); the Gate agent then **escalated**
+(`escalate:true`) by correctly refusing to auto-push. Both escalation grounds were *process*,
+not code defects — but the reviewer catches were real:
+
+**Reviewer findings (all fixed, main-loop-verified genuine):**
+1. **Build gate shipped RED (blocker)** — `npm run build` (`tsc --noEmit`) failed with 3
+   `TS2532/TS2722` errors in the new `emitter.test.ts` under `noUncheckedIndexedAccess`.
+   Vitest's transpile does **not** typecheck, so `npm test` was green while `tsc` was red —
+   the exact "unwatched gate shipped red" trap (principle #6). **My build workflow only ran
+   lint/test/e2e, never `npm run build`.** The 5th occurrence of `proof-by-inference /
+   unwatched gate`.
+2. **Missing behavioral assertion (major)** — the materials live-apply e2e wrote `pieceOpacity`
+   but never asserted piece opacity; that branch (`pieces.setMaterial` fade-snap) is
+   *mutation-excluded* (Three.js glue), so Playwright was its ONLY possible gate and it was
+   silent. Fixed with a real `toBeCloseTo` on the settled piece opacity (+ `materialsDefault`
+   SSOT baseline, `waitSettled` for determinism).
+3. **Exclusion test didn't bite (major)** — the "controls is a documented no-op" test asserted
+   through `getCamera()` (position/target), which a wrongly-live `applyCameraPreset` (mutates
+   buttons/speeds/limits) would NOT change → the test couldn't observe the regression it
+   claimed to guard. Fixed by adding a `getCameraPreset()` readout and asserting it (principle
+   #7 — a gate you haven't watched reject something isn't a gate).
+4. **Deploy consequence (major)** — CI `deploy.yml` runs `npm run build`; the red typecheck
+   would fail the deploy. Same root cause as #1.
+
+**Instruction/structural tweaks (nip the pattern — pending human ratification per the ritual):**
+- **Build workflows must run `npm run build`** (tsc typecheck + vite build) as a task-level and
+  verify-level gate, not just lint/test/e2e — else test-file type errors ship red. Applied to
+  `.claude/workflows/pente-live-settings-a.mjs` (task + verify gate, `buildPassing` in schema);
+  **should propagate to the `pente-stage-*` template.**
+- **eslint now ignores `dist/**`** (`eslint.config.mjs`) — building then linting made `eslint .`
+  scan the minified bundle → 2309 spurious `no-unused-expressions` errors, i.e. a gate failing
+  for a non-source reason. Structural: build output is never linted. (This is why the Gate
+  agent saw lint green — no `dist/` — while a build-then-lint locally goes red.)
+- **Review-gate scope ergonomics (watch item, human tweak):** invoking with `scope` = pure +
+  glue + e2e files makes the Gate's literal "100% coverage on scope" *structurally impossible*
+  (glue/e2e aren't vitest-measured), which is why it escalated. The Gate correctly refused to
+  reinterpret (principle #6). Consider splitting `coverageScope` (pure only) from `reviewScope`
+  (the whole diff) so reviewers still read the glue without breaking the coverage claim.
+
+**Main-loop oversight (independent, not trusting the reports):** re-ran on HEAD `24e7e44` —
+`npm run build` exit 0 (the previously-red gate), lint 0 (clean tree), 798 unit pass, coverage
+100% on `emitter.ts`+`config.ts`, e2e 111 pass, scoped mutation **96.23% twice** (stable,
+2 documented `readOverride` equivalents; `emitter.ts` 100%). Verified the reviewer fixes are
+genuine assertions (real `toBeCloseTo` on opacity + `getCameraPreset`), not silencing.
+Confirmed `dist/` is not tracked.
+
+**Verdict: Increment A genuinely complete.** Not yet pushed/merged — awaiting maintainer call
+on deploy timing (push to a source branch auto-deploys). Diagrams regenerated pre-merge.

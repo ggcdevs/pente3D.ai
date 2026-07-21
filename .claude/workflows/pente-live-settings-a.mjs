@@ -42,6 +42,7 @@ const BUILD_SCHEMA = {
     unitTestsPassing: { type: 'boolean' }, playwrightPassing: { type: 'boolean' },
     lintPassing: { type: 'boolean' }, committed: { type: 'boolean' },
     commitSha: { type: 'string' }, windowPenteAdded: { type: 'string' },
+    buildPassing: { type: 'boolean' },
     liveApplyObserved: { type: 'string' }, notes: { type: 'string' },
   },
 }
@@ -50,6 +51,7 @@ const VERIFY_SCHEMA = {
   required: ['lintPassed', 'unitTestsPassed', 'playwrightPassed'],
   properties: {
     lintPassed: { type: 'boolean' }, unitTestsPassed: { type: 'boolean' },
+    buildPassed: { type: 'boolean' },
     playwrightPassed: { type: 'boolean' }, unitTestCount: { type: 'number' },
     liveApplyIntegrationProven: { type: 'boolean' }, pureLogicFiles: { type: 'string' },
     pureLogicCoveragePct: { type: 'number' }, ioBoundaryNotes: { type: 'string' },
@@ -65,7 +67,7 @@ for (const t of TASKS) {
       `${DOCTRINE}\n\n` +
       `Target: ${t.desc}\n\n` +
       `Separate PURE logic (emitter, config pub/sub — decisions with no THREE/DOM) from GLUE (scene/Three.js, DOM widgets, main wiring). Pure → strict TDD (Vitest) + fast-check where apt + Stryker mutate scope + 100% vite coverage pin. Glue → Playwright driving the real app, asserting window.__pente real values + screenshots, NEVER log lines. Reuse existing src/util, src/config, src/render, src/ui, src/main — DRY; do not rebuild working code.\n\n` +
-      `Run \`npm run lint\` (exit 0), \`npm test\` (unit), and the relevant \`npm run e2e\` spec. When all green + lint-clean, COMMIT (conventional message referencing #15 + trailer \`${TRAILER}\`). Do NOT push. Return structured evidence only (no conclusions without observed command output).`,
+      `Run \`npm run build\` (tsc --noEmit typecheck + vite build — exit 0; the typecheck catches TS errors in *.test.ts and glue that vitest's transpile does NOT, e.g. noUncheckedIndexedAccess — a green \`npm test\` does NOT imply a green build), \`npm run lint\` (exit 0), \`npm test\` (unit), and the relevant \`npm run e2e\` spec. When ALL green + lint-clean, COMMIT (conventional message referencing #15 + trailer \`${TRAILER}\`). Do NOT push. Return structured evidence only (no conclusions without observed command output).`,
     { label: `build:${t.id}-${t.label}`, phase: 'Build', schema: BUILD_SCHEMA }
   )
   results.push({ id: t.id, r })
@@ -84,7 +86,7 @@ if (halted) {
 phase('Verify')
 const verify = await agent(
   `Build-verification for Pente3D Menu & live-settings Increment A (#15 core). Repo ${REPO}. ${DOCTRINE}\n` +
-    `Run and PASTE real output: \`npm run lint\` (0), \`npm test\` (unit — all pass, note count), \`npm run e2e\` (Playwright — all pass, INCLUDING the new live-apply integration spec; report whether a setting changed through the UI reflected on the board with NO reload, via window.__pente), \`npm run coverage\`.\n` +
+    `Run and PASTE real output: \`npm run build\` (tsc typecheck + vite build — exit 0; a green unit suite does NOT imply a green build), \`npm run lint\` (0), \`npm test\` (unit — all pass, note count), \`npm run e2e\` (Playwright — all pass, INCLUDING the new live-apply integration spec; report whether a setting changed through the UI reflected on the board with NO reload, via window.__pente), \`npm run coverage\`.\n` +
     `Report coverage for the PURE Increment-A logic (src/util/emitter.ts, src/config/config.ts + any pure model changes) vs the Three.js/DOM/main glue — the review-gate will set mutateScope to the pure files. Do NOT push. Return structured evidence.`,
   { label: 'verify:increment-A', phase: 'Verify', schema: VERIFY_SCHEMA }
 )
