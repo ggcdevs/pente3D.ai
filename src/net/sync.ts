@@ -46,6 +46,7 @@ import {
 import type { Coord } from '../core/coords';
 import { opponent, type GameState, type Player } from '../core/gameState';
 import { flagConflicted, type ArchivedMeta } from '../persist/archive';
+import { createEmitter, type Emitter } from '../util/emitter';
 import type { Transport, TransportMessage } from './transport';
 
 /** The sync wire-format version. Bumped only on a breaking message-shape change. */
@@ -64,6 +65,131 @@ export interface SyncMessage {
   readonly headHash: string;
   /** The full append-only log as plain events, in order. */
   readonly log: readonly Event[];
+}
+
+/**
+ * A **proposal** message: one player asks the peer to accept an out-of-band
+ * `action` (e.g. `'rematch'`, `'undo'`, `'redo'` — an OPAQUE tag this layer never
+ * interprets; the consumers #12/#18 give it meaning). It is held out-of-band and is
+ * NOT part of the append-only move-log: a rejected proposal must leave no trace.
+ *
+ * `id` is a UNIQUE, sender-chosen identifier used to DEDUP on receipt so a
+ * reconnect / retained re-delivery never replays a stale proposal, and to correlate
+ * the {@link ResponseMessage} back to its proposal.
+ */
+export interface ProposalMessage {
+  readonly kind: 'proposal';
+  /** Unique proposal id (dedup on receive; correlates the response). */
+  readonly id: string;
+  /** Opaque action tag the consumer fills (`'rematch' | 'undo' | 'redo' | …`). */
+  readonly action: string;
+  /** The seat (by color) that raised the proposal. */
+  readonly proposedBy: Player;
+}
+
+/**
+ * A **response** message: the peer's accept/decline of a {@link ProposalMessage},
+ * correlated by `proposalId`. Like a proposal it is out-of-band — never appended to
+ * the move-log.
+ */
+export interface ResponseMessage {
+  readonly kind: 'response';
+  /** The {@link ProposalMessage.id} this responds to. */
+  readonly proposalId: string;
+  /** `true` = accepted, `false` = declined. */
+  readonly accepted: boolean;
+}
+
+/**
+ * The networked wire message as a DISCRIMINATED UNION on `kind`:
+ *
+ *   - `'sync'`     — the existing full-log sync payload ({@link SyncMessage} fields),
+ *                    unchanged on the wire except for the added `kind` tag.
+ *   - `'proposal'` — an out-of-band ask ({@link ProposalMessage}).
+ *   - `'response'` — the accept/decline of a proposal ({@link ResponseMessage}).
+ *
+ * Every message crossing the transport is one of these; {@link parseGameMessage}
+ * validates the shape and narrows the kind before anything acts on it.
+ */
+export type GameMessage =
+  | ({ readonly kind: 'sync' } & SyncMessage)
+  | ProposalMessage
+  | ResponseMessage;
+
+/**
+ * Validate an inbound `unknown` transport payload into a well-typed
+ * {@link GameMessage} (pure — no side effects). Discriminates on `kind` and
+ * validates EACH shape's required fields, throwing a {@link SyncError} on a
+ * malformed message, an unknown `kind`, or a missing/mistyped field — errors
+ * propagate honestly, never a silently-coerced half-message (agent-principles:
+ * errors propagate honestly).
+ *
+ * BACKWARD-COMPAT: a message with NO `kind` field but the shape of a legacy sync
+ * message (a numeric `version`, a string `headHash`, and an array `log`) is treated
+ * as `kind: 'sync'`. A peer running the pre-union build publishes an un-kinded
+ * {@link SyncMessage}; rejecting it would break sync the moment one side upgrades,
+ * so an un-kinded-but-sync-shaped payload is accepted and tagged `'sync'`. Anything
+ * else with no recognisable `kind`/shape is rejected (a truly malformed or
+ * unknown-kind message must NOT be silently accepted).
+ *
+ * Note this validates the ENVELOPE (kind + field presence/types); the deeper
+ * sync-payload integrity (the hash-chain re-verification) is done by
+ * {@link parseSyncMessage} when a `'sync'` message is applied.
+ */
+export function parseGameMessage(msg: unknown): GameMessage {
+  if (typeof msg !== 'object' || msg === null) {
+    throw new SyncError('game message must be an object');
+  }
+  const rec = msg as Record<string, unknown>;
+  const kind = rec.kind;
+  // Backward-compat: an un-kinded legacy sync message (pre-tagged-union peer).
+  if (kind === undefined && looksLikeSync(rec)) {
+    return { kind: 'sync', version: rec.version as number, headHash: rec.headHash as string, log: rec.log as readonly Event[] };
+  }
+  switch (kind) {
+    case 'sync': {
+      if (!looksLikeSync(rec)) {
+        throw new SyncError('sync message requires numeric version, string headHash, and array log');
+      }
+      return { kind: 'sync', version: rec.version as number, headHash: rec.headHash as string, log: rec.log as readonly Event[] };
+    }
+    case 'proposal': {
+      if (typeof rec.id !== 'string') {
+        throw new SyncError('proposal message requires a string id');
+      }
+      if (typeof rec.action !== 'string') {
+        throw new SyncError('proposal message requires a string action');
+      }
+      if (rec.proposedBy !== 'white' && rec.proposedBy !== 'black') {
+        throw new SyncError("proposal message requires proposedBy 'white' or 'black'");
+      }
+      return { kind: 'proposal', id: rec.id, action: rec.action, proposedBy: rec.proposedBy };
+    }
+    case 'response': {
+      if (typeof rec.proposalId !== 'string') {
+        throw new SyncError('response message requires a string proposalId');
+      }
+      if (typeof rec.accepted !== 'boolean') {
+        throw new SyncError('response message requires a boolean accepted');
+      }
+      return { kind: 'response', proposalId: rec.proposalId, accepted: rec.accepted };
+    }
+    default:
+      throw new SyncError(`unknown game message kind: ${String(kind)}`);
+  }
+}
+
+/**
+ * Whether `rec` has the field shape of a sync payload: a numeric `version`, a
+ * string `headHash`, and an array `log`. Used both to accept an un-kinded legacy
+ * sync message and to validate an explicit `kind: 'sync'` envelope.
+ */
+function looksLikeSync(rec: Record<string, unknown>): boolean {
+  return (
+    typeof rec.version === 'number' &&
+    typeof rec.headHash === 'string' &&
+    Array.isArray(rec.log)
+  );
 }
 
 /** The three possible outcomes of comparing a local log against a remote one. */
@@ -134,9 +260,16 @@ export function decideUndo(
   return { ok: true };
 }
 
-/** Build a {@link SyncMessage} carrying `log`'s full history and head hash. */
-export function toSyncMessage(log: EventLog): SyncMessage {
+/**
+ * Build a `kind: 'sync'` {@link GameMessage} carrying `log`'s full history and head
+ * hash. The `kind` tag makes it a member of the {@link GameMessage} union so a
+ * receiver can discriminate it from a `'proposal'` / `'response'`; the remaining
+ * fields are the unchanged {@link SyncMessage} payload, so existing sync traffic
+ * round-trips identically apart from the added tag.
+ */
+export function toSyncMessage(log: EventLog): { readonly kind: 'sync' } & SyncMessage {
   return {
+    kind: 'sync',
     version: SYNC_VERSION,
     headHash: headHash(log),
     log: log.entries.map((entry) => entry.event),
@@ -218,6 +351,12 @@ export class SyncEngine {
   private _archiving: Promise<void> = Promise.resolve();
   /** Subscribers notified after every game mutation (local move OR remote adopt/conflict). */
   private readonly changeListeners = new Set<() => void>();
+  /**
+   * Emitter for inbound OUT-OF-BAND handshake messages (`'proposal'` / `'response'`) — the seam the
+   * N.1 handshake state machine (#12/#18) subscribes via {@link onMessage}. Kept separate from the
+   * sync path so a proposal never touches the append-only move-log.
+   */
+  private readonly messages: Emitter<ProposalMessage | ResponseMessage> = createEmitter();
 
   /**
    * @param game The initial local game (usually fresh; may already hold moves).
@@ -383,9 +522,36 @@ export class SyncEngine {
     }
   }
 
-  /** Transport message pump: parse-and-apply through the guarded {@link receive}. */
+  /**
+   * Subscribe to inbound NON-sync {@link GameMessage}s (currently `'proposal'` /
+   * `'response'`) as they arrive over the transport — the seam the out-of-band
+   * handshake state machine wires (N.1 consumers #12/#18). Returns an unsubscribe
+   * fn. `'sync'` messages are NOT delivered here: they are applied to the game log
+   * through {@link receive}, never handed to the handshake, so the two concerns stay
+   * separate.
+   */
+  onMessage(listener: (msg: ProposalMessage | ResponseMessage) => void): () => void {
+    return this.messages.subscribe(listener);
+  }
+
+  /**
+   * Transport message pump: VALIDATE the raw payload into a typed
+   * {@link GameMessage} (never a blind cast), then route by kind. A `'sync'`
+   * message goes through the guarded, replay-safe {@link receive}; a `'proposal'` /
+   * `'response'` is emitted to {@link onMessage} subscribers so the out-of-band
+   * handshake (never the append-only log) handles it. A malformed / unknown-kind
+   * payload throws a {@link SyncError} out of {@link parseGameMessage} — it is NOT
+   * silently dropped.
+   */
   private onTransportMessage(raw: TransportMessage): void {
-    this.receive(raw as SyncMessage);
+    const msg = parseGameMessage(raw);
+    if (msg.kind === 'sync') {
+      this.receive(msg);
+      return;
+    }
+    // 'proposal' | 'response': out-of-band, never touches the move-log. Deliver to the
+    // handshake seam (the N.1 consumers subscribe via onMessage).
+    this.messages.emit(msg);
   }
 
   /**

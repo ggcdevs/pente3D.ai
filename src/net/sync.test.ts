@@ -1,5 +1,6 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach } from 'vitest';
+import * as fc from 'fast-check';
 import { Game } from '../core/game';
 import { emptyLog, append, headHash, type EventLog } from '../core/eventLog';
 import { openDatabase } from '../persist/db';
@@ -10,10 +11,14 @@ import {
   decideUndo,
   toSyncMessage,
   parseSyncMessage,
+  parseGameMessage,
   SYNC_VERSION,
   SyncEngine,
   SyncError,
   type SyncMessage,
+  type GameMessage,
+  type ProposalMessage,
+  type ResponseMessage,
 } from './sync';
 
 /** Build a log from a sequence of node keys (each a `place`). */
@@ -82,9 +87,10 @@ describe('decideSync — pure prefix/hash decision', () => {
 });
 
 describe('SyncMessage — wire format {version, headHash, log}', () => {
-  it('carries version, headHash, and the plain event log', () => {
+  it('carries the sync kind tag, version, headHash, and the plain event log', () => {
     const log = logOf('0,0,0', '1,1,1');
     const msg = toSyncMessage(log);
+    expect(msg.kind).toBe('sync');
     expect(msg.version).toBe(SYNC_VERSION);
     expect(msg.headHash).toBe(headHash(log));
     expect(msg.log).toEqual([
@@ -152,6 +158,224 @@ describe('SyncMessage — wire format {version, headHash, log}', () => {
     } as unknown as SyncMessage;
     expect(() => parseSyncMessage(objLog)).toThrow(SyncError);
     expect(() => parseSyncMessage(objLog)).toThrow(/array of events/);
+  });
+});
+
+describe('parseGameMessage — discriminated-union envelope validation', () => {
+  // A valid, kinded sync message straight off toSyncMessage.
+  const syncMsg = toSyncMessage(logOf('0,0,0', '1,1,1'));
+
+  describe('kind: sync', () => {
+    it('parses a well-formed kinded sync message, preserving all fields', () => {
+      const parsed: GameMessage = parseGameMessage(syncMsg);
+      expect(parsed).toEqual(syncMsg);
+      // Narrowed to sync: the payload is re-verifiable by parseSyncMessage.
+      if (parsed.kind !== 'sync') throw new Error('expected sync');
+      expect(headHash(parseSyncMessage(parsed))).toBe(syncMsg.headHash);
+    });
+
+    it('round-trips through JSON (the real wire path) unchanged', () => {
+      const wire = JSON.parse(JSON.stringify(syncMsg)) as unknown;
+      expect(parseGameMessage(wire)).toEqual(syncMsg);
+    });
+
+    it('rejects a kind:sync with a non-numeric version', () => {
+      const bad = { kind: 'sync', version: '1', headHash: 'x', log: [] };
+      expect(() => parseGameMessage(bad)).toThrow(SyncError);
+      expect(() => parseGameMessage(bad)).toThrow(/numeric version/);
+    });
+
+    it('rejects a kind:sync with a non-string headHash', () => {
+      const bad = { kind: 'sync', version: 1, headHash: 42, log: [] };
+      expect(() => parseGameMessage(bad)).toThrow(SyncError);
+      expect(() => parseGameMessage(bad)).toThrow(/string headHash/);
+    });
+
+    it('rejects a kind:sync with a non-array log', () => {
+      const bad = { kind: 'sync', version: 1, headHash: 'x', log: 'nope' };
+      expect(() => parseGameMessage(bad)).toThrow(SyncError);
+      expect(() => parseGameMessage(bad)).toThrow(/array log/);
+    });
+  });
+
+  describe('kind: proposal', () => {
+    const proposal: ProposalMessage = {
+      kind: 'proposal',
+      id: 'p-123',
+      action: 'rematch',
+      proposedBy: 'white',
+    };
+
+    it('parses a well-formed proposal, preserving every field', () => {
+      expect(parseGameMessage({ ...proposal })).toEqual(proposal);
+    });
+
+    it('treats action as an OPAQUE tag (any string, e.g. undo/redo/rematch)', () => {
+      for (const action of ['rematch', 'undo', 'redo', 'anything-else']) {
+        const parsed = parseGameMessage({ ...proposal, action });
+        expect(parsed).toEqual({ ...proposal, action });
+      }
+    });
+
+    it('accepts proposedBy of either seat colour', () => {
+      expect(parseGameMessage({ ...proposal, proposedBy: 'black' })).toEqual({
+        ...proposal,
+        proposedBy: 'black',
+      });
+    });
+
+    it('rejects a proposal missing its id (non-string)', () => {
+      const bad = { kind: 'proposal', action: 'undo', proposedBy: 'white' };
+      expect(() => parseGameMessage(bad)).toThrow(SyncError);
+      expect(() => parseGameMessage(bad)).toThrow(/string id/);
+    });
+
+    it('rejects a proposal whose id is not a string (numeric)', () => {
+      const bad = { kind: 'proposal', id: 7, action: 'undo', proposedBy: 'white' };
+      expect(() => parseGameMessage(bad)).toThrow(/string id/);
+    });
+
+    it('rejects a proposal missing its action (non-string)', () => {
+      const bad = { kind: 'proposal', id: 'p', proposedBy: 'white' };
+      expect(() => parseGameMessage(bad)).toThrow(SyncError);
+      expect(() => parseGameMessage(bad)).toThrow(/string action/);
+    });
+
+    it('rejects a proposal with an invalid proposedBy (not a seat colour)', () => {
+      const bad = { kind: 'proposal', id: 'p', action: 'undo', proposedBy: 'green' };
+      expect(() => parseGameMessage(bad)).toThrow(SyncError);
+      expect(() => parseGameMessage(bad)).toThrow(/proposedBy/);
+    });
+
+    it('rejects a proposal with a missing proposedBy', () => {
+      const bad = { kind: 'proposal', id: 'p', action: 'undo' };
+      expect(() => parseGameMessage(bad)).toThrow(/proposedBy/);
+    });
+  });
+
+  describe('kind: response', () => {
+    const response: ResponseMessage = {
+      kind: 'response',
+      proposalId: 'p-123',
+      accepted: true,
+    };
+
+    it('parses a well-formed accepting response', () => {
+      expect(parseGameMessage({ ...response })).toEqual(response);
+    });
+
+    it('parses a declining response (accepted:false, not coerced away)', () => {
+      const declined = { kind: 'response', proposalId: 'p-9', accepted: false };
+      expect(parseGameMessage(declined)).toEqual(declined);
+    });
+
+    it('rejects a response missing its proposalId (non-string)', () => {
+      const bad = { kind: 'response', accepted: true };
+      expect(() => parseGameMessage(bad)).toThrow(SyncError);
+      expect(() => parseGameMessage(bad)).toThrow(/string proposalId/);
+    });
+
+    it('rejects a response whose accepted is not a boolean', () => {
+      const bad = { kind: 'response', proposalId: 'p', accepted: 'yes' };
+      expect(() => parseGameMessage(bad)).toThrow(SyncError);
+      expect(() => parseGameMessage(bad)).toThrow(/boolean accepted/);
+    });
+  });
+
+  describe('malformed / unknown', () => {
+    it('rejects a non-object payload (null / number / string)', () => {
+      for (const bad of [null, 42, 'str', undefined, true]) {
+        expect(() => parseGameMessage(bad)).toThrow(SyncError);
+        expect(() => parseGameMessage(bad)).toThrow(/must be an object/);
+      }
+    });
+
+    it('rejects an unknown kind, echoing the kind in the message', () => {
+      const bad = { kind: 'chat', text: 'hi' };
+      expect(() => parseGameMessage(bad)).toThrow(SyncError);
+      expect(() => parseGameMessage(bad)).toThrow(/unknown game message kind: chat/);
+    });
+
+    it('rejects an object with a non-string kind that is present (not the legacy path)', () => {
+      // kind is present but numeric — NOT the un-kinded legacy branch (kind === undefined),
+      // so it falls through to the unknown-kind rejection, not silent acceptance.
+      const bad = { kind: 5, version: 1, headHash: 'x', log: [] };
+      expect(() => parseGameMessage(bad)).toThrow(/unknown game message kind: 5/);
+    });
+  });
+
+  describe('backward-compat: un-kinded legacy sync message', () => {
+    it('accepts an un-kinded sync-shaped message and tags it kind:sync', () => {
+      // A pre-tagged-union peer publishes { version, headHash, log } with NO kind.
+      // Rejecting it would break sync the instant one side upgrades, so it is
+      // treated as a sync message (the added tag is the only difference).
+      const legacy = {
+        version: SYNC_VERSION,
+        headHash: syncMsg.headHash,
+        log: syncMsg.log,
+      };
+      const parsed = parseGameMessage(legacy);
+      expect(parsed).toEqual(syncMsg); // now carries kind:'sync'
+      if (parsed.kind !== 'sync') throw new Error('expected sync');
+      // And its payload really re-verifies through the hash-chain check.
+      expect(headHash(parseSyncMessage(parsed))).toBe(syncMsg.headHash);
+    });
+
+    it('rejects an un-kinded object that is NOT sync-shaped (missing headHash)', () => {
+      // No kind AND not sync-shaped → not the legacy path; must be rejected as an
+      // unknown message, never silently accepted.
+      const bad = { version: 1, log: [] };
+      expect(() => parseGameMessage(bad)).toThrow(SyncError);
+      expect(() => parseGameMessage(bad)).toThrow(/unknown game message kind: undefined/);
+    });
+
+    it('rejects an un-kinded object with a non-array log (not sync-shaped)', () => {
+      const bad = { version: 1, headHash: 'x', log: 'nope' };
+      expect(() => parseGameMessage(bad)).toThrow(/unknown game message kind: undefined/);
+    });
+
+    it('rejects an empty object (no kind, not sync-shaped)', () => {
+      expect(() => parseGameMessage({})).toThrow(/unknown game message kind: undefined/);
+    });
+  });
+
+  describe('property: every well-formed message round-trips; every response accepted flag survives', () => {
+    it('any proposal with a string id/action + valid seat parses back identically', () => {
+      fc.assert(
+        fc.property(
+          fc.string(),
+          fc.string(),
+          fc.constantFrom<'white' | 'black'>('white', 'black'),
+          (id, action, proposedBy) => {
+            const msg = { kind: 'proposal' as const, id, action, proposedBy };
+            const parsed = parseGameMessage(JSON.parse(JSON.stringify(msg)));
+            expect(parsed).toEqual(msg);
+          },
+        ),
+      );
+    });
+
+    it('any response preserves its proposalId and its exact accepted boolean', () => {
+      fc.assert(
+        fc.property(fc.string(), fc.boolean(), (proposalId, accepted) => {
+          const msg = { kind: 'response' as const, proposalId, accepted };
+          const parsed = parseGameMessage(JSON.parse(JSON.stringify(msg)));
+          expect(parsed).toEqual(msg);
+        }),
+      );
+    });
+
+    it('a non-string action is always rejected (never coerced to a tag)', () => {
+      fc.assert(
+        fc.property(
+          fc.oneof(fc.integer(), fc.boolean(), fc.constant(null)),
+          (action) => {
+            const bad = { kind: 'proposal', id: 'p', action, proposedBy: 'white' };
+            expect(() => parseGameMessage(bad)).toThrow(/string action/);
+          },
+        ),
+      );
+    });
   });
 });
 
@@ -441,6 +665,107 @@ describe('SyncEngine.onChange — the resync notification (Task 6.1, issue #4)',
     eng.onChange(() => (fires += 1));
     eng.receive(toSyncMessage(logOf('0,0,0', '2,2,2'))); // would adopt if not frozen
     expect(fires).toBe(0);
+  });
+});
+
+describe('SyncEngine.onMessage — the pump validates + routes the tagged union', () => {
+  let db: IDBDatabase;
+  const meta = { players: { white: 'w', black: 'b' }, startedAt: 5000 };
+
+  beforeEach(async () => {
+    db = await openDatabase(`route-test-${Math.random().toString(36).slice(2)}`);
+  });
+
+  /** A pair on a shared mock relay so a raw publish drives the OTHER engine's pump. */
+  async function pair(size = 9): Promise<{
+    a: SyncEngine;
+    b: SyncEngine;
+    ta: MockTransport;
+    tb: MockTransport;
+  }> {
+    const hub = new MockRelayHub();
+    const ta = new MockTransport(hub, 'route-a');
+    const tb = new MockTransport(hub, 'route-b');
+    const a = new SyncEngine(new Game(size), ta, db, () => meta, 'white');
+    const b = new SyncEngine(new Game(size), tb, db, () => meta, 'black');
+    await a.connect('route-room');
+    await b.connect('route-room');
+    return { a, b, ta, tb };
+  }
+
+  it('routes an inbound proposal to onMessage (not the game log)', async () => {
+    const { a, b, ta } = await pair();
+    const seen: (ProposalMessage | ResponseMessage)[] = [];
+    b.onMessage((m) => seen.push(m));
+    const plyBefore = b.game().ply();
+    // A publishes a raw proposal over the relay; B's pump validates + routes it.
+    const proposal: ProposalMessage = {
+      kind: 'proposal',
+      id: 'p-1',
+      action: 'rematch',
+      proposedBy: 'white',
+    };
+    ta.publish(proposal as unknown as Parameters<typeof ta.publish>[0]);
+    // Delivered to B's handshake seam, with all fields intact…
+    expect(seen).toEqual([proposal]);
+    // …and it NEVER touched the append-only log: B's game is unchanged.
+    expect(b.game().ply()).toBe(plyBefore);
+    expect(b.game().log.entries.length).toBe(0);
+    expect(a).toBeDefined();
+  });
+
+  it('routes an inbound response to onMessage, preserving its accepted flag', async () => {
+    const { b, ta } = await pair();
+    const seen: (ProposalMessage | ResponseMessage)[] = [];
+    b.onMessage((m) => seen.push(m));
+    const response: ResponseMessage = { kind: 'response', proposalId: 'p-1', accepted: false };
+    ta.publish(response as unknown as Parameters<typeof ta.publish>[0]);
+    expect(seen).toEqual([response]);
+    expect(b.game().log.entries.length).toBe(0);
+  });
+
+  it('routes a sync message to the game (adopt) and NOT to onMessage', async () => {
+    const { a, b } = await pair();
+    const seen: (ProposalMessage | ResponseMessage)[] = [];
+    b.onMessage((m) => seen.push(m));
+    // A real move → A publishes a kind:'sync' message; B adopts it via the pump.
+    a.place([0, 0, 0]);
+    expect(b.game().state().pieces['0,0,0']).toBe('white');
+    // A sync message is applied to the log, never delivered to the handshake seam.
+    expect(seen).toEqual([]);
+  });
+
+  it('un-kinded legacy sync over the wire still converges the peer (backward-compat)', async () => {
+    const { b, ta } = await pair();
+    const seen: (ProposalMessage | ResponseMessage)[] = [];
+    b.onMessage((m) => seen.push(m));
+    // Simulate a PRE-tagged-union peer: publish an un-kinded {version,headHash,log}.
+    const legacy = toSyncMessage(logOf('0,0,0', '1,1,1')) as unknown as Record<string, unknown>;
+    const { kind: _dropped, ...unKinded } = legacy;
+    void _dropped;
+    ta.publish(unKinded as unknown as Parameters<typeof ta.publish>[0]);
+    // B adopted the legacy sync payload — its board reflects the two moves…
+    expect(b.game().state().pieces['0,0,0']).toBe('white');
+    expect(b.game().ply()).toBe(2);
+    // …and it was NOT misrouted to the handshake seam.
+    expect(seen).toEqual([]);
+  });
+
+  it('a malformed transport payload throws a SyncError out of the pump (never silently dropped)', async () => {
+    const { ta, b } = await pair();
+    const seen: (ProposalMessage | ResponseMessage)[] = [];
+    b.onMessage((m) => seen.push(m));
+    // A publishes an unknown-kind payload; the mock relay delivers it SYNCHRONOUSLY to
+    // B's pump, which validates via parseGameMessage and throws — the error propagates
+    // out of the publish call (proof-by-behavior: the pump rejects, it does not swallow).
+    const bad = { kind: 'chat', text: 'hi' } as unknown;
+    expect(() => ta.publish(bad as Parameters<typeof ta.publish>[0])).toThrow(SyncError);
+    expect(() => ta.publish(bad as Parameters<typeof ta.publish>[0])).toThrow(
+      /unknown game message kind: chat/,
+    );
+    // The rejected message never reached the handshake seam nor the log.
+    expect(seen).toEqual([]);
+    expect(b.game().log.entries.length).toBe(0);
   });
 });
 
