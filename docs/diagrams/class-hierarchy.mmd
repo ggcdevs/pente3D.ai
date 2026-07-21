@@ -153,19 +153,31 @@ classDiagram
     class ColorsPreview {
         <<interface>>
         +background: string
+        +blackPiece: string
+        +emptySphere: string
+        +hoverHighlight: string
         +lineFaceDiagonal: string
         +lineOpacity: number
         +lineOrthogonal: string
         +lineSpaceDiagonal: string
+        +tempPiece: string
+        +whitePiece: string
+        +winningLine: string
     }
     note for ColorsPreview "src/render/scene.ts"
     class ColorsReadout {
         <<interface>>
         +background: string
+        +blackPiece: string
+        +emptySphere: string
+        +hoverHighlight: string
         +lineFaceDiagonal: string
         +lineOpacity: number
         +lineOrthogonal: string
         +lineSpaceDiagonal: string
+        +tempPiece: string
+        +whitePiece: string
+        +winningLine: string
     }
     note for ColorsReadout "src/render/scene.ts"
     class Command {
@@ -594,12 +606,14 @@ classDiagram
         +dispose(): void
         +getMarkers(query: readonly NodeKey[]): MarkersReadout
         +highlight(nodes: readonly NodeKey[]): void
+        +setColor(hex: string): string
         +setMaterial(params: Object): void
         +sync(state: GameState): void
     }
     note for MarkersHandle "src/render/markers.ts"
     class MarkersReadout {
         <<interface>>
+        +baseColorHex: string
         +count: number
         +highlightedCount: number
         +materialEmissiveIntensity: number
@@ -933,8 +947,10 @@ classDiagram
         +readonly object: THREE.Group
         +count(): number
         +dispose(): void
+        +getColors(): Object
         +getPieces(): PieceReadout[]
         +highlight(nodes: readonly NodeKey[], color: string, boost: number): void
+        +setColors(next: Object): Object
         +setMaterial(params: Object): void
         +sync(state: GameState): void
         +tick(deltaMs: number): void
@@ -1285,6 +1301,7 @@ classDiagram
         +readonly object: THREE.Group
         +dispose(): void
         +getWinLine(): WinLineReadout
+        +setColor(hex: string): number
         +sync(state: GameState): void
     }
     note for WinLineHandle "src/render/winLine.ts"

@@ -2995,6 +2995,7 @@
         "extends": [],
         "methods": [],
         "properties": [
+          "baseColorHex: string",
           "count: number",
           "highlightedCount: number",
           "materialEmissiveIntensity: number",
@@ -3012,6 +3013,7 @@
           "dispose(): void",
           "getMarkers(query: readonly NodeKey[]): MarkersReadout",
           "highlight(nodes: readonly NodeKey[]): void",
+          "setColor(hex: string): string",
           "setMaterial(params: { roughness?: number; metalness?: number; opacity?: number }): void",
           "sync(state: GameState): void"
         ],
@@ -3029,6 +3031,7 @@
       "getMarkers",
       "highlight",
       "instanceColorHexOf",
+      "setColor",
       "setMaterial",
       "sync"
     ]
@@ -3329,8 +3332,10 @@
         "methods": [
           "count(): number",
           "dispose(): void",
+          "getColors(): { whitePiece: string; blackPiece: string }",
           "getPieces(): PieceReadout[]",
           "highlight(nodes: readonly NodeKey[], color: string, boost: number): void",
+          "setColors(next: { whitePiece?: string; blackPiece?: string }): {\n    whitePiece: string;\n    blackPiece: string;\n  }",
           "setMaterial(params: { roughness?: number; metalness?: number; opacity?: number }): void",
           "sync(state: GameState): void",
           "tick(deltaMs: number): void"
@@ -3361,10 +3366,12 @@
       "createPieces",
       "dispose",
       "disposeEntry",
+      "getColors",
       "getPieces",
       "highlight",
       "makeMaterial",
       "recolorPiece",
+      "setColors",
       "setMaterial",
       "startFadeOut",
       "sync",
@@ -3716,10 +3723,16 @@
         "methods": [],
         "properties": [
           "background: string",
+          "blackPiece: string",
+          "emptySphere: string",
+          "hoverHighlight: string",
           "lineFaceDiagonal: string",
           "lineOpacity: number",
           "lineOrthogonal: string",
-          "lineSpaceDiagonal: string"
+          "lineSpaceDiagonal: string",
+          "tempPiece: string",
+          "whitePiece: string",
+          "winningLine: string"
         ]
       },
       {
@@ -3728,10 +3741,16 @@
         "methods": [],
         "properties": [
           "background: string",
+          "blackPiece: string",
+          "emptySphere: string",
+          "hoverHighlight: string",
           "lineFaceDiagonal: string",
           "lineOpacity: number",
           "lineOrthogonal: string",
-          "lineSpaceDiagonal: string"
+          "lineSpaceDiagonal: string",
+          "tempPiece: string",
+          "whitePiece: string",
+          "winningLine: string"
         ]
       },
       {
@@ -4068,6 +4087,7 @@
         "methods": [
           "dispose(): void",
           "getWinLine(): WinLineReadout",
+          "setColor(hex: string): number",
           "sync(state: GameState): void"
         ],
         "properties": [
@@ -4083,6 +4103,7 @@
       "dispose",
       "getWinLine",
       "segmentMatrix",
+      "setColor",
       "sync",
       "worldOf"
     ]

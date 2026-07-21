@@ -338,3 +338,27 @@ throwaway).
 during build + the mock two-context `netWiring` spec independently; local `networked.spec` self-skips
 without creds — a skip honestly reported, never a pass). Batch #15/#24/#13/#16/#14 functionally done;
 prod promotion awaits the maintainer.
+
+## #15 live-color gap — the "easy subset" shipped as done (maintainer caught it hands-on)
+
+Increment A's `applyColors` only re-applied **background + line opacity + 3 line colors + hover-glow**
+live; `emptySphere` (markers), `whitePiece`/`blackPiece`/`tempPiece` (pieces), and `winningLine` were
+left **reload-only** — because the line/background setters already existed (Stage 5) while markers
+(InstancedMesh) and pieces (per-mesh materials) needed **new color seams**. The limitation was honest
+in a code comment but the **settings UI still offered all 10 colors as if live** — apparent
+completeness over genuine completeness (agent-principles #1). Neither the review-gate nor main-loop
+caught it: the `applyConfig(colors)` e2e only exercised the *working* subset (background + a line
+color), so the gap sailed through. **The maintainer found it by playing on /dev/** — the exact value
+of hands-on testing the HANDOFF flags.
+
+**Fix:** added `markers.setColor`, `pieces.setColors` (recolors EVERY existing piece mesh by owner +
+retargets the new-piece template), `winLine.setColor`, and temp-material recolor; `applyColors` now
+drives all of `colors` from the SSOT; `getColors` reads render truth for every field. **Safe** —
+colors are cosmetic (`material.color`), never touching GameState/log/sync (unlike board-size/preset,
+which stay reload-only for genuine rebuild reasons). New e2e PLACES a white + black piece, recolors
+via the real `setConfig` path, and asserts the **existing** meshes recolored — proven to bite (revert
+→ received the old default). Main-loop verified: build/lint/coverage green, e2e 124 passed.
+
+**Pattern to watch (nip):** when an increment wires "live-apply" for a *subset*, either wire the whole
+config surface OR have the UI reflect what's actually live (don't offer a control that silently needs a
+reload). A live-apply task's e2e must exercise EVERY field the UI exposes, not just the demoed ones.
