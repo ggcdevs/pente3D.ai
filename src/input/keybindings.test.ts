@@ -16,7 +16,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { chordOf, scopeFromBindings, type KeyChordEvent } from './keybindings.ts';
+import { chordOf, scopeFromBindings, isEditableTarget, type KeyChordEvent } from './keybindings.ts';
 import { resolveKey, pushScope, emptyStack } from './scopes.ts';
 import keybindingsDefault from '../config/defaults/keybindings.json' with { type: 'json' };
 
@@ -64,6 +64,45 @@ describe('chordOf — modifiers', () => {
     expect(chordOf(ev({ key: 'Shift', shiftKey: true }))).toBe('shift');
     expect(chordOf(ev({ key: 'Alt', altKey: true }))).toBe('alt');
     expect(chordOf(ev({ key: 'Meta', metaKey: true }))).toBe('meta');
+  });
+});
+
+describe('isEditableTarget', () => {
+  it('is true for a text-input element (INPUT)', () => {
+    expect(isEditableTarget({ tagName: 'INPUT' })).toBe(true);
+  });
+
+  it('is true for TEXTAREA and SELECT', () => {
+    expect(isEditableTarget({ tagName: 'TEXTAREA' })).toBe(true);
+    expect(isEditableTarget({ tagName: 'SELECT' })).toBe(true);
+  });
+
+  it('matches tagName case-insensitively (lowercase input)', () => {
+    // The DOM reports upper-case tagNames, but guard against a projected lower-case one.
+    expect(isEditableTarget({ tagName: 'input' })).toBe(true);
+  });
+
+  it('is true for a contenteditable host regardless of tagName', () => {
+    expect(isEditableTarget({ isContentEditable: true })).toBe(true);
+    expect(isEditableTarget({ tagName: 'DIV', isContentEditable: true })).toBe(true);
+  });
+
+  it('is false for a non-editable element (DIV)', () => {
+    expect(isEditableTarget({ tagName: 'DIV' })).toBe(false);
+  });
+
+  it('is false for a non-editable contenteditable value (explicit false, not just missing)', () => {
+    // `isContentEditable === true` — a false must NOT pass (kills the `!== false`/truthiness mutant).
+    expect(isEditableTarget({ tagName: 'DIV', isContentEditable: false })).toBe(false);
+  });
+
+  it('is false for an empty descriptor (no tagName, no contentEditable)', () => {
+    expect(isEditableTarget({})).toBe(false);
+  });
+
+  it('is false for null and undefined targets', () => {
+    expect(isEditableTarget(null)).toBe(false);
+    expect(isEditableTarget(undefined)).toBe(false);
   });
 });
 

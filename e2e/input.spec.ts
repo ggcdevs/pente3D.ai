@@ -68,6 +68,26 @@ type Pente = {
   place(coords: [number, number, number]): GameStateReadout | null;
 };
 
+/**
+ * Inject a hermetic in-page mock net transport BEFORE boot (the `appSession.ts` seam), so the
+ * Network Game panel mounts without any real relay. Mirrors `netPanel.spec.ts`; only needed by
+ * the focused-input suppression test, which opens that panel to get a real text <input> focused.
+ */
+async function installNetMock(page: import('@playwright/test').Page) {
+  await page.addInitScript(() => {
+    window.localStorage.clear();
+    (
+      window as unknown as { __penteNetTransportFactory: () => unknown }
+    ).__penteNetTransportFactory = () => ({
+      connect: () => Promise.resolve(),
+      publish: () => {},
+      onMessage: () => {},
+      onPresence: () => {},
+      disconnect: () => {},
+    });
+  });
+}
+
 async function ready(page: import('@playwright/test').Page) {
   await page.goto('/');
   await page.waitForFunction(() => {
@@ -217,6 +237,61 @@ test('the button path (dispatch by id) drives the same command as the key path',
   // An unknown command id is a graceful no-op (returns false, nothing crashes).
   const unknown = await get(page, (p) => p.dispatch('noSuchCommand'));
   expect(unknown).toBe(false);
+});
+
+test('a game shortcut fires on a real DOM keydown when NOTHING editable is focused (regression guard)', async ({
+  page,
+}) => {
+  // Companion to the focused-input test below: proves the guard does NOT over-suppress. The
+  // SAME real DOM key (`page.keyboard`, not `pressKey` which bypasses the listener) still
+  // toggles the board when no text field owns focus, so bailing on editable targets is the
+  // only behaviour change.
+  await ready(page);
+  const faceVisible = () =>
+    get(page, (p) => p.getVisibleLines()!.find((g) => g.category === 'face')!.visible);
+
+  // `d` = showAllDiagonals in the tracked default; the face diagonals start hidden.
+  expect(keybindingsDefault['d']).toBe('showAllDiagonals');
+  expect(await faceVisible()).toBe(false);
+
+  // Focus is on the body/canvas (nothing editable). A REAL keydown must still dispatch.
+  await page.locator('canvas').click();
+  await page.keyboard.press('d');
+  expect(await faceVisible()).toBe(true);
+});
+
+test('a game shortcut is SUPPRESSED (board unchanged, field gets the char) when a text input is focused', async ({
+  page,
+}) => {
+  // The real proof of the fix (issue #13/#27). We drive a REAL DOM keydown into the Network
+  // Game code input while it is focused — `window.__pente.pressKey()` would bypass the DOM
+  // listener/guard, so it is deliberately NOT used here.
+  await installNetMock(page);
+  await ready(page);
+
+  // `f` is a line-visibility toggle in the tracked default; capture the board state before.
+  const shortcut = 'f';
+  expect(keybindingsDefault[shortcut]).toBeTruthy();
+  const linesBefore = JSON.stringify(await get(page, (p) => p.getVisibleLines()!));
+
+  // Open the Network Game panel and FOCUS its code input, so event.target is the <input>.
+  await page.locator('[data-widget-id="menuButton"] [data-testid="menu-button"]').click();
+  await page.locator('[data-widget-id="menuButton"] [data-testid="menu-entry-network"]').click();
+  const codeInput = page.locator(
+    '[data-testid="netpanel-modal"] [data-testid="netpanel-code-input"]',
+  );
+  await expect(codeInput).toBeVisible();
+  await codeInput.focus();
+  await expect(codeInput).toBeFocused();
+
+  // Type the shortcut char INTO the focused input via a real DOM keydown.
+  await page.keyboard.press(shortcut);
+
+  // The board did NOT change (the game command did not fire)…
+  const linesAfter = JSON.stringify(await get(page, (p) => p.getVisibleLines()!));
+  expect(linesAfter).toBe(linesBefore);
+  // …and the field received the character (the key was NOT preventDefault'd away from it).
+  await expect(codeInput).toHaveValue(shortcut);
 });
 
 test('an undo hotkey removes the just-placed piece (command → live Game)', async ({ page }) => {

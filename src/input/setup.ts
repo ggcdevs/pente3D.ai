@@ -23,7 +23,13 @@ import {
   type ScopeStack,
   type KeyResolution,
 } from './scopes.ts';
-import { chordOf, scopeFromBindings, type KeyChordEvent } from './keybindings.ts';
+import {
+  chordOf,
+  scopeFromBindings,
+  isEditableTarget,
+  type KeyChordEvent,
+  type EditableProbe,
+} from './keybindings.ts';
 
 /** A serializable readout of the active scope stack — for `window.__pente` assertions. */
 export interface InputReadout {
@@ -87,6 +93,12 @@ export function createInput(
 
   function onKeyDown(event: Event): void {
     const ke = event as unknown as KeyboardEvent & KeyChordEvent;
+    // When the keystroke is being typed into a text-editing surface (e.g. the Network Game
+    // code combobox), do NOT dispatch a game command and do NOT preventDefault — the field
+    // must receive the key. Bailing here does not affect Escape-to-close: the panels own
+    // that via their OWN document listeners (menu.ts / settings.ts), independent of this
+    // handler. Per issue #27 this becomes an `inputFocus` scope in the keybindings revamp.
+    if (isEditableTarget(ke.target as EditableProbe | null)) return;
     const resolution = handleChord(chordOf(ke));
     // A handled key (bound OR swallowed by a blocking scope) is consumed so it does not
     // also trigger a browser default (e.g. `/` opening quick-find). Unhandled keys fall

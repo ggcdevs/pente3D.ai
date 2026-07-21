@@ -69,6 +69,36 @@ export function chordOf(event: KeyChordEvent): string {
 }
 
 /**
+ * The minimal element shape {@link isEditableTarget} needs to decide whether a keystroke is
+ * being typed into a text-editing surface. A plain descriptor (not a live DOM `Element`) so
+ * this module stays DOM-free — the scene glue at the `setup.ts` edge projects a real
+ * `event.target` onto it, exactly as `chordOf` takes a projected {@link KeyChordEvent}.
+ */
+export interface EditableProbe {
+  /** The element's `tagName` (`'INPUT'`, `'DIV'`, …), matched case-insensitively. */
+  readonly tagName?: string;
+  /** Whether the element is a `contenteditable` host. */
+  readonly isContentEditable?: boolean;
+}
+
+/**
+ * True when `target` is a text-editing surface — an `<input>`, `<textarea>`, `<select>`, or a
+ * `contenteditable` host — so a global keydown handler can bail out and let the field receive
+ * the key instead of firing a game shortcut. False for a null/undefined target and for any
+ * non-editable element.
+ *
+ * PURE: it inspects the plain {@link EditableProbe} descriptor only; the DOM stays at the
+ * `setup.ts` edge. Per issue #27 this predicate becomes the `inputFocus` context in the
+ * future keybindings-scope revamp (an `inputFocus` scope that swallows game chords), so it
+ * lives here beside the other pure resolvers rather than inline in the IO shell.
+ */
+export function isEditableTarget(target: EditableProbe | null | undefined): boolean {
+  if (target === null || target === undefined) return false;
+  const tag = target.tagName?.toUpperCase();
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable === true;
+}
+
+/**
  * Build a {@link Scope} from a `key→commandID` config record (e.g. the tracked
  * `keybindings` default). The record's keys are chord strings as produced by `chordOf`;
  * `blocking` marks a modal/blocking scope.
