@@ -109,10 +109,13 @@ classDiagram
     class BannerModel {
         <<interface>>
         +readonly blackCaptures: number
+        +readonly blackCapturesLabel: string
         +readonly buttons: readonly BannerButton[]
+        +readonly capturesSeparator: string
         +readonly player: Player
         +readonly status: 'turn' | 'winner'
         +readonly whiteCaptures: number
+        +readonly whiteCapturesLabel: string
     }
     note for BannerModel "src/ui/widgets/bannerModel.ts"
     class BoardConfig {
@@ -242,6 +245,12 @@ classDiagram
         +readonly thresholdPx: number
     }
     note for DragGuardConfig "src/input/pointerGesture.ts"
+    class EditableProbe {
+        <<interface>>
+        +readonly isContentEditable: boolean
+        +readonly tagName: string
+    }
+    note for EditableProbe "src/input/keybindings.ts"
     class Emitter {
         <<interface>>
         +emit(payload: T): void
@@ -631,10 +640,15 @@ classDiagram
         +readonly items: readonly MenuItem[]
     }
     note for MenuModel "src/ui/widgets/menuModel.ts"
+    class MenuOpenState {
+        <<interface>>
+        +readonly open: boolean
+    }
+    note for MenuOpenState "src/ui/widgets/menuModel.ts"
     class MenuScope {
         <<interface>>
         +readonly bindings: Readonly~Record~string, string~~
-        +readonly blocking: true
+        +readonly blocking: boolean
         +readonly id: string
     }
     note for MenuScope "src/ui/widgets/menu.ts"
@@ -683,9 +697,7 @@ classDiagram
         <<interface>>
         +readonly doc: Document
         +copyToClipboard(text: string): Promise~void~
-        +dispatch(commandId: string): boolean
         +getNet(): NetSessionState
-        +setPendingJoinCode(code: string): void
     }
     note for NetDeps "src/ui/widgets/net.ts"
     class NetHooks {
@@ -712,6 +724,46 @@ classDiagram
         +readonly statusText: string
     }
     note for NetModel "src/ui/widgets/netModel.ts"
+    class NetPanelDeps {
+        <<interface>>
+        +readonly doc: Document
+        +dispatch(commandId: string): boolean
+        +popScope(): void
+        +pushScope(scope: NetPanelScope): void
+        +registerOpenNetwork(open: () =~ void): void
+        +setPendingJoinCode(code: string): void
+    }
+    note for NetPanelDeps "src/ui/widgets/netPanel.ts"
+    class NetPanelModel {
+        <<interface>>
+        +readonly canonicalCode: string | null
+        +readonly codeError: string | null
+        +readonly codeValid: boolean
+        +readonly effectiveCode: string
+        +readonly placeholder: string
+        +readonly recentRows: readonly NetPanelRecentRow[]
+        +readonly text: string
+    }
+    note for NetPanelModel "src/ui/widgets/netPanelModel.ts"
+    class NetPanelRecentRow {
+        <<interface>>
+        +readonly code: string
+    }
+    note for NetPanelRecentRow "src/ui/widgets/netPanelModel.ts"
+    class NetPanelScope {
+        <<interface>>
+        +readonly bindings: Readonly~Record~string, string~~
+        +readonly blocking: boolean
+        +readonly id: string
+    }
+    note for NetPanelScope "src/ui/widgets/netPanel.ts"
+    class NetPanelState {
+        <<interface>>
+        +readonly placeholder: string
+        +readonly recent: readonly string[]
+        +readonly text: string
+    }
+    note for NetPanelState "src/ui/widgets/netPanelModel.ts"
     class NetSessionDeps {
         <<interface>>
         +now: () =~ number
@@ -775,6 +827,7 @@ classDiagram
         +scrubTo(k: number): void
         +setCamera(position: Object, target: Object): void
         +setConfig(section: ConfigSection, partial: Record~string, unknown~): void
+        +setPendingJoinCode(code: string): void
     }
     note for PenteInspect "src/debug/window.ts"
     class PickableLineMesh {
@@ -1003,6 +1056,7 @@ classDiagram
         +setNetHooks(hooks: NetHooks): void
         +setOpenArchive(open: () =~ void): void
         +setOpenHelp(open: () =~ void): void
+        +setOpenNetwork(open: () =~ void): void
         +setOpenSettings(open: () =~ void): void
         +setPendingJoinCode(code: string): void
     }
@@ -1057,7 +1111,7 @@ classDiagram
     class SettingsScope {
         <<interface>>
         +readonly bindings: Readonly~Record~string, string~~
-        +readonly blocking: true
+        +readonly blocking: boolean
         +readonly id: string
     }
     note for SettingsScope "src/ui/widgets/settings.ts"
@@ -1130,9 +1184,10 @@ classDiagram
         +getNet(): NetSessionState
         +listArchive(): Promise~readonly ArchiveListing[]~
         +popScope(): void
-        +pushScope(scope: MenuScope | SettingsScope | HelpScope | ArchiveScope): void
+        +pushScope(scope: MenuScope | SettingsScope | HelpScope | ArchiveScope | NetPanelScope): void
         +registerOpenArchive(open: () =~ void): void
         +registerOpenHelp(open: () =~ void): void
+        +registerOpenNetwork(open: () =~ void): void
         +registerOpener(open: () =~ void): void
         +resumeArchived(id: string): Promise~void~
         +reviewArchived(id: string): Promise~void~
@@ -1313,7 +1368,7 @@ classDiagram
         +canPlace(): boolean
         +disconnect(): void
         +gameState(): GameState | null
-        +host(): Promise~void~
+        +host(rawCode: string): Promise~void~
         +join(rawCode: string): Promise~boolean~
         +onChange(listener: NetChangeListener): () =~ void
         +place(coords: Coord): void

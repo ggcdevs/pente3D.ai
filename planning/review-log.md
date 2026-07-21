@@ -284,3 +284,57 @@ Confirmed `dist/` is not tracked.
 
 **Verdict: Increment A genuinely complete.** Not yet pushed/merged — awaiting maintainer call
 on deploy timing (push to a source branch auto-deploys). Diagrams regenerated pre-merge.
+
+## menu-drawer-B (Increment B — #24/#14) — passed after 1 reviewer round; then hands-on polish
+
+Non-blocking side-drawer + settings-in-drawer live preview + #14 banner fix. Gate **passed**
+(`escalate:false`, pushed). Reviewers (round 1) caught one genuine **major**: the "#24 money-shot"
+screenshot was captured *after* an orbit-drag whose outside-pointerdown had already CLOSED the
+settings panel — so the headline visual proof showed the panel **absent** (the reviewer VIEWED the
+image and caught it — the adversarial screenshot check doing exactly its job). Fixed by capturing
+before the panel-closing drag; the behavioral live-apply assertions were genuine (ran before the
+close). Round 2 clean.
+
+**Hands-on tweaks (maintainer on /dev/, treated as first-class signal — done directly, not gated,
+they're visual #16 polish verified by build/lint/e2e):** slide-in animation from the **left**
+(switched the toggle from `[hidden]`→a `transform: translateX` class so it can animate; added
+`prefers-reduced-motion`), moved the menu button to the **top-left as a hamburger** (inline SVG,
+no icon-font), and made it **translucent → opaque on hover**. Maintainer confirmed **board-click
+dismisses** the drawer is desired (not a bug).
+
+## net-in-menu-C (Increment C — #13) — built three-source, redesigned to a combobox on request, passed clean
+
+Game-code utils (unambiguous random, `validateGameCode`, recent-codes store) → Network Game drawer
+panel + retire inline Host/Join (keep on-board status) → two-browser e2e via the new UI. C.1 found
++ fixed a real gap: the code alphabet still contained **`L`** (reads as `1`) — removed. The shipped
+code length is **6** (SSOT `CODE_LENGTH`), not the prompt's loose "5".
+
+**Design iteration (maintainer):** the three-source (custom/saved/random) tab picker was simplified
+to a **single combobox** — one input whose *placeholder* is a fresh random code (`effectiveCode =
+input.trim() || placeholder`), a dropdown of recent codes (newest-first, per-row remove), and the
+board hint removed. The three-tab review-gate was **stopped mid-run** (no point gating a replaced
+UI); the combobox was rebuilt (pure `netPanelModel` re-TDD'd 100%) and re-gated — **passed with
+`reviewRounds:0`, zero issues** (mutation 99.06%, the 2 survivors the documented `recentCodes`
+equivalents).
+
+**Security (verified, clean):** to prove the two-browser sync over the REAL relay, the C.2 agent
+injected live creds into `relay.json` (working tree only), ran `networked.spec` (3 tests passed,
+headHashes converged), then restored it to blank. **Independently confirmed no Increment-C commit
+touched `relay.json`** and current content is blank. *Pre-existing* (not this session): the creds
+remain in older git history (removed from the tip in `c03bfd2`/`ecbef01`) — flagged for rotation +
+#23 if the repo is public.
+
+**Hands-on finding → input-focus guard + a new ticket.** Maintainer found that typing a code fired
+in-game shortcuts (`s`/`f` toggled diagonals). Root cause is **not** scope-stack weakness — it's a
+*missing editable-focus guard*: the non-blocking panel scope (correct, keeps the board live) lets
+keys fall through, and the global `keydown` handler had no "don't hijack a focused text field" check.
+Diagnosis: the `blocking` flag is all-or-nothing — too coarse for "some shortcuts in some contexts".
+Shipped the small guard (`isEditableTarget` in the pure/gated `keybindings.ts`; bail in `setup.ts`;
+proven to bite — removing it makes the suppression e2e fail) and filed **#27** for the richer
+VS Code-style `when`-context keybinding revamp (the guard *becomes* the `inputFocus` context — not
+throwaway).
+
+**Verdict: Increments B & C complete** (both on /dev/; #13's real-relay two-browser sync proven live
+during build + the mock two-context `netWiring` spec independently; local `networked.spec` self-skips
+without creds — a skip honestly reported, never a pass). Batch #15/#24/#13/#16/#14 functionally done;
+prod promotion awaits the maintainer.

@@ -906,7 +906,8 @@
           "resync(): void",
           "scrubTo(k: number): void",
           "setCamera(position: { x: number; y: number; z: number }, target: { x: number; y: number; z: number }): void",
-          "setConfig(section: ConfigSection, partial: Record<string, unknown>): void"
+          "setConfig(section: ConfigSection, partial: Record<string, unknown>): void",
+          "setPendingJoinCode(code: string): void"
         ],
         "properties": []
       },
@@ -983,8 +984,10 @@
   },
   "src/input/keybindings.ts": {
     "exports": [
+      "EditableProbe",
       "KeyChordEvent",
       "chordOf",
+      "isEditableTarget",
       "scopeFromBindings"
     ],
     "imports": [
@@ -1010,12 +1013,22 @@
           "readonly metaKey: boolean",
           "readonly shiftKey: boolean"
         ]
+      },
+      {
+        "name": "EditableProbe",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly isContentEditable: boolean",
+          "readonly tagName: string"
+        ]
       }
     ],
     "enums": [],
     "typeAliases": [],
     "functions": [
       "chordOf",
+      "isEditableTarget",
       "scopeFromBindings"
     ]
   },
@@ -1212,8 +1225,10 @@
         "source": "./keybindings.ts",
         "target": "src/input/keybindings.ts",
         "specifiers": [
+          "EditableProbe",
           "KeyChordEvent",
           "chordOf",
+          "isEditableTarget",
           "scopeFromBindings"
         ]
       },
@@ -1870,7 +1885,7 @@
           "canPlace(): boolean",
           "disconnect(): void",
           "gameState(): GameState | null",
-          "host(): Promise<void>",
+          "host(rawCode: string): Promise<void>",
           "join(rawCode: string): Promise<boolean>",
           "onChange(listener: NetChangeListener): () => void",
           "place(coords: Coord): void",
@@ -3811,6 +3826,7 @@
           "setNetHooks(hooks: NetHooks): void",
           "setOpenArchive(open: () => void): void",
           "setOpenHelp(open: () => void): void",
+          "setOpenNetwork(open: () => void): void",
           "setOpenSettings(open: () => void): void",
           "setPendingJoinCode(code: string): void"
         ],
@@ -3890,6 +3906,7 @@
       "setNetHooks",
       "setOpenArchive",
       "setOpenHelp",
+      "setOpenNetwork",
       "setOpenSettings",
       "setPendingJoinCode",
       "syncBoard",
@@ -4404,6 +4421,14 @@
         ]
       },
       {
+        "source": "./widgets/netPanel.ts",
+        "target": "src/ui/widgets/netPanel.ts",
+        "specifiers": [
+          "NetPanelScope",
+          "netPanelWidget"
+        ]
+      },
+      {
         "source": "./widgets/settings.ts",
         "target": "src/ui/widgets/settings.ts",
         "specifiers": [
@@ -4432,9 +4457,10 @@
           "getNet(): NetSessionState",
           "listArchive(): Promise<readonly ArchiveListing[]>",
           "popScope(): void",
-          "pushScope(scope: MenuScope | SettingsScope | HelpScope | ArchiveScope): void",
+          "pushScope(scope: MenuScope | SettingsScope | HelpScope | ArchiveScope | NetPanelScope): void",
           "registerOpenArchive(open: () => void): void",
           "registerOpenHelp(open: () => void): void",
+          "registerOpenNetwork(open: () => void): void",
           "registerOpener(open: () => void): void",
           "resumeArchived(id: string): Promise<void>",
           "reviewArchived(id: string): Promise<void>",
@@ -4680,6 +4706,7 @@
       "BannerButton",
       "BannerHistory",
       "BannerModel",
+      "CAPTURES_SEPARATOR",
       "deriveBanner"
     ],
     "imports": [
@@ -4720,10 +4747,13 @@
         "methods": [],
         "properties": [
           "readonly blackCaptures: number",
+          "readonly blackCapturesLabel: string",
           "readonly buttons: readonly BannerButton[]",
+          "readonly capturesSeparator: string",
           "readonly player: Player",
           "readonly status: 'turn' | 'winner'",
-          "readonly whiteCaptures: number"
+          "readonly whiteCaptures: number",
+          "readonly whiteCapturesLabel: string"
         ]
       }
     ],
@@ -4913,9 +4943,13 @@
         "source": "./menuModel.ts",
         "target": "src/ui/widgets/menuModel.ts",
         "specifiers": [
+          "MENU_SCOPE_BLOCKING",
           "MENU_SCOPE_ID",
           "MenuEntrySpec",
-          "deriveMenu"
+          "closeMenu",
+          "closedMenu",
+          "deriveMenu",
+          "toggleMenu"
         ]
       }
     ],
@@ -4927,7 +4961,7 @@
         "methods": [],
         "properties": [
           "readonly bindings: Readonly<Record<string, string>>",
-          "readonly blocking: true",
+          "readonly blocking: boolean",
           "readonly id: string"
         ]
       },
@@ -4959,15 +4993,28 @@
   "src/ui/widgets/menuModel.ts": {
     "exports": [
       "DEFAULT_MENU_ENTRIES",
+      "MENU_SCOPE_BLOCKING",
       "MENU_SCOPE_ID",
       "MenuEntrySpec",
       "MenuItem",
       "MenuModel",
-      "deriveMenu"
+      "MenuOpenState",
+      "closeMenu",
+      "closedMenu",
+      "deriveMenu",
+      "toggleMenu"
     ],
     "imports": [],
     "classes": [],
     "interfaces": [
+      {
+        "name": "MenuOpenState",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly open: boolean"
+        ]
+      },
       {
         "name": "MenuEntrySpec",
         "extends": [],
@@ -5002,7 +5049,10 @@
     "enums": [],
     "typeAliases": [],
     "functions": [
-      "deriveMenu"
+      "closeMenu",
+      "closedMenu",
+      "deriveMenu",
+      "toggleMenu"
     ]
   },
   "src/ui/widgets/net.ts": {
@@ -5024,13 +5074,9 @@
         "source": "./netModel.ts",
         "target": "src/ui/widgets/netModel.ts",
         "specifiers": [
-          "CODE_ERROR_TEXT",
-          "HOST_GAME_COMMAND",
-          "JOIN_GAME_COMMAND",
           "NetModel",
           "NetSessionState",
-          "deriveNet",
-          "validateGameCode"
+          "deriveNet"
         ]
       }
     ],
@@ -5041,9 +5087,7 @@
         "extends": [],
         "methods": [
           "copyToClipboard(text: string): Promise<void>",
-          "dispatch(commandId: string): boolean",
-          "getNet(): NetSessionState",
-          "setPendingJoinCode(code: string): void"
+          "getNet(): NetSessionState"
         ],
         "properties": [
           "readonly doc: Document"
@@ -5053,12 +5097,9 @@
     "enums": [],
     "typeAliases": [],
     "functions": [
-      "attemptJoin",
-      "clearJoinError",
       "netWidget",
       "refresh",
-      "render",
-      "showJoinError"
+      "render"
     ]
   },
   "src/ui/widgets/netModel.ts": {
@@ -5146,6 +5187,199 @@
       "validateGameCode"
     ]
   },
+  "src/ui/widgets/netPanel.ts": {
+    "exports": [
+      "NET_PANEL_SCOPE_BLOCKING",
+      "NET_PANEL_SCOPE_ID",
+      "NET_PANEL_WIDGET_ID",
+      "NetPanelDeps",
+      "NetPanelScope",
+      "netPanelWidget"
+    ],
+    "imports": [
+      {
+        "source": "../registry.ts",
+        "target": "src/ui/registry.ts",
+        "specifiers": [
+          "Widget",
+          "WidgetFactory"
+        ]
+      },
+      {
+        "source": "./netModel.ts",
+        "target": "src/ui/widgets/netModel.ts",
+        "specifiers": [
+          "HOST_GAME_COMMAND",
+          "JOIN_GAME_COMMAND",
+          "generateGameCode"
+        ]
+      },
+      {
+        "source": "./netPanelModel.ts",
+        "target": "src/ui/widgets/netPanelModel.ts",
+        "specifiers": [
+          "NetPanelState",
+          "chooseRecent",
+          "deriveNetPanel",
+          "initialNetPanel",
+          "removeRecent",
+          "setPanelText"
+        ]
+      },
+      {
+        "source": "./recentCodes.ts",
+        "target": "src/ui/widgets/recentCodes.ts",
+        "specifiers": [
+          "listRecentCodes",
+          "recordRecentCode",
+          "removeRecentCode"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "NetPanelScope",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly bindings: Readonly<Record<string, string>>",
+          "readonly blocking: boolean",
+          "readonly id: string"
+        ]
+      },
+      {
+        "name": "NetPanelDeps",
+        "extends": [],
+        "methods": [
+          "dispatch(commandId: string): boolean",
+          "popScope(): void",
+          "pushScope(scope: NetPanelScope): void",
+          "registerOpenNetwork(open: () => void): void",
+          "setPendingJoinCode(code: string): void"
+        ],
+        "properties": [
+          "readonly doc: Document"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "act",
+      "chooseCode",
+      "close",
+      "netPanelScope",
+      "netPanelWidget",
+      "onKeyDown",
+      "onOutsidePointer",
+      "openPanel",
+      "recentRow",
+      "removeCode",
+      "render",
+      "setDropdown"
+    ]
+  },
+  "src/ui/widgets/netPanelModel.ts": {
+    "exports": [
+      "NetPanelModel",
+      "NetPanelRecentRow",
+      "NetPanelState",
+      "chooseRecent",
+      "deriveNetPanel",
+      "initialNetPanel",
+      "removeRecent",
+      "setPanelText"
+    ],
+    "imports": [
+      {
+        "source": "./netModel.ts",
+        "target": "src/ui/widgets/netModel.ts",
+        "specifiers": [
+          "CODE_ERROR_TEXT",
+          "CodeError",
+          "validateGameCode"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "NetPanelState",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly placeholder: string",
+          "readonly recent: readonly string[]",
+          "readonly text: string"
+        ]
+      },
+      {
+        "name": "NetPanelRecentRow",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly code: string"
+        ]
+      },
+      {
+        "name": "NetPanelModel",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly canonicalCode: string | null",
+          "readonly codeError: string | null",
+          "readonly codeValid: boolean",
+          "readonly effectiveCode: string",
+          "readonly placeholder: string",
+          "readonly recentRows: readonly NetPanelRecentRow[]",
+          "readonly text: string"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "chooseRecent",
+      "codeErrorText",
+      "deriveNetPanel",
+      "initialNetPanel",
+      "removeRecent",
+      "setPanelText"
+    ]
+  },
+  "src/ui/widgets/recentCodes.ts": {
+    "exports": [
+      "RECENT_CODES_CAP",
+      "RECENT_CODES_KEY",
+      "clearRecentCodes",
+      "listRecentCodes",
+      "recordRecentCode",
+      "removeRecentCode"
+    ],
+    "imports": [
+      {
+        "source": "./netModel.ts",
+        "target": "src/ui/widgets/netModel.ts",
+        "specifiers": [
+          "validateGameCode"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "clearRecentCodes",
+      "dedupeCap",
+      "listRecentCodes",
+      "parseStoredArray",
+      "recordRecentCode",
+      "removeRecentCode",
+      "resolveStorage"
+    ]
+  },
   "src/ui/widgets/settings.ts": {
     "exports": [
       "SETTINGS_WIDGET_ID",
@@ -5181,6 +5415,7 @@
           "ControlsConfig",
           "KeybindingsConfig",
           "RESET_SECTIONS",
+          "SETTINGS_SCOPE_BLOCKING",
           "SETTINGS_SCOPE_ID",
           "SettingsSources",
           "boardSizePatch",
@@ -5199,7 +5434,7 @@
         "methods": [],
         "properties": [
           "readonly bindings: Readonly<Record<string, string>>",
-          "readonly blocking: true",
+          "readonly blocking: boolean",
           "readonly id: string"
         ]
       },
@@ -5247,6 +5482,7 @@
       "OPEN_SETTINGS_COMMAND",
       "OpacityFieldModel",
       "RESET_SECTIONS",
+      "SETTINGS_SCOPE_BLOCKING",
       "SETTINGS_SCOPE_ID",
       "SelectOption",
       "SettingsModel",

@@ -80,6 +80,9 @@ graph LR
         src_ui_widgets_menuModel_ts["menuModel.ts"]
         src_ui_widgets_net_ts["net.ts"]
         src_ui_widgets_netModel_ts["netModel.ts"]
+        src_ui_widgets_netPanel_ts["netPanel.ts"]
+        src_ui_widgets_netPanelModel_ts["netPanelModel.ts"]
+        src_ui_widgets_recentCodes_ts["recentCodes.ts"]
         src_ui_widgets_settings_ts["settings.ts"]
         src_ui_widgets_settingsModel_ts["settingsModel.ts"]
         src_ui_widgets_sliderModel_ts["sliderModel.ts"]
@@ -257,6 +260,7 @@ graph LR
     src_ui_setup_ts --> src_ui_widgets_menu_ts
     src_ui_setup_ts --> src_ui_widgets_net_ts
     src_ui_setup_ts --> src_ui_widgets_netModel_ts
+    src_ui_setup_ts --> src_ui_widgets_netPanel_ts
     src_ui_setup_ts --> src_ui_widgets_settings_ts
     src_ui_setup_ts --> src_ui_widgets_sliderModel_ts
     src_ui_widgets_archive_ts --> src_ui_registry_ts
@@ -273,6 +277,12 @@ graph LR
     src_ui_widgets_menu_ts --> src_ui_widgets_menuModel_ts
     src_ui_widgets_net_ts --> src_ui_registry_ts
     src_ui_widgets_net_ts --> src_ui_widgets_netModel_ts
+    src_ui_widgets_netPanel_ts --> src_ui_registry_ts
+    src_ui_widgets_netPanel_ts --> src_ui_widgets_netModel_ts
+    src_ui_widgets_netPanel_ts --> src_ui_widgets_netPanelModel_ts
+    src_ui_widgets_netPanel_ts --> src_ui_widgets_recentCodes_ts
+    src_ui_widgets_netPanelModel_ts --> src_ui_widgets_netModel_ts
+    src_ui_widgets_recentCodes_ts --> src_ui_widgets_netModel_ts
     src_ui_widgets_settings_ts --> src_config_config_ts
     src_ui_widgets_settings_ts --> src_ui_registry_ts
     src_ui_widgets_settings_ts --> src_ui_widgets_settingsModel_ts
