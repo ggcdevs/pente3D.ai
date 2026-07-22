@@ -114,6 +114,16 @@ export default {
     // N.1 handshake selectors — no duplicated state machine or win logic. Separated from the overlay
     // widget/session IO glue so it is mutation-gated like the other pure net logic.
     'src/net/endState.ts',
+    // Pure networked mutual-confirm undo/redo logic (Task N.3.1, issue #18): the redo gate
+    // (`decideRedo` — a redo re-applies the just-undone move, whose mover is the post-undo
+    // `state.turn`), the single-pending propose guards (`canProposeUndo`/`canProposeRedo`,
+    // combining the decide-rule with the N.1 no-concurrent-pending invariant), and the incoming
+    // undo/redo accept/decline prompt view-model (`deriveUndoRedoPrompt`). REUSES `decideUndo`
+    // (re-exported from sync.ts, not re-implemented), the N.1 `canPropose`/`incomingPending`
+    // selectors, and the enumerated `Player` union for the prompt copy — no duplicated state
+    // machine or rule. Separated from the SyncEngine/banner/session IO glue so it is mutation-
+    // gated like the other pure net logic.
+    'src/net/undoRedo.ts',
     '!src/net/**/*.test.ts',
     // Pure render resolvers only (THREE-free). The Three.js scene GLUE (`scene.ts`,
     // `lines.ts`) is NOT mutated — it is an IO boundary verified by Playwright (build
