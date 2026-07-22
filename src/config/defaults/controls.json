@@ -27,7 +27,7 @@
     },
     "web": {
       "orbit": "left",
-      "pan": "ctrl+left",
+      "pan": "shift+left",
       "zoom": "wheel",
       "orbitSpeed": 1.0,
       "panSpeed": 1.0,

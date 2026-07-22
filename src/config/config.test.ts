@@ -193,7 +193,10 @@ describe('getConfig — deep merge of overrides', () => {
     expect(controls.presets.fusion360.pan).toBe('middle'); // sibling untouched
     expect(controls.presets.fusion360.zoomToCursor).toBe(true); // sibling untouched
     expect(controls.presets.web.orbit).toBe('left'); // other preset untouched — override did NOT leak
-    expect(controls.presets.web.pan).toBe('ctrl+left'); // untouched
+    // The web preset's pan is untouched by the fusion360-only override: derive the expected value
+    // from the tracked SSOT default (not a frozen literal) so this never goes stale when the shipped
+    // default changes (agent-principles #8). This is the camera-controls fix's `shift+left`.
+    expect(controls.presets.web.pan).toBe(getDefault('controls').presets.web.pan);
   });
 
   it('a top-level override can flip a single boolean without dropping the others', () => {

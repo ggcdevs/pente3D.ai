@@ -17,6 +17,7 @@ import { createWinLine, type WinLineHandle, type WinLineReadout } from './winLin
 import { resolveCameraPreset, type ControlsConfig } from './cameraPresets.ts';
 import {
   applyCameraPreset,
+  installModifierSwaps,
   readCameraPreset,
   type AppliedPresetTag,
   type CameraPresetReadout,
@@ -794,15 +795,20 @@ export function createScene(container: HTMLElement): SceneHandle {
   // the OrbitControls (IO glue) — mouse-button mapping, speeds, invert, zoom limits. Only the preset
   // IDENTITY (name + orbit/pan button choice) is retained; speeds/limits/mouseButtons are read LIVE
   // off the controls in getCameraPreset, so the readout never diverges from the actual controller.
-  const applied = applyCameraPreset(
-    controls,
-    resolveCameraPreset(getConfig('controls') as unknown as ControlsConfig),
-  );
+  const resolvedControls = resolveCameraPreset(getConfig('controls') as unknown as ControlsConfig);
+  const applied = applyCameraPreset(controls, resolvedControls);
   const appliedPresetTag: AppliedPresetTag = {
     name: applied.name,
     orbitButton: applied.orbitButton,
     panButton: applied.panButton,
   };
+  // FUNCTIONAL modifier gate (camera-controls fix): a gesture like web's `pan: "shift+left"` means
+  // "LEFT pans WHILE Shift is held". The base map above binds LEFT to the un-modified orbit action;
+  // OrbitControls' OWN native ctrl/meta/shift→rotate↔pan inversion then makes Shift+left PAN at press
+  // time — we must NOT also rewrite mouseButtons (that would double-invert). This handle only OBSERVES
+  // the held modifier (real DOM keydown/keyup on the SAME `window` target the input system uses) so
+  // getCameraPreset can report the EFFECTIVE action (LEFT→PAN while Shift held). Disposed on teardown.
+  const modifierSwaps = installModifierSwaps(controls, resolvedControls, window);
 
   // Line-visibility toggle shared by the category commands: flips the config-derived
   // visible flag on the group mesh and mirrors it into the state we report.
@@ -1403,10 +1409,11 @@ export function createScene(container: HTMLElement): SceneHandle {
   }
 
   function getCameraPreset(): CameraPresetReadout {
-    // Read the speeds/limits/mouseButtons LIVE off the controls (tagged with the applied preset
-    // identity), so the readout reflects the controller's current state — the observable a wrongly-live
-    // `controls` re-apply would move (agent-principles #3).
-    return readCameraPreset(controls, appliedPresetTag);
+    // Read the speeds/limits LIVE off the controls (tagged with the applied preset identity) and the
+    // EFFECTIVE mouseButtons via the modifier handle, so the readout reflects the controller's current
+    // state AND any held modifier gate (web: LEFT reads PAN while Shift is down) — the observables a
+    // wrongly-live `controls` re-apply or a broken modifier gate would move (agent-principles #3).
+    return readCameraPreset(controls, appliedPresetTag, modifierSwaps);
   }
 
   function getInput(): InputReadout {
@@ -1802,6 +1809,7 @@ export function createScene(container: HTMLElement): SceneHandle {
     renderer.domElement.removeEventListener('pointerdown', onPointerDown);
     renderer.domElement.removeEventListener('pointerup', onPointerUp);
     input.dispose();
+    modifierSwaps.dispose();
     controls.dispose();
     renderer.dispose();
     lines.dispose();
