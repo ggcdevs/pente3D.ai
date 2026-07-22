@@ -318,6 +318,12 @@ classDiagram
         +readonly warning: string
     }
     note for GenerateLineResult "src/core/lines.ts"
+    class HandshakeState {
+        <<interface>>
+        +readonly pending: PendingProposal | null
+        +readonly resolution: Resolution | null
+    }
+    note for HandshakeState "src/net/handshake.ts"
     class HelpDeps {
         <<interface>>
         +readonly doc: Document
@@ -717,12 +723,16 @@ classDiagram
     class NetHooks {
         <<interface>>
         +canPlace(): boolean
+        +getHandshake(): HandshakeState
         +getNet(): NetSessionState
         +getNetGameState(): GameState | null
         +getNetHeadHash(): string | null
         +host(): void
         +join(): void
+        +leaveNet(): void
         +place(coords: Coord): GameState
+        +propose(action: string): boolean
+        +respond(accepted: boolean): boolean
         +resync(): void
         +setPendingJoinCode(code: string): void
     }
@@ -804,6 +814,14 @@ classDiagram
         +readonly value: number
     }
     note for OpacityFieldModel "src/ui/widgets/settingsModel.ts"
+    class PendingProposal {
+        <<interface>>
+        +readonly action: string
+        +readonly direction: ProposalDirection
+        +readonly id: string
+        +readonly proposedBy: Player
+    }
+    note for PendingProposal "src/net/handshake.ts"
     class PenteInspect {
         <<interface>>
         +applyConfig(section: ConfigSection): void
@@ -814,6 +832,7 @@ classDiagram
         +getCamera(): CameraReadout | null
         +getCameraPreset(): CameraPresetReadout | null
         +getColors(): ColorsReadout | null
+        +getHandshake(): HandshakeState
         +getHeadHash(): string | null
         +getHelpSources(): HelpSources | null
         +getHistory(): HistoryReadout | null
@@ -832,11 +851,14 @@ classDiagram
         +getVisibleLines(): LineGroupReadout[] | null
         +getWinLine(): WinLineReadout | null
         +hoverAt(ndcX: number, ndcY: number): HoverTarget | null
+        +leaveNet(): void
         +pickAt(ndcX: number, ndcY: number): RaycastHit | null
         +place(coords: Coord): GameState | null
         +pressKey(chord: string): KeyResolution | null
+        +propose(action: string): boolean
         +radiusOf(node: Coord): number | null
         +rayNodeDistances(ndcX: number, ndcY: number): Object[]
+        +respond(accepted: boolean): boolean
         +resync(): void
         +scrubTo(k: number): void
         +setCamera(position: Object, target: Object): void
@@ -974,6 +996,14 @@ classDiagram
         +readonly peerId: string
     }
     note for PresenceSignal "src/net/presence.ts"
+    class ProposalMessage {
+        <<interface>>
+        +readonly action: string
+        +readonly id: string
+        +readonly kind: 'proposal'
+        +readonly proposedBy: Player
+    }
+    note for ProposalMessage "src/net/sync.ts"
     class RedoEvent {
         <<interface>>
         +readonly type: 'redo'
@@ -987,6 +1017,14 @@ classDiagram
         +readonly wssUrl: string
     }
     note for RelayConfig "src/config/config.ts"
+    class Resolution {
+        <<interface>>
+        +readonly action: string
+        +readonly direction: ProposalDirection
+        +readonly id: string
+        +readonly outcome: ResolutionOutcome
+    }
+    note for Resolution "src/net/handshake.ts"
     class ResolvedCameraPreset {
         <<interface>>
         +readonly name: string
@@ -1017,6 +1055,13 @@ classDiagram
         +readonly order: number
     }
     note for ResolvedWidget "src/ui/layout.ts"
+    class ResponseMessage {
+        <<interface>>
+        +readonly accepted: boolean
+        +readonly kind: 'response'
+        +readonly proposalId: string
+    }
+    note for ResponseMessage "src/net/sync.ts"
     class SceneColorsConfig {
         <<interface>>
         +background: string
@@ -1039,6 +1084,7 @@ classDiagram
         +getCameraPreset(): CameraPresetReadout
         +getColors(): ColorsReadout
         +getGame(): Game
+        +getHandshake(): HandshakeState
         +getHeadHash(): string
         +getHelpSources(): HelpSources
         +getHistory(): HistoryReadout
@@ -1056,6 +1102,7 @@ classDiagram
         +getVisibleLines(): LineGroupReadout[]
         +getWinLine(): WinLineReadout
         +hoverAt(ndcX: number, ndcY: number): HoverTarget | null
+        +leaveNet(): void
         +loadGame(loaded: Game): void
         +onNewGame(listener: () =~ void): () =~ void
         +onStateChange(listener: () =~ void): () =~ void
@@ -1064,8 +1111,10 @@ classDiagram
         +place(coords: Coord): GameState
         +popScope(): void
         +pressKey(chord: string): KeyResolution
+        +propose(action: string): boolean
         +pushScope(scope: Scope): void
         +rayNodeDistances(ndcX: number, ndcY: number): Object[]
+        +respond(accepted: boolean): boolean
         +resync(): void
         +scrubTo(k: number): void
         +setCamera(position: Object, target: Object): void
@@ -1385,10 +1434,14 @@ classDiagram
         +canPlace(): boolean
         +disconnect(): void
         +gameState(): GameState | null
+        +getHandshake(): HandshakeState
         +host(rawCode: string): Promise~void~
         +join(rawCode: string): Promise~boolean~
         +onChange(listener: NetChangeListener): () =~ void
+        +onHandshakeChange(listener: HandshakeChangeListener): () =~ void
         +place(coords: Coord): void
+        +propose(action: string): boolean
+        +respond(accepted: boolean): boolean
         +state(): NetSessionState
         +syncEngine(): SyncEngine | null
         +undo(): void
@@ -1406,8 +1459,10 @@ classDiagram
         +connect(roomCode: string): Promise~void~
         +game(): Game
         +onChange(listener: () =~ void): () =~ void
+        +onMessage(listener: (msg: ProposalMessage | ResponseMessage) =~ void): () =~ void
         +place(coords: Coord): void
         +placeLocalOnly(coords: Coord): void
+        +publishHandshake(msg: ProposalMessage | ResponseMessage): void
         +publishState(): void
         +receive(msg: SyncMessage): void
         +status(): SyncStatus

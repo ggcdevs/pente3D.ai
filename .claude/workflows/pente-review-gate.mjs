@@ -18,11 +18,17 @@ const STAGE = A.stage
 if (!SCOPE || typeof SCOPE !== 'string') {
   throw new Error('pente-review-gate: args.scope (a whitespace-separated path string, e.g. "src/config src/persist") is REQUIRED — refusing to run with a silent default that could gate the wrong code.')
 }
-// Coverage is pinned to SCOPE (all of it). Mutation defaults to SCOPE too, but an IO-heavy
-// layer can pass a narrower MUTATE_SCOPE (pure logic only) so mqtt.js/DOM glue — verified by
-// integration tests instead — is not mutation-tested. Coverage stays 100% on everything.
+// SCOPE = the full changed surface the REVIEWERS read (impl + tests + glue + e2e). It is NOT the
+// coverage target: glue (THREE/DOM/net) and e2e specs are Playwright-verified, not vitest-measured,
+// so demanding "100% coverage on all of SCOPE" is structurally impossible and used to false-escalate
+// the Gate. MUTATE_SCOPE = the pure logic that is mutation-tested; COVERAGE_SCOPE = the files the
+// 100% coverage pin + check actually apply to — the pure/vitest-measured files, defaulting to
+// MUTATE_SCOPE (coverage and mutation stay aligned on the same pure files). A caller may override
+// COVERAGE_SCOPE only if the pure coverage-files differ from the mutation-files (rare). This is not a
+// weakening: the bar stays 100% on every measurable pure file; glue stays Playwright-verified.
 const MUTATE_SCOPE = (A.mutateScope && typeof A.mutateScope === 'string') ? A.mutateScope : SCOPE
-log(`review-gate resolved coverage-scope="${SCOPE}" mutate-scope="${MUTATE_SCOPE}" stage=${STAGE}`)
+const COVERAGE_SCOPE = (A.coverageScope && typeof A.coverageScope === 'string') ? A.coverageScope : MUTATE_SCOPE
+log(`review-gate resolved review-scope="${SCOPE}" coverage-scope="${COVERAGE_SCOPE}" mutate-scope="${MUTATE_SCOPE}" stage=${STAGE}`)
 const PRINCIPLES = 'planning/agent-principles.md'
 const MUT_MIN = 95
 const TRAILER = 'Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>'
@@ -84,7 +90,7 @@ const setup = await agent(
     `Tooling may already exist from a prior stage — be IDEMPOTENT and never drop paths already covered:\n` +
     `1. StrykerJS (@stryker-mutator/core + @stryker-mutator/vitest-runner): ensure installed; ensure stryker.config.mjs \`mutate\` includes the MUTATION scope "${MUTATE_SCOPE}" — each entry may be a dir (expand to \`<dir>/**/*.ts\`) or an exact \`.ts\` file — excluding \`*.test.ts\`, keeping existing paths. Do NOT add IO-glue files that are outside "${MUTATE_SCOPE}". Ensure \`thresholds.break = ${MUT_MIN}\` and an npm \`mutate\` script. Run \`npx stryker run\` and paste the score.\n` +
     `2. eslint-plugin-vitest rules (expect-expect, valid-expect, no-disabled-tests, no-focused-tests) active as errors on *.test.ts; \`npm run lint\` exits 0.\n` +
-    `3. vite coverage \`thresholds\`: pin every PURE (THREE-free / DOM-free) file under the COVERAGE scope "${SCOPE}" to 100% on statements/branches/functions/lines, keeping existing pins. Coverage MUST stay aligned with the mutation scope — every mutation-gated file must ALSO be 100% coverage-pinned (fix any drift). Do NOT pin the Three.js/DOM IO-glue files (scene/renderer/InstancedMesh/Raycaster/DOM-touching) — those are the Playwright-verified IO boundary; LIST which files you classified as glue vs pure.\n` +
+    `3. vite coverage \`thresholds\`: pin every PURE (THREE-free / DOM-free) file in the COVERAGE_SCOPE "${COVERAGE_SCOPE}" to 100% on statements/branches/functions/lines, keeping existing pins. COVERAGE_SCOPE is the pure/vitest-measured set; it stays ALIGNED with the mutation scope (every mutation-gated file is ALSO 100% coverage-pinned — fix any drift). Do NOT pin THREE.js/DOM IO-glue or e2e specs (they are the Playwright-verified boundary, outside vitest coverage); of the broader review-scope "${SCOPE}", LIST which files you classified as glue/e2e vs pure.\n` +
     `PROVE each gate BITES (${PRINCIPLES} #7): show it exit non-zero on a deliberate regression (raise stryker \`break\` above the current score -> exit 1; inject an uncovered branch into an in-scope file -> \`npm run coverage\` exit 1), then RESTORE to green.\n` +
     `Commit any config changes (message + trailer \`${TRAILER}\`). Do NOT push. Return structured evidence (gatesBiteProven=true only if you actually observed the non-zero exits).`,
   { schema: SETUP_SCHEMA, phase: 'Harden', label: 'harden:gates' }
@@ -133,7 +139,7 @@ const gate = await agent(
     `Run and PASTE full output:\n` +
     `1. \`npm run lint\` -> exit 0 (incl. assertion-lint rules).\n` +
     `2. \`npm test\` -> all pass (note count).\n` +
-    `3. \`npm run coverage\` -> ${SCOPE} must be 100% on all four metrics.\n` +
+    `3. \`npm run coverage\` -> the COVERAGE_SCOPE files "${COVERAGE_SCOPE}" must be 100% on all four metrics. (These are the pure/vitest-measured files. The rest of the review-scope is THREE/DOM/net glue + e2e specs verified by Playwright, NOT by \`npm run coverage\` — do NOT expect them in the coverage report or weaken the config to force them; instead confirm the relevant e2e specs pass.)\n` +
     `4. \`npm run mutate\` (Stryker, mutates "${MUTATE_SCOPE}") -> overall mutation score must be >= ${MUT_MIN}%. List EVERY surviving mutant with a justification; a survivor is only acceptable if genuinely equivalent/unreachable and explained.\n` +
     `passed = lint(0) AND all tests pass AND coverage 100% AND mutation >= ${MUT_MIN}% (survivors justified).\n` +
     `REVIEWERS APPROVED = ${approved}. Push ONLY if passed AND reviewers approved. If reviewers did NOT approve (this run escalates to a human), DO NOT push regardless of the mechanical result — a human must resolve the outstanding review findings first.\n` +

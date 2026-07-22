@@ -30,6 +30,7 @@ graph LR
     end
     subgraph src/net
         src_net_appSession_ts["appSession.ts"]
+        src_net_handshake_ts["handshake.ts"]
         src_net_mqttTransport_ts["mqttTransport.ts"]
         src_net_netRouting_ts["netRouting.ts"]
         src_net_presence_ts["presence.ts"]
@@ -116,6 +117,7 @@ graph LR
     src_debug_window_ts --> src_input_pointerGesture_ts
     src_debug_window_ts --> src_input_scopes_ts
     src_debug_window_ts --> src_input_setup_ts
+    src_debug_window_ts --> src_net_handshake_ts
     src_debug_window_ts --> src_render_cameraControls_ts
     src_debug_window_ts --> src_render_hover_ts
     src_debug_window_ts --> src_render_lines_ts
@@ -158,6 +160,9 @@ graph LR
     src_net_appSession_ts --> src_net_transport_ts
     src_net_appSession_ts --> src_persist_db_ts
     src_net_appSession_ts --> src_util_randomId_ts
+    src_net_handshake_ts --> src_core_gameState_ts
+    src_net_handshake_ts --> src_net_sync_ts
+    src_net_handshake_ts --> src_util_randomId_ts
     src_net_mqttTransport_ts --> src_config_config_ts
     src_net_mqttTransport_ts --> src_net_presence_ts
     src_net_mqttTransport_ts --> src_net_transport_ts
@@ -166,6 +171,7 @@ graph LR
     src_net_session_ts --> src_core_coords_ts
     src_net_session_ts --> src_core_game_ts
     src_net_session_ts --> src_core_gameState_ts
+    src_net_session_ts --> src_net_handshake_ts
     src_net_session_ts --> src_net_seats_ts
     src_net_session_ts --> src_net_sync_ts
     src_net_session_ts --> src_net_transport_ts
@@ -178,6 +184,7 @@ graph LR
     src_net_sync_ts --> src_core_gameState_ts
     src_net_sync_ts --> src_net_transport_ts
     src_net_sync_ts --> src_persist_archive_ts
+    src_net_sync_ts --> src_util_emitter_ts
     src_net_turnGate_ts --> src_core_gameState_ts
     src_net_turnGate_ts --> src_ui_widgets_netModel_ts
     src_persist_archive_ts --> src_core_eventLog_ts
@@ -225,6 +232,7 @@ graph LR
     src_render_scene_ts --> src_input_pointerGesture_ts
     src_render_scene_ts --> src_input_scopes_ts
     src_render_scene_ts --> src_input_setup_ts
+    src_render_scene_ts --> src_net_handshake_ts
     src_render_scene_ts --> src_render_cameraControls_ts
     src_render_scene_ts --> src_render_cameraPresets_ts
     src_render_scene_ts --> src_render_hover_ts

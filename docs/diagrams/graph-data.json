@@ -760,6 +760,13 @@
         ]
       },
       {
+        "source": "../net/handshake.ts",
+        "target": "src/net/handshake.ts",
+        "specifiers": [
+          "HandshakeState"
+        ]
+      },
+      {
         "source": "../render/cameraControls.ts",
         "target": "src/render/cameraControls.ts",
         "specifiers": [
@@ -880,6 +887,7 @@
           "getCamera(): CameraReadout | null",
           "getCameraPreset(): CameraPresetReadout | null",
           "getColors(): ColorsReadout | null",
+          "getHandshake(): HandshakeState",
           "getHeadHash(): string | null",
           "getHelpSources(): HelpSources | null",
           "getHistory(): HistoryReadout | null",
@@ -898,11 +906,14 @@
           "getVisibleLines(): LineGroupReadout[] | null",
           "getWinLine(): WinLineReadout | null",
           "hoverAt(ndcX: number, ndcY: number): HoverTarget | null",
+          "leaveNet(): void",
           "pickAt(ndcX: number, ndcY: number): RaycastHit | null",
           "place(coords: Coord): GameState | null",
           "pressKey(chord: string): KeyResolution | null",
+          "propose(action: string): boolean",
           "radiusOf(node: Coord): number | null",
           "rayNodeDistances(ndcX: number, ndcY: number): { node: string; distance: number; depth: number }[]",
+          "respond(accepted: boolean): boolean",
           "resync(): void",
           "scrubTo(k: number): void",
           "setCamera(position: { x: number; y: number; z: number }, target: { x: number; y: number; z: number }): void",
@@ -1522,6 +1533,119 @@
       "resolveTransportFactory"
     ]
   },
+  "src/net/handshake.ts": {
+    "exports": [
+      "HandshakeState",
+      "IdSource",
+      "PendingProposal",
+      "ProposalDirection",
+      "Resolution",
+      "ResolutionOutcome",
+      "canPropose",
+      "cancel",
+      "clearResolution",
+      "hasPending",
+      "incomingPending",
+      "initialHandshake",
+      "onGameAdvanced",
+      "onPeerGone",
+      "outgoingPending",
+      "propose",
+      "receiveProposal",
+      "receiveResponse",
+      "resolution",
+      "respond"
+    ],
+    "imports": [
+      {
+        "source": "../core/gameState",
+        "target": "src/core/gameState.ts",
+        "specifiers": [
+          "Player"
+        ]
+      },
+      {
+        "source": "../util/randomId",
+        "target": "src/util/randomId.ts",
+        "specifiers": [
+          "randomId"
+        ]
+      },
+      {
+        "source": "./sync",
+        "target": "src/net/sync.ts",
+        "specifiers": [
+          "ProposalMessage",
+          "ResponseMessage"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "PendingProposal",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly action: string",
+          "readonly direction: ProposalDirection",
+          "readonly id: string",
+          "readonly proposedBy: Player"
+        ]
+      },
+      {
+        "name": "Resolution",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly action: string",
+          "readonly direction: ProposalDirection",
+          "readonly id: string",
+          "readonly outcome: ResolutionOutcome"
+        ]
+      },
+      {
+        "name": "HandshakeState",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly pending: PendingProposal | null",
+          "readonly resolution: Resolution | null"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [
+      {
+        "name": "ProposalDirection",
+        "type": "'outgoing' | 'incoming'"
+      },
+      {
+        "name": "ResolutionOutcome",
+        "type": "'accepted' | 'declined'"
+      },
+      {
+        "name": "IdSource",
+        "type": "() => string"
+      }
+    ],
+    "functions": [
+      "canPropose",
+      "cancel",
+      "clearResolution",
+      "hasPending",
+      "incomingPending",
+      "initialHandshake",
+      "onGameAdvanced",
+      "onPeerGone",
+      "outgoingPending",
+      "propose",
+      "receiveProposal",
+      "receiveResponse",
+      "resolution",
+      "respond"
+    ]
+  },
   "src/net/mqttTransport.ts": {
     "exports": [
       "MqttClientLike",
@@ -1797,6 +1921,7 @@
   },
   "src/net/session.ts": {
     "exports": [
+      "HandshakeChangeListener",
       "NetChangeListener",
       "NetSession",
       "NetSessionDeps"
@@ -1845,6 +1970,21 @@
         ]
       },
       {
+        "source": "./handshake",
+        "target": "src/net/handshake.ts",
+        "specifiers": [
+          "HandshakeState",
+          "incomingPending",
+          "initialHandshake",
+          "onGameAdvanced",
+          "onPeerGone",
+          "propose",
+          "receiveProposal",
+          "receiveResponse",
+          "respond"
+        ]
+      },
+      {
         "source": "./seats",
         "target": "src/net/seats.ts",
         "specifiers": [
@@ -1885,10 +2025,14 @@
           "canPlace(): boolean",
           "disconnect(): void",
           "gameState(): GameState | null",
+          "getHandshake(): HandshakeState",
           "host(rawCode: string): Promise<void>",
           "join(rawCode: string): Promise<boolean>",
           "onChange(listener: NetChangeListener): () => void",
+          "onHandshakeChange(listener: HandshakeChangeListener): () => void",
           "place(coords: Coord): void",
+          "propose(action: string): boolean",
+          "respond(accepted: boolean): boolean",
           "state(): NetSessionState",
           "syncEngine(): SyncEngine | null",
           "undo(): void"
@@ -1918,13 +2062,20 @@
       {
         "name": "NetChangeListener",
         "type": "(state: NetSessionState) => void"
+      },
+      {
+        "name": "HandshakeChangeListener",
+        "type": "(state: HandshakeState) => void"
       }
     ],
     "functions": []
   },
   "src/net/sync.ts": {
     "exports": [
+      "GameMessage",
       "MetaProvider",
+      "ProposalMessage",
+      "ResponseMessage",
       "SYNC_VERSION",
       "SyncDecision",
       "SyncEngine",
@@ -1935,6 +2086,7 @@
       "UndoRejection",
       "decideSync",
       "decideUndo",
+      "parseGameMessage",
       "parseSyncMessage",
       "toSyncMessage"
     ],
@@ -1984,6 +2136,14 @@
         ]
       },
       {
+        "source": "../util/emitter",
+        "target": "src/util/emitter.ts",
+        "specifiers": [
+          "Emitter",
+          "createEmitter"
+        ]
+      },
+      {
         "source": "./transport",
         "target": "src/net/transport.ts",
         "specifiers": [
@@ -2010,8 +2170,10 @@
           "connect(roomCode: string): Promise<void>",
           "game(): Game",
           "onChange(listener: () => void): () => void",
+          "onMessage(listener: (msg: ProposalMessage | ResponseMessage) => void): () => void",
           "place(coords: Coord): void",
           "placeLocalOnly(coords: Coord): void",
+          "publishHandshake(msg: ProposalMessage | ResponseMessage): void",
           "publishState(): void",
           "receive(msg: SyncMessage): void",
           "status(): SyncStatus",
@@ -2032,10 +2194,35 @@
           "readonly log: readonly Event[]",
           "readonly version: number"
         ]
+      },
+      {
+        "name": "ProposalMessage",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly action: string",
+          "readonly id: string",
+          "readonly kind: 'proposal'",
+          "readonly proposedBy: Player"
+        ]
+      },
+      {
+        "name": "ResponseMessage",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly accepted: boolean",
+          "readonly kind: 'response'",
+          "readonly proposalId: string"
+        ]
       }
     ],
     "enums": [],
     "typeAliases": [
+      {
+        "name": "GameMessage",
+        "type": "| ({ readonly kind: 'sync' } & SyncMessage)\n  | ProposalMessage\n  | ResponseMessage"
+      },
       {
         "name": "SyncDecision",
         "type": "| { readonly action: 'adopt' }\n  | { readonly action: 'ignore' }\n  | { readonly action: 'conflict'; readonly divergePly: number }"
@@ -2060,6 +2247,8 @@
     "functions": [
       "decideSync",
       "decideUndo",
+      "looksLikeSync",
+      "parseGameMessage",
       "parseSyncMessage",
       "toSyncMessage"
     ]
@@ -3557,6 +3746,14 @@
         ]
       },
       {
+        "source": "../net/handshake.ts",
+        "target": "src/net/handshake.ts",
+        "specifiers": [
+          "HandshakeState",
+          "initialHandshake"
+        ]
+      },
+      {
         "source": "../ui/widgets/banner.ts",
         "target": "src/ui/widgets/banner.ts",
         "specifiers": [
@@ -3786,12 +3983,16 @@
         "extends": [],
         "methods": [
           "canPlace(): boolean",
+          "getHandshake(): HandshakeState",
           "getNet(): NetSessionState",
           "getNetGameState(): GameState | null",
           "getNetHeadHash(): string | null",
           "host(): void",
           "join(): void",
+          "leaveNet(): void",
           "place(coords: Coord): GameState",
+          "propose(action: string): boolean",
+          "respond(accepted: boolean): boolean",
           "resync(): void",
           "setPendingJoinCode(code: string): void"
         ],
@@ -3812,6 +4013,7 @@
           "getCameraPreset(): CameraPresetReadout",
           "getColors(): ColorsReadout",
           "getGame(): Game",
+          "getHandshake(): HandshakeState",
           "getHeadHash(): string",
           "getHelpSources(): HelpSources",
           "getHistory(): HistoryReadout",
@@ -3829,6 +4031,7 @@
           "getVisibleLines(): LineGroupReadout[]",
           "getWinLine(): WinLineReadout",
           "hoverAt(ndcX: number, ndcY: number): HoverTarget | null",
+          "leaveNet(): void",
           "loadGame(loaded: Game): void",
           "onNewGame(listener: () => void): () => void",
           "onStateChange(listener: () => void): () => void",
@@ -3837,8 +4040,10 @@
           "place(coords: Coord): GameState",
           "popScope(): void",
           "pressKey(chord: string): KeyResolution",
+          "propose(action: string): boolean",
           "pushScope(scope: Scope): void",
           "rayNodeDistances(ndcX: number, ndcY: number): { node: NodeKey; distance: number; depth: number }[]",
+          "respond(accepted: boolean): boolean",
           "resync(): void",
           "scrubTo(k: number): void",
           "setCamera(position: { x: number; y: number; z: number }, target: { x: number; y: number; z: number }): void",
@@ -3883,6 +4088,7 @@
       "getCameraPreset",
       "getColors",
       "getGame",
+      "getHandshake",
       "getHeadHash",
       "getHelpSources",
       "getHistory",
@@ -3900,6 +4106,7 @@
       "getVisibleLines",
       "getWinLine",
       "hoverAt",
+      "leaveNet",
       "loadGame",
       "notifyNewGame",
       "notifyStateChanged",
@@ -3914,11 +4121,13 @@
       "place",
       "popScope",
       "pressKey",
+      "propose",
       "pushScope",
       "rayNodeDistances",
       "renderLoop",
       "renderNetState",
       "renderState",
+      "respond",
       "resync",
       "scrubTo",
       "setCamera",
