@@ -760,6 +760,13 @@
         ]
       },
       {
+        "source": "../net/endState.ts",
+        "target": "src/net/endState.ts",
+        "specifiers": [
+          "EndState"
+        ]
+      },
+      {
         "source": "../net/handshake.ts",
         "target": "src/net/handshake.ts",
         "specifiers": [
@@ -887,6 +894,7 @@
           "getCamera(): CameraReadout | null",
           "getCameraPreset(): CameraPresetReadout | null",
           "getColors(): ColorsReadout | null",
+          "getEndState(): EndState",
           "getHandshake(): HandshakeState",
           "getHeadHash(): string | null",
           "getHelpSources(): HelpSources | null",
@@ -926,6 +934,7 @@
         "name": "ArchiveInspect",
         "extends": [],
         "methods": [
+          "getEndState(): EndState",
           "listArchive(): Promise<readonly ArchiveListing[]>"
         ],
         "properties": []
@@ -1339,6 +1348,15 @@
         ]
       },
       {
+        "source": "./net/endState.ts",
+        "target": "src/net/endState.ts",
+        "specifiers": [
+          "EndState",
+          "REMATCH_ACTION",
+          "deriveEndState"
+        ]
+      },
+      {
         "source": "./net/netRouting.ts",
         "target": "src/net/netRouting.ts",
         "specifiers": [
@@ -1349,8 +1367,7 @@
         "source": "./net/rematch.ts",
         "target": "src/net/rematch.ts",
         "specifiers": [
-          "shouldArchiveBeforeNetStart",
-          "shouldPromptRematch"
+          "shouldArchiveBeforeNetStart"
         ]
       },
       {
@@ -1412,16 +1429,7 @@
       }
     ],
     "classes": [],
-    "interfaces": [
-      {
-        "name": "Window",
-        "extends": [],
-        "methods": [],
-        "properties": [
-          "__penteRematchPrompt: () => boolean"
-        ]
-      }
-    ],
+    "interfaces": [],
     "enums": [],
     "typeAliases": [],
     "functions": [
@@ -1434,7 +1442,6 @@
       "loadArchivedIntoScene",
       "loadConflictedIfAny",
       "refreshUi",
-      "rematchPrompt",
       "resolveAutosaveId",
       "resumeArchived",
       "reviewArchived"
@@ -1531,6 +1538,79 @@
       "createAppNetSession",
       "resolvePlayerId",
       "resolveTransportFactory"
+    ]
+  },
+  "src/net/endState.ts": {
+    "exports": [
+      "EndState",
+      "REMATCH_ACTION",
+      "RematchUi",
+      "WinReason",
+      "alternateSeats",
+      "deriveEndState"
+    ],
+    "imports": [
+      {
+        "source": "../core/gameState",
+        "target": "src/core/gameState.ts",
+        "specifiers": [
+          "GameState",
+          "Player"
+        ]
+      },
+      {
+        "source": "./handshake",
+        "target": "src/net/handshake.ts",
+        "specifiers": [
+          "HandshakeState",
+          "incomingPending",
+          "outgoingPending",
+          "resolution"
+        ]
+      },
+      {
+        "source": "./seats",
+        "target": "src/net/seats.ts",
+        "specifiers": [
+          "SeatColor",
+          "SeatMap"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "EndState",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly iWon: boolean",
+          "readonly rematchUi: RematchUi",
+          "readonly resultText: string",
+          "readonly show: boolean",
+          "readonly winReason: WinReason | null",
+          "readonly winner: Player | null"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [
+      {
+        "name": "WinReason",
+        "type": "'line' | 'captures'"
+      },
+      {
+        "name": "RematchUi",
+        "type": "| 'idle'\n  | 'proposed-waiting'\n  | 'incoming'\n  | 'accepted'\n  | 'declined'"
+      }
+    ],
+    "functions": [
+      "alternateSeats",
+      "colorName",
+      "deriveEndState",
+      "rematchUiOf",
+      "resultTextOf",
+      "winReasonOf"
     ]
   },
   "src/net/handshake.ts": {
@@ -1970,10 +2050,18 @@
         ]
       },
       {
+        "source": "./endState",
+        "target": "src/net/endState.ts",
+        "specifiers": [
+          "alternateSeats"
+        ]
+      },
+      {
         "source": "./handshake",
         "target": "src/net/handshake.ts",
         "specifiers": [
           "HandshakeState",
+          "clearResolution",
           "incomingPending",
           "initialHandshake",
           "onGameAdvanced",
@@ -1991,7 +2079,8 @@
           "SeatColor",
           "SeatMap",
           "claimSeat",
-          "emptySeatMap"
+          "emptySeatMap",
+          "seatOf"
         ]
       },
       {
@@ -2032,6 +2121,7 @@
           "onHandshakeChange(listener: HandshakeChangeListener): () => void",
           "place(coords: Coord): void",
           "propose(action: string): boolean",
+          "resetForRematch(): boolean",
           "respond(accepted: boolean): boolean",
           "state(): NetSessionState",
           "syncEngine(): SyncEngine | null",
@@ -2085,7 +2175,9 @@
       "UndoDecision",
       "UndoRejection",
       "decideSync",
+      "decideSyncEpoched",
       "decideUndo",
+      "normalizeEpoch",
       "parseGameMessage",
       "parseSyncMessage",
       "toSyncMessage"
@@ -2168,6 +2260,7 @@
         "methods": [
           "conflictForks(): { readonly mine: EventLog; readonly theirs: EventLog } | null",
           "connect(roomCode: string): Promise<void>",
+          "epoch(): number",
           "game(): Game",
           "onChange(listener: () => void): () => void",
           "onMessage(listener: (msg: ProposalMessage | ResponseMessage) => void): () => void",
@@ -2176,6 +2269,7 @@
           "publishHandshake(msg: ProposalMessage | ResponseMessage): void",
           "publishState(): void",
           "receive(msg: SyncMessage): void",
+          "resetGame(newGame: Game, newMyColor: Player): void",
           "status(): SyncStatus",
           "undo(): void",
           "whenSettled(): Promise<void>"
@@ -2190,6 +2284,7 @@
         "extends": [],
         "methods": [],
         "properties": [
+          "readonly epoch: number",
           "readonly headHash: string",
           "readonly log: readonly Event[]",
           "readonly version: number"
@@ -2246,8 +2341,11 @@
     ],
     "functions": [
       "decideSync",
+      "decideSyncEpoched",
       "decideUndo",
+      "epochOf",
       "looksLikeSync",
+      "normalizeEpoch",
       "parseGameMessage",
       "parseSyncMessage",
       "toSyncMessage"
@@ -4561,6 +4659,13 @@
         ]
       },
       {
+        "source": "../net/endState.ts",
+        "target": "src/net/endState.ts",
+        "specifiers": [
+          "EndState"
+        ]
+      },
+      {
         "source": "./container.ts",
         "target": "src/ui/container.ts",
         "specifiers": [
@@ -4604,6 +4709,13 @@
         "target": "src/ui/widgets/banner.ts",
         "specifiers": [
           "bannerWidget"
+        ]
+      },
+      {
+        "source": "./widgets/endStateOverlay.ts",
+        "target": "src/ui/widgets/endStateOverlay.ts",
+        "specifiers": [
+          "endStateOverlayWidget"
         ]
       },
       {
@@ -4682,16 +4794,19 @@
         "methods": [
           "copyToClipboard(text: string): Promise<void>",
           "dispatch(commandId: string): boolean",
+          "getEndState(): EndState",
           "getHelpSources(): HelpSources",
           "getHistory(): HistoryFacts",
           "getNet(): NetSessionState",
           "listArchive(): Promise<readonly ArchiveListing[]>",
           "popScope(): void",
+          "proposeRematch(): boolean",
           "pushScope(scope: MenuScope | SettingsScope | HelpScope | ArchiveScope | NetPanelScope): void",
           "registerOpenArchive(open: () => void): void",
           "registerOpenHelp(open: () => void): void",
           "registerOpenNetwork(open: () => void): void",
           "registerOpener(open: () => void): void",
+          "respondRematch(accepted: boolean): boolean",
           "resumeArchived(id: string): Promise<void>",
           "reviewArchived(id: string): Promise<void>",
           "scrubTo(k: number): void",
@@ -4991,6 +5106,52 @@
     "typeAliases": [],
     "functions": [
       "deriveBanner"
+    ]
+  },
+  "src/ui/widgets/endStateOverlay.ts": {
+    "exports": [
+      "END_STATE_OVERLAY_ID",
+      "EndStateOverlayDeps",
+      "endStateOverlayWidget"
+    ],
+    "imports": [
+      {
+        "source": "../../net/endState.ts",
+        "target": "src/net/endState.ts",
+        "specifiers": [
+          "EndState",
+          "RematchUi"
+        ]
+      },
+      {
+        "source": "../registry.ts",
+        "target": "src/ui/registry.ts",
+        "specifiers": [
+          "Widget",
+          "WidgetFactory"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "EndStateOverlayDeps",
+        "extends": [],
+        "methods": [
+          "getEndState(): EndState",
+          "proposeRematch(): boolean",
+          "respondRematch(accepted: boolean): boolean"
+        ],
+        "properties": [
+          "readonly doc: Document"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "endStateOverlayWidget",
+      "render"
     ]
   },
   "src/ui/widgets/help.ts": {

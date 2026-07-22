@@ -32,6 +32,7 @@ classDiagram
     note for ArchivedMeta "src/persist/archive.ts"
     class ArchiveInspect {
         <<interface>>
+        +getEndState(): EndState
         +listArchive(): Promise~readonly ArchiveListing[]~
     }
     note for ArchiveInspect "src/debug/window.ts"
@@ -269,6 +270,24 @@ classDiagram
         +subscribe(fn: (payload: T) =~ void): () =~ void
     }
     note for Emitter "src/util/emitter.ts"
+    class EndState {
+        <<interface>>
+        +readonly iWon: boolean
+        +readonly rematchUi: RematchUi
+        +readonly resultText: string
+        +readonly show: boolean
+        +readonly winReason: WinReason | null
+        +readonly winner: Player | null
+    }
+    note for EndState "src/net/endState.ts"
+    class EndStateOverlayDeps {
+        <<interface>>
+        +readonly doc: Document
+        +getEndState(): EndState
+        +proposeRematch(): boolean
+        +respondRematch(accepted: boolean): boolean
+    }
+    note for EndStateOverlayDeps "src/ui/widgets/endStateOverlay.ts"
     class Entry {
         <<interface>>
         +fn: (payload: T) =~ void
@@ -832,6 +851,7 @@ classDiagram
         +getCamera(): CameraReadout | null
         +getCameraPreset(): CameraPresetReadout | null
         +getColors(): ColorsReadout | null
+        +getEndState(): EndState
         +getHandshake(): HandshakeState
         +getHeadHash(): string | null
         +getHelpSources(): HelpSources | null
@@ -1200,6 +1220,7 @@ classDiagram
     note for SliderModel "src/ui/widgets/sliderModel.ts"
     class SyncMessage {
         <<interface>>
+        +readonly epoch: number
         +readonly headHash: string
         +readonly log: readonly Event[]
         +readonly version: number
@@ -1244,16 +1265,19 @@ classDiagram
         <<interface>>
         +copyToClipboard(text: string): Promise~void~
         +dispatch(commandId: string): boolean
+        +getEndState(): EndState
         +getHelpSources(): HelpSources
         +getHistory(): HistoryFacts
         +getNet(): NetSessionState
         +listArchive(): Promise~readonly ArchiveListing[]~
         +popScope(): void
+        +proposeRematch(): boolean
         +pushScope(scope: MenuScope | SettingsScope | HelpScope | ArchiveScope | NetPanelScope): void
         +registerOpenArchive(open: () =~ void): void
         +registerOpenHelp(open: () =~ void): void
         +registerOpenNetwork(open: () =~ void): void
         +registerOpener(open: () =~ void): void
+        +respondRematch(accepted: boolean): boolean
         +resumeArchived(id: string): Promise~void~
         +reviewArchived(id: string): Promise~void~
         +scrubTo(k: number): void
@@ -1319,11 +1343,6 @@ classDiagram
         +__pente: PenteInspect
     }
     note for Window "src/debug/window.ts"
-    class Window {
-        <<interface>>
-        +__penteRematchPrompt: () =~ boolean
-    }
-    note for Window "src/main.ts"
     class Window {
         <<interface>>
         +__penteNetTransportFactory: () =~ Transport
@@ -1441,6 +1460,7 @@ classDiagram
         +onHandshakeChange(listener: HandshakeChangeListener): () =~ void
         +place(coords: Coord): void
         +propose(action: string): boolean
+        +resetForRematch(): boolean
         +respond(accepted: boolean): boolean
         +state(): NetSessionState
         +syncEngine(): SyncEngine | null
@@ -1457,6 +1477,7 @@ classDiagram
     class SyncEngine {
         +conflictForks(): Object | null
         +connect(roomCode: string): Promise~void~
+        +epoch(): number
         +game(): Game
         +onChange(listener: () =~ void): () =~ void
         +onMessage(listener: (msg: ProposalMessage | ResponseMessage) =~ void): () =~ void
@@ -1465,6 +1486,7 @@ classDiagram
         +publishHandshake(msg: ProposalMessage | ResponseMessage): void
         +publishState(): void
         +receive(msg: SyncMessage): void
+        +resetGame(newGame: Game, newMyColor: Player): void
         +status(): SyncStatus
         +undo(): void
         +whenSettled(): Promise~void~

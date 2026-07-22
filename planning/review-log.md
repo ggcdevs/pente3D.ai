@@ -399,3 +399,32 @@ survivors pre-documented equivalents), e2e incl. accept/decline/auto-cancel roun
 **Verdict: N.1 genuinely complete.** On /dev/. Also fixed hands-on: the idle net-status widget rendered an
 empty box (leftover after #13/#16 emptied its offline panel) — now hidden when idle (`.pente-widget--net[hidden]`
 must beat the class `display:flex`, the recurring [hidden]-vs-flex gotcha).
+
+## net-ux-N2 (#12 win/rematch) — the coverageScope fix landed clean; the review-gate caught a design violation and FIXED it to spec
+
+End-state overlay + mutual rematch via the N.1 handshake + colors alternate. Two milestones:
+
+**1. The review-gate coverage-scope fix WORKED.** First gate run with the new `coverageScope` (pure files) split
+from the reviewer `scope` (full diff): `gate.passed:true`, `escalate:false`, **no coverage false-escalation** on
+the mixed glue/e2e scope. The recurring artifact (Increment A, N.1) is retired.
+
+**2. Reviewer caught a design deviation → the fix loop implemented it correctly (its best work yet).** N.2.2 first
+shipped the rematch reset as a **disconnect → re-host/re-join** shortcut, violating the explicit plan directive
+("both reset to a fresh game in the SAME room/connection — NO disconnect/re-host"). The implementer documented it
+candidly (not disguised scaffolding), but the reviewer flagged it as a real deviation with real consequences (a
+presence flicker that could trip the peer's own N.1 `onPeerGone` auto-cancel; a reconnect race). Rather than
+escalate for a design decision, the **fix loop built the seamless in-place reset**: extended `SyncEngine` with an
+in-place fresh-game reset published over the existing transport (sync.ts +188, +198 test lines, sync.ts mutation
+100%), and rewrote `main.ts` to use it (no disconnect). Main-loop-verified: build 0, lint 0, sync+endState
+mutation 100%, coverage endState 100%, the two-context win→rematch→swapped-seats e2e passes, handshake/netWiring/net
+unregressed. This is the charter working as intended — assume the minimal-effort path, verify the opposite, and
+hold the line on the design.
+
+**Infra note (watch item):** one full-suite e2e run had **38/39 failures all `ERR_CONNECTION_REFUSED`** — the vite
+dev server crashed mid-run (GPU `SharedImageManager` errors) under the full parallel WebGL load, cascading every
+subsequent test. NOT a code regression: the affected specs re-passed on a targeted re-run, and the pre-crash 90
+passed. If it recurs, lower Playwright workers / shard the suite. (Reinforces: never trust a single e2e run;
+distinguish infra failures — connection-refused, GPU, timeouts — from assertion failures.)
+
+**Verdict: N.2 genuinely complete** (in-place seamless rematch per the design). On /dev/ after deploy. Opponent
+text rendered via `textContent` (relay is publicly writable — see #23).
