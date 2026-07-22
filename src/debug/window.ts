@@ -239,6 +239,14 @@ export interface PenteInspect {
    */
   resync(): void;
   /**
+   * Leave the networked room and return to offline (the "Leave room" capability): disconnects the
+   * session's transport, which drops this client's presence so the PEER observes a present→absent
+   * edge. A no-op offline; idempotent. Lets a two-context e2e drive a GRACEFUL peer drop
+   * deterministically and prove the surviving client's session auto-cancels a pending out-of-band
+   * proposal (the `onPeerGone` guardrail) — observable behavior on the OTHER client, not a log line.
+   */
+  leaveNet(): void;
+  /**
    * The OUT-OF-BAND ask/accept handshake state (N.1, issues #12/#18): the session's at-most-one
    * pending proposal (its `direction` — `outgoing` = we asked, `incoming` = the peer asked — `action`,
    * and `id`) plus the last `resolution` (`accepted`/`declined`). Held in session memory, NEVER on the
@@ -332,6 +340,9 @@ export function installInspectApi(
     // Re-broadcast the authoritative networked log (Task 6.7) — a no-op offline. The two-context
     // live-relay e2e drives this to defeat the relay's subscription gap without weakening the proof.
     resync: () => scene.resync(),
+    // Leave the networked room (drops presence so the peer sees us depart) — a no-op offline. The
+    // two-context e2e drives this to prove the surviving client auto-cancels a pending proposal.
+    leaveNet: () => scene.leaveNet(),
     // Out-of-band ask/accept handshake (N.1, #12/#18): read the pending proposal + last resolution,
     // and drive a proposal/response. Delegates to the scene's net hooks (the live session). A
     // two-context e2e proves the round-trip as real state on the OTHER client (agent-principles #3).

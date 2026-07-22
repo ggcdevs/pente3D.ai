@@ -52,7 +52,9 @@ type Pente = {
   respond(accepted: boolean): boolean | null;
   setPendingJoinCode(code: string): void;
   dispatch(id: string): boolean | null;
+  place(coords: [number, number, number]): unknown;
   resync(): void;
+  leaveNet(): void;
 };
 
 const hs = (page: Page) =>
@@ -78,29 +80,44 @@ async function installBroadcastMock(page: Page, senderId: string) {
       let channel: BroadcastChannel | null = null;
       let msgCb: (msg: unknown) => void = () => {};
       let presenceCb: (peers: readonly string[]) => void = () => {};
-      const present = new Set<string>([sid]);
       let lastBody: unknown = null;
+      // Presence is keyed by the app's REAL playerId (the session filters its own playerId out of the
+      // presence array — GLOSSARY "playerId"), NOT the channel-level `sid`. Using `sid` here would put
+      // an id the session never recognizes as "self" into the array, so `peerPresent` could never fall
+      // back to false when the peer leaves — masking the onPeerGone edge. Resolved at connect time,
+      // by which point the app has already minted `pente:playerId` in localStorage.
+      const myPid = (): string => window.localStorage.getItem('pente:playerId') ?? sid;
+      const present = new Set<string>();
       return {
         connect: (roomCode: string) => {
+          const pid = myPid();
+          present.add(pid);
           channel = new BroadcastChannel(`pente-mock-${roomCode}`);
           channel.onmessage = (ev: MessageEvent) => {
-            const data = ev.data as { from: string; kind: string; body?: unknown };
+            const data = ev.data as { from: string; pid?: string; kind: string; body?: unknown };
             if (data.from === sid) return; // faithful relay: never echo to the sender
             if (data.kind === 'msg') {
               msgCb(data.body);
             } else if (data.kind === 'hello') {
-              present.add(data.from);
+              if (data.pid !== undefined) present.add(data.pid);
               presenceCb([...present]);
-              channel!.postMessage({ from: sid, kind: 'hello-ack' });
+              channel!.postMessage({ from: sid, pid, kind: 'hello-ack' });
               if (lastBody !== null) {
                 channel!.postMessage({ from: sid, kind: 'msg', body: lastBody });
               }
             } else if (data.kind === 'hello-ack') {
-              present.add(data.from);
+              if (data.pid !== undefined) present.add(data.pid);
+              presenceCb([...present]);
+            } else if (data.kind === 'bye') {
+              // A peer left the room. A faithful relay signals departure (the real MqttTransport
+              // clears its retained presence on a graceful disconnect, and the broker's Last-Will
+              // does the same on a crash), so drop it by its playerId and re-emit presence — this is
+              // the present→absent edge the session's onPeerGone auto-cancel guardrail keys off.
+              if (data.pid !== undefined) present.delete(data.pid);
               presenceCb([...present]);
             }
           };
-          channel.postMessage({ from: sid, kind: 'hello' });
+          channel.postMessage({ from: sid, pid, kind: 'hello' });
           presenceCb([...present]);
           return Promise.resolve();
         },
@@ -115,6 +132,11 @@ async function installBroadcastMock(page: Page, senderId: string) {
           presenceCb = cb;
         },
         disconnect: () => {
+          // Announce departure before closing (faithful relay: the real transport clears its
+          // presence on disconnect), carrying our playerId so the surviving peer removes the RIGHT
+          // presence entry — its onPresence then fires the present→absent edge and the session's
+          // onPeerGone auto-cancel guardrail can fire.
+          channel?.postMessage({ from: sid, pid: myPid(), kind: 'bye' });
           channel?.close();
           channel = null;
         },
@@ -317,6 +339,112 @@ test.describe('handshake over a hermetic mock relay (N.1.3 routing, always runs)
       // The whole exchange was OUT-OF-BAND: B's move-log head never moved (a declined ask leaves no
       // trace — the append-only-log guardrail, proven as observable state not an assumption).
       expect(await head(b)).toBe(headB0);
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  // AUTO-CANCEL guardrail #1 (session.ts onChange → onGameAdvanced): a proposal in flight is dropped
+  // the instant the authoritative game advances. This exercises the SESSION-LEVEL wiring, not the pure
+  // `onGameAdvanced` (unit-tested in handshake.test.ts): A raises an outgoing ask, then A PLACES a real
+  // move — which routes through the session's SyncEngine and fires `engine.onChange`. We assert the
+  // pending slot returns to null OUT-OF-BAND (no resolution recorded — it was neither accepted nor
+  // declined, it was auto-cancelled), and that the move genuinely landed (the head DID advance). If the
+  // onChange→onGameAdvanced hookup regressed (e.g. wrong transition), the stale ask would linger — this
+  // fails, so the guardrail is a gate that has been watched reject (agent-principles #7).
+  test('a move landing auto-cancels a pending proposal (onGameAdvanced wiring); no resolution recorded', async ({
+    browser,
+  }) => {
+    const { ctx, a, b } = await hostAndJoin(browser);
+    try {
+      const headA0 = await head(a);
+      // A raises an outgoing ask and confirms it is pending on A (and crosses to B, proving it was
+      // genuinely in flight — not a no-op that would make the cancel vacuous).
+      expect(
+        await a.evaluate(() => (window as unknown as { __pente: Pente }).__pente.propose('rematch')),
+      ).toBe(true);
+      await a.waitForFunction(() => {
+        const h = (window as unknown as { __pente: Pente }).__pente.getHandshake();
+        return h?.pending?.direction === 'outgoing' && h.pending.action === 'rematch';
+      });
+      await b.waitForFunction(() => {
+        const h = (window as unknown as { __pente: Pente }).__pente.getHandshake();
+        return h?.pending?.direction === 'incoming';
+      });
+      // The ask was OUT-OF-BAND: A's head is still unchanged while the proposal is merely pending.
+      expect(await head(a)).toBe(headA0);
+
+      // A places a real move (A hosts white, white moves first, so this is A's turn). This advances the
+      // authoritative game via the session's engine → `engine.onChange` → `onGameAdvanced`.
+      await a.evaluate(() => (window as unknown as { __pente: Pente }).__pente.place([2, 2, 2]));
+
+      // PROOF-BY-BEHAVIOR (#3): A's pending ask returns to null AUTO-CANCELLED — no resolution was ever
+      // recorded (it was not accepted/declined; the game simply moved on).
+      await a.waitForFunction(() => {
+        const h = (window as unknown as { __pente: Pente }).__pente.getHandshake();
+        return h?.pending === null;
+      });
+      const hsA = (await hs(a))!;
+      expect(hsA.pending).toBeNull();
+      expect(hsA.resolution).toBeNull();
+      // The move genuinely landed — the head DID advance (so the cancel was triggered by a REAL
+      // game-advance, not by nothing happening).
+      expect(await head(a)).not.toBe(headA0);
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  // AUTO-CANCEL guardrail #2 (session.ts onPresence → onPeerGone): a proposal in flight is dropped when
+  // the peer disappears (there is no one left to accept/decline it). This exercises the SESSION-LEVEL
+  // wiring, not the pure `onPeerGone`: A raises an outgoing ask, then B LEAVES the room — a genuine
+  // present→absent presence edge (the mock relay broadcasts B's departure exactly as the real broker
+  // clears a leaving peer's presence). We assert A's pending slot returns to null out-of-band with NO
+  // resolution recorded. If onPeerGone were wired to the wrong presence edge (e.g. peer ARRIVES) or
+  // omitted, the stale ask would linger — this fails, so the guardrail is a watched gate (#7).
+  test('a peer drop auto-cancels a pending proposal (onPeerGone wiring); no resolution recorded', async ({
+    browser,
+  }) => {
+    const { ctx, a, b } = await hostAndJoin(browser);
+    try {
+      const headA0 = await head(a);
+      // Confirm A sees the peer present BEFORE the ask, so the later drop is a real present→absent edge.
+      await a.waitForFunction(
+        () => (window as unknown as { __pente: Pente }).__pente.getNet()?.peerPresent === true,
+      );
+      // A raises an outgoing ask; confirm it is pending on A and crossed to B (genuinely in flight).
+      expect(
+        await a.evaluate(() => (window as unknown as { __pente: Pente }).__pente.propose('rematch')),
+      ).toBe(true);
+      await a.waitForFunction(() => {
+        const h = (window as unknown as { __pente: Pente }).__pente.getHandshake();
+        return h?.pending?.direction === 'outgoing';
+      });
+      await b.waitForFunction(() => {
+        const h = (window as unknown as { __pente: Pente }).__pente.getHandshake();
+        return h?.pending?.direction === 'incoming';
+      });
+
+      // B DROPS: leaving the room disconnects B's transport, whose departure broadcast (faithful to the
+      // broker clearing a leaving peer's presence) makes A's transport see presence go peer-absent →
+      // session `onPeerGone`.
+      await b.evaluate(() => (window as unknown as { __pente: Pente }).__pente.leaveNet());
+      // A observes the peer gone (the present→absent edge that triggers the guardrail).
+      await a.waitForFunction(
+        () => (window as unknown as { __pente: Pente }).__pente.getNet()?.peerPresent === false,
+      );
+
+      // PROOF-BY-BEHAVIOR (#3): A's pending ask returns to null AUTO-CANCELLED — no resolution recorded
+      // (the peer vanished; the ask was neither accepted nor declined).
+      await a.waitForFunction(() => {
+        const h = (window as unknown as { __pente: Pente }).__pente.getHandshake();
+        return h?.pending === null;
+      });
+      const hsA = (await hs(a))!;
+      expect(hsA.pending).toBeNull();
+      expect(hsA.resolution).toBeNull();
+      // The ask never entered the append-only move-log (out-of-band throughout): A's head is unchanged.
+      expect(await head(a)).toBe(headA0);
     } finally {
       await ctx.close();
     }

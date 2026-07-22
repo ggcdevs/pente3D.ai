@@ -235,6 +235,14 @@ export interface NetHooks {
    */
   resync(): void;
   /**
+   * Leave the networked room and return to offline (the "Leave room" capability): disconnects the
+   * transport (which drops this client's presence, so the PEER sees a present→absent edge) and drops
+   * the session's engine/seat. A no-op offline. Idempotent. Surfaced so a two-context e2e can drive a
+   * GRACEFUL peer drop deterministically and prove the surviving client's session auto-cancels a
+   * pending out-of-band proposal (the `onPeerGone` guardrail) — observable behavior, not a log line.
+   */
+  leaveNet(): void;
+  /**
    * The OUT-OF-BAND ask/accept handshake readout (N.1, issues #12/#18): the session's current
    * {@link HandshakeState} (its at-most-one pending proposal + last resolution). Held in session
    * memory, never on the move-log. Lets `window.__pente.getHandshake` prove a proposal actually
@@ -440,6 +448,13 @@ export interface SceneHandle {
    * non-retained subscription gap, letting a two-context live-relay e2e converge deterministically.
    */
   resync(): void;
+  /**
+   * Leave the networked room (the "Leave room" capability): the app disconnects the session's
+   * transport (dropping this client's presence so the peer observes it depart) and returns offline.
+   * A no-op offline. Wired to `session.disconnect()`; surfaced so a two-context e2e can drive a
+   * graceful peer drop and prove the surviving client auto-cancels a pending proposal (`onPeerGone`).
+   */
+  leaveNet(): void;
   /**
    * The LIVE sources the help overlay generates its shortcut list from (Task 5.7): the registered
    * command ids + the current `key→commandId` bindings. The overlay derives its rows from these so
@@ -833,6 +848,8 @@ export function createScene(container: HTMLElement): SceneHandle {
     getNetHeadHash: () => null,
     // No live session → nothing to re-broadcast. Honest no-op until wired (never a crash on dispatch).
     resync: () => {},
+    // No live session → no room to leave. Honest no-op until wired (never a crash on dispatch).
+    leaveNet: () => {},
     // No live session → no handshake: an idle state, and propose/respond are honest no-ops that
     // report `false` (nothing raised/answered), never a crash on dispatch before the session wires.
     getHandshake: () => initialHandshake(),
@@ -1385,6 +1402,11 @@ export function createScene(container: HTMLElement): SceneHandle {
     netHooks.resync();
   }
 
+  /** Leave the networked room via the session (drops presence so the peer sees us depart); no-op offline. */
+  function leaveNet(): void {
+    netHooks.leaveNet();
+  }
+
   /** The session's OUT-OF-BAND handshake readout (N.1, #12/#18); idle until a session wires. */
   function getHandshake(): HandshakeState {
     return netHooks.getHandshake();
@@ -1752,6 +1774,7 @@ export function createScene(container: HTMLElement): SceneHandle {
     getGame,
     getHeadHash,
     resync,
+    leaveNet,
     getHandshake,
     propose,
     respond,

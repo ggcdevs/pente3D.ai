@@ -425,6 +425,14 @@ void createAppNetSession(scene.getState().size)
       resync: () => {
         session.syncEngine()?.publishState();
       },
+      // Leave the networked room (the "Leave room" capability): disconnect the session, which drops
+      // this client's transport presence — so the PEER observes a present→absent edge and its own
+      // session auto-cancels any pending out-of-band proposal (the `onPeerGone` guardrail). A no-op
+      // offline; idempotent. `refreshUi` repaints the now-offline net widget.
+      leaveNet: () => {
+        session.disconnect();
+        refreshUi();
+      },
       // Out-of-band ask/accept handshake (N.1, issues #12/#18): the shared primitive #12 rematch and
       // #18 undo/redo build on. `getHandshake` surfaces the session's pending proposal + last
       // resolution for `window.__pente.getHandshake` (a two-context e2e proves an ask crossed the
