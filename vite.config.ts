@@ -62,7 +62,8 @@ export default defineConfig({
         // Task N.5.2 move-notification + auto-reconnect GLUE: the DOM (`document.title` flash) +
         // browser-API (`Notification`, `requestPermission`) + `visibilitychange`/`online` listener
         // side effects the PURE `notify.ts` decisions gate. Touches document / browser globals —
-        // verified by the Task N.5.2 Playwright spec (real title + fire counters + a Notification spy),
+        // verified by the Task N.5.2 Playwright spec (real title + fire counters + a Notification spy
+        // covering the granted/denied fire gate AND the 'default' one-time opt-in request + once-guard),
         // not unit coverage. The PURE `net/notify.ts` it stands on is pinned to the 100% floor (via
         // `src/net/**`) and in the mutation scope. Excluded file-by-file so `notify.ts` stays measured.
         'src/net/notifyGlue.ts',

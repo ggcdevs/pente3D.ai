@@ -15,6 +15,11 @@ import { dirname, resolve } from 'node:path';
  *   (c) BROWSER NOTIFICATION via a SPY, only hidden + permitted — with a spy `Notification` whose
  *       permission is `granted`, a host move while the joiner is hidden CONSTRUCTS one notification with
  *       the enumerated copy; a DENIED spy fires none.
+ *   (c') ONE-TIME OPT-IN (design #20: 'opt-in, one-time permission') — with a spy whose permission starts
+ *       `default`, the FIRST hidden your-turn move calls `Notification.requestPermission` exactly ONCE
+ *       (`permissionRequests` → 1, spy request counter → 1) and fires no notification; a SECOND your-turn
+ *       moment does NOT request again (the once-guard). When the prompt is accepted (grant lands async
+ *       AFTER the triggering move), a subsequent hidden your-turn move then fires one notification.
  *   (d) AUTO-RECONNECT — after the joiner leaves the room (phase → offline, seat dropped) and its tab
  *       goes hidden→visible / fires `online`, the session RE-JOINS the same room, reclaiming the SAME
  *       sticky seat (phase → connected, seat unchanged) and re-converging with the host.
@@ -59,17 +64,23 @@ type Pente = {
 async function installMocks(
   page: Page,
   sid: string,
-  opts: { notificationPermission?: NotificationPermission; configOverride?: Record<string, unknown> } = {},
+  opts: {
+    notificationPermission?: NotificationPermission;
+    configOverride?: Record<string, unknown>;
+    grantOnRequest?: boolean;
+  } = {},
 ) {
   await page.addInitScript(
     ({
       sid,
       permission,
       configOverride,
+      grantOnRequest,
     }: {
       sid: string;
       permission: NotificationPermission | null;
       configOverride: Record<string, unknown> | null;
+      grantOnRequest: boolean;
     }) => {
       window.localStorage.clear();
       if (configOverride !== null) {
@@ -84,6 +95,17 @@ async function installMocks(
           static permission: NotificationPermission = permission;
           static requestPermission(): Promise<NotificationPermission> {
             spy.permissionRequests += 1;
+            // A real accepted prompt flips the grant to 'granted' only when the returned Promise RESOLVES
+            // (after the user acts) — never synchronously inside this call. Flipping on resolve (not in
+            // the method body) is load-bearing: the move that TRIGGERED the request reads the grant
+            // synchronously right after and must still see the pre-grant state, so it fires nothing. A
+            // prompt left at 'default' models the user dismissing it. This is what test (c') exercises.
+            if (grantOnRequest) {
+              return Promise.resolve().then(() => {
+                SpyNotification.permission = 'granted';
+                return 'granted' as NotificationPermission;
+              });
+            }
             return Promise.resolve(SpyNotification.permission);
           }
           constructor(title: string, options?: { body?: string }) {
@@ -142,7 +164,12 @@ async function installMocks(
         };
       };
     },
-    { sid, permission: opts.notificationPermission ?? null, configOverride: opts.configOverride ?? null },
+    {
+      sid,
+      permission: opts.notificationPermission ?? null,
+      configOverride: opts.configOverride ?? null,
+      grantOnRequest: opts.grantOnRequest ?? false,
+    },
   );
 }
 
@@ -339,6 +366,98 @@ test('(c) a browser Notification fires via the spy ONLY when hidden + permission
     expect((await notify(j)).notificationCount).toBe(0);
   } finally {
     await deniedCtx.close();
+  }
+});
+
+test("(c') the one-time opt-in: permission 'default' requests ONCE, then a post-grant move fires", async ({
+  browser,
+}) => {
+  // DISMISSED-PROMPT context: permission starts 'default' and STAYS 'default' after the request (the
+  // user dismissed the prompt). This drives the `ctor.permission === 'default'` opt-in branch that the
+  // granted/denied cases (test c) can never reach — proving `requestPermission` is actually invoked and
+  // the once-guard holds across multiple your-turn moments.
+  const dismissCtx = await browser.newContext();
+  try {
+    const { host: h, joiner: j } = await bootPair(dismissCtx, {
+      notificationPermission: 'default',
+      grantOnRequest: false,
+    });
+    await setVisibility(j, false);
+    // Baseline: no request has happened yet (the opt-in fires on the FIRST your-turn moment, not boot).
+    expect((await notify(j)).permissionRequests).toBe(0);
+    expect((await spy(j))?.permissionRequests).toBe(0);
+
+    // First your-turn move while hidden → the opt-in requests the permission exactly once.
+    await h.evaluate(() => (window as unknown as { __pente: Pente }).__pente.place([2, 2, 2]));
+    await j.waitForFunction(
+      () => (window as unknown as { __pente: Pente }).__pente.getNotify().permissionRequests === 1,
+    );
+    // The glue actually CALLED Notification.requestPermission (spy proof, not just the internal counter).
+    await j.waitForFunction(() => (window as unknown as { __notifySpy: { permissionRequests: number } }).__notifySpy.permissionRequests === 1);
+    // Permission is still 'default' (dismissed) → NO notification fired despite the your-turn move.
+    expect((await notify(j)).notificationCount).toBe(0);
+    expect((await spy(j))?.constructed.length).toBe(0);
+
+    // Drive a SECOND your-turn moment: joiner plays its own (black) move, then the host (white) plays
+    // again → joiner's turn once more while hidden. The once-guard must NOT request permission again.
+    await j.evaluate(() => (window as unknown as { __pente: Pente }).__pente.place([3, 3, 3]));
+    await h.waitForFunction(
+      () => (window as unknown as { __pente: Pente }).__pente.getState()?.pieces['3,3,3'] === 'black',
+    );
+    await h.evaluate(() => (window as unknown as { __pente: Pente }).__pente.place([4, 4, 4]));
+    await j.waitForFunction(
+      () => (window as unknown as { __pente: Pente }).__pente.getState()?.pieces['4,4,4'] === 'white',
+    );
+    await j.waitForTimeout(300); // let any stray second request settle before asserting the once-guard
+    expect((await notify(j)).permissionRequests).toBe(1); // once-guard: STILL one, not two
+    expect((await spy(j))?.permissionRequests).toBe(1);
+    expect((await notify(j)).notificationCount).toBe(0); // still ungranted → still no notification
+  } finally {
+    await dismissCtx.close();
+  }
+
+  // GRANT-ON-REQUEST context: the prompt is accepted, so `requestPermission` flips the grant to
+  // 'granted' AFTER it resolves. The move that TRIGGERED the request predates the grant (fires nothing),
+  // but a SUBSEQUENT your-turn move — now that permission is granted — constructs a notification.
+  const grantCtx = await browser.newContext();
+  try {
+    const { host: h, joiner: j } = await bootPair(grantCtx, {
+      notificationPermission: 'default',
+      grantOnRequest: true,
+    });
+    await setVisibility(j, false);
+
+    // First your-turn move: requests the permission (grant lands async), fires nothing yet.
+    await h.evaluate(() => (window as unknown as { __pente: Pente }).__pente.place([2, 2, 2]));
+    await j.waitForFunction(
+      () => (window as unknown as { __pente: Pente }).__pente.getNotify().permissionRequests === 1,
+    );
+    // Wait until the async grant has actually landed on the spy ctor (permission is now 'granted').
+    await j.waitForFunction(
+      () =>
+        (window as unknown as { __penteNotifyNotificationCtor: { permission: string } })
+          .__penteNotifyNotificationCtor.permission === 'granted',
+    );
+    expect((await notify(j)).notificationCount).toBe(0); // the triggering move predates the grant
+
+    // Second your-turn move — permission is granted now — fires exactly one notification, once-guarded
+    // so it does NOT request permission a second time.
+    await j.evaluate(() => (window as unknown as { __pente: Pente }).__pente.place([3, 3, 3]));
+    await h.waitForFunction(
+      () => (window as unknown as { __pente: Pente }).__pente.getState()?.pieces['3,3,3'] === 'black',
+    );
+    await h.evaluate(() => (window as unknown as { __pente: Pente }).__pente.place([4, 4, 4]));
+    await j.waitForFunction(
+      () => (window as unknown as { __pente: Pente }).__pente.getNotify().notificationCount === 1,
+    );
+    const s = await spy(j);
+    expect(s?.permissionRequests).toBe(1); // once-guard held across both moves
+    expect(s?.constructed.length).toBe(1);
+    expect(s?.constructed[0].title).toBe(YOUR_TURN_FLASH);
+    expect(s?.constructed[0].body).toBe('Your turn');
+    expect((await notify(j)).notificationCount).toBe(1);
+  } finally {
+    await grantCtx.close();
   }
 });
 
