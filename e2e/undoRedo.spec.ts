@@ -444,6 +444,103 @@ test.describe('networked undo/redo mutual-confirm over a hermetic mock relay (N.
       await ctx.close();
     }
   });
+
+  // ── NEGATIVE: the DISPATCH path is GATED, not just the button's DOM `disabled` (agent-principles #7)
+  //
+  // The restricting gate (decideUndo/decideRedo via canProposeUndo/canProposeRedo — plan N.3 decision 3)
+  // must be consulted on the COMMAND path, not merely reflected on the button's `disabled` attribute.
+  // `u`/`r` are bound keys (keybindings.json) that dispatch the SAME `undo`/`redo` commands as the
+  // button, and any programmatic `dispatch('undo')` funnels through the same seam. If the gate lived
+  // ONLY on the DOM `disabled` state, a wrong-seat player pressing `u` (or a stray dispatch) would BYPASS
+  // it and publish an invalid proposal — undoing the OPPONENT's last move. These tests DRIVE the
+  // dispatch on a player the gate FORBIDS and prove NO proposal is minted or crosses the relay: the gate
+  // actually REJECTS something on the real input path (a gate you haven't watched reject isn't a gate).
+
+  test('WRONG-SEAT dispatch is REJECTED: B (not the last mover) presses undo → NO proposal minted, A sees nothing', async ({
+    browser,
+  }) => {
+    const { ctx, a, b } = await hostAndJoin(browser);
+    try {
+      const node = await connectedWithMove(a, b); // A (white) is the last mover; B is black.
+      const headBefore = await head(a);
+
+      // The pure gate FORBIDS B: B is NOT the last mover, so B's networked Undo button is DISABLED.
+      // This is the flag the dispatch path must also consult (proving the gate itself says "no" for B).
+      expect((await bannerBtn(b, 'undo'))!.disabled, "B's Undo must be disabled (not last mover)").toBe(
+        true,
+      );
+
+      // B dispatches the `undo` COMMAND DIRECTLY — the exact path a `u` keybinding takes, bypassing the
+      // button's DOM `disabled`. The gate on the dispatch site must REJECT it: NO outgoing proposal.
+      await b.evaluate(() => (window as unknown as { __pente: Pente }).__pente.dispatch('undo'));
+
+      // PROOF-BY-BEHAVIOR: B minted NO proposal — its handshake pending stays null (nothing outgoing).
+      expect(
+        (await b.evaluate(() =>
+          (window as unknown as { __pente: Pente }).__pente.getHandshake(),
+        ))!.pending,
+        'a forbidden dispatch must NOT mint an outgoing proposal',
+      ).toBeNull();
+
+      // And nothing crossed the relay: A never receives an incoming undo prompt (settle window, then
+      // assert absence). If the dispatch path were ungated, A would now show "Black wants to undo".
+      await a.waitForTimeout(500);
+      expect((await prompt(a))!.show, 'A must see NO incoming prompt from a forbidden dispatch').toBe(
+        false,
+      );
+      expect(
+        (await a.evaluate(() =>
+          (window as unknown as { __pente: Pente }).__pente.getHandshake(),
+        ))!.pending,
+        'no proposal may cross the relay from a forbidden dispatch',
+      ).toBeNull();
+
+      // Both boards are untouched — the invalid undo never happened on either side.
+      expect((await state(a))?.pieces[node]).toBe('white');
+      expect((await state(b))?.pieces[node]).toBe('white');
+      expect(await head(a)).toBe(headBefore);
+      expect(await head(b)).toBe(headBefore);
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  test('SINGLE-PENDING: a second dispatch while a proposal is pending does NOT supersede it', async ({
+    browser,
+  }) => {
+    const { ctx, a, b } = await hostAndJoin(browser);
+    try {
+      await connectedWithMove(a, b); // A (white) is the last mover — A may propose undo.
+
+      // A raises a valid undo proposal via the command path.
+      await a.evaluate(() => (window as unknown as { __pente: Pente }).__pente.dispatch('undo'));
+      await a.waitForFunction(() => {
+        const h = (window as unknown as { __pente: Pente }).__pente.getHandshake();
+        return h?.pending?.direction === 'outgoing' && h.pending.action === 'undo';
+      });
+      const pendingId = (await a.evaluate(() =>
+        (window as unknown as { __pente: Pente }).__pente.getHandshake(),
+      ))!.pending!.id;
+
+      // With a proposal ALREADY pending the single-pending invariant makes canProposeUndo false, so the
+      // button is DISABLED — and a second DISPATCH must be a no-op (NOT supersede the pending ask with a
+      // fresh id, which would violate the single-pending invariant the button enforces).
+      expect(
+        (await bannerBtn(a, 'undo'))!.disabled,
+        "A's Undo must be disabled while a proposal is pending",
+      ).toBe(true);
+      await a.evaluate(() => (window as unknown as { __pente: Pente }).__pente.dispatch('undo'));
+
+      // The pending proposal is the SAME one (same id) — the second dispatch did not mint a new proposal.
+      const after = (await a.evaluate(() =>
+        (window as unknown as { __pente: Pente }).__pente.getHandshake(),
+      ))!.pending;
+      expect(after, 'a proposal must still be pending').not.toBeNull();
+      expect(after!.id, 'a second dispatch must NOT supersede the pending proposal').toBe(pendingId);
+    } finally {
+      await ctx.close();
+    }
+  });
 });
 
 // ── LOCAL single-player undo/redo still applies DIRECTLY (unchanged) — no networking ─────────────

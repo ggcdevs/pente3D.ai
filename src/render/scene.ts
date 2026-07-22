@@ -901,11 +901,22 @@ export function createScene(container: HTMLElement): SceneHandle {
   // So when a net game is live the `undo`/`redo` commands publish an out-of-band proposal instead of
   // mutating the local game; offline they apply DIRECTLY (unchanged local single-player behavior). The
   // SAME command id fires from the banner button and any keybinding (design Principle 3), so both route
-  // identically. `netHooks.propose` returns false offline (no session), which never happens here since
-  // we only take this branch when a net game is authoritative.
+  // identically — INCLUDING the permission gate. The restricted last-mover-only rule + single-pending
+  // invariant (`decideUndo`/`decideRedo` via `canProposeUndo`/`canProposeRedo`, plan N.3 decision 3)
+  // is the SAME `getNetUndoRedoAvail()` the button reads to enable/disable itself; the command MUST
+  // consult it before minting a proposal, or a wrong-seat player pressing `u`/`r` (or any programmatic
+  // dispatch) would BYPASS the gate — publishing an invalid undo of the OPPONENT's move, or superseding
+  // an already-pending proposal — since `session.propose` is a generic, action-agnostic mint. Reading
+  // the exact flag the button reads is what makes button and keybinding genuinely route identically:
+  // the gate lives at the single dispatch site both paths funnel through, not merely on the DOM
+  // `disabled` attribute a keybinding never consults. A blocked dispatch is a silent no-op (same as a
+  // disabled button); `netHooks.propose` is only reached when the pure gate says this action is
+  // proposable right now.
   const undoRedoNet = (action: 'undo' | 'redo', localApply: () => void): void => {
     if (netHooks.getNetGameState() !== null) {
-      netHooks.propose(action);
+      const avail = netHooks.getNetUndoRedoAvail();
+      const proposable = action === 'undo' ? avail.canUndo : avail.canRedo;
+      if (proposable) netHooks.propose(action);
       return;
     }
     undoRedoSafe(localApply);
