@@ -695,6 +695,18 @@ classDiagram
         +readonly id: string
     }
     note for MenuScope "src/ui/widgets/menu.ts"
+    class ModifierGate {
+        <<interface>>
+        +button: ButtonToken
+        +modifier: 'shift' | 'ctrl'
+    }
+    note for ModifierGate "src/render/cameraControls.ts"
+    class ModifierSwapHandle {
+        <<interface>>
+        +dispose(): void
+        +effectiveMouseButtons(): Object
+    }
+    note for ModifierSwapHandle "src/render/cameraControls.ts"
     class MoveNotification {
         <<interface>>
         +readonly browserNotification: Object | null
@@ -883,6 +895,12 @@ classDiagram
         +readonly value: number
     }
     note for OpacityFieldModel "src/ui/widgets/settingsModel.ts"
+    class ParsedGesture {
+        <<interface>>
+        +button: ButtonToken
+        +modifier: ModifierToken
+    }
+    note for ParsedGesture "src/render/cameraControls.ts"
     class PendingProposal {
         <<interface>>
         +readonly action: string

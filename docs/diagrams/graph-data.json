@@ -3032,7 +3032,11 @@
     "exports": [
       "AppliedPresetTag",
       "CameraPresetReadout",
+      "ModifierSwapHandle",
+      "ParsedGesture",
       "applyCameraPreset",
+      "installModifierSwaps",
+      "parseGesture",
       "readCameraPreset"
     ],
     "imports": [
@@ -3078,6 +3082,33 @@
         ]
       },
       {
+        "name": "ParsedGesture",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "button: ButtonToken",
+          "modifier: ModifierToken"
+        ]
+      },
+      {
+        "name": "ModifierGate",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "button: ButtonToken",
+          "modifier: 'shift' | 'ctrl'"
+        ]
+      },
+      {
+        "name": "ModifierSwapHandle",
+        "extends": [],
+        "methods": [
+          "dispose(): void",
+          "effectiveMouseButtons(): { LEFT: number | undefined; MIDDLE: number | undefined; RIGHT: number | undefined }"
+        ],
+        "properties": []
+      },
+      {
         "name": "AppliedPresetTag",
         "extends": [],
         "methods": [],
@@ -3093,11 +3124,21 @@
       {
         "name": "ButtonToken",
         "type": "'LEFT' | 'MIDDLE' | 'RIGHT'"
+      },
+      {
+        "name": "ModifierToken",
+        "type": "'shift' | 'ctrl' | null"
+      },
+      {
+        "name": "ListenerTarget",
+        "type": "Pick<EventTarget, 'addEventListener' | 'removeEventListener'>"
       }
     ],
     "functions": [
       "applyCameraPreset",
-      "buttonOf",
+      "installModifierSwaps",
+      "invertUnderModifier",
+      "parseGesture",
       "readCameraPreset"
     ]
   },
@@ -4203,6 +4244,7 @@
           "AppliedPresetTag",
           "CameraPresetReadout",
           "applyCameraPreset",
+          "installModifierSwaps",
           "readCameraPreset"
         ]
       },
