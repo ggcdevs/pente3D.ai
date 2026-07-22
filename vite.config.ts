@@ -75,6 +75,12 @@ export default defineConfig({
         // the 100% floor below (and in the mutation scope). Excluded file-by-file so archiveModel
         // stays measured.
         'src/ui/widgets/archive.ts',
+        // Task N.2.2 networked end-state overlay widget: the non-blocking, view-only card DOM glue
+        // that paints the PURE `deriveEndState` view-model and drives a rematch through the session's
+        // handshake API. Touches the DOM — verified by the Task N.2.2 Playwright spec (two-context
+        // rematch + seat-swap), not unit coverage. The PURE `net/endState.ts` it renders is pinned to
+        // the 100% floor (via `src/net/**`) and in the mutation scope. Excluded file-by-file.
+        'src/ui/widgets/endStateOverlay.ts',
       ],
       // MACHINE-ENFORCED GATE (not documentation): the pure rules engine AND the
       // in-scope config/persist layers are held to a hard 100% floor

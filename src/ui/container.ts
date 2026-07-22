@@ -186,6 +186,26 @@ const UI_STYLESHEET = `
 .pente-archive-review:hover { background: rgba(255,255,255,0.22); }
 .pente-archive-resume { background: rgba(90,170,120,0.28); }
 .pente-archive-resume:hover { background: rgba(90,170,120,0.42); }
+/* Task N.2.2 / issue #12: the networked END-STATE overlay. NON-BLOCKING + view-only — there is NO
+   full-viewport backdrop (a backdrop would hide the very read-only won board the overlay describes,
+   and eat the canvas orbit/scrub the finished board still allows). The root is a fixed, centred,
+   click-THROUGH layer (pointer-events: none); ONLY the card re-enables pointer-events so its
+   Rematch / Accept / Decline buttons are clickable while the board stays visible + interactive
+   underneath. Sits above the widgets but is not a modal. Hidden via the [hidden] attribute when the
+   game is not over (an in-progress or a local game shows nothing). */
+.pente-endstate[hidden] { display: none; }
+.pente-endstate { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; z-index: 35; }
+.pente-endstate-card { display: flex; flex-direction: column; gap: 12px; align-items: center; min-width: 240px; padding: 20px 28px; border-radius: 10px; background: rgba(20,20,26,0.92); backdrop-filter: blur(4px); color: #e6e6ea; font-family: system-ui, sans-serif; box-shadow: 0 8px 32px rgba(0,0,0,0.5); pointer-events: auto; text-align: center; }
+.pente-endstate-result { font-size: 18px; font-weight: 600; }
+.pente-endstate-note[hidden] { display: none; }
+.pente-endstate-note { font-size: 13px; opacity: 0.82; }
+.pente-endstate-actions { display: flex; gap: 8px; }
+.pente-endstate-rematch[hidden], .pente-endstate-accept[hidden], .pente-endstate-decline[hidden] { display: none; }
+.pente-endstate-actions button { cursor: pointer; padding: 8px 16px; border-radius: 6px; border: none; color: #e6e6ea; font-size: 14px; }
+.pente-endstate-rematch, .pente-endstate-accept { background: rgba(74,144,217,0.5); }
+.pente-endstate-rematch:hover, .pente-endstate-accept:hover { background: rgba(74,144,217,0.7); }
+.pente-endstate-decline { background: rgba(255,80,80,0.24); color: #ffb0b0; }
+.pente-endstate-decline:hover { background: rgba(255,80,80,0.38); }
 `;
 
 /** Install the overlay stylesheet once per document (idempotent, keyed by {@link UI_STYLE_ID}). */

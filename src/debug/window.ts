@@ -25,6 +25,7 @@ import type { LayoutReadout } from '../ui/container.ts';
 import type { BannerContext } from '../ui/widgets/banner.ts';
 import type { NetSessionState } from '../ui/widgets/netModel.ts';
 import type { HandshakeState } from '../net/handshake.ts';
+import type { EndState } from '../net/endState.ts';
 import type { HelpSources } from '../ui/widgets/helpModel.ts';
 import type { ArchiveListing } from '../ui/widgets/archiveModel.ts';
 import { createLogger } from './log.ts';
@@ -269,12 +270,28 @@ export interface PenteInspect {
    * nothing to answer. The e2e driver for the responder side of the round-trip.
    */
   respond(accepted: boolean): boolean;
+  /**
+   * The live networked END-STATE view-model (Task N.2.2, issue #12): the pure `deriveEndState` folded
+   * from the AUTHORITATIVE net game + the N.1 handshake + this client's seat — `show` (true only on a
+   * finished NET game), `winner`/`winReason`/`iWon`, the enumerated `resultText`, and the `rematchUi`
+   * sub-state (`idle`/`proposed-waiting`/`incoming`/`accepted`/`declined`). Lets a two-context e2e prove
+   * that BOTH clients surface the view-only overlay when the net game ends, and that after A proposes /
+   * B accepts the rematch resolves — observable behavior on the OTHER client, not a log line (#3). The
+   * hidden shape (`show: false, rematchUi: 'idle'`) offline / for a local game.
+   */
+  getEndState(): EndState;
 }
 
 /** The app-level archive readouts wired into the inspect API (Task 5.8; the DB lives in `main.ts`). */
 export interface ArchiveInspect {
   /** List every archived game as `{ id, meta }` (no logs) — the browser's live data source. */
   listArchive(): Promise<readonly ArchiveListing[]>;
+  /**
+   * The live networked END-STATE view-model (Task N.2.2) — the app's `getNetEndState` (`main.ts`),
+   * exposed here because the end-state is derived in the app (over the net session + seat), not in the
+   * scene. Wired onto `window.__pente.getEndState` for the two-context rematch e2e.
+   */
+  getEndState(): EndState;
 }
 
 declare global {
@@ -349,6 +366,10 @@ export function installInspectApi(
     getHandshake: () => scene.getHandshake(),
     propose: (action: string) => scene.propose(action),
     respond: (accepted: boolean) => scene.respond(accepted),
+    // Networked end-state view-model (Task N.2.2, issue #12) — the app's `getNetEndState`, exposed so
+    // a two-context e2e proves BOTH clients surface the view-only overlay on a net game-over and drive
+    // the rematch. Derived in the app (net session + seat), not the scene, so it rides `archive`.
+    getEndState: () => archive.getEndState(),
   };
   window.__pente = api;
   log.info('window.__pente installed', Object.keys(api));

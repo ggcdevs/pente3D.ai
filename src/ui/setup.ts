@@ -32,6 +32,8 @@ import { helpWidget, type HelpScope } from './widgets/help.ts';
 import type { HelpSources } from './widgets/helpModel.ts';
 import { archiveWidget, type ArchiveScope } from './widgets/archive.ts';
 import type { ArchiveListing } from './widgets/archiveModel.ts';
+import { endStateOverlayWidget } from './widgets/endStateOverlay.ts';
+import type { EndState } from '../net/endState.ts';
 import type { LayoutConfig } from './layout.ts';
 
 /**
@@ -127,6 +129,22 @@ export interface UiDeps {
    * `game.stateAt(k)` for the local viewer without mutating the game; `k >= head` snaps to live.
    */
   scrubTo(k: number): void;
+  /**
+   * The live networked END-STATE view-model the overlay renders (Task N.2.2, issue #12) — the app's
+   * `deriveEndState` folded from the authoritative game + the N.1 handshake + this client's seat.
+   * Supplied by the app so the UI shell never imports `src/net`; the overlay only paints it.
+   */
+  getEndState(): EndState;
+  /**
+   * Raise a rematch proposal (Task N.2.2) — the app's `session.propose('rematch')`. The overlay's
+   * Rematch button calls this; the SAME session handshake API `window.__pente.propose` drives.
+   */
+  proposeRematch(): boolean;
+  /**
+   * Accept (`true`) / decline (`false`) an incoming rematch proposal (Task N.2.2) — the app's
+   * `session.respond(accepted)`. The overlay's Accept/Decline buttons call this.
+   */
+  respondRematch(accepted: boolean): boolean;
 }
 
 /** The live UI handle exposed to the app + tests: the container plus its layout readout. */
@@ -157,6 +175,7 @@ export function defaultWidgetFactories(): WidgetFactory[] {
     historySliderWidget(),
     helpWidget(),
     archiveWidget(),
+    endStateOverlayWidget(),
   ];
 }
 
@@ -193,6 +212,9 @@ export function createUi(container: HTMLElement, deps: UiDeps): UiHandle {
       copyToClipboard: deps.copyToClipboard,
       getHistory: deps.getHistory,
       scrubTo: deps.scrubTo,
+      getEndState: deps.getEndState,
+      proposeRematch: deps.proposeRematch,
+      respondRematch: deps.respondRematch,
     },
     document,
   );

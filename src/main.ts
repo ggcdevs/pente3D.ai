@@ -5,7 +5,9 @@ import { installInspectApi } from './debug/window.ts';
 import { createLogger } from './debug/log.ts';
 import { createAppNetSession } from './net/appSession.ts';
 import { shouldRenderSessionGame } from './net/netRouting.ts';
-import { shouldArchiveBeforeNetStart, shouldPromptRematch } from './net/rematch.ts';
+import { shouldArchiveBeforeNetStart } from './net/rematch.ts';
+import { deriveEndState, alternateSeats, REMATCH_ACTION, type EndState } from './net/endState.ts';
+import { seatOf, type SeatColor } from './net/seats.ts';
 import { headHash } from './core/eventLog.ts';
 import { openDatabase, resolveDbName } from './persist/db.ts';
 import {
@@ -27,23 +29,12 @@ import { randomId } from './util/randomId.ts';
 
 const log = createLogger('app:boot');
 
-/**
- * The "play another?" prompt for a finished networked game (Task 6.4), as an injectable seam so the
- * Playwright e2e can drive accept / decline deterministically (like the `__penteNetTransportFactory`
- * seam). In the running app it is `window.confirm`; a test installs `window.__penteRematchPrompt`
- * BEFORE boot to answer the prompt without a real dialog. Returns `true` to start a fresh net game.
- */
-declare global {
-  interface Window {
-    /** Test-only: answers the play-another? prompt (true = start a fresh net game). */
-    __penteRematchPrompt?: () => boolean;
-  }
-}
-function rematchPrompt(): boolean {
-  const injected = window.__penteRematchPrompt;
-  if (injected !== undefined) return injected();
-  return window.confirm('Game over — play another?');
-}
+// Task N.2.2 (issue #12): the finished-networked-game rematch is NO LONGER a blocking `window.confirm`
+// (removed here — it froze the tab and hid the won board). It is now a NON-BLOCKING, view-only
+// END-STATE overlay (`src/ui/widgets/endStateOverlay.ts`) driven by the pure `deriveEndState`
+// (`src/net/endState.ts`) over the authoritative net game + the N.1 handshake + this client's seat.
+// Either player proposes "Rematch" via the shared N.1 handshake; on MUTUAL accept BOTH clients reset
+// to a fresh game in the SAME room with ALTERNATED colors (the seat-swap restart wired below).
 
 const container = document.getElementById('app');
 if (!container) {
@@ -144,6 +135,22 @@ scene.onNewGame(bumpGeneration);
 // honest-until-wired pattern the net hooks use. Returns the SESSION engine's live `Game` when a net
 // game is authoritative, else null.
 let netAuthoritativeGame: () => Game | null = () => null;
+
+/** The hidden end-state used before the net session wires up (offline / pre-wiring): the networked
+ *  end-state overlay shows nothing until there is a live, finished net game to describe. */
+const HIDDEN_END_STATE: EndState = {
+  show: false,
+  winner: null,
+  winReason: null,
+  iWon: false,
+  resultText: '',
+  rematchUi: 'idle',
+};
+
+// The live networked END-STATE view-model the overlay renders (Task N.2.2, issue #12), set once the
+// net session wires up (below). Until then (offline / pre-wiring) there is no net game, so the overlay
+// is hidden — the same honest-until-wired pattern `netAuthoritativeGame` uses.
+let getNetEndState: () => EndState = () => HIDDEN_END_STATE;
 
 /** The authoritative game to archive: the networked SESSION's game when a net game is live, else the
  *  scene's local game. Both expose the same `Game` shape (log + ply + state) the archive persists. */
@@ -454,63 +461,88 @@ void createAppNetSession(scene.getState().size)
       const engine = session.syncEngine();
       return engine === null ? null : engine.game();
     };
-    // Play-another? on a finished networked game (Task 6.4). When the authoritative networked game
-    // ENDS (a winner is set) we PROMPT the player to start another, and on accept start a fresh net
-    // game in the SAME role (host mints a new code; a joiner rejoins its code). The PURE
-    // `shouldPromptRematch` decides "has the net game ended?" from the authoritative state; the prompt
-    // itself is an injectable seam (default `window.confirm`) so the Playwright e2e can drive accept /
-    // decline deterministically. The prompt fires EXACTLY ONCE per finished game (`rematchPromptedFor`
-    // guards against re-prompting on every subsequent idle session change once won).
-    let rematchPromptedFor: string | null = null;
-    const startFreshNetGame = (): void => {
+    // The live networked END-STATE view-model the overlay renders (Task N.2.2, issue #12): fold the
+    // AUTHORITATIVE net game state + the N.1 handshake + this client's seat through the PURE
+    // `deriveEndState`. Offline / no live net game → there is no net end-state, so the overlay shows
+    // nothing (a LOCAL game-over never surfaces this networked overlay). `deriveEndState`'s own `show`
+    // still gates on a winner, so an in-progress net game also shows nothing.
+    getNetEndState = (): EndState => {
+      const netState = netGameState();
+      if (netState === null) return HIDDEN_END_STATE;
+      return deriveEndState(netState, session.getHandshake(), session.state().seat);
+    };
+
+    // MUTUAL-ACCEPT seat-swap restart (Task N.2.2, plan N.2 decision 2: "colors ALTERNATE every game").
+    // When the out-of-band rematch handshake RESOLVES to `accepted` (either WE proposed and the peer
+    // accepted, or the peer proposed and WE accepted), BOTH clients reset to a FRESH game in the SAME
+    // room with their seats SWAPPED. The swap is DETERMINISTIC and needs no coordination: each side
+    // derives its NEW seat purely from its OWN current one via the pure N.1/N.2.1 seat logic
+    // (`alternateSeats` is the tested involution; `seatOf` reads where this client landed), then takes
+    // the role that claims that color — a host claims white, a joiner claims black. So the ex-white
+    // JOINs (→ black) and the ex-black HOSTs the same code (→ white): the colors have alternated and
+    // both peers re-meet in the same room. We reuse the existing fresh-game reset (disconnect → re-
+    // host/re-join the same code) because the SyncEngine builds one `Game` per session at `start()`
+    // and offers no in-place fresh-game reset — this is the minimal path that both swaps seats AND
+    // keeps the same room code, done ONCE per accepted rematch (guarded on the resolution id).
+    let handledRematchId: string | null = null;
+    const swappedSeat = (seat: SeatColor): SeatColor => {
+      // Reuse the pure, tested seat swap: place this client on its current seat, alternate, read back.
+      const me = session.state().code ?? 'me';
+      const swapped = alternateSeats({
+        white: seat === 'white' ? me : null,
+        black: seat === 'black' ? me : null,
+      });
+      // `seatOf` returns the color `me` now owns after the swap (never null — `me` was seated).
+      return seatOf(swapped, me) ?? seat;
+    };
+    const startSwappedRematch = (): void => {
       const code = session.state().code;
       const seat = session.state().seat;
+      if (code === null || seat === null) return;
+      const nextSeat = swappedSeat(seat);
       session.disconnect();
       // A rematch (game-over → a new game) is an EXPLICIT boundary (issue #7): bump the generation ONCE
       // so the just-finished (won) net game is left and the rematch mints its own fresh archive record —
-      // the same one-record-per-GAME rule, not one per remote move of the rematch.
+      // the same one-record-per-GAME rule, not one per remote move of the rematch. `disconnect` returned
+      // us to offline, so host/join are live again.
       bumpGeneration();
-      // Preserve the role: a host re-hosts (a fresh code); a joiner rejoins the SAME room code so both
-      // accepting peers meet again. `disconnect` returned us to offline, so host/join are live again.
-      if (seat === 'black' && code !== null) {
+      // Take the role that claims the SWAPPED color, reusing the SAME room code so both peers re-meet:
+      // white ← host, black ← join. Colors have thus alternated from the just-finished game.
+      if (nextSeat === 'white') {
+        void session.host(code).then(refreshUi);
+      } else {
         pendingJoinCode = code;
         void session.join(pendingJoinCode).then(refreshUi);
-      } else {
-        void session.host().then(refreshUi);
       }
     };
-    const netHeadKey = (): string | null => {
-      const game = netAuthoritativeGame();
-      return game === null ? null : headHash(game.log);
-    };
-    const maybePromptRematch = (): void => {
-      const netState = netGameState();
-      if (netState === null || !shouldPromptRematch(netState)) return;
-      // Fire once per finished game: key the guard on the authoritative head so a NEW finished game
-      // (a later rematch that is also won) re-prompts, but the same won game does not re-prompt.
-      const key = netHeadKey();
-      if (key === null || key === rematchPromptedFor) return;
-      rematchPromptedFor = key;
-      if (rematchPrompt()) startFreshNetGame();
+    // Fire the seat-swap restart exactly once per accepted rematch resolution, then clear the
+    // resolution so the effect never re-fires and the handshake settles back to idle for the next game.
+    const maybeRematchReset = (): void => {
+      const res = session.getHandshake().resolution;
+      if (res === null || res.action !== REMATCH_ACTION || res.outcome !== 'accepted') return;
+      if (res.id === handledRematchId) return;
+      handledRematchId = res.id;
+      startSwappedRematch();
     };
 
     // On EVERY session-state change — a local move, a REMOTE move adopted by the transport pump
     // (the resync link), presence, or a conflict — adopt the session's authoritative game into the
     // scene (re-rendering a remote move) and repaint the widgets. This is the render half of "ONE
     // authoritative game per session"; without it a peer's move never reaches the board (issue #4).
-    // A finished game additionally offers a rematch (Task 6.4).
+    // A finished game surfaces the non-blocking end-state overlay via the refreshed `getNetEndState`.
     session.onChange(() => {
       scene.adoptNetState();
       refreshUi();
-      maybePromptRematch();
     });
     // Out-of-band handshake changes (N.1, #12/#18): an incoming ask, a resolution, or an auto-cancel.
-    // Repaint the widgets so a UI (the #12 rematch overlay / #18 undo prompt, built on this primitive)
-    // reflects the pending proposal. Kept separate from the sync `onChange` because a handshake
-    // transition is NOT a move — it never touches the board/log — so it must not run the adopt/rematch
-    // path; it only refreshes the view of the out-of-band state.
+    // Repaint the widgets so the #12 rematch overlay reflects the pending proposal / resolution, and
+    // fire the MUTUAL-ACCEPT seat-swap restart when the rematch handshake resolves to `accepted`. Kept
+    // separate from the sync `onChange` because a handshake transition is NOT a move — it never touches
+    // the board/log — so it must not run the adopt path; it only refreshes the out-of-band state view
+    // and drives the accepted-rematch reset.
     session.onHandshakeChange(() => {
       refreshUi();
+      maybeRematchReset();
     });
     refreshUi();
     log.info('net session wired');
@@ -569,6 +601,14 @@ const ui = createUi(container, {
   // its local scrub seam — no command dispatch (it emits/syncs nothing; design Part 6 / GLOSSARY).
   getHistory: () => scene.getHistory(),
   scrubTo: (k) => scene.scrubTo(k),
+  // Networked END-STATE overlay (Task N.2.2, issue #12): the overlay reads the live end-state view-
+  // model (the app's `deriveEndState` over the authoritative net game + N.1 handshake + seat) and
+  // drives a rematch through the SAME session handshake API `window.__pente.propose`/`respond` use —
+  // Rematch → `scene.propose('rematch')`, Accept/Decline → `scene.respond(accepted)`. On MUTUAL accept
+  // the session's handshake resolves and `maybeRematchReset` (above) swaps seats + restarts.
+  getEndState: () => getNetEndState(),
+  proposeRematch: () => scene.propose(REMATCH_ACTION),
+  respondRematch: (accepted) => scene.respond(accepted),
 });
 
 /** Repaint every widget from the live state + the banner history context (Task 5.2). */
@@ -603,6 +643,11 @@ onConfigChange((section) => {
 
 // Expose the inspection API so browser agents (Playwright, cdp) can read real state.
 // Kept unconditional for the v1 walking skeleton; a prod gate lands with the real build.
-installInspectApi(scene, ui, { listArchive: () => listArchive() });
+installInspectApi(scene, ui, {
+  listArchive: () => listArchive(),
+  // The networked end-state view-model (Task N.2.2, issue #12) — derived in the app over the net
+  // session + seat, so it is supplied here (not from the scene) for `window.__pente.getEndState`.
+  getEndState: () => getNetEndState(),
+});
 
 log.info('app booted');
