@@ -99,6 +99,13 @@
         ]
       },
       {
+        "source": "./defaults/notifications.json",
+        "target": "src/config/defaults/notifications.json",
+        "specifiers": [
+          "default"
+        ]
+      },
+      {
         "source": "./defaults/relay.json",
         "target": "src/config/defaults/relay.json",
         "specifiers": [
@@ -774,6 +781,13 @@
         ]
       },
       {
+        "source": "../net/notifyGlue.ts",
+        "target": "src/net/notifyGlue.ts",
+        "specifiers": [
+          "NotifyReadout"
+        ]
+      },
+      {
         "source": "../net/undoRedo.ts",
         "target": "src/net/undoRedo.ts",
         "specifiers": [
@@ -913,6 +927,7 @@
           "getLighting(): LightingReadout | null",
           "getMarkers(query: readonly string[]): MarkersReadout | null",
           "getNet(): NetSessionState | null",
+          "getNotify(): NotifyReadout",
           "getPieces(): PieceReadout[] | null",
           "getState(): GameState | null",
           "getTemp(): TempReadout | null",
@@ -943,6 +958,7 @@
         "extends": [],
         "methods": [
           "getEndState(): EndState",
+          "getNotify(): NotifyReadout",
           "listArchive(): Promise<readonly ArchiveListing[]>"
         ],
         "properties": []
@@ -1372,6 +1388,15 @@
         ]
       },
       {
+        "source": "./net/notifyGlue.ts",
+        "target": "src/net/notifyGlue.ts",
+        "specifiers": [
+          "NotificationApi",
+          "NotifyGlue",
+          "NotifyReadout"
+        ]
+      },
+      {
         "source": "./net/rematch.ts",
         "target": "src/net/rematch.ts",
         "specifiers": [
@@ -1437,7 +1462,16 @@
       }
     ],
     "classes": [],
-    "interfaces": [],
+    "interfaces": [
+      {
+        "name": "Window",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "__penteNotifyNotificationCtor: NotificationApi"
+        ]
+      }
+    ],
     "enums": [],
     "typeAliases": [],
     "functions": [
@@ -1446,6 +1480,7 @@
       "autosaveTick",
       "bumpGeneration",
       "currentGeneration",
+      "getNotifyReadout",
       "listArchive",
       "loadArchivedIntoScene",
       "loadConflictedIfAny",
@@ -1893,6 +1928,178 @@
       "shouldRenderSessionGame"
     ]
   },
+  "src/net/notify.ts": {
+    "exports": [
+      "MoveNotification",
+      "NetSeat",
+      "NotificationsConfig",
+      "Player",
+      "YOUR_TURN_BODY",
+      "YOUR_TURN_TITLE_FLASH",
+      "defaultNotificationsConfig",
+      "deriveMoveNotification",
+      "isRemoteMoveForMe",
+      "shouldReconnect"
+    ],
+    "imports": [
+      {
+        "source": "../config/config",
+        "target": "src/config/config.ts",
+        "specifiers": [
+          "getDefault"
+        ]
+      },
+      {
+        "source": "../core/gameState",
+        "target": "src/core/gameState.ts",
+        "specifiers": [
+          "GameState",
+          "Player"
+        ]
+      },
+      {
+        "source": "../ui/widgets/netModel",
+        "target": "src/ui/widgets/netModel.ts",
+        "specifiers": [
+          "NetPhase",
+          "NetSeat"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "NotificationsConfig",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly browserNotification: boolean",
+          "readonly sound: boolean",
+          "readonly titleFlash: boolean"
+        ]
+      },
+      {
+        "name": "MoveNotification",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly browserNotification: { readonly title: string; readonly body: string } | null",
+          "readonly sound: boolean",
+          "readonly titleFlash: string | null"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "defaultNotificationsConfig",
+      "deriveMoveNotification",
+      "isRemoteMoveForMe",
+      "shouldReconnect"
+    ]
+  },
+  "src/net/notifyGlue.ts": {
+    "exports": [
+      "NotificationApi",
+      "NotifyGlue",
+      "NotifyGlueDeps",
+      "NotifyReadout"
+    ],
+    "imports": [
+      {
+        "source": "../config/config",
+        "target": "src/config/config.ts",
+        "specifiers": [
+          "getConfig"
+        ]
+      },
+      {
+        "source": "../core/gameState",
+        "target": "src/core/gameState.ts",
+        "specifiers": [
+          "GameState"
+        ]
+      },
+      {
+        "source": "../ui/widgets/netModel",
+        "target": "src/ui/widgets/netModel.ts",
+        "specifiers": [
+          "NetPhase",
+          "NetSeat"
+        ]
+      },
+      {
+        "source": "./notify",
+        "target": "src/net/notify.ts",
+        "specifiers": [
+          "NotificationsConfig",
+          "deriveMoveNotification",
+          "isRemoteMoveForMe",
+          "shouldReconnect"
+        ]
+      }
+    ],
+    "classes": [
+      {
+        "name": "NotifyGlue",
+        "extends": null,
+        "implements": [],
+        "methods": [
+          "onSessionChange(): void",
+          "readout(): NotifyReadout",
+          "stop(): void"
+        ],
+        "properties": [],
+        "isAbstract": false
+      }
+    ],
+    "interfaces": [
+      {
+        "name": "NotificationApi",
+        "extends": [],
+        "methods": [
+          "requestPermission(): Promise<NotificationPermission>"
+        ],
+        "properties": [
+          "permission: NotificationPermission"
+        ]
+      },
+      {
+        "name": "NotifyGlueDeps",
+        "extends": [],
+        "methods": [
+          "getGameState(): GameState | null",
+          "getPhase(): NetPhase",
+          "getPly(): number",
+          "getSeat(): NetSeat",
+          "readNotificationsConfig(): NotificationsConfig",
+          "reconnect(): void"
+        ],
+        "properties": [
+          "readonly doc: Document",
+          "readonly notificationCtor: NotificationApi | null",
+          "readonly win: Window"
+        ]
+      },
+      {
+        "name": "NotifyReadout",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly baseTitle: string",
+          "readonly lastFlash: string | null",
+          "readonly lastNotification: { readonly title: string; readonly body: string } | null",
+          "readonly notificationCount: number",
+          "readonly permissionRequests: number",
+          "readonly title: string",
+          "readonly titleFlashCount: number"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": []
+  },
   "src/net/presence.ts": {
     "exports": [
       "PresenceKind",
@@ -2143,7 +2350,9 @@
           "onChange(listener: NetChangeListener): () => void",
           "onHandshakeChange(listener: HandshakeChangeListener): () => void",
           "place(coords: Coord): void",
+          "ply(): number",
           "propose(action: string): boolean",
+          "reconnect(): Promise<boolean>",
           "redo(): void",
           "resetForRematch(): boolean",
           "respond(accepted: boolean): boolean",

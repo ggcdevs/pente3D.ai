@@ -463,3 +463,38 @@ pre-documented equivalents), undo e2e 6 passed incl. the wrong-seat-rejected + d
 
 **Verdict: N.3 genuinely complete + secure.** On /dev/ after deploy. Networked Undo/Redo buttons now live (they were
 grayed pre-N.3, as expected).
+
+## net-ux-N45 (#17 history-local + #20 reconnect/notifications) — reviewers caught a happy-path shell AND silent scaffolding; both fixed genuinely. BATCH COMPLETE.
+
+N.4 (#17): a permanent test locking that a networked history scrub publishes ZERO transport messages (proven to bite).
+N.5 (#20): pure notify/reconnect decisions (`notify.ts`, 100% coverage+mutation) → `visibilitychange`/`online`
+auto-reconnect (reclaim sticky seat) + move notifications (tab-title flash + browser Notification, config-driven;
+banner keeps turn, NO pulse). Gate passed clean (coverageScope fix holding), pushed.
+
+**N.4 finding (honest, → #33):** the networked history slider is not just read-only — it's **inert** (the scene
+renders the SESSION game, but the scene-local game the slider scrubs is never advanced networked). #17's letter
+("0 network requests") is satisfied trivially by an inert slider, but the *intent* (scrub a networked game's history
+locally) isn't met. The build agent reported this candidly and tested the true behavior; filed #33 to wire the slider
+to the session game's history. Good example of an agent surfacing a scope/intent gap instead of papering over it.
+
+**Reviewer catches (2, both real, both fixed):**
+1. **Happy-path shell (major).** The browser-notification **one-time permission opt-in** — an explicit #20 design
+   requirement — had ZERO behavioral proof: the only browser-channel e2e used `granted`/`denied` spies, which
+   short-circuit before `requestPermission()` is ever called, so the `'default'` opt-in branch was untested. The
+   coverage-exclusion justification ("verified by the Playwright spec") was false for that branch. Fixed (`9a883fe`):
+   a `'default'`-permission e2e asserting `requestPermission` fires exactly ONCE (once-guard) + a post-grant move then
+   fires.
+2. **Silent scaffolding (major).** The `sound` channel was exposed + documented "Play a sound" + config-defaulted +
+   its pure decision computed & tested — but the glue **never consumed `decision.sound`** (no audio code anywhere in
+   `src/`). A user setting `sound:true` got nothing, no `TODO`. Since sound was never a named #20 deliverable (the
+   maintainer picked title-flash + browser-notification), fixed (`77f720b`) by honestly disclosing it as
+   `TODO(sound-effect-not-implemented)` in the glue + model, config `sound:false`, doc de-present-tensed — an explicit
+   deferral, not disguised-as-done. Both are textbook agent-principles #1 catches (apparent vs genuine completeness).
+
+**Main-loop oversight:** reviewers approved (round 3 clean). Verified HEAD `77f720b`: build 0, lint 0, coverage 100%
+(notify.ts), mutation 98.51% (notify.ts 100%), e2e 6/6 notifications (incl. the new opt-in test) + the history lock +
+no networking regression.
+
+**Verdict: N.4/N.5 complete. NETWORKING UX BATCH COMPLETE** (#12 rematch, #18 undo/redo, #17 history-local lock,
+#20 reconnect/notifications — all on /dev/). Follow-ups filed: #30 (codes), #31 (seats — design discussion), #32
+(aesthetics), #33 (networked slider), #28 (depth-sort). Prod promotion (both batches) awaits the maintainer.

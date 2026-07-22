@@ -34,6 +34,8 @@ graph LR
         src_net_handshake_ts["handshake.ts"]
         src_net_mqttTransport_ts["mqttTransport.ts"]
         src_net_netRouting_ts["netRouting.ts"]
+        src_net_notify_ts["notify.ts"]
+        src_net_notifyGlue_ts["notifyGlue.ts"]
         src_net_presence_ts["presence.ts"]
         src_net_rematch_ts["rematch.ts"]
         src_net_seats_ts["seats.ts"]
@@ -122,6 +124,7 @@ graph LR
     src_debug_window_ts --> src_input_setup_ts
     src_debug_window_ts --> src_net_endState_ts
     src_debug_window_ts --> src_net_handshake_ts
+    src_debug_window_ts --> src_net_notifyGlue_ts
     src_debug_window_ts --> src_net_undoRedo_ts
     src_debug_window_ts --> src_render_cameraControls_ts
     src_debug_window_ts --> src_render_hover_ts
@@ -151,6 +154,7 @@ graph LR
     src_main_ts --> src_net_appSession_ts
     src_main_ts --> src_net_endState_ts
     src_main_ts --> src_net_netRouting_ts
+    src_main_ts --> src_net_notifyGlue_ts
     src_main_ts --> src_net_rematch_ts
     src_main_ts --> src_persist_archive_ts
     src_main_ts --> src_persist_db_ts
@@ -176,6 +180,13 @@ graph LR
     src_net_mqttTransport_ts --> src_net_presence_ts
     src_net_mqttTransport_ts --> src_net_transport_ts
     src_net_netRouting_ts --> src_ui_widgets_netModel_ts
+    src_net_notify_ts --> src_config_config_ts
+    src_net_notify_ts --> src_core_gameState_ts
+    src_net_notify_ts --> src_ui_widgets_netModel_ts
+    src_net_notifyGlue_ts --> src_config_config_ts
+    src_net_notifyGlue_ts --> src_core_gameState_ts
+    src_net_notifyGlue_ts --> src_net_notify_ts
+    src_net_notifyGlue_ts --> src_ui_widgets_netModel_ts
     src_net_rematch_ts --> src_core_gameState_ts
     src_net_session_ts --> src_core_coords_ts
     src_net_session_ts --> src_core_game_ts

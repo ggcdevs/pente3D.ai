@@ -33,6 +33,7 @@ classDiagram
     class ArchiveInspect {
         <<interface>>
         +getEndState(): EndState
+        +getNotify(): NotifyReadout
         +listArchive(): Promise~readonly ArchiveListing[]~
     }
     note for ArchiveInspect "src/debug/window.ts"
@@ -694,6 +695,13 @@ classDiagram
         +readonly id: string
     }
     note for MenuScope "src/ui/widgets/menu.ts"
+    class MoveNotification {
+        <<interface>>
+        +readonly browserNotification: Object | null
+        +readonly sound: boolean
+        +readonly titleFlash: string | null
+    }
+    note for MoveNotification "src/net/notify.ts"
     class MqttClientLike {
         <<interface>>
         +end(): this
@@ -831,6 +839,43 @@ classDiagram
         +readonly seat: NetSeat
     }
     note for NetSessionState "src/ui/widgets/netModel.ts"
+    class NotificationApi {
+        <<interface>>
+        +permission: NotificationPermission
+        +requestPermission(): Promise~NotificationPermission~
+    }
+    note for NotificationApi "src/net/notifyGlue.ts"
+    class NotificationsConfig {
+        <<interface>>
+        +readonly browserNotification: boolean
+        +readonly sound: boolean
+        +readonly titleFlash: boolean
+    }
+    note for NotificationsConfig "src/net/notify.ts"
+    class NotifyGlueDeps {
+        <<interface>>
+        +readonly doc: Document
+        +readonly notificationCtor: NotificationApi | null
+        +readonly win: Window
+        +getGameState(): GameState | null
+        +getPhase(): NetPhase
+        +getPly(): number
+        +getSeat(): NetSeat
+        +readNotificationsConfig(): NotificationsConfig
+        +reconnect(): void
+    }
+    note for NotifyGlueDeps "src/net/notifyGlue.ts"
+    class NotifyReadout {
+        <<interface>>
+        +readonly baseTitle: string
+        +readonly lastFlash: string | null
+        +readonly lastNotification: Object | null
+        +readonly notificationCount: number
+        +readonly permissionRequests: number
+        +readonly title: string
+        +readonly titleFlashCount: number
+    }
+    note for NotifyReadout "src/net/notifyGlue.ts"
     class OpacityFieldModel {
         <<interface>>
         +readonly key: string
@@ -868,6 +913,7 @@ classDiagram
         +getLighting(): LightingReadout | null
         +getMarkers(query: readonly string[]): MarkersReadout | null
         +getNet(): NetSessionState | null
+        +getNotify(): NotifyReadout
         +getPieces(): PieceReadout[] | null
         +getState(): GameState | null
         +getTemp(): TempReadout | null
@@ -1360,6 +1406,11 @@ classDiagram
     note for Window "src/debug/window.ts"
     class Window {
         <<interface>>
+        +__penteNotifyNotificationCtor: NotificationApi
+    }
+    note for Window "src/main.ts"
+    class Window {
+        <<interface>>
         +__penteNetTransportFactory: () =~ Transport
     }
     note for Window "src/net/appSession.ts"
@@ -1475,7 +1526,9 @@ classDiagram
         +onChange(listener: NetChangeListener): () =~ void
         +onHandshakeChange(listener: HandshakeChangeListener): () =~ void
         +place(coords: Coord): void
+        +ply(): number
         +propose(action: string): boolean
+        +reconnect(): Promise~boolean~
         +redo(): void
         +resetForRematch(): boolean
         +respond(accepted: boolean): boolean
@@ -1486,6 +1539,12 @@ classDiagram
         +undoRedoPrompt(): UndoRedoPrompt
     }
     note for NetSession "src/net/session.ts"
+    class NotifyGlue {
+        +onSessionChange(): void
+        +readout(): NotifyReadout
+        +stop(): void
+    }
+    note for NotifyGlue "src/net/notifyGlue.ts"
     class PresenceTracker {
         +apply(signal: PresenceSignal): boolean
         +candidatePeers(): string[]
