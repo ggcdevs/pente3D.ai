@@ -1363,6 +1363,12 @@ export function createScene(container: HTMLElement): SceneHandle {
    * Scrub the LOCAL view to ply `k` (Task 5.6, read-only). Reflects `game.stateAt(k)` into the
    * meshes WITHOUT touching the canonical `Game`. A `k` at/after the live head snaps back to live
    * (`scrubIndex = null`); otherwise the earlier snapshot is shown. Emits/syncs nothing.
+   *
+   * READ-ONLY LOCK (#17, agent-principles #7): this seam MUST NOT reach the networked session — no
+   * `netHooks.place` / `netHooks.resync` / `netHooks.propose` / any publish. It only mutates the
+   * local `scrubIndex` and repaints. `e2e/historyLocalLock.spec.ts` counts transport publishes and
+   * asserts a networked scrub adds ZERO; adding ANY `netHooks.*` publish here (e.g. `netHooks.resync()`)
+   * makes that spec go red. Keep it local.
    */
   function scrubTo(k: number): void {
     scrubIndex = k >= game.ply() ? null : k;
