@@ -1297,6 +1297,9 @@ export function createScene(container: HTMLElement): SceneHandle {
       case 'keybindings':
       case 'layout':
       case 'relay':
+      // #20 move-notifications config (title-flash / browser-notification / sound): a networking-UX
+      // section the SESSION glue consumes, NOT the scene — an explicit no-op here, never a silent gap.
+      case 'notifications':
         return;
     }
   }

@@ -108,6 +108,30 @@ describe('getConfig — defaults', () => {
     resetConfig('board', storage);
     expect(getConfig('board', storage).size).toBe(5);
   });
+
+  it('returns the notifications default (#20 SSOT: title-flash ON, browser-notification ON, sound OFF)', () => {
+    // Design decision #20 (locked): the tab-title flash is on by default (no permission needed); the
+    // browser Notification channel is on-BY-CONFIG but still gated by the runtime permission grant
+    // (the pure decision layer treats config.browserNotification && permission-granted); sound is off.
+    const notifications = getConfig('notifications', storage);
+    expect(notifications).toEqual({ titleFlash: true, browserNotification: true, sound: false });
+  });
+
+  it('persists + reads back a notifications override, per-field (localStorage override path)', () => {
+    // A user who opts out of the title flash keeps the other defaults (deep-merge over the default).
+    setConfig('notifications', { titleFlash: false }, storage);
+    expect(getConfig('notifications', storage)).toEqual({
+      titleFlash: false,
+      browserNotification: true,
+      sound: false,
+    });
+    resetConfig('notifications', storage);
+    expect(getConfig('notifications', storage)).toEqual({
+      titleFlash: true,
+      browserNotification: true,
+      sound: false,
+    });
+  });
 });
 
 describe('getConfig — interaction.dragGuard (issue #1)', () => {
@@ -445,7 +469,7 @@ describe('render config sections (Task 4.2)', () => {
 });
 
 describe('sections registry', () => {
-  it('exposes exactly the thirteen required sections', () => {
+  it('exposes exactly the fourteen required sections', () => {
     expect([...CONFIG_SECTIONS].sort()).toEqual(
       [
         'blending',
@@ -459,6 +483,7 @@ describe('sections registry', () => {
         'lighting',
         'lineVisibility',
         'materials',
+        'notifications',
         'relay',
         'rendering',
       ].sort(),

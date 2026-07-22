@@ -124,8 +124,17 @@ export default {
     // machine or rule. Separated from the SyncEngine/banner/session IO glue so it is mutation-
     // gated like the other pure net logic.
     'src/net/undoRedo.ts',
+    // Pure #20 notify/reconnect decisions (Task N.5.1, issue #20): whether an adopted state change was
+    // the OPPONENT's move that made it MY turn (`isRemoteMoveForMe` — the your-turn trigger), which
+    // notification channels fire with what ENUMERATED copy (`deriveMoveNotification` — title-flash +
+    // permission-gated browser notif + config sound, never opponent free text), and whether a
+    // visibility/online edge on a dropped session should auto-reconnect (`shouldReconnect`). REUSES the
+    // core `Player`/`GameState` + `NetPhase`/`NetSeat` types and the config-layer default (no magic
+    // values). Separated from the session/document.title/Notification IO glue so it is mutation-gated
+    // like the other pure net logic.
+    'src/net/notify.ts',
     '!src/net/**/*.test.ts',
-    // Pure render resolvers only (THREE-free). The Three.js scene GLUE (`scene.ts`,
+    // Pure render resolvers only (THREE-free). (the net test-exclusion above covers notify.test.ts) The Three.js scene GLUE (`scene.ts`,
     // `lines.ts`) is NOT mutated — it is an IO boundary verified by Playwright (build
     // plan Tasks 4.1/4.4).
     'src/render/sceneConfig.ts',
