@@ -118,6 +118,17 @@ export class NetSession {
   private peerPresent = false;
   private joinError: JoinErrorReason | null = null;
 
+  /**
+   * The room code + preferred seat color of the LAST session {@link start} ran (N.5.2, #20). Retained
+   * across a background→return drop so {@link reconnect} can RE-JOIN the SAME room in the SAME role,
+   * reclaiming this browser's sticky {@link NetSessionDeps.playerId} seat via the identity-owned
+   * {@link claimSeat} (the host reclaims white, the joiner black). Set on every start; NOT cleared by
+   * {@link disconnect} (a graceful leave / background drop is exactly what a later reconnect resumes),
+   * only overwritten by the next start.
+   */
+  private lastCode: string | null = null;
+  private lastColor: SeatColor | null = null;
+
   private engine: SyncEngine | null = null;
   private transport: Transport | null = null;
 
@@ -189,6 +200,32 @@ export class NetSession {
   }
 
   /**
+   * Auto-reconnect after a background→return drop (N.5.2, issue #20): re-establish the SAME room in
+   * the SAME role the last {@link host}/{@link join} used, reclaiming this browser's sticky
+   * {@link NetSessionDeps.playerId} seat. This is the GLUE side effect the pure
+   * {@link shouldReconnect} (`notify.ts`) gates — the app's `visibilitychange`→visible / `online`
+   * listeners call it only when that decision holds (the session is `offline` AND the tab just became
+   * visible or the network came back), so it never stacks a second connect over a live/connecting one.
+   *
+   * It reuses the EXISTING host/join startup ({@link start} over the injected {@link createTransport}
+   * factory) rather than a bespoke reconnect path: a fresh transport for the room is built the same way
+   * a first connect builds one, and the identity-owned {@link claimSeat} lands this browser back on its
+   * prior seat (host → white, joiner → black) because the `playerId` is unchanged across the drop. A
+   * no-op returning `false` when there is no remembered room (never connected) or a session is already
+   * live (`phase !== 'offline'`) — the defensive backstop for the `shouldReconnect` gate the caller
+   * already applied. On success the reconnected engine's `connect` re-publishes our log so the two
+   * clients re-converge (the same resync the two-context specs drive), reclaiming the seat.
+   *
+   * @returns `true` if a reconnect was attempted, `false` if there was nothing to reconnect to.
+   */
+  async reconnect(): Promise<boolean> {
+    if (this.phase !== 'offline') return false;
+    if (this.lastCode === null || this.lastColor === null) return false;
+    await this.start(this.lastCode, this.lastColor);
+    return true;
+  }
+
+  /**
    * Shared host/join startup: claim `preferredColor`'s seat, build the game + SyncEngine over a
    * fresh transport, wire presence + the connect, and connect to `code`. On a connect failure the
    * phase flips back to `offline` with a `connect-failed` join error (surfaced under the Join
@@ -196,6 +233,10 @@ export class NetSession {
    */
   private async start(code: string, preferredColor: SeatColor): Promise<void> {
     this.joinError = null;
+    // Remember the room + role for a background→return auto-reconnect (N.5.2, #20): re-joining the
+    // SAME code in the SAME role reclaims this browser's sticky playerId seat via `claimSeat`.
+    this.lastCode = normalizeGameCode(code);
+    this.lastColor = preferredColor;
     // Genuine seat claim against the session's seat-map view (identity-owned; see the class TODO on
     // the deferred shared-seat-map negotiation). `claimSeat` is first-available white-preferred, so
     // to seat a JOINER as black we present a map with white already taken by a placeholder "host"
@@ -486,6 +527,18 @@ export class NetSession {
   /** The wrapped SyncEngine, for the scene to read its `Game`/state once connected, or null. */
   syncEngine(): SyncEngine | null {
     return this.engine;
+  }
+
+  /**
+   * The authoritative game's move-log length (ply) while a session is live, or `0` offline (N.5.2,
+   * issue #20). The move-notification glue tracks this across session changes to detect a FORWARD
+   * opponent move (the ply GREW) — the trigger the pure {@link isRemoteMoveForMe} reads. Sourced from
+   * the wrapped engine's `Game.ply()` (the canonical move-log length, capture-independent), NOT from a
+   * piece count (captures remove pieces without shortening the log), so an undo shrinks it and a
+   * capturing move still grows it — exactly what the trigger needs.
+   */
+  ply(): number {
+    return this.engine === null ? 0 : this.engine.game().ply();
   }
 
   /**

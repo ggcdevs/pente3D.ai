@@ -7,6 +7,7 @@ import { createAppNetSession } from './net/appSession.ts';
 import { shouldRenderSessionGame } from './net/netRouting.ts';
 import { shouldArchiveBeforeNetStart } from './net/rematch.ts';
 import { deriveEndState, REMATCH_ACTION, type EndState } from './net/endState.ts';
+import { NotifyGlue, type NotifyReadout, type NotificationApi } from './net/notifyGlue.ts';
 import { headHash } from './core/eventLog.ts';
 import { openDatabase, resolveDbName } from './persist/db.ts';
 import {
@@ -27,6 +28,18 @@ import type { ArchiveListing } from './ui/widgets/archiveModel.ts';
 import { randomId } from './util/randomId.ts';
 
 const log = createLogger('app:boot');
+
+/**
+ * The e2e-injectable `Notification` constructor seam (Task N.5.2, issue #20). A Playwright spec sets it
+ * BEFORE the app boots (via `addInitScript`) to a SPY constructor, so the move-notification glue fires
+ * a fake `Notification` it can assert on WITHOUT triggering a real OS permission prompt. Absent, the
+ * glue uses the real `window.Notification` (or `null` where the browser lacks it — a silent degrade).
+ */
+declare global {
+  interface Window {
+    __penteNotifyNotificationCtor?: NotificationApi;
+  }
+}
 
 // Task N.2.2 (issue #12): the finished-networked-game rematch is NO LONGER a blocking `window.confirm`
 // (removed here — it froze the tab and hid the won board). It is now a NON-BLOCKING, view-only
@@ -151,6 +164,25 @@ const HIDDEN_END_STATE: EndState = {
 // net session wires up (below). Until then (offline / pre-wiring) there is no net game, so the overlay
 // is hidden — the same honest-until-wired pattern `netAuthoritativeGame` uses.
 let getNetEndState: () => EndState = () => HIDDEN_END_STATE;
+
+// The move-notification + auto-reconnect glue (Task N.5.2, issue #20), set once the net session wires
+// up. Until then (offline / pre-wiring) there is no session to notify for, so the readout reports the
+// pristine title with zeroed counters — the same honest-until-wired pattern the other net holders use.
+let notifyGlue: NotifyGlue | null = null;
+/** The live move-notification readout (`document.title` + fire counters) for `window.__pente` (#3). */
+function getNotifyReadout(): NotifyReadout {
+  return (
+    notifyGlue?.readout() ?? {
+      title: document.title,
+      baseTitle: document.title,
+      titleFlashCount: 0,
+      notificationCount: 0,
+      permissionRequests: 0,
+      lastFlash: null,
+      lastNotification: null,
+    }
+  );
+}
 
 /** The authoritative game to archive: the networked SESSION's game when a net game is live, else the
  *  scene's local game. Both expose the same `Game` shape (log + ply + state) the archive persists. */
@@ -506,13 +538,44 @@ void createAppNetSession(scene.getState().size)
       refreshUi();
     };
 
+    // MOVE-NOTIFICATION + AUTO-RECONNECT glue (Task N.5.2, issue #20). Concentrates the DOM /
+    // browser-API side effects the PURE `notify.ts` decisions gate: the tab-title flash + browser
+    // Notification on a your-turn OPPONENT move (fired only while the tab is HIDDEN, config-driven,
+    // permission requested once on opt-in), and the `visibilitychange`→visible / `online` auto-reconnect
+    // that re-joins the SAME room reclaiming the sticky seat (`session.reconnect`). The `Notification`
+    // constructor is read from an e2e-injectable seam (`window.__penteNotifyNotificationCtor`) so a spec
+    // drives a spy without a real OS permission prompt; absent it, the real `window.Notification` (or
+    // `null` where the browser lacks it — a graceful silent degrade) is used. It reads the live session
+    // phase/game/seat/ply through accessors, so a background→return reconnect and a your-turn nudge both
+    // derive from the SAME authoritative session state the board renders (never a duplicated fact).
+    const injectedNotificationCtor = window.__penteNotifyNotificationCtor;
+    const notificationCtor: NotificationApi | null =
+      injectedNotificationCtor !== undefined
+        ? injectedNotificationCtor
+        : typeof window.Notification === 'undefined'
+          ? null
+          : (window.Notification as unknown as NotificationApi);
+    notifyGlue = new NotifyGlue({
+      doc: document,
+      win: window,
+      notificationCtor,
+      getPhase: () => session.state().phase,
+      getGameState: () => session.gameState(),
+      getPly: () => session.ply(),
+      getSeat: () => session.state().seat,
+      reconnect: () => void session.reconnect().then(refreshUi),
+    });
+
     // On EVERY session-state change — a local move, a REMOTE move adopted by the transport pump
     // (the resync link), presence, or a conflict — adopt the session's authoritative game into the
     // scene (re-rendering a remote move) and repaint the widgets. This is the render half of "ONE
     // authoritative game per session"; without it a peer's move never reaches the board (issue #4).
     // A finished game surfaces the non-blocking end-state overlay via the refreshed `getNetEndState`.
+    // The notify glue also observes the change to fire the your-turn tab-title flash / browser
+    // Notification when the ADOPTED change was an opponent move that made it this client's turn (#20).
     session.onChange(() => {
       scene.adoptNetState();
+      notifyGlue?.onSessionChange();
       refreshUi();
     });
     // MUTUAL-ACCEPT networked undo/redo apply (Task N.3.2, plan N.3 decision 3, issue #18: "opponent
@@ -648,6 +711,9 @@ installInspectApi(scene, ui, {
   // The networked end-state view-model (Task N.2.2, issue #12) — derived in the app over the net
   // session + seat, so it is supplied here (not from the scene) for `window.__pente.getEndState`.
   getEndState: () => getNetEndState(),
+  // The move-notification readout (Task N.5.2, issue #20) — the app-level notify glue's live
+  // document.title + fire counters, for `window.__pente.getNotify` (the #20 e2e's proof-by-behaviour).
+  getNotify: () => getNotifyReadout(),
 });
 
 log.info('app booted');

@@ -26,6 +26,7 @@ import type { BannerContext } from '../ui/widgets/banner.ts';
 import type { NetSessionState } from '../ui/widgets/netModel.ts';
 import type { HandshakeState } from '../net/handshake.ts';
 import type { EndState } from '../net/endState.ts';
+import type { NotifyReadout } from '../net/notifyGlue.ts';
 import type { UndoRedoPrompt } from '../net/undoRedo.ts';
 import type { HelpSources } from '../ui/widgets/helpModel.ts';
 import type { ArchiveListing } from '../ui/widgets/archiveModel.ts';
@@ -291,6 +292,16 @@ export interface PenteInspect {
    * hidden shape (`show: false, rematchUi: 'idle'`) offline / for a local game.
    */
   getEndState(): EndState;
+  /**
+   * The live move-notification readout (Task N.5.2, issue #20): the current `document.title`, the
+   * `baseTitle` the flash restores to, and the fire COUNTERS (`titleFlashCount`, `notificationCount`,
+   * `permissionRequests`) plus the last flash/notification copy. Lets a Playwright spec prove — by
+   * observable behaviour, never a log line (#3) — that a REMOTE move while the tab is HIDDEN flashed the
+   * title to the enumerated your-turn string and that becoming visible RESTORED it, that MY OWN move did
+   * NOT, and (with a `Notification` spy) that a browser notification fired only when hidden + permitted.
+   * The gate bites: flipping the `notifications` config off must leave `titleFlashCount` unchanged.
+   */
+  getNotify(): NotifyReadout;
 }
 
 /** The app-level archive readouts wired into the inspect API (Task 5.8; the DB lives in `main.ts`). */
@@ -303,6 +314,12 @@ export interface ArchiveInspect {
    * scene. Wired onto `window.__pente.getEndState` for the two-context rematch e2e.
    */
   getEndState(): EndState;
+  /**
+   * The live move-notification readout (Task N.5.2, issue #20) — the app's `getNotifyReadout`
+   * (`main.ts`), exposed here because the notify glue is an app-level object (owns `document.title` +
+   * the `Notification` API), not scene state. Wired onto `window.__pente.getNotify` for the #20 e2e.
+   */
+  getNotify(): NotifyReadout;
 }
 
 declare global {
@@ -385,6 +402,10 @@ export function installInspectApi(
     // a two-context e2e proves BOTH clients surface the view-only overlay on a net game-over and drive
     // the rematch. Derived in the app (net session + seat), not the scene, so it rides `archive`.
     getEndState: () => archive.getEndState(),
+    // Move-notification readout (Task N.5.2, issue #20) — the app's notify glue (`getNotifyReadout`),
+    // exposed so the #20 e2e asserts the tab-title flash / browser-notification fired (real title +
+    // counters), not a log line. Rides `archive` because the glue is app-level (owns document.title).
+    getNotify: () => archive.getNotify(),
   };
   window.__pente = api;
   log.info('window.__pente installed', Object.keys(api));

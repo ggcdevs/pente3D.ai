@@ -59,6 +59,13 @@ export default defineConfig({
         'src/ui/widgets/netPanel.ts',
         'src/net/session.ts',
         'src/net/appSession.ts',
+        // Task N.5.2 move-notification + auto-reconnect GLUE: the DOM (`document.title` flash) +
+        // browser-API (`Notification`, `requestPermission`) + `visibilitychange`/`online` listener
+        // side effects the PURE `notify.ts` decisions gate. Touches document / browser globals —
+        // verified by the Task N.5.2 Playwright spec (real title + fire counters + a Notification spy),
+        // not unit coverage. The PURE `net/notify.ts` it stands on is pinned to the 100% floor (via
+        // `src/net/**`) and in the mutation scope. Excluded file-by-file so `notify.ts` stays measured.
+        'src/net/notifyGlue.ts',
         // Task 5.6 history-slider widget: the `<input type=range>` DOM glue that reads the scene's
         // history readout and drives its read-only scrub seam. Touches the DOM — verified by the
         // Task 5.6 Playwright spec, not unit coverage. The PURE `sliderModel.ts` is pinned to the
