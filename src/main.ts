@@ -449,6 +449,14 @@ void createAppNetSession(scene.getState().size)
       getHandshake: () => session.getHandshake(),
       propose: (action) => session.propose(action),
       respond: (accepted) => session.respond(accepted),
+      // Networked mutual-confirm undo/redo (N.3.2, issue #18): the banner Undo/Redo buttons enable on
+      // whether a PROPOSAL is currently valid (the session's `canProposeUndo`/`canProposeRedo` — the
+      // restricted last-mover-only rule + the single-pending invariant), and the incoming accept/decline
+      // PROMPT view-model the banner surfaces (`deriveUndoRedoPrompt` over the handshake + seat). Both are
+      // pure derivations folded in the session over the authoritative net game; the banner renders the
+      // prompt copy via `textContent` (opponent-derived color from the fixed `Player` union, never eval'd).
+      getNetUndoRedoAvail: () => session.undoRedoAvail(),
+      getUndoRedoPrompt: () => session.undoRedoPrompt(),
     });
     // Archive ACCUMULATION for NETWORKED games (Task 6.3): the authoritative game to persist while a
     // net game is live is the SESSION engine's game — its own `Game` object, distinct from the scene's
@@ -507,15 +515,30 @@ void createAppNetSession(scene.getState().size)
       scene.adoptNetState();
       refreshUi();
     });
+    // MUTUAL-ACCEPT networked undo/redo apply (Task N.3.2, plan N.3 decision 3, issue #18: "opponent
+    // confirms → both roll back one"; redo the same via a proposal). When the out-of-band undo/redo
+    // handshake RESOLVES to `accepted` on EITHER side (WE proposed and the peer accepted, or the peer
+    // proposed and WE accepted), BOTH clients apply the undo/redo to their OWN engine + publish, so the
+    // two logs converge by the same prefix/hash path as any move. The undo/redo was held OUT-OF-BAND on
+    // the handshake until this point — a decline or auto-cancel (a move lands / peer drops) never
+    // resolves to `accepted`, so both games stay untouched. `applyAcceptedUndoRedo` guards on the
+    // resolution (only an accepted `'undo'`/`'redo'`) and CLEARS it, so it fires once per acceptance and
+    // never re-applies; a `'rematch'` accept is `maybeRematchReset`'s job (the two consumers stay
+    // decoupled on their action tag). No manual id-guard is needed here — the clear makes it idempotent.
+    const maybeApplyUndoRedo = (): void => {
+      session.applyAcceptedUndoRedo();
+    };
     // Out-of-band handshake changes (N.1, #12/#18): an incoming ask, a resolution, or an auto-cancel.
-    // Repaint the widgets so the #12 rematch overlay reflects the pending proposal / resolution, and
-    // fire the MUTUAL-ACCEPT seat-swap restart when the rematch handshake resolves to `accepted`. Kept
+    // Repaint the widgets so the #12 rematch overlay + the #18 undo/redo prompt reflect the pending
+    // proposal / resolution, fire the MUTUAL-ACCEPT seat-swap restart when the rematch handshake
+    // resolves to `accepted`, and apply the MUTUAL-ACCEPT undo/redo when that handshake does. Kept
     // separate from the sync `onChange` because a handshake transition is NOT a move — it never touches
-    // the board/log — so it must not run the adopt path; it only refreshes the out-of-band state view
-    // and drives the accepted-rematch reset.
+    // the board/log directly — so it must not run the adopt path; it only refreshes the out-of-band
+    // state view and drives the accepted-rematch reset / accepted-undo-redo apply.
     session.onHandshakeChange(() => {
       refreshUi();
       maybeRematchReset();
+      maybeApplyUndoRedo();
     });
     refreshUi();
     log.info('net session wired');
@@ -582,6 +605,10 @@ const ui = createUi(container, {
   getEndState: () => getNetEndState(),
   proposeRematch: () => scene.propose(REMATCH_ACTION),
   respondRematch: (accepted) => scene.respond(accepted),
+  // Networked undo/redo prompt Accept/Decline (Task N.3.2, issue #18): the banner's incoming-undo/redo
+  // prompt routes accept/decline through the SAME session handshake `respond` (`window.__pente.respond`
+  // uses) — on mutual accept the app applies the undo/redo on the resolution (`applyAcceptedUndoRedo`).
+  respondUndoRedo: (accepted) => scene.respond(accepted),
 });
 
 /** Repaint every widget from the live state + the banner history context (Task 5.2). */

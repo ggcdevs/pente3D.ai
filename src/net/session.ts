@@ -50,6 +50,14 @@ import {
 } from './handshake';
 import { claimSeat, emptySeatMap, seatOf, type SeatColor, type SeatMap } from './seats';
 import { alternateSeats } from './endState';
+import {
+  UNDO_ACTION,
+  REDO_ACTION,
+  canProposeUndo,
+  canProposeRedo,
+  deriveUndoRedoPrompt,
+  type UndoRedoPrompt,
+} from './undoRedo';
 import { canPlaceForSeat } from './turnGate';
 import {
   generateGameCode,
@@ -286,6 +294,56 @@ export class NetSession {
     this.emit();
   }
 
+  /** Redo this client's own previously-undone move (delegates to the engine's restricted redo). */
+  redo(): void {
+    this.requireEngine().redo();
+    this.reflectEngineStatus();
+    this.emit();
+  }
+
+  /**
+   * Apply an ACCEPTED out-of-band undo/redo resolution (the #18 mutual-confirm apply half). Called by
+   * the app when the shared N.1 handshake RESOLVES to `accepted` for an `'undo'` / `'redo'` action on
+   * EITHER side (WE proposed and the peer accepted, or the peer proposed and WE accepted): BOTH clients
+   * fold the action into their own engine + publish, so the two logs converge by the same prefix/hash
+   * path as any move. This is where the undo/redo — held OUT-OF-BAND on the handshake until this point —
+   * is finally applied to the game/log; a declined or auto-cancelled proposal never reaches here, so
+   * both games stay untouched (the #18 "held out-of-band until BOTH accept" guarantee).
+   *
+   * It reads the session's own {@link HandshakeState.resolution}: only an `accepted` resolution whose
+   * action is `'undo'` or `'redo'` applies (a `'rematch'` accept is {@link resetForRematch}'s job; a
+   * decline does nothing). Applies exactly the matching engine action, then CLEARS the resolution so it
+   * cannot re-fire and the handshake settles idle for the next ask. A no-op returning `false` when
+   * there is no live engine, or the current resolution is not an accepted undo/redo.
+   *
+   * @returns `true` iff an accepted undo/redo was applied, `false` otherwise.
+   */
+  applyAcceptedUndoRedo(): boolean {
+    if (this.engine === null) return false;
+    const res = this.handshake.resolution;
+    if (res === null || res.outcome !== 'accepted') return false;
+    if (res.action !== UNDO_ACTION && res.action !== REDO_ACTION) return false;
+    // Apply the AGREED action to OUR engine (which publishes → the peer adopts the strict extension).
+    // Use the UNCONDITIONAL apply variants, NOT the restricted `engine.undo()`: who may PROPOSE was
+    // gated upstream (decideUndo/decideRedo via canProposeUndo/canProposeRedo) before the ask was
+    // raised, but the APPLY runs on BOTH clients — and the RESPONDER's seat is NOT the last mover's, so
+    // the restricted `engine.undo()` would refuse the undo the responder just accepted and the boards
+    // would diverge. `applyAgreedUndo`/`redo` step the last move regardless of seat (mutual consent was
+    // already established); a core IllegalMove would still propagate honestly rather than be masked.
+    if (res.action === UNDO_ACTION) {
+      this.engine.applyAgreedUndo();
+    } else {
+      this.engine.redo();
+    }
+    // The accepted undo/redo has now been applied — clear the resolution so it cannot re-fire and the
+    // next ask starts from an idle handshake (mirrors resetForRematch). setHandshake notifies the
+    // handshake listeners so the prompt/idle UI repaints, and no-ops if there was nothing to clear.
+    this.setHandshake(clearResolution(this.handshake));
+    this.reflectEngineStatus();
+    this.emit();
+    return true;
+  }
+
   /**
    * Reset to a FRESH game IN PLACE — the N.2 seamless rematch (design decision 2: "both reset to a
    * fresh game in the SAME room/connection — no disconnect/re-host", "colors ALTERNATE every game").
@@ -391,6 +449,38 @@ export class NetSession {
   canPlace(): boolean {
     if (this.engine === null) return true;
     return canPlaceForSeat(this.seat, this.engine.game().state().turn);
+  }
+
+  /**
+   * Whether this client may PROPOSE an undo / a redo right now (Task N.3.2, issue #18) — the flags the
+   * networked banner Undo/Redo buttons enable on. Folds the authoritative game state + ply + redo-tail
+   * fact + this client's seat + the N.1 handshake through the PURE {@link canProposeUndo} /
+   * {@link canProposeRedo} (which combine the restricted last-mover-only rule with the single-pending
+   * invariant). With no live engine/seat (offline) neither is proposable (there is no networked game),
+   * so both are `false` — the LOCAL buttons then use the scene's own `canUndo`/`canRedo` history facts.
+   */
+  undoRedoAvail(): { readonly canUndo: boolean; readonly canRedo: boolean } {
+    if (this.engine === null || this.seat === null) {
+      return { canUndo: false, canRedo: false };
+    }
+    const game = this.engine.game();
+    const state = game.state();
+    const seat = this.seat as Player;
+    return {
+      canUndo: canProposeUndo(state, game.ply(), seat, this.handshake),
+      canRedo: canProposeRedo(state, game.canRedo(), seat, this.handshake),
+    };
+  }
+
+  /**
+   * The INCOMING undo/redo accept/decline prompt view-model (Task N.3.2, issue #18): the PURE
+   * {@link deriveUndoRedoPrompt} over the N.1 handshake + this client's seat. `show` is `true` only when
+   * the PEER has an `'undo'`/`'redo'` proposal awaiting our response; the copy names the opponent color
+   * (from the fixed `Player` union, never opponent free text — the consuming widget renders it via
+   * `textContent`). Offline / no incoming ask → a hidden prompt.
+   */
+  undoRedoPrompt(): UndoRedoPrompt {
+    return deriveUndoRedoPrompt(this.handshake, this.seat);
   }
 
   /** The wrapped SyncEngine, for the scene to read its `Game`/state once connected, or null. */

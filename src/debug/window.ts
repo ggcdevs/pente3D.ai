@@ -26,6 +26,7 @@ import type { BannerContext } from '../ui/widgets/banner.ts';
 import type { NetSessionState } from '../ui/widgets/netModel.ts';
 import type { HandshakeState } from '../net/handshake.ts';
 import type { EndState } from '../net/endState.ts';
+import type { UndoRedoPrompt } from '../net/undoRedo.ts';
 import type { HelpSources } from '../ui/widgets/helpModel.ts';
 import type { ArchiveListing } from '../ui/widgets/archiveModel.ts';
 import { createLogger } from './log.ts';
@@ -271,6 +272,16 @@ export interface PenteInspect {
    */
   respond(accepted: boolean): boolean;
   /**
+   * The INCOMING networked undo/redo accept/decline PROMPT view-model (Task N.3.2, issue #18): the pure
+   * `deriveUndoRedoPrompt` folded from the N.1 handshake + this client's seat. `show` is `true` ONLY
+   * when the PEER has an `'undo'`/`'redo'` proposal awaiting our response; `action` is the narrowed
+   * `'undo'`/`'redo'`, and `promptText` names the opponent color (fixed `Player` union, never opponent
+   * free text). Lets the TWO-CONTEXT e2e prove that after A proposes an undo, B's session surfaces
+   * `{ show: true, action: 'undo', promptText: '<color> wants to undo' }` — observable state on the
+   * OTHER client, not a log line (#3). Hidden (`{ show: false, action: null, promptText: '' }`) offline.
+   */
+  getUndoRedoPrompt(): UndoRedoPrompt;
+  /**
    * The live networked END-STATE view-model (Task N.2.2, issue #12): the pure `deriveEndState` folded
    * from the AUTHORITATIVE net game + the N.1 handshake + this client's seat — `show` (true only on a
    * finished NET game), `winner`/`winReason`/`iWon`, the enumerated `resultText`, and the `rematchUi`
@@ -366,6 +377,10 @@ export function installInspectApi(
     getHandshake: () => scene.getHandshake(),
     propose: (action: string) => scene.propose(action),
     respond: (accepted: boolean) => scene.respond(accepted),
+    // Networked undo/redo accept/decline PROMPT (Task N.3.2, issue #18): the session's pure
+    // `deriveUndoRedoPrompt` over the handshake + seat. A two-context e2e reads this to prove B surfaces
+    // "<color> wants to undo" after A proposes — observable state on the OTHER client, not a log line.
+    getUndoRedoPrompt: () => scene.getUndoRedoPrompt(),
     // Networked end-state view-model (Task N.2.2, issue #12) — the app's `getNetEndState`, exposed so
     // a two-context e2e proves BOTH clients surface the view-only overlay on a net game-over and drive
     // the rematch. Derived in the app (net session + seat), not the scene, so it rides `archive`.

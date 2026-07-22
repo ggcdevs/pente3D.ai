@@ -53,6 +53,7 @@ import type { GameState } from '../core/gameState.ts';
 import type { BannerContext } from '../ui/widgets/banner.ts';
 import type { NetSessionState } from '../ui/widgets/netModel.ts';
 import { initialHandshake, type HandshakeState } from '../net/handshake.ts';
+import { deriveUndoRedoPrompt, type UndoRedoPrompt } from '../net/undoRedo.ts';
 import type { HelpSources } from '../ui/widgets/helpModel.ts';
 import { keyOf, type Coord, type NodeKey } from '../core/coords.ts';
 import { generateAllLines, type LineCategory } from '../core/lines.ts';
@@ -262,6 +263,22 @@ export interface NetHooks {
    * there is nothing to answer. Out-of-band throughout — no move-log write.
    */
   respond(accepted: boolean): boolean;
+  /**
+   * Whether this client may PROPOSE an undo / a redo in the LIVE networked game (Task N.3.2, issue
+   * #18): the session folds the authoritative state + ply + redo-tail + seat + handshake through the
+   * pure `canProposeUndo`/`canProposeRedo`. The scene reads these to enable the networked banner
+   * Undo/Redo buttons — a networked undo/redo is a PROPOSAL, gated by the restricted last-mover-only
+   * rule + the single-pending invariant, not the local ply/redo-tail history. `false`/`false` offline.
+   */
+  getNetUndoRedoAvail(): { readonly canUndo: boolean; readonly canRedo: boolean };
+  /**
+   * The INCOMING undo/redo accept/decline PROMPT (Task N.3.2, issue #18): the session's pure
+   * `deriveUndoRedoPrompt` over the handshake + seat. `show` is `true` only when the PEER has an
+   * undo/redo proposal awaiting our response; the copy names the opponent color (fixed `Player` union,
+   * never opponent free text). The banner surfaces it (not the end-state overlay — the game is not
+   * over) and calls {@link respond} on Accept/Decline. Hidden offline / with no incoming ask.
+   */
+  getUndoRedoPrompt(): UndoRedoPrompt;
 }
 
 export interface SceneHandle {
@@ -487,6 +504,13 @@ export interface SceneHandle {
   propose(action: string): boolean;
   /** Respond accept/decline to the incoming proposal (N.1); `true` if a response was sent, else `false`. */
   respond(accepted: boolean): boolean;
+  /**
+   * The INCOMING networked undo/redo accept/decline PROMPT (Task N.3.2, issue #18): `show` is `true`
+   * only when the peer's undo/redo proposal awaits our response; the copy names the opponent color
+   * (fixed `Player` union, rendered via `textContent`). Surfaced on `window.__pente.getUndoRedoPrompt`
+   * so a two-context e2e proves B sees "<color> wants to undo" when A proposes. Hidden offline.
+   */
+  getUndoRedoPrompt(): UndoRedoPrompt;
   /** Stash a validated join code for the next `joinGame` dispatch (Task 5.5 argument seam). */
   setPendingJoinCode(code: string): void;
   /** Resolve a chord through the scope stack and dispatch it — drives the key path in tests. */
@@ -855,6 +879,10 @@ export function createScene(container: HTMLElement): SceneHandle {
     getHandshake: () => initialHandshake(),
     propose: () => false,
     respond: () => false,
+    // No live session → nothing is proposable and no incoming ask exists. Honest defaults so the banner
+    // never shows a networked prompt or enables a networked-only button before the session wires (#18).
+    getNetUndoRedoAvail: () => ({ canUndo: false, canRedo: false }),
+    getUndoRedoPrompt: () => deriveUndoRedoPrompt(initialHandshake(), null),
   };
 
   const undoRedoSafe = (fn: () => void): void => {
@@ -867,9 +895,24 @@ export function createScene(container: HTMLElement): SceneHandle {
     // A real undo/redo is a live state change: snap the local view back to live (clears any scrub).
     commitLive();
   };
+  // Networked undo/redo is MUTUAL-CONFIRM (issue #18, Task N.3.2): in a live networked game an
+  // undo/redo does NOT apply directly — it PROPOSES via the shared N.1 handshake and only both-sides-
+  // apply on mutual accept (the app wires the accepted resolution to `session.applyAcceptedUndoRedo`).
+  // So when a net game is live the `undo`/`redo` commands publish an out-of-band proposal instead of
+  // mutating the local game; offline they apply DIRECTLY (unchanged local single-player behavior). The
+  // SAME command id fires from the banner button and any keybinding (design Principle 3), so both route
+  // identically. `netHooks.propose` returns false offline (no session), which never happens here since
+  // we only take this branch when a net game is authoritative.
+  const undoRedoNet = (action: 'undo' | 'redo', localApply: () => void): void => {
+    if (netHooks.getNetGameState() !== null) {
+      netHooks.propose(action);
+      return;
+    }
+    undoRedoSafe(localApply);
+  };
   const commands: Command[] = [
-    { id: 'undo', run: () => undoRedoSafe(() => game.undo()) },
-    { id: 'redo', run: () => undoRedoSafe(() => game.redo()) },
+    { id: 'undo', run: () => undoRedoNet('undo', () => game.undo()) },
+    { id: 'redo', run: () => undoRedoNet('redo', () => game.redo()) },
     // Reset (Task 5.2): start a brand-new game. Replaces the `Game` instance (undo/redo of a
     // reset is out of scope for v1) and reconciles every state-derived mesh to the pristine
     // state. A no-op reflected in the UI is fine — a pristine game's Reset is disabled anyway.
@@ -1270,15 +1313,27 @@ export function createScene(container: HTMLElement): SceneHandle {
    * true whenever the game is not pristine (a move was made or an undone tail remains).
    */
   function getBannerContext(): BannerContext {
+    // In a LIVE networked game (Task N.3.2, issue #18) Undo/Redo are mutual-confirm PROPOSALS, so the
+    // buttons enable on whether a PROPOSAL is currently valid (restricted last-mover-only rule + no
+    // pending ask — the session's `canProposeUndo`/`canProposeRedo`), NOT on the local ply/redo-tail.
+    // This is what LIGHTS UP the previously-grayed networked buttons. Offline the buttons use the
+    // scene's own local history facts (unchanged single-player behavior). `canReset` stays local — a
+    // reset is not part of the #18 handshake. Only branch when a net game is authoritative.
+    const netLive = netHooks.getNetGameState() !== null;
+    const netAvail = netHooks.getNetUndoRedoAvail();
     return {
       history: {
-        canUndo: game.canUndo(),
-        canRedo: game.canRedo(),
+        canUndo: netLive ? netAvail.canUndo : game.canUndo(),
+        canRedo: netLive ? netAvail.canRedo : game.canRedo(),
         canReset: game.canUndo() || game.canRedo(),
       },
       // The seat-turn gate's running block count (Task 6.2). The banner compares it to the count it
       // last saw and, when it advanced, briefly pulses the "X to move" line — the subtle off-turn cue.
       offTurnBlocks,
+      // The INCOMING networked undo/redo accept/decline prompt (Task N.3.2, issue #18): the session's
+      // pure `deriveUndoRedoPrompt` over the handshake + seat. The banner surfaces it (not the end-state
+      // overlay — the game is not over) and renders the opponent-derived copy via `textContent`.
+      undoRedoPrompt: netHooks.getUndoRedoPrompt(),
     };
   }
 
@@ -1420,6 +1475,16 @@ export function createScene(container: HTMLElement): SceneHandle {
   /** Respond accept/decline to the incoming proposal via the session (N.1); `false` if none. */
   function respond(accepted: boolean): boolean {
     return netHooks.respond(accepted);
+  }
+
+  /**
+   * The INCOMING undo/redo accept/decline prompt (Task N.3.2, issue #18): the session's pure
+   * `deriveUndoRedoPrompt` over the handshake + seat. The banner surfaces it (not the end-state
+   * overlay — the game is not over); Playwright reads it via `window.__pente.getUndoRedoPrompt`.
+   * Hidden offline / with no incoming ask.
+   */
+  function getUndoRedoPrompt(): UndoRedoPrompt {
+    return netHooks.getUndoRedoPrompt();
   }
 
   /**
@@ -1778,6 +1843,7 @@ export function createScene(container: HTMLElement): SceneHandle {
     getHandshake,
     propose,
     respond,
+    getUndoRedoPrompt,
     getHelpSources,
     setNetHooks,
     adoptNetState,

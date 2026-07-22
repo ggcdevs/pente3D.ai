@@ -20,6 +20,7 @@
 import type { Widget, WidgetFactory } from '../registry.ts';
 import type { GameState } from '../../core/gameState.ts';
 import { deriveBanner, type BannerHistory, type BannerModel } from './bannerModel.ts';
+import type { UndoRedoPrompt } from '../../net/undoRedo.ts';
 
 /** The stable widget id — matches the `statusBanner` entry in the tracked `layout` default. */
 export const BANNER_WIDGET_ID = 'statusBanner';
@@ -32,6 +33,14 @@ export interface BannerDeps {
   readonly doc: Document;
   /** Dispatch a command id (Undo/Redo/Reset). Returns whether a command ran. */
   dispatch(commandId: string): boolean;
+  /**
+   * Respond accept (`true`) / decline (`false`) to the INCOMING networked undo/redo proposal (Task
+   * N.3.2, issue #18). The banner surfaces the accept/decline prompt (NOT the end-state overlay — the
+   * game is not over) and calls this on the Accept/Decline buttons; it routes to the session handshake
+   * `respond`, so on mutual accept BOTH clients roll the undo/redo (the app applies on the resolution).
+   * Returns whether a response was sent (`false` if there was nothing to answer).
+   */
+  respondUndoRedo(accepted: boolean): boolean;
 }
 
 /**
@@ -49,6 +58,15 @@ export interface BannerContext {
    * mirrored onto `data-offturn-flashes` so Playwright can prove the cue fired (observable, not a log).
    */
   readonly offTurnBlocks?: number;
+  /**
+   * The INCOMING networked undo/redo accept/decline PROMPT view-model (Task N.3.2, issue #18): the pure
+   * `deriveUndoRedoPrompt` output the session folds over the N.1 handshake + this client's seat. When
+   * `show` is `true` the banner surfaces an accept/decline prompt naming the opponent (rendered via
+   * `textContent` — opponent-derived color from the fixed `Player` union, never `innerHTML`/eval). Absent
+   * (older callers / no net game) it is treated as hidden, so the prompt never appears spuriously. Its
+   * fields are mirrored onto `data-*` so Playwright reads the rendered prompt back off the live DOM (#3).
+   */
+  readonly undoRedoPrompt?: UndoRedoPrompt;
 }
 
 /** Pristine flags used before any state arrives (nothing to undo/redo/reset yet). */
@@ -142,6 +160,47 @@ export function bannerWidget(): WidgetFactory {
       }
       element.appendChild(controls);
 
+      // Networked undo/redo accept/decline PROMPT (Task N.3.2, issue #18). Surfaced HERE in the banner
+      // (NOT the end-state overlay — the game is not over) when the peer proposes an undo/redo. The
+      // headline text is opponent-derived (the fixed `Player` color word from the pure model), so it is
+      // painted via `textContent` ONLY — never innerHTML/eval (the relay is publicly writable; treat any
+      // opponent-derived text as untrusted). Built once; `update` toggles visibility + repaints copy.
+      const prompt = doc.createElement('div');
+      prompt.className = 'pente-banner-undoredo-prompt';
+      prompt.setAttribute('data-testid', 'banner-undoredo-prompt');
+      prompt.setAttribute('data-show', 'false');
+      prompt.setAttribute('data-action', '');
+      prompt.hidden = true;
+      const promptText = doc.createElement('span');
+      promptText.className = 'pente-banner-undoredo-text';
+      promptText.setAttribute('data-testid', 'banner-undoredo-text');
+      const acceptBtn = doc.createElement('button');
+      acceptBtn.className = 'pente-banner-button pente-banner-undoredo-accept';
+      acceptBtn.setAttribute('data-testid', 'banner-undoredo-accept');
+      acceptBtn.textContent = 'Accept';
+      acceptBtn.addEventListener('click', () => deps.respondUndoRedo(true));
+      const declineBtn = doc.createElement('button');
+      declineBtn.className = 'pente-banner-button pente-banner-undoredo-decline';
+      declineBtn.setAttribute('data-testid', 'banner-undoredo-decline');
+      declineBtn.textContent = 'Decline';
+      declineBtn.addEventListener('click', () => deps.respondUndoRedo(false));
+      prompt.append(promptText, acceptBtn, declineBtn);
+      element.appendChild(prompt);
+
+      /**
+       * Paint the incoming undo/redo prompt (Task N.3.2). When `show` is `true` the prompt is revealed
+       * with the opponent-derived headline (via `textContent` only) and Accept/Decline; otherwise it is
+       * hidden. The `data-*` mirror lets Playwright read the rendered prompt off the live DOM (#3).
+       */
+      function renderUndoRedoPrompt(p: UndoRedoPrompt | undefined): void {
+        const show = p?.show === true;
+        prompt.hidden = !show;
+        prompt.setAttribute('data-show', String(show));
+        prompt.setAttribute('data-action', show && p ? (p.action ?? '') : '');
+        // textContent ONLY — the copy is opponent-derived; never innerHTML (untrusted relay input).
+        promptText.textContent = show && p ? p.promptText : '';
+      }
+
       /** Paint a derived model onto the DOM (status text, captures, button labels/enabled). */
       function render(model: BannerModel): void {
         status.textContent =
@@ -166,6 +225,7 @@ export function bannerWidget(): WidgetFactory {
       }
 
       render(initial);
+      renderUndoRedoPrompt(undefined);
 
       return {
         element,
@@ -181,6 +241,9 @@ export function bannerWidget(): WidgetFactory {
           const blocks = context?.offTurnBlocks ?? 0;
           if (blocks > lastOffTurnBlocks) flashOffTurn();
           lastOffTurnBlocks = blocks;
+          // Networked undo/redo accept/decline prompt (Task N.3.2, issue #18): surface it when the peer
+          // has proposed an undo/redo. Hidden when absent (offline / no incoming ask).
+          renderUndoRedoPrompt(context?.undoRedoPrompt);
         },
       };
     },

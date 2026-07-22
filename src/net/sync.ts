@@ -577,6 +577,67 @@ export class SyncEngine {
   }
 
   /**
+   * Re-apply this client's **own** previously-undone move as a real, synced action (the mirror of
+   * {@link undo}), then publish the extended log so the peer adopts it and steps forward too.
+   *
+   * This is the APPLY half of the #18 mutual-confirm REDO: it is called only after BOTH clients have
+   * accepted the out-of-band `'redo'` proposal (the handshake holds the ask out-of-band; nothing is
+   * appended here until that mutual accept). Like {@link undo}, a `redo` is an appended EVENT (never a
+   * truncation): the log grows, the peer sees a strict extension and adopts it, and both sides fold the
+   * `redo` to step their cursor forward — convergence by the same prefix/hash path as any move.
+   *
+   * The permission (only the player whose undone move is being re-applied may redo — the pure
+   * {@link decideRedo} in `undoRedo.ts`) is enforced UPSTREAM by the session before it proposes, exactly
+   * as {@link undo}'s {@link decideUndo} gate is applied before an undo is proposed. Here the raw core
+   * `redo` is called; it throws {@link IllegalMove} verbatim if there is no redo tail, and the error
+   * propagates honestly (never a masked no-op).
+   *
+   * @throws if the game is stopped by a conflict ({@link SyncError}), or if there is nothing to redo
+   *   (the core `Game.redo`'s `IllegalMove`, propagated verbatim).
+   */
+  /**
+   * Apply an AGREED undo — step the last committed move back UNCONDITIONALLY (no per-seat restriction)
+   * — then publish so the peer adopts the strict extension and steps back too. This is the APPLY half
+   * of the #18 mutual-confirm UNDO, invoked on BOTH clients only after the out-of-band `'undo'`
+   * handshake resolved to `accepted`.
+   *
+   * It deliberately does NOT apply {@link decideUndo}'s restricted last-mover-only rule the way
+   * {@link undo} does: that rule gates who may *propose* an undo (enforced upstream by the session's
+   * `canProposeUndo` before an ask is raised). Once BOTH players have agreed, the last move is stepped
+   * back on each side regardless of which seat this client holds — otherwise the RESPONDER (whose seat
+   * is NOT the last mover's) would refuse to apply the undo it just accepted, and the two boards would
+   * diverge. The core `Game.undo` is unrestricted (it steps the cursor); this wraps it with the
+   * publish/notify so both peers converge one step back by the same prefix/hash path as any move.
+   *
+   * @throws if the game is stopped by a conflict ({@link SyncError}), or if there is nothing to undo
+   *   (the core `Game.undo`'s `IllegalMove`, propagated verbatim — never masked).
+   */
+  applyAgreedUndo(): void {
+    this.assertLive();
+    this._game.undo();
+    this.publishState();
+    this.emitChange();
+  }
+
+  /**
+   * Apply an AGREED redo — re-apply the last-undone move UNCONDITIONALLY — then publish so the peer
+   * adopts it and steps forward too. The APPLY half of the #18 mutual-confirm REDO, invoked on BOTH
+   * clients only after the out-of-band `'redo'` handshake resolved to `accepted`. Like
+   * {@link applyAgreedUndo} it applies no per-seat restriction (who may *propose* a redo is gated
+   * upstream by the session's `canProposeRedo`); once both agreed, each side re-applies the move so the
+   * two boards converge one step forward.
+   *
+   * @throws if the game is stopped by a conflict ({@link SyncError}), or if there is nothing to redo
+   *   (the core `Game.redo`'s `IllegalMove`, propagated verbatim).
+   */
+  redo(): void {
+    this.assertLive();
+    this._game.redo();
+    this.publishState();
+    this.emitChange();
+  }
+
+  /**
    * Apply a local move **without** publishing — used to construct a divergent
    * history in tests and by callers that batch a publish. Still refused once
    * stopped.

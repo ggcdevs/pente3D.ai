@@ -729,6 +729,120 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
     expect(eng.game().ply()).toBe(1);
   });
 
+  // ── SyncEngine.redo — the APPLY half of #18 mutual-confirm redo (Task N.3.2) ─────────────────────
+  // The permission gate (decideRedo — only the player whose undone move is re-applied may propose) is
+  // enforced UPSTREAM in the session before it proposes; here we prove the engine's raw redo applies +
+  // publishes so BOTH peers converge one step FORWARD, and that its error paths propagate honestly.
+
+  it('redo re-applies a previously-undone move and PUBLISHES it — the peer adopts and BOTH converge forward', async () => {
+    const { a, b } = await pair();
+    a.place([0, 0, 0]); // white ply1 (crosses to B)
+    a.undo(); // white undoes its own last move (a real synced undo — B adopts it, back to ply0)
+    expect(a.game().ply()).toBe(0);
+    expect(b.game().ply()).toBe(0);
+    expect(a.game().canRedo()).toBe(true);
+    // A REDOes: re-applies the undone white move + publishes. The peer must adopt the strict extension.
+    a.redo();
+    expect(a.game().ply()).toBe(1);
+    // PROOF-BY-BEHAVIOR (#3): B actually stepped forward over the relay — the piece is really back on B.
+    expect(b.game().ply()).toBe(1);
+    expect(b.game().state().pieces['0,0,0']).toBe('white');
+    // Both converge to an identical head (the redo event rode the same prefix/hash path as any move).
+    expect(headHash(a.game().log)).toBe(headHash(b.game().log));
+  });
+
+  it('redo THROWS the core IllegalMove verbatim when there is no redo tail (the error is not masked)', async () => {
+    const hub = new MockRelayHub();
+    const t = new MockTransport(hub, 'redo-empty');
+    const eng = new SyncEngine(new Game(9), t, db, () => meta, 'white');
+    await eng.connect('redo-empty-room');
+    eng.place([0, 0, 0]); // a committed move, but nothing undone → no redo tail
+    // The core Game.redo throws IllegalMove('nothing to redo'); the engine propagates it verbatim
+    // (an honest error, never a swallowed no-op that would silently diverge the peers).
+    expect(() => eng.redo()).toThrow(/nothing to redo/);
+    // The log was left untouched — the failed redo appended nothing (still just the one placement).
+    expect(eng.game().ply()).toBe(1);
+  });
+
+  it('redo is REFUSED once the game is stopped by a conflict (a stopped game exchanges no traffic)', async () => {
+    const hub = new MockRelayHub();
+    const ta = new MockTransport(hub, 'rd-a');
+    const tb = new MockTransport(hub, 'rd-b');
+    const ea = new SyncEngine(new Game(9), ta, db, () => meta, 'white');
+    const eb = new SyncEngine(new Game(9), tb, db, () => meta, 'black');
+    ea.placeLocalOnly([0, 0, 0]);
+    eb.placeLocalOnly([2, 2, 2]);
+    await ea.connect('rd-room');
+    await eb.connect('rd-room');
+    ea.publishState();
+    expect(eb.status().kind).toBe('conflict');
+    // A stopped (conflicted) game refuses ALL further local actions, redo included (assertLive).
+    expect(() => eb.redo()).toThrow(/conflict|stopped/i);
+  });
+
+  // ── SyncEngine.applyAgreedUndo — the APPLY half of #18 mutual-confirm undo (Task N.3.2) ──────────
+  // Unlike the restricted `undo()` (last-mover-only — who may PROPOSE), the AGREED apply steps the last
+  // move back UNCONDITIONALLY on BOTH clients once the handshake resolved to accepted. The responder's
+  // seat is NOT the last mover's, so a restricted undo there would refuse and the boards would diverge —
+  // this is exactly the case the agreed apply must handle.
+
+  it('applyAgreedUndo steps the last move back EVEN WHEN it was the OPPONENT’s (the responder side)', async () => {
+    const hub = new MockRelayHub();
+    const t = new MockTransport(hub, 'agreed-undo');
+    // This client is BLACK (the responder). White (the opponent) made the last move.
+    const eng = new SyncEngine(new Game(9), t, db, () => meta, 'black');
+    await eng.connect('agreed-undo-room');
+    eng.receive(toSyncMessage(logOf('2,2,2'))); // adopt white's opening move (white is last mover)
+    expect(eng.game().state().pieces['2,2,2']).toBe('white');
+    expect(eng.game().ply()).toBe(1);
+    // The RESTRICTED undo would REFUSE (not this black client's move) — proving the two paths differ.
+    expect(() => eng.undo()).toThrow(/not-your-move/);
+    // But the AGREED apply steps it back regardless of seat (mutual consent was already established).
+    eng.applyAgreedUndo();
+    expect(eng.game().ply()).toBe(0);
+    expect(eng.game().state().pieces['2,2,2']).toBeUndefined();
+  });
+
+  it('applyAgreedUndo PUBLISHES so the peer adopts and BOTH converge one step back', async () => {
+    const { a, b } = await pair();
+    a.place([0, 0, 0]); // white ply1 (crosses to B)
+    expect(b.game().ply()).toBe(1);
+    // B (black — NOT the last mover) applies the AGREED undo of white's move: it must still step back
+    // AND publish, so A adopts the strict extension and both converge to the empty board.
+    b.applyAgreedUndo();
+    expect(b.game().ply()).toBe(0);
+    // PROOF-BY-BEHAVIOR (#3): A actually stepped back over the relay — the piece is gone on A too.
+    expect(a.game().ply()).toBe(0);
+    expect(a.game().state().pieces['0,0,0']).toBeUndefined();
+    expect(headHash(a.game().log)).toBe(headHash(b.game().log));
+  });
+
+  it('applyAgreedUndo THROWS the core IllegalMove verbatim at ply 0 (nothing to undo; not masked)', async () => {
+    const hub = new MockRelayHub();
+    const t = new MockTransport(hub, 'agreed-empty');
+    const eng = new SyncEngine(new Game(9), t, db, () => meta, 'white');
+    await eng.connect('agreed-empty-room');
+    // Nothing committed → the core Game.undo throws IllegalMove; the agreed apply propagates it verbatim
+    // (an honest error, never a swallowed no-op that would silently diverge the peers).
+    expect(() => eng.applyAgreedUndo()).toThrow(/nothing to undo|IllegalMove/i);
+    expect(eng.game().ply()).toBe(0);
+  });
+
+  it('applyAgreedUndo is REFUSED once the game is stopped by a conflict (a stopped game exchanges no traffic)', async () => {
+    const hub = new MockRelayHub();
+    const ta = new MockTransport(hub, 'au-a');
+    const tb = new MockTransport(hub, 'au-b');
+    const ea = new SyncEngine(new Game(9), ta, db, () => meta, 'white');
+    const eb = new SyncEngine(new Game(9), tb, db, () => meta, 'black');
+    ea.placeLocalOnly([0, 0, 0]);
+    eb.placeLocalOnly([2, 2, 2]);
+    await ea.connect('au-room');
+    await eb.connect('au-room');
+    ea.publishState();
+    expect(eb.status().kind).toBe('conflict');
+    expect(() => eb.applyAgreedUndo()).toThrow(/conflict|stopped/i);
+  });
+
   it('resetGame is REFUSED once the game is stopped by a conflict (a stopped game exchanges no traffic)', async () => {
     const hub = new MockRelayHub();
     const ta = new MockTransport(hub, 'rc-a');

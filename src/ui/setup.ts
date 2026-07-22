@@ -145,6 +145,12 @@ export interface UiDeps {
    * `session.respond(accepted)`. The overlay's Accept/Decline buttons call this.
    */
   respondRematch(accepted: boolean): boolean;
+  /**
+   * Accept (`true`) / decline (`false`) an incoming networked UNDO/REDO proposal (Task N.3.2, issue
+   * #18) — the app's `session.respond(accepted)`. The banner's undo/redo prompt Accept/Decline buttons
+   * call this; on mutual accept BOTH clients roll the undo/redo (the app applies on the resolution).
+   */
+  respondUndoRedo(accepted: boolean): boolean;
 }
 
 /** The live UI handle exposed to the app + tests: the container plus its layout readout. */
@@ -215,6 +221,7 @@ export function createUi(container: HTMLElement, deps: UiDeps): UiHandle {
       getEndState: deps.getEndState,
       proposeRematch: deps.proposeRematch,
       respondRematch: deps.respondRematch,
+      respondUndoRedo: deps.respondUndoRedo,
     },
     document,
   );
