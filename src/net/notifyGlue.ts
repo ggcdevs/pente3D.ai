@@ -197,6 +197,11 @@ export class NotifyGlue {
     if (decision.browserNotification !== null) {
       this.fireNotification(decision.browserNotification);
     }
+    // TODO(sound-effect-not-implemented): `decision.sound` is intentionally NOT consumed — there is no
+    // audio player in `src/` and the your-turn sound is not a named deliverable of the #20 batch
+    // (`planning/2026-07-21-networking-ux-batch.md` §N.5 lists only the title-flash + browser channels).
+    // The flag ships `false` by default, so it is inert; this line documents the gap so it is disclosed,
+    // not silently disguised as wired. When audio is added, consume `decision.sound` here.
   }
 
   /** The current observable readout (title, counters, last copy) for `window.__pente` (#3). */

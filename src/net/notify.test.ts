@@ -141,10 +141,13 @@ describe('deriveMoveNotification', () => {
     expect(result.titleFlash).toBe(YOUR_TURN_TITLE_FLASH);
   });
 
-  it('sound follows config exactly (default OFF): off stays off, on turns on when triggered', () => {
+  it('sound flag mirrors config exactly (default OFF) — computed but INERT: no glue plays audio', () => {
+    // The PURE decision computes `sound` from `config.sound` (kept in lock-step with the config SSOT), but
+    // it is TODO(sound-effect-not-implemented) end-to-end: `NotifyGlue` deliberately does not consume it
+    // (no audio player in `src/`). These assertions pin the pure computation only.
     expect(deriveMoveNotification(true, { ...on, sound: false }, true).sound).toBe(false);
     expect(deriveMoveNotification(true, { ...on, sound: true }, true).sound).toBe(true);
-    // Never sounds when NOT triggered, even with sound configured on.
+    // Never sets the flag when NOT triggered, even with sound configured on.
     expect(deriveMoveNotification(false, { ...on, sound: true }, true).sound).toBe(false);
   });
 

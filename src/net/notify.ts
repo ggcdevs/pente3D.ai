@@ -43,7 +43,15 @@ export interface NotificationsConfig {
   readonly titleFlash: boolean;
   /** Fire a browser `Notification` on your turn — on by config, but only when permission is granted. */
   readonly browserNotification: boolean;
-  /** Play a sound on your turn — off by default. */
+  /**
+   * TODO(sound-effect-not-implemented): the your-turn sound EFFECT is not wired in the glue yet. The pure
+   * decision computes {@link MoveNotification.sound} from this flag and it is unit-gated, but
+   * `NotifyGlue.onSessionChange` has no audio side effect to consume it (there is no audio player in
+   * `src/`), so this flag is INERT end-to-end today. It ships `false` by default and is NOT a named
+   * deliverable of the #20 batch (`planning/2026-07-21-networking-ux-batch.md` §N.5 lists only the
+   * tab-title flash + browser Notification channels). Kept in the tracked shape so the config SSOT and the
+   * pure decision stay in lock-step for when the audio effect is added; setting it `true` does nothing yet.
+   */
   readonly sound: boolean;
 }
 
@@ -61,12 +69,16 @@ export const YOUR_TURN_TITLE_FLASH = '(!) Your turn — Pente';
  * its channel should stay silent:
  *   - `titleFlash`: the flash string to write to `document.title`, or `null` to leave the title alone.
  *   - `browserNotification`: the `{ title, body }` to pass to the `Notification` API, or `null`.
- *   - `sound`: whether to play the your-turn sound.
+ *   - `sound`: whether the your-turn sound WOULD play — see TODO below; no glue consumes it yet.
  * All copy is the enumerated constants above — the glue never has to (and must never) inject networked text.
  */
 export interface MoveNotification {
   readonly titleFlash: string | null;
   readonly browserNotification: { readonly title: string; readonly body: string } | null;
+  /**
+   * TODO(sound-effect-not-implemented): computed from {@link NotificationsConfig.sound} but INERT — no glue
+   * side effect consumes it (no audio player in `src/`; see the field doc on `NotificationsConfig.sound`).
+   */
   readonly sound: boolean;
 }
 
@@ -116,7 +128,8 @@ export function isRemoteMoveForMe(
  *   - `titleFlash` fires (the enumerated flash string) iff `config.titleFlash` — it needs no permission;
  *   - `browserNotification` fires (the enumerated `{ title, body }`) iff `config.browserNotification`
  *     AND `permissionGranted` — the on-by-config-but-permission-gated rule (design #20);
- *   - `sound` follows `config.sound` exactly.
+ *   - `sound` mirrors `config.sound` exactly, but is INERT — no glue plays audio yet
+ *     (TODO(sound-effect-not-implemented); see {@link NotificationsConfig.sound}).
  *
  * @param triggered The {@link isRemoteMoveForMe} result — whether this is a your-turn moment.
  * @param config The resolved {@link NotificationsConfig} (tracked default + any localStorage override).
