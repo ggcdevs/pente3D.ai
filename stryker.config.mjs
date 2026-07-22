@@ -107,6 +107,13 @@ export default {
     // the move-log. Separated from the SyncEngine/session IO glue so it is mutation-gated like the
     // other pure net logic.
     'src/net/handshake.ts',
+    // Pure networked end-state view-model + seat alternation (Task N.2.1, issue #12): folds the
+    // authoritative GameState + the N.1 handshake + this client's seat into the end-state overlay
+    // model (show/winner/winReason/iWon/resultText/rematchUi), and swaps white<->black for the next
+    // game (a deterministic involution). REUSES the win detection (reads winner/winningLine) and the
+    // N.1 handshake selectors — no duplicated state machine or win logic. Separated from the overlay
+    // widget/session IO glue so it is mutation-gated like the other pure net logic.
+    'src/net/endState.ts',
     '!src/net/**/*.test.ts',
     // Pure render resolvers only (THREE-free). The Three.js scene GLUE (`scene.ts`,
     // `lines.ts`) is NOT mutated — it is an IO boundary verified by Playwright (build
