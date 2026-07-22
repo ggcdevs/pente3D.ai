@@ -774,6 +774,13 @@
         ]
       },
       {
+        "source": "../net/undoRedo.ts",
+        "target": "src/net/undoRedo.ts",
+        "specifiers": [
+          "UndoRedoPrompt"
+        ]
+      },
+      {
         "source": "../render/cameraControls.ts",
         "target": "src/render/cameraControls.ts",
         "specifiers": [
@@ -910,6 +917,7 @@
           "getState(): GameState | null",
           "getTemp(): TempReadout | null",
           "getTurnGate(): TurnGateReadout | null",
+          "getUndoRedoPrompt(): UndoRedoPrompt",
           "getViewportSize(): ViewportReadout | null",
           "getVisibleLines(): LineGroupReadout[] | null",
           "getWinLine(): WinLineReadout | null",
@@ -1585,6 +1593,7 @@
         "methods": [],
         "properties": [
           "readonly iWon: boolean",
+          "readonly rematchPrompt: string | null",
           "readonly rematchUi: RematchUi",
           "readonly resultText: string",
           "readonly show: boolean",
@@ -1608,6 +1617,7 @@
       "alternateSeats",
       "colorName",
       "deriveEndState",
+      "rematchPromptOf",
       "rematchUiOf",
       "resultTextOf",
       "winReasonOf"
@@ -2103,6 +2113,18 @@
         "specifiers": [
           "canPlaceForSeat"
         ]
+      },
+      {
+        "source": "./undoRedo",
+        "target": "src/net/undoRedo.ts",
+        "specifiers": [
+          "REDO_ACTION",
+          "UNDO_ACTION",
+          "UndoRedoPrompt",
+          "canProposeRedo",
+          "canProposeUndo",
+          "deriveUndoRedoPrompt"
+        ]
       }
     ],
     "classes": [
@@ -2111,6 +2133,7 @@
         "extends": null,
         "implements": [],
         "methods": [
+          "applyAcceptedUndoRedo(): boolean",
           "canPlace(): boolean",
           "disconnect(): void",
           "gameState(): GameState | null",
@@ -2121,11 +2144,14 @@
           "onHandshakeChange(listener: HandshakeChangeListener): () => void",
           "place(coords: Coord): void",
           "propose(action: string): boolean",
+          "redo(): void",
           "resetForRematch(): boolean",
           "respond(accepted: boolean): boolean",
           "state(): NetSessionState",
           "syncEngine(): SyncEngine | null",
-          "undo(): void"
+          "undo(): void",
+          "undoRedoAvail(): { readonly canUndo: boolean; readonly canRedo: boolean }",
+          "undoRedoPrompt(): UndoRedoPrompt"
         ],
         "properties": [],
         "isAbstract": false
@@ -2258,6 +2284,7 @@
         "extends": null,
         "implements": [],
         "methods": [
+          "applyAgreedUndo(): void",
           "conflictForks(): { readonly mine: EventLog; readonly theirs: EventLog } | null",
           "connect(roomCode: string): Promise<void>",
           "epoch(): number",
@@ -2269,6 +2296,7 @@
           "publishHandshake(msg: ProposalMessage | ResponseMessage): void",
           "publishState(): void",
           "receive(msg: SyncMessage): void",
+          "redo(): void",
           "resetGame(newGame: Game, newMyColor: Player): void",
           "status(): SyncStatus",
           "undo(): void",
@@ -2466,6 +2494,85 @@
     "typeAliases": [],
     "functions": [
       "canPlaceForSeat"
+    ]
+  },
+  "src/net/undoRedo.ts": {
+    "exports": [
+      "REDO_ACTION",
+      "RedoDecision",
+      "RedoRejection",
+      "UNDO_ACTION",
+      "UndoDecision",
+      "UndoRedoAction",
+      "UndoRedoPrompt",
+      "UndoRejection",
+      "canProposeRedo",
+      "canProposeUndo",
+      "decideRedo",
+      "decideUndo",
+      "deriveUndoRedoPrompt"
+    ],
+    "imports": [
+      {
+        "source": "../core/gameState",
+        "target": "src/core/gameState.ts",
+        "specifiers": [
+          "GameState",
+          "Player"
+        ]
+      },
+      {
+        "source": "./handshake",
+        "target": "src/net/handshake.ts",
+        "specifiers": [
+          "HandshakeState",
+          "canPropose",
+          "incomingPending"
+        ]
+      },
+      {
+        "source": "./sync",
+        "target": "src/net/sync.ts",
+        "specifiers": [
+          "decideUndo"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "UndoRedoPrompt",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly action: UndoRedoAction | null",
+          "readonly promptText: string",
+          "readonly show: boolean"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [
+      {
+        "name": "RedoDecision",
+        "type": "| { readonly ok: true }\n  | { readonly ok: false; readonly reason: RedoRejection }"
+      },
+      {
+        "name": "RedoRejection",
+        "type": "'nothing-to-redo' | 'not-your-move'"
+      },
+      {
+        "name": "UndoRedoAction",
+        "type": "'undo' | 'redo'"
+      }
+    ],
+    "functions": [
+      "canProposeRedo",
+      "canProposeUndo",
+      "decideRedo",
+      "deriveUndoRedoPrompt",
+      "opponentName",
+      "promptTextOf"
     ]
   },
   "src/persist/archive.ts": {
@@ -3852,6 +3959,14 @@
         ]
       },
       {
+        "source": "../net/undoRedo.ts",
+        "target": "src/net/undoRedo.ts",
+        "specifiers": [
+          "UndoRedoPrompt",
+          "deriveUndoRedoPrompt"
+        ]
+      },
+      {
         "source": "../ui/widgets/banner.ts",
         "target": "src/ui/widgets/banner.ts",
         "specifiers": [
@@ -4085,6 +4200,8 @@
           "getNet(): NetSessionState",
           "getNetGameState(): GameState | null",
           "getNetHeadHash(): string | null",
+          "getNetUndoRedoAvail(): { readonly canUndo: boolean; readonly canRedo: boolean }",
+          "getUndoRedoPrompt(): UndoRedoPrompt",
           "host(): void",
           "join(): void",
           "leaveNet(): void",
@@ -4125,6 +4242,7 @@
           "getState(): GameState",
           "getTemp(): TempReadout",
           "getTurnGate(): TurnGateReadout",
+          "getUndoRedoPrompt(): UndoRedoPrompt",
           "getViewportSize(): ViewportReadout",
           "getVisibleLines(): LineGroupReadout[]",
           "getWinLine(): WinLineReadout",
@@ -4200,6 +4318,7 @@
       "getState",
       "getTemp",
       "getTurnGate",
+      "getUndoRedoPrompt",
       "getViewportSize",
       "getVisibleLines",
       "getWinLine",
@@ -4807,6 +4926,7 @@
           "registerOpenNetwork(open: () => void): void",
           "registerOpener(open: () => void): void",
           "respondRematch(accepted: boolean): boolean",
+          "respondUndoRedo(accepted: boolean): boolean",
           "resumeArchived(id: string): Promise<void>",
           "reviewArchived(id: string): Promise<void>",
           "scrubTo(k: number): void",
@@ -4996,6 +5116,13 @@
         ]
       },
       {
+        "source": "../../net/undoRedo.ts",
+        "target": "src/net/undoRedo.ts",
+        "specifiers": [
+          "UndoRedoPrompt"
+        ]
+      },
+      {
         "source": "../registry.ts",
         "target": "src/ui/registry.ts",
         "specifiers": [
@@ -5019,7 +5146,8 @@
         "name": "BannerDeps",
         "extends": [],
         "methods": [
-          "dispatch(commandId: string): boolean"
+          "dispatch(commandId: string): boolean",
+          "respondUndoRedo(accepted: boolean): boolean"
         ],
         "properties": [
           "readonly doc: Document"
@@ -5031,7 +5159,8 @@
         "methods": [],
         "properties": [
           "readonly history: BannerHistory",
-          "readonly offTurnBlocks: number"
+          "readonly offTurnBlocks: number",
+          "readonly undoRedoPrompt: UndoRedoPrompt"
         ]
       }
     ],
@@ -5042,7 +5171,8 @@
       "cap",
       "emptyStateFallback",
       "flashOffTurn",
-      "render"
+      "render",
+      "renderUndoRedoPrompt"
     ]
   },
   "src/ui/widgets/bannerModel.ts": {

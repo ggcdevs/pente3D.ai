@@ -428,3 +428,38 @@ distinguish infra failures — connection-refused, GPU, timeouts — from assert
 
 **Verdict: N.2 genuinely complete** (in-place seamless rematch per the design). On /dev/ after deploy. Opponent
 text rendered via `textContent` (relay is publicly writable — see #23).
+
+## net-ux-N3 (#18 undo/redo) — the review-gate caught (and fixed) a real security BYPASS on the keybinding path
+
+Networked mutual-confirm undo/redo via the N.1 handshake (propose = last mover, opponent Accept/Decline, both roll
+back only on accept, held out-of-band); local undo/redo unchanged. Two agent-caught bugs, both real:
+
+**1. (build agent, during e2e) apply-on-accept must NOT be last-mover-restricted.** `SyncEngine.undo()` is
+correctly restricted to the last mover for WHO-MAY-PROPOSE, but the *accepting* opponent isn't the last mover — so
+the restricted `undo()` threw `not-your-move` on apply and the boards would diverge. Fixed with
+`SyncEngine.applyAgreedUndo()` (apply unconditionally once mutual consent is established; the restriction is the
+*propose* gate, enforced upstream).
+
+**2. (reviewer, MAJOR — a genuine security bypass) the propose gate was only wired to the BUTTON, not the command.**
+`canProposeUndo/canProposeRedo` gated only the banner button's `disabled` attribute; the `undo`/`redo` COMMAND
+dispatch (`scene.ts:undoRedoNet` → `session.propose`) fired UNCONDITIONALLY. Since `u`/`r` are bound keys and
+buttons+keys share the command registry (design Principle 3), a **wrong-seat player pressing `u`/`r` could propose
+undoing the OPPONENT's last move** — and on mutual accept `applyAgreedUndo` steps it back unconditionally, defeating
+the last-mover restriction on a real input path. The pure gate had 100% mutation coverage but **nothing proved it was
+consulted before an action was emitted** (the e2e only ever dispatched on the valid last mover). Fix (`e37854f`):
+gate the dispatch path itself on `canProposeUndo/canProposeRedo`, + a new e2e — *"WRONG-SEAT dispatch is REJECTED:
+B (not the last mover) presses undo → NO proposal minted"* — and a single-pending guard. This is the adversarial
+reviewer doing exactly what coverage/mutation can't: proving a designed *permission* gate is actually on the
+enforcement path, not just the UI.
+
+**Process note:** the Gate agent reported a scary "local branch 21 behind origin" — a **miscount** (it compared to
+the stale `origin/feat` at 9ba30af from N.1's gate push; we push `dev`, not `feat`, so local `feat` is far AHEAD).
+Main-loop verified the real git state: full N.1/N.2/N.3 chain intact, nothing lost. (Watch: the Gate's ahead/behind
+check against a stale remote ref is noise — don't trust its git-topology claims, verify.)
+
+**Main-loop oversight:** reviewers approved (round 2 clean after the bypass fix). Independently verified HEAD
+`e37854f`: build 0, lint 0, coverage 100% (undoRedo.ts + sync.ts), mutation 97.63% (undoRedo 100%; sync survivors
+pre-documented equivalents), undo e2e 6 passed incl. the wrong-seat-rejected + decline + redo + local-direct guards.
+
+**Verdict: N.3 genuinely complete + secure.** On /dev/ after deploy. Networked Undo/Redo buttons now live (they were
+grayed pre-N.3, as expected).

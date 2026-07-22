@@ -41,6 +41,7 @@ graph LR
         src_net_sync_ts["sync.ts"]
         src_net_transport_ts["transport.ts"]
         src_net_turnGate_ts["turnGate.ts"]
+        src_net_undoRedo_ts["undoRedo.ts"]
     end
     subgraph src/persist
         src_persist_archive_ts["archive.ts"]
@@ -121,6 +122,7 @@ graph LR
     src_debug_window_ts --> src_input_setup_ts
     src_debug_window_ts --> src_net_endState_ts
     src_debug_window_ts --> src_net_handshake_ts
+    src_debug_window_ts --> src_net_undoRedo_ts
     src_debug_window_ts --> src_render_cameraControls_ts
     src_debug_window_ts --> src_render_hover_ts
     src_debug_window_ts --> src_render_lines_ts
@@ -184,6 +186,7 @@ graph LR
     src_net_session_ts --> src_net_sync_ts
     src_net_session_ts --> src_net_transport_ts
     src_net_session_ts --> src_net_turnGate_ts
+    src_net_session_ts --> src_net_undoRedo_ts
     src_net_session_ts --> src_persist_archive_ts
     src_net_session_ts --> src_ui_widgets_netModel_ts
     src_net_sync_ts --> src_core_coords_ts
@@ -195,6 +198,9 @@ graph LR
     src_net_sync_ts --> src_util_emitter_ts
     src_net_turnGate_ts --> src_core_gameState_ts
     src_net_turnGate_ts --> src_ui_widgets_netModel_ts
+    src_net_undoRedo_ts --> src_core_gameState_ts
+    src_net_undoRedo_ts --> src_net_handshake_ts
+    src_net_undoRedo_ts --> src_net_sync_ts
     src_persist_archive_ts --> src_core_eventLog_ts
     src_persist_archive_ts --> src_core_game_ts
     src_persist_archive_ts --> src_core_serialize_ts
@@ -241,6 +247,7 @@ graph LR
     src_render_scene_ts --> src_input_scopes_ts
     src_render_scene_ts --> src_input_setup_ts
     src_render_scene_ts --> src_net_handshake_ts
+    src_render_scene_ts --> src_net_undoRedo_ts
     src_render_scene_ts --> src_render_cameraControls_ts
     src_render_scene_ts --> src_render_cameraPresets_ts
     src_render_scene_ts --> src_render_hover_ts
@@ -284,6 +291,7 @@ graph LR
     src_ui_widgets_archive_ts --> src_ui_registry_ts
     src_ui_widgets_archive_ts --> src_ui_widgets_archiveModel_ts
     src_ui_widgets_banner_ts --> src_core_gameState_ts
+    src_ui_widgets_banner_ts --> src_net_undoRedo_ts
     src_ui_widgets_banner_ts --> src_ui_registry_ts
     src_ui_widgets_banner_ts --> src_ui_widgets_bannerModel_ts
     src_ui_widgets_bannerModel_ts --> src_core_gameState_ts

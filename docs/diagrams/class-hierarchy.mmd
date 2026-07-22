@@ -92,12 +92,14 @@ classDiagram
         <<interface>>
         +readonly history: BannerHistory
         +readonly offTurnBlocks: number
+        +readonly undoRedoPrompt: UndoRedoPrompt
     }
     note for BannerContext "src/ui/widgets/banner.ts"
     class BannerDeps {
         <<interface>>
         +readonly doc: Document
         +dispatch(commandId: string): boolean
+        +respondUndoRedo(accepted: boolean): boolean
     }
     note for BannerDeps "src/ui/widgets/banner.ts"
     class BannerHistory {
@@ -273,6 +275,7 @@ classDiagram
     class EndState {
         <<interface>>
         +readonly iWon: boolean
+        +readonly rematchPrompt: string | null
         +readonly rematchUi: RematchUi
         +readonly resultText: string
         +readonly show: boolean
@@ -746,6 +749,8 @@ classDiagram
         +getNet(): NetSessionState
         +getNetGameState(): GameState | null
         +getNetHeadHash(): string | null
+        +getNetUndoRedoAvail(): Object
+        +getUndoRedoPrompt(): UndoRedoPrompt
         +host(): void
         +join(): void
         +leaveNet(): void
@@ -867,6 +872,7 @@ classDiagram
         +getState(): GameState | null
         +getTemp(): TempReadout | null
         +getTurnGate(): TurnGateReadout | null
+        +getUndoRedoPrompt(): UndoRedoPrompt
         +getViewportSize(): ViewportReadout | null
         +getVisibleLines(): LineGroupReadout[] | null
         +getWinLine(): WinLineReadout | null
@@ -1118,6 +1124,7 @@ classDiagram
         +getState(): GameState
         +getTemp(): TempReadout
         +getTurnGate(): TurnGateReadout
+        +getUndoRedoPrompt(): UndoRedoPrompt
         +getViewportSize(): ViewportReadout
         +getVisibleLines(): LineGroupReadout[]
         +getWinLine(): WinLineReadout
@@ -1278,6 +1285,7 @@ classDiagram
         +registerOpenNetwork(open: () =~ void): void
         +registerOpener(open: () =~ void): void
         +respondRematch(accepted: boolean): boolean
+        +respondUndoRedo(accepted: boolean): boolean
         +resumeArchived(id: string): Promise~void~
         +reviewArchived(id: string): Promise~void~
         +scrubTo(k: number): void
@@ -1295,6 +1303,13 @@ classDiagram
         +readonly type: 'undo'
     }
     note for UndoEvent "src/core/eventLog.ts"
+    class UndoRedoPrompt {
+        <<interface>>
+        +readonly action: UndoRedoAction | null
+        +readonly promptText: string
+        +readonly show: boolean
+    }
+    note for UndoRedoPrompt "src/net/undoRedo.ts"
     class Vec3 {
         <<interface>>
         +x: number
@@ -1450,6 +1465,7 @@ classDiagram
     }
     note for MqttTransport "src/net/mqttTransport.ts"
     class NetSession {
+        +applyAcceptedUndoRedo(): boolean
         +canPlace(): boolean
         +disconnect(): void
         +gameState(): GameState | null
@@ -1460,11 +1476,14 @@ classDiagram
         +onHandshakeChange(listener: HandshakeChangeListener): () =~ void
         +place(coords: Coord): void
         +propose(action: string): boolean
+        +redo(): void
         +resetForRematch(): boolean
         +respond(accepted: boolean): boolean
         +state(): NetSessionState
         +syncEngine(): SyncEngine | null
         +undo(): void
+        +undoRedoAvail(): Object
+        +undoRedoPrompt(): UndoRedoPrompt
     }
     note for NetSession "src/net/session.ts"
     class PresenceTracker {
@@ -1475,6 +1494,7 @@ classDiagram
     }
     note for PresenceTracker "src/net/presence.ts"
     class SyncEngine {
+        +applyAgreedUndo(): void
         +conflictForks(): Object | null
         +connect(roomCode: string): Promise~void~
         +epoch(): number
@@ -1486,6 +1506,7 @@ classDiagram
         +publishHandshake(msg: ProposalMessage | ResponseMessage): void
         +publishState(): void
         +receive(msg: SyncMessage): void
+        +redo(): void
         +resetGame(newGame: Game, newMyColor: Player): void
         +status(): SyncStatus
         +undo(): void
