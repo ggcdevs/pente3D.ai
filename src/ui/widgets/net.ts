@@ -145,6 +145,11 @@ export function netWidget(): WidgetFactory {
       /** Paint a derived model onto the three panels (show exactly one). */
       function render(model: NetModel): void {
         element.setAttribute('data-panel', model.panel);
+        // Hide the whole widget when idle: the `controls` panel is empty since #13/#16 moved
+        // Host/Join into the drawer and dropped the board hint, so an offline widget has nothing
+        // to show — don't leave a styled empty box on the board. It reappears the moment there's
+        // live status/conflict (the `status`/`conflict` panels) to display.
+        element.hidden = model.panel === 'controls';
         controls.hidden = model.panel !== 'controls';
         status.hidden = model.panel !== 'status';
         conflict.hidden = model.panel !== 'conflict';

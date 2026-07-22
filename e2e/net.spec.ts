@@ -139,8 +139,10 @@ test('the net STATUS widget mounts in its configured zone and starts offline wit
   const inZone = page.locator(`[data-zone="top-left"] [data-widget-id="${NET_ID}"]`);
   await expect(inZone).toHaveCount(1);
 
-  // Offline: the controls panel is shown but EMPTY — the status + conflict panels hidden. The passive
-  // "open the menu" board hint was REMOVED (issue #16): no menu feature advertises itself on the board.
+  // Offline: the widget has NOTHING to show — the controls panel is empty (#13 moved Host/Join to the
+  // drawer, #16 removed the board hint), so the whole widget is HIDDEN and leaves no empty box on the
+  // board. Its data-panel stays 'controls' and the status/conflict panels stay hidden underneath.
+  await expect(widget(page)).toBeHidden();
   await expect(widget(page)).toHaveAttribute('data-panel', 'controls');
   await expect(testid(page, 'net-offline-prompt')).toHaveCount(0);
   await expect(testid(page, 'net-status')).toBeHidden();

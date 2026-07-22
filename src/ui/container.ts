@@ -151,7 +151,9 @@ const UI_STYLESHEET = `
 .pente-netpanel-host:disabled, .pente-netpanel-join:disabled { cursor: default; opacity: 0.4; }
 @media (prefers-reduced-motion: reduce) { .pente-netpanel-modal { transition: none; } }
 .pente-widget--net { display: flex; flex-direction: column; gap: 8px; min-width: 200px; padding: 10px 12px; border-radius: 6px; background: rgba(16,16,20,0.72); color: #e6e6ea; font-family: system-ui, sans-serif; font-size: 13px; }
-.pente-net-controls[hidden], .pente-net-status[hidden], .pente-net-conflict[hidden], .pente-net-code-row[hidden], .pente-net-seat[hidden] { display: none; }
+/* [hidden] must beat the class display:flex (else the attribute is a no-op) — incl. the root
+   .pente-widget--net so an idle net widget leaves no empty box on the board. */
+.pente-widget--net[hidden], .pente-net-controls[hidden], .pente-net-status[hidden], .pente-net-conflict[hidden], .pente-net-code-row[hidden], .pente-net-seat[hidden] { display: none; }
 /* Task C.2 / issue #13: the inline widget no longer HOSTS/JOINS (that moved to the drawer's
    Network-Game panel). issue #16: the passive "open the menu" board hint was removed, so while
    offline the controls panel is empty (nothing advertised on the board). */
