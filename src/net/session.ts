@@ -44,10 +44,12 @@ import {
   receiveResponse,
   onGameAdvanced,
   onPeerGone,
+  clearResolution,
   incomingPending,
   type HandshakeState,
 } from './handshake';
-import { claimSeat, emptySeatMap, type SeatColor, type SeatMap } from './seats';
+import { claimSeat, emptySeatMap, seatOf, type SeatColor, type SeatMap } from './seats';
+import { alternateSeats } from './endState';
 import { canPlaceForSeat } from './turnGate';
 import {
   generateGameCode,
@@ -282,6 +284,47 @@ export class NetSession {
     this.requireEngine().undo();
     this.reflectEngineStatus();
     this.emit();
+  }
+
+  /**
+   * Reset to a FRESH game IN PLACE — the N.2 seamless rematch (design decision 2: "both reset to a
+   * fresh game in the SAME room/connection — no disconnect/re-host", "colors ALTERNATE every game").
+   * Called by the app when the out-of-band rematch handshake RESOLVES to `accepted` on EITHER side.
+   *
+   * Unlike the earlier disconnect→re-host/re-join shortcut, this keeps the SAME transport and seat
+   * ownership up (no present→absent presence flicker to the peer, no reconnect race): it just
+   *
+   *   1. ALTERNATES this client's seat deterministically ({@link alternateSeats} via {@link seatOf}) —
+   *      each side derives its NEW color from its OWN current one, so the swap needs no coordination;
+   *   2. swaps a fresh empty {@link Game} into the live {@link SyncEngine} and BUMPS its fresh-game
+   *      epoch ({@link SyncEngine.resetGame}), which publishes the fresh log over the existing
+   *      connection so the peer adopts the new generation and any stale finished-game message is
+   *      ignored by epoch — the convergence the seamless reset turns on.
+   *
+   * A no-op returning `false` when there is no live engine/seat (offline) — there is no game to reset.
+   * The handshake is cleared afterwards so the just-resolved rematch cannot re-fire and the next
+   * game starts from an idle handshake.
+   *
+   * @returns `true` if the in-place reset ran, `false` if not connected/seated.
+   */
+  resetForRematch(): boolean {
+    if (this.engine === null || this.seat === null) return false;
+    const me = this.deps.playerId;
+    // Alternate THIS client's seat from its own current color (deterministic; no peer coordination).
+    const swapped = alternateSeats(
+      this.seat === 'white' ? { white: me, black: null } : { white: null, black: me },
+    );
+    const nextColor = seatOf(swapped, me) ?? this.seat;
+    this.seat = nextColor;
+    // Swap a fresh empty game into the live engine over the SAME transport, re-basing the undo rule
+    // onto the swapped color and bumping the epoch so the peer adopts the fresh generation.
+    this.engine.resetGame(new Game(this.deps.size), nextColor as Player);
+    // The rematch resolved and has now been applied — clear it so it cannot re-fire and the fresh
+    // game starts from an idle handshake.
+    this.handshake = clearResolution(this.handshake);
+    this.reflectEngineStatus();
+    this.emit();
+    return true;
   }
 
   // ── Out-of-band handshake API (N.1: shared ask/accept primitive for #12 / #18) ──────────────────

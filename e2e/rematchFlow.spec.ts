@@ -16,17 +16,22 @@ import relay from '../src/config/defaults/relay.json' with { type: 'json' };
  *      pieces — the overlay does not hide/reset the board; the DOM overlay has no display:none board
  *      backdrop). The overlay card is actually in the DOM (`data-testid="endstate-overlay"` visible).
  *   2. A clicks Rematch (`propose('rematch')`) → B's `getEndState().rematchUi === 'incoming'` (the ask
- *      crossed the relay) → B Accepts → BOTH clients reset to a FRESH EMPTY game, STILL connected,
- *      with their SEATS SWAPPED (host was white → now black; joiner was black → now white).
+ *      crossed the relay) → B Accepts → BOTH clients reset SEAMLESSLY IN PLACE to a FRESH EMPTY game
+ *      over the SAME live connection (NO disconnect/re-host — design N.2 decision 2), with their SEATS
+ *      SWAPPED (host was white → now black; joiner was black → now white). The reset never drops the
+ *      connection: `getNet().phase` stays `connected` throughout — never `offline`/`connecting` — so
+ *      there is NO present→absent presence flicker to the peer (the exact regression the earlier
+ *      disconnect→re-host shortcut caused, and what the epoch-tagged in-place reset removes).
  *
  * ## Why it bites if the accept→reset wiring breaks (agent-principles #7)
  *
- * The seat-swap restart is wired in `main.ts` (`session.onHandshakeChange` → `maybeRematchReset` →
- * `startSwappedRematch`), keyed on an `accepted` rematch resolution. If that route regresses — the
- * resolution not firing the reset, or the reset not swapping seats — the swapped-fresh-game assertion
- * in step (3) FAILS (the fresh empty board never appears, or the seats do not alternate). Proven to
- * bite: disabling the `startSwappedRematch()` call makes step (3) time out (observed in the N.2.2
- * build report), then restored.
+ * The in-place reset is wired in `main.ts` (`session.onHandshakeChange` → `maybeRematchReset` →
+ * `session.resetForRematch()`), keyed on an `accepted` rematch resolution. `resetForRematch` swaps a
+ * fresh empty game into the live `SyncEngine` (`resetGame`, epoch↑) over the SAME transport and
+ * alternates the seat. If that route regresses — the resolution not firing the reset, or the reset not
+ * swapping seats, or a stale finished-game message resurrecting the old board — the fresh-empty-board /
+ * swapped-seats assertions in step (3) FAIL. Proven to bite: making `resetForRematch` a no-op makes
+ * step (3) time out (the fresh empty board never appears), then restored.
  *
  * ## Two verification tiers (mirroring handshake.spec.ts)
  *
@@ -282,6 +287,24 @@ async function proveRematchFlow(host: Page, joiner: Page, artifact: string) {
   expect(seenIncoming, "joiner must receive the host's rematch ask over the relay").toBe(true);
   await expect(joiner.locator('[data-testid="endstate-accept"]')).toBeVisible();
 
+  // Install a CONNECTION WATCHER on both pages BEFORE the accept fires the reset: it polls
+  // `getNet().phase` frequently and records whether it EVER leaves `connected`. The in-place reset
+  // must NOT disconnect — if `phase` ever became `offline`/`connecting` (the old disconnect→re-host
+  // shortcut), the peer would see a present→absent presence flicker. This is the behavioral proof that
+  // the reset is seamless, not a teardown/reconnect.
+  for (const page of [host, joiner]) {
+    await page.evaluate(() => {
+      const w = window as unknown as { __pente: Pente; __phaseDropped?: boolean };
+      w.__phaseDropped = false;
+      const timer = window.setInterval(() => {
+        const phase = w.__pente.getNet()?.phase;
+        if (phase !== undefined && phase !== 'connected') w.__phaseDropped = true;
+      }, 10);
+      // Stop sampling after the reset window so the flag reflects only the reset transition.
+      window.setTimeout(() => window.clearInterval(timer), 8_000);
+    });
+  }
+
   // The joiner ACCEPTS via the overlay button (→ session.respond(true)).
   await joiner.locator('[data-testid="endstate-accept"]').click();
 
@@ -310,6 +333,16 @@ async function proveRematchFlow(host: Page, joiner: Page, artifact: string) {
   // SEATS SWAPPED: the ex-white host is now black, the ex-black joiner is now white (colors alternated).
   expect((await net(host))?.seat, 'host (was white) must now be black — colors alternate').toBe('black');
   expect((await net(joiner))?.seat, 'joiner (was black) must now be white — colors alternate').toBe('white');
+
+  // SEAMLESS: neither client's connection EVER dropped during the reset — `phase` stayed `connected`
+  // the whole time (no offline/connecting blip). This is the design's "same room/connection, no
+  // disconnect/re-host" made observable: the old disconnect→re-host shortcut would trip this flag.
+  for (const page of [host, joiner]) {
+    const dropped = await page.evaluate(
+      () => (window as unknown as { __phaseDropped?: boolean }).__phaseDropped === true,
+    );
+    expect(dropped, 'in-place rematch reset must NOT disconnect (phase stayed connected)').toBe(false);
+  }
 }
 
 async function waitObserved(

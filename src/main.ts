@@ -6,8 +6,7 @@ import { createLogger } from './debug/log.ts';
 import { createAppNetSession } from './net/appSession.ts';
 import { shouldRenderSessionGame } from './net/netRouting.ts';
 import { shouldArchiveBeforeNetStart } from './net/rematch.ts';
-import { deriveEndState, alternateSeats, REMATCH_ACTION, type EndState } from './net/endState.ts';
-import { seatOf, type SeatColor } from './net/seats.ts';
+import { deriveEndState, REMATCH_ACTION, type EndState } from './net/endState.ts';
 import { headHash } from './core/eventLog.ts';
 import { openDatabase, resolveDbName } from './persist/db.ts';
 import {
@@ -472,57 +471,30 @@ void createAppNetSession(scene.getState().size)
       return deriveEndState(netState, session.getHandshake(), session.state().seat);
     };
 
-    // MUTUAL-ACCEPT seat-swap restart (Task N.2.2, plan N.2 decision 2: "colors ALTERNATE every game").
-    // When the out-of-band rematch handshake RESOLVES to `accepted` (either WE proposed and the peer
-    // accepted, or the peer proposed and WE accepted), BOTH clients reset to a FRESH game in the SAME
-    // room with their seats SWAPPED. The swap is DETERMINISTIC and needs no coordination: each side
-    // derives its NEW seat purely from its OWN current one via the pure N.1/N.2.1 seat logic
-    // (`alternateSeats` is the tested involution; `seatOf` reads where this client landed), then takes
-    // the role that claims that color — a host claims white, a joiner claims black. So the ex-white
-    // JOINs (→ black) and the ex-black HOSTs the same code (→ white): the colors have alternated and
-    // both peers re-meet in the same room. We reuse the existing fresh-game reset (disconnect → re-
-    // host/re-join the same code) because the SyncEngine builds one `Game` per session at `start()`
-    // and offers no in-place fresh-game reset — this is the minimal path that both swaps seats AND
-    // keeps the same room code, done ONCE per accepted rematch (guarded on the resolution id).
+    // MUTUAL-ACCEPT in-place rematch reset (Task N.2.2, plan N.2 decision 2: "both reset to a fresh
+    // game in the SAME room/connection — NO disconnect/re-host", "colors ALTERNATE every game"). When
+    // the out-of-band rematch handshake RESOLVES to `accepted` (either WE proposed and the peer
+    // accepted, or the peer proposed and WE accepted), BOTH clients reset SEAMLESSLY to a FRESH game
+    // over the SAME live connection with their seats SWAPPED — no transport teardown, so the peer sees
+    // NO present→absent presence flicker and there is no reconnect race. The seamless reset is
+    // `session.resetForRematch()`: it swaps this client's seat deterministically (each side alternates
+    // from its OWN current color — no coordination), swaps a fresh empty `Game` into the live
+    // `SyncEngine`, and bumps the sync epoch so the peer adopts the fresh generation and any late
+    // finished-game message is ignored by epoch (see `SyncEngine.resetGame`). Fired ONCE per accepted
+    // rematch resolution (guarded on the resolution id); `resetForRematch` clears the resolution so the
+    // handshake settles idle for the next game.
     let handledRematchId: string | null = null;
-    const swappedSeat = (seat: SeatColor): SeatColor => {
-      // Reuse the pure, tested seat swap: place this client on its current seat, alternate, read back.
-      const me = session.state().code ?? 'me';
-      const swapped = alternateSeats({
-        white: seat === 'white' ? me : null,
-        black: seat === 'black' ? me : null,
-      });
-      // `seatOf` returns the color `me` now owns after the swap (never null — `me` was seated).
-      return seatOf(swapped, me) ?? seat;
-    };
-    const startSwappedRematch = (): void => {
-      const code = session.state().code;
-      const seat = session.state().seat;
-      if (code === null || seat === null) return;
-      const nextSeat = swappedSeat(seat);
-      session.disconnect();
-      // A rematch (game-over → a new game) is an EXPLICIT boundary (issue #7): bump the generation ONCE
-      // so the just-finished (won) net game is left and the rematch mints its own fresh archive record —
-      // the same one-record-per-GAME rule, not one per remote move of the rematch. `disconnect` returned
-      // us to offline, so host/join are live again.
-      bumpGeneration();
-      // Take the role that claims the SWAPPED color, reusing the SAME room code so both peers re-meet:
-      // white ← host, black ← join. Colors have thus alternated from the just-finished game.
-      if (nextSeat === 'white') {
-        void session.host(code).then(refreshUi);
-      } else {
-        pendingJoinCode = code;
-        void session.join(pendingJoinCode).then(refreshUi);
-      }
-    };
-    // Fire the seat-swap restart exactly once per accepted rematch resolution, then clear the
-    // resolution so the effect never re-fires and the handshake settles back to idle for the next game.
     const maybeRematchReset = (): void => {
       const res = session.getHandshake().resolution;
       if (res === null || res.action !== REMATCH_ACTION || res.outcome !== 'accepted') return;
       if (res.id === handledRematchId) return;
       handledRematchId = res.id;
-      startSwappedRematch();
+      // A rematch (game-over → a new game) is an EXPLICIT game boundary (issue #7): bump the generation
+      // ONCE so the just-finished (won) net game is finalized under its own archive id and the fresh
+      // rematch game mints its own record — one-record-per-GAME, not one per remote move of the rematch.
+      bumpGeneration();
+      session.resetForRematch();
+      refreshUi();
     };
 
     // On EVERY session-state change — a local move, a REMOTE move adopted by the transport pump

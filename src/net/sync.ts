@@ -57,10 +57,31 @@ export const SYNC_VERSION = 1 as const;
  * the sender's `headHash` (a cheap integrity check the receiver re-verifies against
  * the log it reconstructs). The `log` is plain events (JSON-cloneable), matching the
  * archive/export form.
+ *
+ * ## `epoch` — the in-place fresh-game generation (N.2 rematch)
+ *
+ * A rematch resets BOTH peers to a fresh game OVER THE SAME CONNECTION (no
+ * disconnect/re-host; design N.2 decision 2). A fresh game has a fresh empty log,
+ * which is NOT a strict extension of the finished game's log — so raw prefix
+ * convergence would either fork (conflict) or, worse, a late in-flight message from
+ * the just-finished game would re-adopt the old board (empty is a prefix of the full
+ * log). The `epoch` is the fresh-game GENERATION: it increments on every in-place
+ * reset ({@link SyncEngine.resetGame}). Convergence is epoch-lexicographic — a HIGHER
+ * remote epoch wins outright (the peer reset first; adopt its fresh game), a LOWER
+ * remote epoch is stale (ignore), and only WITHIN the same epoch does the existing
+ * prefix/hash decision apply. This makes the seamless in-place reset converge on the
+ * same transport and makes any stale prior-epoch replay a no-op by construction.
  */
 export interface SyncMessage {
   /** Wire-format version (must equal {@link SYNC_VERSION}). */
   readonly version: number;
+  /**
+   * The fresh-game GENERATION (N.2 in-place rematch). Starts at 0; incremented by
+   * {@link SyncEngine.resetGame} on every seamless reset. A missing `epoch` on the
+   * wire (a pre-epoch peer) is read as 0 — the same generation the first game runs in
+   * — so an un-upgraded peer's first game still converges (backward-compat).
+   */
+  readonly epoch: number;
   /** The sender's head hash — re-verified on receipt against the reconstructed log. */
   readonly headHash: string;
   /** The full append-only log as plain events, in order. */
@@ -144,14 +165,14 @@ export function parseGameMessage(msg: unknown): GameMessage {
   const kind = rec.kind;
   // Backward-compat: an un-kinded legacy sync message (pre-tagged-union peer).
   if (kind === undefined && looksLikeSync(rec)) {
-    return { kind: 'sync', version: rec.version as number, headHash: rec.headHash as string, log: rec.log as readonly Event[] };
+    return { kind: 'sync', version: rec.version as number, epoch: epochOf(rec), headHash: rec.headHash as string, log: rec.log as readonly Event[] };
   }
   switch (kind) {
     case 'sync': {
       if (!looksLikeSync(rec)) {
         throw new SyncError('sync message requires numeric version, string headHash, and array log');
       }
-      return { kind: 'sync', version: rec.version as number, headHash: rec.headHash as string, log: rec.log as readonly Event[] };
+      return { kind: 'sync', version: rec.version as number, epoch: epochOf(rec), headHash: rec.headHash as string, log: rec.log as readonly Event[] };
     }
     case 'proposal': {
       if (typeof rec.id !== 'string') {
@@ -192,6 +213,38 @@ function looksLikeSync(rec: Record<string, unknown>): boolean {
   );
 }
 
+/**
+ * Read the fresh-game {@link SyncMessage.epoch} off a raw sync record, defaulting a
+ * MISSING or non-numeric `epoch` to 0 — the generation the first game runs in. A
+ * pre-epoch peer publishes no `epoch`; treating it as 0 keeps its first game
+ * converging with an upgraded peer (backward-compat, exactly as an un-kinded message
+ * is treated as `kind: 'sync'`). A negative epoch is impossible from
+ * {@link SyncEngine.resetGame} (it only increments from 0); a hostile/garbage
+ * negative value is clamped to 0 so it can never out-rank a live generation.
+ */
+function epochOf(rec: Record<string, unknown>): number {
+  return normalizeEpoch(rec.epoch);
+}
+
+/**
+ * Normalize a raw `epoch` value to a whole, non-negative generation: a missing / non-numeric /
+ * non-finite / negative value becomes 0 (the first generation), a fractional value is floored. The
+ * single source of truth for reading an epoch off the wire — used both by the {@link parseGameMessage}
+ * codec ({@link epochOf}) and by {@link SyncEngine.receive}'s public seam (which must not trust a
+ * directly-injected message's epoch), so the two can never disagree.
+ */
+export function normalizeEpoch(raw: unknown): number {
+  // A generation must be a FINITE number; anything else (missing field, string, boolean, NaN,
+  // ±Infinity) is read as 0. `Number.isFinite` returns false without coercion for every non-number,
+  // so this single guard rejects both non-numbers AND non-finite numbers — one predicate, no
+  // redundant sub-condition for a mutant to render equivalent.
+  if (!Number.isFinite(raw as number)) return 0;
+  // Floor to a whole generation, then clamp a negative (hostile/garbage) value up to 0 so it can
+  // never out-rank a live generation. `Math.max(0, …)` makes the clamp arithmetic (killable) rather
+  // than a boundary predicate whose `<`/`<=` variants are indistinguishable at exactly 0.
+  return Math.max(0, Math.floor(raw as number));
+}
+
 /** The three possible outcomes of comparing a local log against a remote one. */
 export type SyncDecision =
   | { readonly action: 'adopt' }
@@ -219,6 +272,38 @@ export function decideSync(local: EventLog, remote: EventLog): SyncDecision {
   if (isPrefix(local, remote)) return { action: 'adopt' };
   // Neither is a prefix → the histories fork.
   return { action: 'conflict', divergePly: firstDivergence(local, remote) };
+}
+
+/**
+ * Epoch-aware sync decision (pure — no side effects): decide how a `remote` log at
+ * `remoteEpoch` relates to the `local` log at `localEpoch`, where the epoch is the
+ * in-place fresh-game GENERATION (N.2 rematch; see {@link SyncMessage.epoch}).
+ *
+ *   - remote epoch **higher** → the peer already reset to a newer game (it did the
+ *     in-place rematch first): `adopt` its fresh log outright, whatever the logs say.
+ *     The prefix comparison does not apply ACROSS generations — a new game's empty
+ *     log is deliberately NOT a continuation of the old one.
+ *   - remote epoch **lower** → the message is from a superseded generation (a late,
+ *     in-flight publish from the just-finished game): `ignore` it. This is exactly
+ *     what stops a stale won-game message from re-adopting the old board after a
+ *     reset — the trap the seamless in-place reset would otherwise spring.
+ *   - **same** epoch → defer to the ordinary same-generation {@link decideSync}
+ *     (adopt strict extension / ignore prefix / conflict on a genuine fork).
+ *
+ * Because a reset only ever INCREMENTS the epoch and both peers reset deterministically
+ * on the same accepted rematch, the epochs converge and delivery order still does not
+ * matter: any permutation settles on the highest epoch, then the longest valid log
+ * within it.
+ */
+export function decideSyncEpoched(
+  localEpoch: number,
+  local: EventLog,
+  remoteEpoch: number,
+  remote: EventLog,
+): SyncDecision {
+  if (remoteEpoch > localEpoch) return { action: 'adopt' };
+  if (remoteEpoch < localEpoch) return { action: 'ignore' };
+  return decideSync(local, remote);
 }
 
 /**
@@ -267,10 +352,14 @@ export function decideUndo(
  * fields are the unchanged {@link SyncMessage} payload, so existing sync traffic
  * round-trips identically apart from the added tag.
  */
-export function toSyncMessage(log: EventLog): { readonly kind: 'sync' } & SyncMessage {
+export function toSyncMessage(
+  log: EventLog,
+  epoch = 0,
+): { readonly kind: 'sync' } & SyncMessage {
   return {
     kind: 'sync',
     version: SYNC_VERSION,
+    epoch,
     headHash: headHash(log),
     log: log.entries.map((entry) => entry.event),
   };
@@ -332,19 +421,36 @@ export type MetaProvider = () => Omit<ArchivedMeta, 'result'>;
  * sync decision on every inbound message and stopping the game on a fork.
  *
  * On a local move the engine appends to its `Game` and publishes the full log. On
- * receipt it runs {@link decideSync}; `adopt` replaces the local game with the
- * remote log, `ignore` is a no-op, and `conflict` archives both forks via
- * {@link flagConflicted}, flips {@link status} to `conflict`, and refuses all
- * further local moves (the game is stopped).
+ * receipt it runs the epoch-aware {@link decideSyncEpoched}; `adopt` replaces the
+ * local game with the remote log (and advances the generation on a higher remote
+ * epoch), `ignore` is a no-op (including a superseded prior-generation message), and
+ * `conflict` archives both forks via {@link flagConflicted}, flips {@link status} to
+ * `conflict`, and refuses all further local moves (the game is stopped).
+ *
+ * A rematch resets to a fresh game IN PLACE over the same transport via
+ * {@link resetGame} — bumping the fresh-game {@link SyncMessage.epoch} rather than
+ * disconnecting/re-hosting (design N.2 decision 2).
  */
 export class SyncEngine {
   private _game: Game;
+  /**
+   * The in-place fresh-game GENERATION (N.2 rematch; see {@link SyncMessage.epoch}).
+   * Starts at 0 for the first game; {@link resetGame} increments it when both peers
+   * reset to a fresh game over the SAME connection. Stamped on every published sync
+   * message and compared on receive so a seamless reset converges and a stale
+   * prior-generation message can never re-adopt the finished board.
+   */
+  private _epoch = 0;
   private readonly transport: Transport;
   private readonly db: IDBDatabase;
   private readonly meta: MetaProvider;
   private readonly size: number;
-  /** This client's own seat color — the basis of the restricted-undo rule. */
-  private readonly myColor: Player;
+  /**
+   * This client's own seat color — the basis of the restricted-undo rule. NOT readonly:
+   * an in-place rematch reset ({@link resetGame}) ALTERNATES colors (N.2 decision 2), so
+   * this client's seat changes with the fresh game and the undo rule must follow it.
+   */
+  private myColor: Player;
   private _status: SyncStatus = { kind: 'ok' };
   private _conflict: { mine: EventLog; theirs: EventLog } | null = null;
   /** The in-flight conflict-archival write, if any (for {@link whenSettled}). */
@@ -482,7 +588,43 @@ export class SyncEngine {
 
   /** Publish our current full log to the room (idempotent; safe to call anytime). */
   publishState(): void {
-    this.transport.publish(toSyncMessage(this._game.log) as TransportMessage);
+    this.transport.publish(toSyncMessage(this._game.log, this._epoch) as TransportMessage);
+  }
+
+  /** The current fresh-game {@link _epoch} (0 for the first game; incremented per {@link resetGame}). */
+  epoch(): number {
+    return this._epoch;
+  }
+
+  /**
+   * Reset to a FRESH game IN PLACE, over the SAME transport — the N.2 seamless rematch
+   * (design decision 2: "both reset to a fresh game in the same room/connection — no
+   * disconnect/re-host"). Swaps in `newGame` (a fresh, empty {@link Game}), BUMPS the
+   * fresh-game {@link _epoch}, publishes the new (empty) log stamped with that higher
+   * epoch so the peer adopts the fresh generation, and notifies change subscribers so
+   * the scene re-renders the empty board.
+   *
+   * The epoch bump is what makes this converge without a disconnect: the peer — which
+   * either reset independently on the same accepted rematch (also bumping to the same
+   * epoch) or is still on the old game — sees a HIGHER-or-equal epoch and adopts the
+   * fresh game rather than forking on the non-extending empty log. Any late in-flight
+   * message from the just-finished (lower-epoch) game is ignored by the same rule, so
+   * the finished board can never resurrect over the reset.
+   *
+   * @param newGame The fresh game to run the rematch in (its log becomes canonical).
+   * @param newMyColor This client's seat color in the fresh game — colors ALTERNATE on
+   *   a rematch (N.2 decision 2), so the restricted-undo rule ({@link myColor}) is
+   *   re-based onto the swapped seat.
+   * @throws {SyncError} if the game is stopped by a conflict — a forked, stopped game
+   *   exchanges no further traffic, rematch reset included ({@link assertLive}).
+   */
+  resetGame(newGame: Game, newMyColor: Player): void {
+    this.assertLive();
+    this._game = newGame;
+    this.myColor = newMyColor;
+    this._epoch += 1;
+    this.publishState();
+    this.emitChange();
   }
 
   /**
@@ -518,21 +660,33 @@ export class SyncEngine {
   receive(msg: SyncMessage): void {
     if (this._status.kind === 'conflict') return;
     const remote = parseSyncMessage(msg);
-    const decision = decideSync(this._game.log, remote);
+    // A missing/garbage epoch on the wire (a pre-epoch peer, or a directly-injected message on this
+    // public seam) reads as generation 0 via the SAME normalizer the codec uses, so an un-upgraded
+    // peer's first game still converges and the two epoch reads can never disagree.
+    const remoteEpoch = normalizeEpoch(msg.epoch);
+    const decision = decideSyncEpoched(this._epoch, this._game.log, remoteEpoch, remote);
     switch (decision.action) {
       case 'ignore':
-        // Stale / replay: the game did not change, so no listener fires (a spurious re-render on an
-        // ignored replay would be a lie about state changing — keep the notification truthful).
+        // Stale / replay — INCLUDING a message from a SUPERSEDED epoch (a late in-flight publish
+        // from the just-finished game after an in-place rematch reset): the game did not change, so
+        // no listener fires (a spurious re-render on an ignored replay would be a lie about state
+        // changing — keep the notification truthful). This is what stops the finished board from
+        // resurrecting over the fresh rematch game.
         return;
       case 'adopt':
-        // Adopt the peer's strict extension as the new authoritative game, then notify so the
-        // scene re-renders the REMOTE move (the issue #4 resync link).
+        // Adopt the peer's log as the new authoritative game, then notify so the scene re-renders
+        // (the issue #4 resync link). ACROSS a higher remote epoch this adopts the peer's FRESH
+        // rematch game (it reset first) and advances our generation to match, so we never fork on
+        // the non-extending empty log and both sides settle on the same epoch.
+        this._epoch = Math.max(this._epoch, remoteEpoch);
         this._game = Game.fromLog(this.size, remote);
         this.emitChange();
         return;
       case 'conflict':
-        // The logs forked and the game is stopped: archive both forks and notify so the UI reflects
-        // the stopped/conflicted state (the phase flips synchronously inside onConflict).
+        // The logs forked WITHIN the same epoch and the game is stopped: archive both forks and
+        // notify so the UI reflects the stopped/conflicted state (the phase flips synchronously
+        // inside onConflict). A cross-epoch difference is never a conflict — it is a generation
+        // change, handled by adopt/ignore above.
         this._archiving = this.onConflict(remote, decision.divergePly);
         this.emitChange();
         return;
