@@ -81,14 +81,49 @@ export interface EndState {
   readonly resultText: string;
   /** The rematch sub-state, derived from the N.1 handshake selectors. */
   readonly rematchUi: RematchUi;
+  /**
+   * The PRIMARY headline shown ONLY in the `incoming` rematch state (the opponent asked and we must
+   * respond): `"<Opponent Color> wants a rematch"` — so the responder knows WHAT they are accepting /
+   * declining, instead of the stale result sentence. `null` in every other state (the overlay keeps
+   * `resultText` then). The opponent color is the enumerated `Player` that is NOT `mySeat`; with no
+   * seat (`mySeat === null`) it falls back to the neutral "Your opponent wants a rematch". Nothing
+   * here is attacker-supplied free text — the color word comes from the fixed `Player` union.
+   */
+  readonly rematchPrompt: string | null;
 }
 
 /** The `rematch` action tag this consumer files its handshake proposals under (N.1's opaque tag). */
 export const REMATCH_ACTION = 'rematch';
 
-/** A human name for a color, for the fixed result sentence. */
+/**
+ * A human name for a color, for the fixed result sentence and the rematch prompt. Enumerated over the
+ * `Player` union with an explicit assertion on each arm (not a lax "else = Black" fallthrough): an
+ * input outside `{'white','black'}` is an invariant violation and throws, so no caller can smuggle an
+ * off-union value into the rendered copy. The assertion also keeps the branch honestly two-sided.
+ */
 function colorName(player: Player): string {
-  return player === 'white' ? 'White' : 'Black';
+  if (player === 'white') {
+    return 'White';
+  }
+  if (player === 'black') {
+    return 'Black';
+  }
+  throw new Error(`colorName: not a Player color: ${String(player)}`);
+}
+
+/**
+ * The `incoming`-only primary headline: who (by COLOR) is asking for a rematch. In a 2-player game the
+ * proposer is the opponent — the color that is NOT `mySeat`. With a known seat this is the enumerated
+ * `Player` opposite `mySeat` (`'white'`→"Black wants a rematch", `'black'`→"White wants a rematch");
+ * with no seat (unseated/spectating) it falls back to a neutral "Your opponent wants a rematch". The
+ * color word is minted from the fixed `Player` union via {@link colorName}, never opponent free text.
+ */
+function rematchPromptOf(mySeat: SeatColor | null): string {
+  if (mySeat === null) {
+    return 'Your opponent wants a rematch';
+  }
+  const opponent: Player = mySeat === 'white' ? 'black' : 'white';
+  return `${colorName(opponent)} wants a rematch`;
 }
 
 /**
@@ -159,6 +194,10 @@ export function deriveEndState(
 ): EndState {
   const winner = gameState.winner;
   const rematchUi = rematchUiOf(handshakeState);
+  // The opponent-color prompt is the primary headline ONLY while an incoming ask awaits our response;
+  // every other state keeps the result sentence, so `rematchPrompt` is null there.
+  const rematchPrompt =
+    rematchUi === 'incoming' ? rematchPromptOf(mySeat) : null;
   if (winner === null) {
     return {
       show: false,
@@ -167,6 +206,7 @@ export function deriveEndState(
       iWon: false,
       resultText: '',
       rematchUi,
+      rematchPrompt,
     };
   }
   const winReason = winReasonOf(gameState);
@@ -178,6 +218,7 @@ export function deriveEndState(
     iWon,
     resultText: resultTextOf(winner, winReason, iWon),
     rematchUi,
+    rematchPrompt,
   };
 }
 

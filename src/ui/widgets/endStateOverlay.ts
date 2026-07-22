@@ -25,7 +25,8 @@
  *     `rematchUi` sub-state:
  *       - `idle` / `declined` → a **Rematch** button (declined adds a one-line "declined" note).
  *       - `proposed-waiting` → "Waiting for opponent…" (WE proposed; the button is spent).
- *       - `incoming` → **Accept** / **Decline** (the OPPONENT proposed).
+ *       - `incoming` → the opponent-color **"<Color> wants a rematch"** prompt (`rematchPrompt`)
+ *         REPLACES the result headline, with **Accept** / **Decline** beneath (the OPPONENT proposed).
  *       - `accepted` → "Starting a fresh game…" (both sides reset — the app swaps seats + restarts).
  *
  * The Rematch button dispatches through `deps.proposeRematch()` (→ `session.propose('rematch')`);
@@ -77,6 +78,7 @@ const HIDDEN_STATE: EndState = {
   iWon: false,
   resultText: '',
   rematchUi: 'idle',
+  rematchPrompt: null,
 };
 
 /**
@@ -170,8 +172,15 @@ export function endStateOverlayWidget(): WidgetFactory {
         element.setAttribute('data-rematch', es.rematchUi);
         element.setAttribute('data-iwon', String(es.iWon));
 
-        // Result sentence — the enumerated, non-free-text string from the pure model, via textContent.
-        result.textContent = es.resultText;
+        // Primary headline — via textContent (never innerHTML), the enumerated, non-free-text string
+        // from the pure model. For an INCOMING ask the responder must know WHAT they're answering, so
+        // we show the opponent-color rematch prompt ("<Color> wants a rematch") IN PLACE of the stale
+        // result sentence; every other state keeps `resultText`. `rematchPrompt` is non-null exactly
+        // in the incoming state (the model's invariant), so this is the one arm that swaps the line.
+        result.textContent =
+          es.rematchUi === 'incoming' && es.rematchPrompt !== null
+            ? es.rematchPrompt
+            : es.resultText;
 
         // The note line (waiting / declined / starting), or empty for the button sub-states.
         const noteText = NOTE_TEXT[es.rematchUi];

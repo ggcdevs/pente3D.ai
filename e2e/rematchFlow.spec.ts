@@ -50,6 +50,7 @@ type EndState = {
   iWon: boolean;
   resultText: string;
   rematchUi: string;
+  rematchPrompt: string | null;
 };
 
 type Pente = {
@@ -286,6 +287,21 @@ async function proveRematchFlow(host: Page, joiner: Page, artifact: string) {
   );
   expect(seenIncoming, "joiner must receive the host's rematch ask over the relay").toBe(true);
   await expect(joiner.locator('[data-testid="endstate-accept"]')).toBeVisible();
+
+  // The joiner is the RESPONDER: its overlay's PRIMARY headline must now tell it WHAT it's answering —
+  // the opponent-color rematch prompt ("<Color> wants a rematch"), NOT the stale result sentence. The
+  // joiner was black, so the opponent (proposer) is white → "White wants a rematch". This is the exact
+  // bug fix (issue #12): before, the incoming responder saw the old "won" line with no idea of the ask.
+  const joinerEs = await endState(joiner);
+  expect(joinerEs?.rematchPrompt).toBe('White wants a rematch');
+  await expect(joiner.locator('[data-testid="endstate-result"]')).toHaveText(
+    'White wants a rematch',
+  );
+  // Proof the headline actually CHANGED: it no longer shows the "won" result sentence it did before.
+  expect(joinerEs?.resultText).toBe('White won with five in a row.');
+  await expect(joiner.locator('[data-testid="endstate-result"]')).not.toHaveText(
+    joinerEs!.resultText,
+  );
 
   // Install a CONNECTION WATCHER on both pages BEFORE the accept fires the reset: it polls
   // `getNet().phase` frequently and records whether it EVER leaves `connected`. The in-place reset

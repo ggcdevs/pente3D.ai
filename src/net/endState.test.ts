@@ -296,6 +296,79 @@ describe('deriveEndState — rematchUi mapping (derived from the N.1 handshake)'
   });
 });
 
+describe('deriveEndState — rematchPrompt (incoming-only opponent-color headline)', () => {
+  it('White (this client) sees "Black wants a rematch" for an incoming ask', () => {
+    // I am White; the opponent (the incoming proposer) is Black — the color that is NOT my seat.
+    const es = deriveEndState(wonByLine('white'), incomingRematch(), 'white');
+    expect(es.rematchUi).toBe('incoming');
+    expect(es.rematchPrompt).toBe('Black wants a rematch');
+  });
+
+  it('Black (this client) sees "White wants a rematch" for an incoming ask', () => {
+    const es = deriveEndState(wonByLine('white'), incomingRematch(), 'black');
+    expect(es.rematchUi).toBe('incoming');
+    expect(es.rematchPrompt).toBe('White wants a rematch');
+  });
+
+  it('an UNSEATED client (mySeat null) gets the neutral fallback prompt for an incoming ask', () => {
+    const es = deriveEndState(wonByLine('white'), incomingRematch(), null);
+    expect(es.rematchUi).toBe('incoming');
+    expect(es.rematchPrompt).toBe('Your opponent wants a rematch');
+  });
+
+  it('the opponent color is exactly the OTHER seat (kills a mutant that names my own color)', () => {
+    // With a seat, the prompt must name the color OPPOSITE mine — never my own. Asserting both seats
+    // pins that the branch flips on the seat (a mutant returning `colorName(mySeat)` fails both).
+    for (const seat of ['white', 'black'] as const) {
+      const other = seat === 'white' ? 'Black' : 'White';
+      const es = deriveEndState(wonByLine('white'), incomingRematch(), seat);
+      expect(es.rematchPrompt).toBe(`${other} wants a rematch`);
+      expect(es.rematchPrompt).not.toBe(`${seat === 'white' ? 'White' : 'Black'} wants a rematch`);
+    }
+  });
+
+  it('rematchPrompt is null in EVERY non-incoming rematch state', () => {
+    const nonIncoming: readonly HandshakeState[] = [
+      initialHandshake(), // idle
+      outgoingRematch(), // proposed-waiting
+      respondedRematch(true), // accepted
+      respondedRematch(false), // declined
+      peerRespondedRematch(true), // accepted
+      peerRespondedRematch(false), // declined
+    ];
+    for (const seat of ['white', 'black', null] as const) {
+      for (const hs of nonIncoming) {
+        const es = deriveEndState(wonByLine('white'), hs, seat);
+        expect(es.rematchUi).not.toBe('incoming');
+        expect(es.rematchPrompt).toBeNull();
+      }
+    }
+  });
+
+  it('THROWS on an off-union color (defensive assertion, not a silent "Black" fallthrough)', () => {
+    // Fault injection to reach a genuinely-unreachable defensive branch (agent-principles: allowed to
+    // reach a guarded invariant, and we still assert REAL behavior — the error propagates verbatim and
+    // is not masked). The `Player` union makes an off-union winner impossible through the types, but
+    // `colorName`'s explicit assertion must reject it rather than paint the wrong color. A lax
+    // `else = 'Black'` fallthrough would silently mislabel it, so this pins the throw.
+    const bogusWinner = 'green' as unknown as Player;
+    const bogusWon: GameState = { ...initialState(9), winner: bogusWinner };
+    // iWon is false (mySeat 'white' ≠ 'green'), so resultText names the color → colorName('green').
+    expect(() => deriveEndState(bogusWon, initialHandshake(), 'white')).toThrow(
+      'colorName: not a Player color: green',
+    );
+  });
+
+  it('rematchPrompt is populated for an incoming ask even while the game is in progress (winner null)', () => {
+    // The prompt is derived from the handshake regardless of `show`; only the widget gates it on show.
+    // Kills a mutant that only computes it in the winner!==null branch.
+    const es = deriveEndState(initialState(9), incomingRematch(), 'white');
+    expect(es.show).toBe(false);
+    expect(es.rematchUi).toBe('incoming');
+    expect(es.rematchPrompt).toBe('Black wants a rematch');
+  });
+});
+
 describe('alternateSeats — deterministic seat swap (colors alternate every game)', () => {
   it('swaps white <-> black owners', () => {
     const before: SeatMap = { white: 'alice', black: 'bob' };

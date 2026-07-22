@@ -144,6 +144,7 @@ const HIDDEN_END_STATE: EndState = {
   iWon: false,
   resultText: '',
   rematchUi: 'idle',
+  rematchPrompt: null,
 };
 
 // The live networked END-STATE view-model the overlay renders (Task N.2.2, issue #12), set once the
