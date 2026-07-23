@@ -37,14 +37,14 @@ import relay from '../src/config/defaults/relay.json' with { type: 'json' };
  *
  *  1. A,B enter, then C enters → C rejected `room-full` (both seats owned). [PROVEN]
  *  2. A,B; B drops + rejoins → B RECLAIMS black by identity while A stays resident. [PROVEN]
- *  3. A,B; A drops + rejoins → A resumes WHITE (the establisher's own color). [PROVEN]
- *  4. A,B; both drop; B rejoins then A rejoins → seat ownership preserved. [`test.fixme` — EXPOSES an
- *      unwired gap: S.2 §2.3 promised durable, persisted-in-the-game seat ownership, but S.5's
- *      `buildProvisionalSeat` mints a fresh empty game + claims first-available white, so an empty-room
- *      re-establish does NOT reclaim the owned color. Tracked, disclosed, not masked (agent-principles #1).]
- *  5. A,B; A drops; C enters claiming A's spot → C rejected (A's white RESERVED). [`test.fixme` — same
- *      durable-seat gap PLUS: an admitted peer (B) never assumes the arbiter role when the establisher
- *      leaves, so there is no resident to refuse C. Both must land for §6.5 to hold.]
+ *  3. A,B; A drops + rejoins → the resident B (arbiter after handoff) admits A back onto WHITE running
+ *      the SAME game — asserted by A+B converging on one uuid + headHash, not a coincidental color. [PROVEN]
+ *  4. A,B; both drop; B rejoins then A rejoins → durable seat ownership is preserved (B reloads its
+ *      persisted game and reclaims BLACK though it returns first; A resumes WHITE), both converging on the
+ *      SAME game uuid. Wired by `buildProvisionalSeat` reloading the room-scoped persisted game+seatmap. [PROVEN]
+ *  5. A,B; A drops; C enters claiming A's spot → C rejected (A's white RESERVED). The admitted peer B
+ *      ASSUMES the arbiter role on A's departure (presence handoff) and its persisted seat map still
+ *      reserves white for the absent player-a, so C hits room-full. [PROVEN]
  *  #31 regression: BOTH peers choose the SAME code and 'defer'/'new' (the old both-Join) → they get
  *      DISTINCT seats (one white, one black), asserted on BOTH contexts' seat + game uuid + headHash.
  *      [PROVEN — and shown to BITE: restoring the old empty-map seeding makes it fail; see the report.]
@@ -61,6 +61,18 @@ import relay from '../src/config/defaults/relay.json' with { type: 'json' };
 const RELAY = relay as { wssUrl: string; username: string; password: string; topicRoot: string };
 /** How long to wait for the broker to accept a probe connection before declaring it down. */
 const CONNECT_PROBE_MS = 10_000;
+/**
+ * The per-wait ceiling for an admission/adopt ROUND-TRIP to land an observable state change (a seat, a
+ * convergence, an offline). Each round-trip here is a page→Node-hub→page `evaluate` hop across 2–3
+ * ISOLATED contexts (each a full WebGL app), so under the suite's PARALLEL workers a single hop can be
+ * legitimately slow — the documented cost of the cross-context proof, NOT a logic race. This ceiling is
+ * generous ENOUGH that a genuinely-completing round-trip is never cut off under load (the old 15s per-
+ * wait cap lost there even though `test.slow()` tripled the whole-test budget — a `waitForFunction`
+ * timeout is a hard local cap `test.slow` does not touch). It is a DEADLINE, not a gate: the awaited
+ * condition must still become true — a broken admission never satisfies it, it just fails slower, so
+ * the proof is unchanged (agent-principles #7). Kept well under `test.slow()`'s 180s whole-test budget.
+ */
+const ROUND_TRIP_MS = 45_000;
 /** Whether the live broker answered the `beforeAll` probe (else the real-relay test SKIPs, genuinely). */
 let relayReachable = false;
 
@@ -300,7 +312,7 @@ async function waitConnected(page: Page): Promise<void> {
   await page.waitForFunction(
     () => (window as unknown as { __pente: Pente }).__pente.getNet()?.phase === 'connected',
     undefined,
-    { timeout: 15_000 },
+    { timeout: ROUND_TRIP_MS },
   );
 }
 
@@ -309,7 +321,7 @@ async function waitOffline(page: Page): Promise<void> {
   await page.waitForFunction(
     () => (window as unknown as { __pente: Pente }).__pente.getNet()?.phase === 'offline',
     undefined,
-    { timeout: 15_000 },
+    { timeout: ROUND_TRIP_MS },
   );
 }
 
@@ -332,7 +344,7 @@ async function establishPair(a: Page, b: Page): Promise<string> {
   await b.waitForFunction(
     () => (window as unknown as { __pente: Pente }).__pente.getNet()?.seat === 'black',
     undefined,
-    { timeout: 15_000 },
+    { timeout: ROUND_TRIP_MS },
   );
   expect(await seatOf(a)).toBe('white');
   expect(await seatOf(b)).toBe('black');
@@ -425,7 +437,7 @@ test.describe('two-context session model over the injected MockTransport (S.7, e
       await b.page.waitForFunction(
         () => (window as unknown as { __pente: Pente }).__pente.getNet()?.seat === 'black',
         undefined,
-        { timeout: 15_000 },
+        { timeout: ROUND_TRIP_MS },
       );
       expect(await seatOf(b.page)).toBe('black');
       // Reclaim-by-identity: B is back on BLACK, both contexts agree the owners are unchanged, and B
@@ -449,38 +461,48 @@ test.describe('two-context session model over the injected MockTransport (S.7, e
       const code = (await a.page.evaluate(
         () => (window as unknown as { __pente: Pente }).__pente.getNet()?.code ?? null,
       ))!;
+      const uuidBefore = await gameUuid(a.page);
+      const headBefore = await headHash(a.page);
 
-      // A (the establisher/white) drops, then returns to the SAME room with `defer`.
+      // A (the establisher/white) drops, then returns to the SAME room with `defer`. When A leaves, the
+      // surviving resident B ASSUMES the arbiter role (design §2.4 handoff), so on A's return B admits
+      // it back onto its RESERVED white running the SAME game — a genuine resume, not a coincidence.
       await leave(a.page);
       await enterDefer(a.page, code);
       await waitConnected(a.page);
+      // Wait until A is back on WHITE — the admit round-trip from the resident B.
+      await a.page.waitForFunction(
+        () => (window as unknown as { __pente: Pente }).__pente.getNet()?.seat === 'white',
+        undefined,
+        { timeout: ROUND_TRIP_MS },
+      );
 
-      // A resumes on WHITE (design §6 scenario 3). NOTE (honesty, agent-principles #2/#3): B is an
-      // admitted peer, not an arbiter, and does not re-announce when A returns, so A re-establishes as
-      // the lone owner and takes white by first-available — which for the original establisher IS its
-      // owned color. The DURABLE reclaim-by-identity guarantee across a room that emptied of arbiters is
-      // the separately-tracked `fixme` (scenario 4); here we prove A's own observable seat is WHITE and
-      // owned by player-a on its context (proof-by-state), not a coincidental unowned assignment.
+      // A resumes on WHITE, and — the mechanism, not a coincidence — A and B CONVERGE on the SAME game:
+      // A re-adopted B's authoritative game (same uuid + headHash as before the drop), and BOTH contexts
+      // agree the seat owners are unchanged. This asserts on B too, and on the shared identity/history,
+      // so a divergent-fresh-game resume (the old proof-by-inference gap) would now FAIL here.
       expect(await seatOf(a.page)).toBe('white');
-      const oa = await owners(a.page);
-      expect(oa?.white).toBe('player-a');
+      expect(await seatOf(b.page)).toBe('black');
+      expect(await gameUuid(a.page)).toBe(uuidBefore);
+      expect(await gameUuid(b.page)).toBe(uuidBefore);
+      expect(await headHash(a.page)).toBe(headBefore);
+      expect(await headHash(b.page)).toBe(headBefore);
+      expect(await owners(a.page)).toEqual({ white: 'player-a', black: 'player-b' });
+      expect(await owners(b.page)).toEqual({ white: 'player-a', black: 'player-b' });
     } finally {
       await a.context.close();
       await b.context.close();
     }
   });
 
-  // TODO(#35 durable-seat-persistence): design §6.4 promises seat ownership survives an EMPTY room
-  // (it is a durable property of each peer's PERSISTED game, S.2 §2.3), so B re-seeds as BLACK and A
-  // resumes WHITE. The S.5 glue does NOT yet wire that persistence: `NetSession.buildProvisionalSeat`
-  // always mints a FRESH empty game and claims first-available WHITE, so after BOTH drop the first
-  // returning owner re-establishes as white regardless of the color it owned. This integration test is
-  // exactly the gate that EXPOSES that missing wiring (component gates missed it) — kept as an
-  // honest, tracked `fixme` (agent-principles #1: an incomplete guarantee is disclosed, never masked
-  // by asserting the wrong behavior). It flips to a real proof the moment the durable seat map is
-  // persisted-into-the-game and reloaded on re-establish. Verified today: without the fix B returns as
-  // WHITE (first-available), which is why this must NOT assert the design's black/white preservation.
-  test.fixme(
+  // Design §6.4: seat ownership is a DURABLE property of each peer's persisted game, so it survives an
+  // EMPTY room — B re-seeds as BLACK and A resumes WHITE regardless of who returns first. The S.5 glue
+  // now wires that persistence: `NetSession.buildProvisionalSeat` reloads this room's persisted game +
+  // seat map and RECLAIMS the owned color (`persistRoomState`/`loadRoomState` under a room-scoped key),
+  // so the first returning owner re-establishes as the color it owned, not first-available white. This
+  // is the integration gate that exposed the missing wiring; it is now a REAL proof (proof-by-state on
+  // both contexts). The mock-transport unit proof of the same mechanism lives in `session.test.ts`.
+  test(
     'scenario 4: A,B; both drop; B rejoins then A rejoins → seat ownership preserved',
     async ({ browser }) => {
     const hub = new NodeRelayHub();
@@ -490,17 +512,27 @@ test.describe('two-context session model over the injected MockTransport (S.7, e
     hub.register(b.playerId, b.page);
     try {
       const code = await establishPair(a.page, b.page);
+      const uuidBefore = await gameUuid(a.page);
 
       // BOTH drop → the room empties. Seat ownership lives in each peer's persisted game (design §6.4),
       // so it survives the empty room.
       await leave(a.page);
       await leave(b.page);
 
-      // B rejoins FIRST (re-seeds as the returning owner), then A rejoins.
+      // B rejoins FIRST (re-seeds as the returning owner from its persisted game), then A rejoins and
+      // the resident B admits it back onto its reserved white.
       await enterDefer(b.page, code);
-      await waitConnected(b.page);
+      await b.page.waitForFunction(
+        () => (window as unknown as { __pente: Pente }).__pente.getNet()?.seat === 'black',
+        undefined,
+        { timeout: ROUND_TRIP_MS },
+      );
       await enterDefer(a.page, code);
-      await waitConnected(a.page);
+      await a.page.waitForFunction(
+        () => (window as unknown as { __pente: Pente }).__pente.getNet()?.seat === 'white',
+        undefined,
+        { timeout: ROUND_TRIP_MS },
+      );
 
       // Each peer resumes the seat its identity owns — B black, A white — NOT reassigned by arrival
       // order (B arrived first but is still BLACK, not white). Proof-by-state on both contexts.
@@ -508,6 +540,9 @@ test.describe('two-context session model over the injected MockTransport (S.7, e
       expect(await seatOf(a.page)).toBe('white');
       expect((await owners(b.page))?.black).toBe('player-b');
       expect((await owners(a.page))?.white).toBe('player-a');
+      // B re-seeded the SAME persisted game identity it owned (not a fresh one), and A converged onto it.
+      expect(await gameUuid(b.page)).toBe(uuidBefore);
+      expect(await gameUuid(a.page)).toBe(uuidBefore);
     } finally {
       await a.context.close();
       await b.context.close();
@@ -515,15 +550,13 @@ test.describe('two-context session model over the injected MockTransport (S.7, e
     },
   );
 
-  // TODO(#35 durable-seat-persistence + resident-arbiter-handoff): design §6.5 rejects C when A's white
-  // is RESERVED. Two pieces of S.5 wiring are missing for this to hold: (1) an ADMITTED peer (B) never
-  // becomes the arbiter, so when the establisher A drops there is NO resident to refuse C; and (2) seat
-  // ownership is not persisted, so C, seeing no arbiter, re-establishes as first-available WHITE and
-  // takes A's reserved spot. This integration test is the gate that EXPOSES both gaps — kept as an
-  // honest, tracked `fixme` (agent-principles #1: disclosed, not masked by asserting C-gets-white as if
-  // correct). It flips to a real proof once B assumes the arbiter role on the establisher's departure
-  // AND seat ownership is durable, so C is rejected `seat-reserved`/`room-full` per §6.5.
-  test.fixme('scenario 5: A,B; A drops; C enters claiming A’s spot → C rejected (white RESERVED)', async ({
+  // Design §6.5: C is rejected when A's white is RESERVED. Both pieces of S.5 wiring are now in place:
+  // (1) an ADMITTED peer (B) ASSUMES the arbiter role when the establisher A drops and B becomes the
+  // sole resident (`onPresence` handoff), so there IS a resident to refuse C; and (2) B's identity-owned
+  // seat map — persisted and kept in memory — still RESERVES white for the absent player-a, so a claim
+  // by the stranger C hits room-full. This integration test, once a tracked `fixme`, is now a REAL proof
+  // (proof-by-state: C is rejected + stays offline; the reserved seat is never handed out).
+  test('scenario 5: A,B; A drops; C enters claiming A’s spot → C rejected (white RESERVED)', async ({
     browser,
   }) => {
     const hub = new NodeRelayHub();
@@ -582,7 +615,7 @@ test.describe('two-context session model over the injected MockTransport (S.7, e
       await b.page.waitForFunction(
         () => (window as unknown as { __pente: Pente }).__pente.getNet()?.seat === 'black',
         undefined,
-        { timeout: 15_000 },
+        { timeout: ROUND_TRIP_MS },
       );
 
       const seatA = await seatOf(a.page);
@@ -606,7 +639,7 @@ test.describe('two-context session model over the injected MockTransport (S.7, e
       await b.page.waitForFunction(
         (expected) => (window as unknown as { __pente: Pente }).__pente.getHeadHash() === expected,
         await headHash(a.page),
-        { timeout: 15_000 },
+        { timeout: ROUND_TRIP_MS },
       );
       expect(await headHash(b.page)).toBe(await headHash(a.page));
 
@@ -652,7 +685,7 @@ test.describe('two-context session model over the injected MockTransport (S.7, e
       await b.page.waitForFunction(
         () => (window as unknown as { __pente: Pente }).__pente.getNet()?.seat === 'black',
         undefined,
-        { timeout: 15_000 },
+        { timeout: ROUND_TRIP_MS },
       );
       // Over the REAL relay, the two isolated contexts negotiated DISTINCT seats and converged on one
       // game identity — the whole model proven end-to-end on MQTT, not a mock.

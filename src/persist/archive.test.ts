@@ -29,10 +29,13 @@ import {
 import {
   saveGame,
   loadGame,
+  loadNetGame,
+  loadNetGameByUuid,
   listArchivedGames,
   flagConflicted,
   loadConflicted,
   ArchiveError,
+  NET_ROOM_RESULT,
   type ArchivedMeta,
 } from './archive';
 
@@ -310,6 +313,125 @@ describe('game archive', () => {
       await putGame(db, illegal);
 
       await expect(loadGame(db, 'dbl')).rejects.toBeInstanceOf(ArchiveError);
+    });
+  });
+
+  describe('durable identity-owned seat map (design §2.3, empty-room reclaim §6.4)', () => {
+    it('round-trips the persisted seat map via loadNetGame', async () => {
+      const { db } = await open();
+      const seats = { white: 'player-a', black: 'player-b' };
+      await saveGame(db, 'room', sampleGame(), { ...sampleMeta, seats });
+
+      const loaded = await loadNetGame(db, 'room');
+      expect(loaded).not.toBeUndefined();
+      // The game reconstructs with its identity intact AND the durable seat map comes back verbatim.
+      expect(loaded!.game.uuid).toBe(SAMPLE_UUID);
+      expect(loaded!.game.state().winner).toBeNull();
+      expect(loaded!.seats).toEqual(seats);
+    });
+
+    it('reserves an absent owner: a seat map with a null side round-trips exactly', async () => {
+      const { db } = await open();
+      // A lone establisher owns white; black is unowned (null) — the reserve-vacated shape.
+      const seats = { white: 'player-a', black: null };
+      await saveGame(db, 'lone', sampleGame(), { ...sampleMeta, seats });
+
+      const loaded = await loadNetGame(db, 'lone');
+      expect(loaded!.seats).toEqual({ white: 'player-a', black: null });
+    });
+
+    it('loadNetGame yields seats:null for a record saved WITHOUT a seat map (a local game)', async () => {
+      const { db } = await open();
+      // sampleMeta has no `seats` → the record stores none → the loader reports null, not an empty map.
+      await saveGame(db, 'local', sampleGame(), sampleMeta);
+
+      const loaded = await loadNetGame(db, 'local');
+      expect(loaded!.game.uuid).toBe(SAMPLE_UUID);
+      expect(loaded!.seats).toBeNull();
+    });
+
+    it('loadNetGame returns undefined for a missing id (negative case)', async () => {
+      const { db } = await open();
+      expect(await loadNetGame(db, 'nope')).toBeUndefined();
+    });
+
+    it('loadNetGame falls back to the default board size (9) when a record omits size', async () => {
+      const { db } = await open();
+      // A record with NO `size` field (a legacy net-room shard) reconstructs on the default board.
+      const record: GameRecord = {
+        id: 'net-room:NOSIZE',
+        log: [{ type: 'place', node: '4,4,4' }],
+        meta: {
+          players: {},
+          result: NET_ROOM_RESULT,
+          startedAt: 0,
+          uuid: 'nosize-uuid',
+          headHash: 'ignored-on-load',
+          seats: { white: 'player-a', black: null },
+        },
+      };
+      await putGame(db, record);
+
+      const loaded = await loadNetGame(db, 'net-room:NOSIZE');
+      expect(loaded).not.toBeUndefined();
+      // Reconstructed on the default 9-board (the single placement is legal there).
+      expect(loaded!.game.state().size).toBe(9);
+      expect(loaded!.seats).toEqual({ white: 'player-a', black: null });
+    });
+
+    it('loadNetGameByUuid finds a game by its portable uuid (not its local record id)', async () => {
+      const { db } = await open();
+      const seats = { white: 'player-a', black: 'player-b' };
+      // Store under a local id that is DISTINCT from the game's uuid — the lookup must key on uuid.
+      await saveGame(db, 'local-record-id', sampleGame(), { ...sampleMeta, seats });
+
+      const loaded = await loadNetGameByUuid(db, SAMPLE_UUID);
+      expect(loaded).not.toBeUndefined();
+      expect(loaded!.game.uuid).toBe(SAMPLE_UUID);
+      expect(loaded!.seats).toEqual(seats);
+    });
+
+    it('loadNetGameByUuid returns undefined when no archived game carries that uuid (negative case)', async () => {
+      const { db } = await open();
+      await saveGame(db, 'g', sampleGame(), sampleMeta);
+      expect(await loadNetGameByUuid(db, 'a-uuid-nobody-has')).toBeUndefined();
+    });
+
+    it('an internal net-room record is EXCLUDED from the archive listing (not a spurious game)', async () => {
+      const { db } = await open();
+      await saveGame(db, 'real', sampleGame(), sampleMeta);
+      // The net session persists its durable room shard under the internal 'net-room' result marker.
+      await saveGame(db, 'net-room:ABCDEF', sampleGame(), {
+        ...sampleMeta,
+        result: NET_ROOM_RESULT,
+        seats: { white: 'player-a', black: null },
+      });
+
+      const list = await listArchivedGames(db);
+      // Only the REAL game is listed; the room shard is filtered out of the user-facing browser.
+      expect(list.map((l) => l.id)).toEqual(['real']);
+      // …but the shard is still directly loadable by its own id (the session reads it that way).
+      expect((await loadNetGame(db, 'net-room:ABCDEF'))?.seats).toEqual({
+        white: 'player-a',
+        black: null,
+      });
+    });
+
+    it('loadNetGameByUuid SKIPS a net-room shard and resolves the real game sharing that uuid', async () => {
+      const { db } = await open();
+      // A real archived game and a net-room shard of the SAME game (same uuid) coexist.
+      await saveGame(db, 'real', sampleGame(), sampleMeta);
+      await saveGame(db, 'net-room:ABCDEF', sampleGame(), {
+        ...sampleMeta,
+        result: NET_ROOM_RESULT,
+        seats: { white: 'player-a', black: 'player-b' },
+      });
+
+      const loaded = await loadNetGameByUuid(db, SAMPLE_UUID);
+      expect(loaded).not.toBeUndefined();
+      // Resolves the REAL game (no seats), NOT the room shard — the resume path wants the real game.
+      expect(loaded!.game.uuid).toBe(SAMPLE_UUID);
+      expect(loaded!.seats).toBeNull();
     });
   });
 

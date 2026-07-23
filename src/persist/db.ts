@@ -78,6 +78,20 @@ export interface GameMeta {
   readonly uuid: string;
   /** The event log's `headHash` — fingerprints the whole history (O(1) identity). */
   readonly headHash: string;
+  /**
+   * The identity-owned seat map bound to this game (design §2.3 "Identity-owned
+   * seats", build-plan S.2 "Seat map becomes part of the *game* (persisted)"):
+   * `{ white, black }` = the real `playerId` that owns each seat, or `null`. This
+   * is what makes reclaim-by-identity survive an EMPTY room — a returning owner
+   * reloads its persisted game and reclaims the exact color it owned, rather than
+   * grabbing first-available white (design §6.4). Optional: a game persisted before
+   * this field (or a local, never-networked game) has no seat map; the net-session
+   * glue treats an absent value as "no owner recorded yet".
+   */
+  readonly seats?: {
+    readonly white: string | null;
+    readonly black: string | null;
+  };
 }
 
 /**

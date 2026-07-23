@@ -15,6 +15,10 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { openDatabase } from '../persist/db';
+import { saveGame } from '../persist/archive';
+import { Game } from '../core/game';
+import { headHash } from '../core/eventLog';
+import { coordsOf } from '../core/coords';
 import { MockRelayHub, MockTransport, type Transport } from './transport';
 import { NetSession, type NetSessionDeps } from './session';
 import type { Proposal } from './admission';
@@ -50,6 +54,9 @@ function makeSession(
   let arrival = 0;
   return new NetSession({
     createTransport: (): Transport => new MockTransport(hub, playerId),
+    // Default to the shared per-test `db`; a durable-reclaim test that models TWO distinct browsers
+    // overrides `db` per identity so their room-scoped persisted state does not collide on one store
+    // (mirroring the e2e's per-context IndexedDB isolation).
     db,
     playerId,
     size: SIZE,
@@ -259,6 +266,164 @@ describe('NetSession.enter — two peers ARRIVE TOGETHER → initiator election 
     expect(a.state().seat).toBe('white');
     expect(b.state().seat).toBe('black');
     expect(b.gameUuid()).toBe(a.gameUuid());
+    expect(a.seatOwners()).toEqual({ white: 'player-a', black: 'player-b' });
+    expect(b.seatOwners()).toEqual({ white: 'player-a', black: 'player-b' });
+  });
+});
+
+/**
+ * The DURABLE identity-owned seat map (design §2.3/§6.4): seat ownership is persisted WITH the game
+ * under a room-scoped key, so it survives an EMPTY room. These model TWO distinct browsers, each with
+ * its OWN archive db (mirroring the e2e's per-context IndexedDB isolation) so their room-scoped
+ * persisted state does not collide on one store. `flush()` lets the fire-and-forget durable write
+ * commit before the returning peer reads it.
+ */
+describe('NetSession — durable seats survive an empty room (design §6.4, scenario 4)', () => {
+  it('both drop; the first returning owner re-seeds as the color it OWNED, not white-by-arrival', async () => {
+    const hub = new MockRelayHub();
+    // Distinct per-browser stores so A and B's `net-room:CODE` records never collide.
+    const dbA = await openDatabase(`net-durable-a-${Math.random().toString(36).slice(2)}`);
+    const dbB = await openDatabase(`net-durable-b-${Math.random().toString(36).slice(2)}`);
+    const a = makeSession(hub, 'player-a', { db: dbA });
+    const b = makeSession(hub, 'player-b', { db: dbB });
+
+    // Establish A (white) + B (black), then await the durable persists so both browsers' room-scoped
+    // seat map + game are COMMITTED before the drop (deterministic durability, not a timing guess).
+    await a.enter(ROOM, NEW);
+    await b.enter(ROOM, DEFER);
+    await a.whenPersisted();
+    await b.whenPersisted();
+    await flush();
+    const uuidBefore = a.gameUuid();
+    expect(b.state().seat).toBe('black');
+
+    // BOTH drop → the room empties on the relay. Seat ownership lives in each browser's persisted game.
+    a.disconnect();
+    b.disconnect();
+    await flush();
+
+    // B rejoins FIRST into the now-empty room with `defer`. The OLD bug re-seeded a fresh empty game
+    // and grabbed first-available WHITE. The durable fix reloads B's persisted game (SAME uuid) and
+    // RECLAIMS black — the color B owned — even though B arrives first into the empty room.
+    const b2 = makeSession(hub, 'player-b', {
+      db: dbB,
+      newMessageId: idSource('player-b-return'),
+    });
+    await b2.enter(ROOM, DEFER);
+    await b2.whenPersisted();
+    await flush();
+
+    expect(b2.state().phase).toBe('connected');
+    expect(b2.state().seat).toBe('black');
+    // B re-seeded the SAME game identity it owned (not a fresh one), and its seat map still reserves
+    // white for the absent player-a.
+    expect(b2.gameUuid()).toBe(uuidBefore);
+    expect(b2.seatOwners()).toEqual({ white: 'player-a', black: 'player-b' });
+
+    // A rejoins second; the resident B admits A back onto its RESERVED white — A resumes white.
+    const a2 = makeSession(hub, 'player-a', {
+      db: dbA,
+      newMessageId: idSource('player-a-return'),
+    });
+    await a2.enter(ROOM, DEFER);
+    await flush();
+
+    expect(a2.state().seat).toBe('white');
+    expect(a2.gameUuid()).toBe(uuidBefore);
+    expect(a2.seatOwners()).toEqual({ white: 'player-a', black: 'player-b' });
+  });
+});
+
+/**
+ * ARBITER HANDOFF (design §2.4/§6.5): an ADMITTED peer (never the establisher) assumes the arbiter
+ * role when its partner leaves and it becomes the sole resident, so a stranger cannot take a RESERVED
+ * seat. Proof-by-observable-state: the stranger is rejected and stays offline; the reserved seat is
+ * never handed out.
+ */
+describe('NetSession — an admitted peer arbitrates once its partner leaves (scenario 5)', () => {
+  it('A drops; C enters claiming A’s spot → resident B refuses it, white stays RESERVED for A', async () => {
+    const hub = new MockRelayHub();
+    const dbA = await openDatabase(`net-handoff-a-${Math.random().toString(36).slice(2)}`);
+    const dbB = await openDatabase(`net-handoff-b-${Math.random().toString(36).slice(2)}`);
+    const dbC = await openDatabase(`net-handoff-c-${Math.random().toString(36).slice(2)}`);
+    const a = makeSession(hub, 'player-a', { db: dbA });
+    const b = makeSession(hub, 'player-b', { db: dbB });
+
+    await a.enter(ROOM, NEW);
+    await b.enter(ROOM, DEFER);
+    await flush();
+    expect(b.state().seat).toBe('black');
+    // B is an ADMITTED peer, not the establisher — before the handoff it is not the arbiter.
+
+    // A (the establisher/white) leaves. B is now the SOLE resident and must take over arbitration.
+    a.disconnect();
+    await flush();
+
+    // C enters claiming a spot with `defer`. It owns neither seat; white is RESERVED for absent A and
+    // black is B's → room full. The resident B refuses C with the honest typed reason.
+    const c = makeSession(hub, 'player-c', {
+      db: dbC,
+      newMessageId: idSource('player-c'),
+    });
+    await c.enter(ROOM, DEFER);
+    await flush();
+
+    expect(c.state().phase).toBe('offline');
+    expect(c.state().seat).toBeNull();
+    expect(c.lastRejectReason()).toBe('room-full');
+    // B never handed out A's reserved white — the surviving resident still reserves it for player-a.
+    expect(b.seatOwners()).toEqual({ white: 'player-a', black: 'player-b' });
+  });
+});
+
+/**
+ * The `current`/`resume` seed proposal (design §3): the establisher brings a CONCRETE game it already
+ * holds. The bug this covers: `buildProvisionalSeat` used to mint a FRESH game whatever the proposal,
+ * so the establisher's engine uuid differed from the uuid it published in its hello — and when a
+ * deferring partner arrived, the arbiter's honesty guard reconciled to `existing{uuid: REAL}` but saw
+ * its own provisional uuid ≠ REAL and REFUSED its own resume as `game-mismatch`. The fix seeds the
+ * provisional from the real archived game named by the proposal's uuid, so the uuids agree and the
+ * partner is admitted onto the resumed game.
+ */
+describe('NetSession — a `current` establisher resumes its real game and admits a deferrer (no game-mismatch)', () => {
+  it('seeds the game the proposal names; a deferring partner adopts it, not a false game-mismatch', async () => {
+    const hub = new MockRelayHub();
+    const dbA = await openDatabase(`net-current-a-${Math.random().toString(36).slice(2)}`);
+    const dbB = await openDatabase(`net-current-b-${Math.random().toString(36).slice(2)}`);
+
+    // Seed A's archive with a real, non-empty game (a couple of moves) and capture its identity.
+    const local = new Game(SIZE);
+    local.place(coordsOf('0,0,0'));
+    local.place(coordsOf('1,1,1'));
+    const localUuid = local.uuid;
+    const localHead = headHash(local.log);
+    await saveGame(dbA, 'local-current', local, {
+      players: {},
+      result: 'in-progress',
+      startedAt: 0,
+    });
+
+    const a = makeSession(hub, 'player-a', { db: dbA });
+    const b = makeSession(hub, 'player-b', { db: dbB });
+
+    // A enters proposing its CURRENT local board (by uuid + headHash). B defers.
+    const CURRENT: Proposal = { kind: 'current', uuid: localUuid, headHash: localHead };
+    await a.enter(ROOM, CURRENT);
+    await flush();
+    // A's engine holds the REAL game identity it proposed (not a fresh mint) — the crux of the fix.
+    expect(a.gameUuid()).toBe(localUuid);
+    expect(a.state().seat).toBe('white');
+
+    await b.enter(ROOM, DEFER);
+    await flush();
+
+    // B is admitted onto black and ADOPTS A's resumed game — NOT rejected game-mismatch.
+    expect(b.state().phase).toBe('connected');
+    expect(b.lastRejectReason()).toBeNull();
+    expect(b.state().seat).toBe('black');
+    expect(b.gameUuid()).toBe(localUuid);
+    // Both converged on the SAME resumed history (identical headHash after B adopted A's log).
+    expect(a.gameUuid()).toBe(b.gameUuid());
     expect(a.seatOwners()).toEqual({ white: 'player-a', black: 'player-b' });
     expect(b.seatOwners()).toEqual({ white: 'player-a', black: 'player-b' });
   });

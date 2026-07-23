@@ -44,7 +44,13 @@
 import { Game } from '../core/game';
 import type { Coord } from '../core/coords';
 import type { GameState, Player } from '../core/gameState';
-import type { ArchivedMeta } from '../persist/archive';
+import {
+  saveGame,
+  loadNetGame,
+  loadNetGameByUuid,
+  NET_ROOM_RESULT,
+  type ArchivedMeta,
+} from '../persist/archive';
 import type { Transport } from './transport';
 import { SyncEngine } from './sync';
 import {
@@ -305,11 +311,15 @@ export class NetSession {
     this.phase = 'connecting';
     this.emit();
 
-    // Build + wire + connect the engine over a fresh transport with a PROVISIONAL seat/game (a fresh
-    // game seeded from our proposal). The authoritative game + seat map are FINALIZED after the settle
-    // window (we may adopt a resident's/initiator's game), but we need a live engine to publish our
-    // hello and to receive admission traffic on `onAdmission`.
-    const provisional = this.buildProvisionalSeat();
+    // Build + wire + connect the engine over a fresh transport with a PROVISIONAL seat/game seeded
+    // from our proposal + any DURABLE state we persisted for this room/game (design §2.3/§6.4): a
+    // returning owner reloads its persisted game (SAME uuid + seat) so an empty-room re-establish
+    // RECLAIMS the color it owned rather than grabbing first-available white, and a resume/current
+    // proposal seeds the real game whose uuid it published in its hello (so the arbiter never refuses
+    // its own resume as `game-mismatch`). The authoritative game + seat map are still FINALIZED after
+    // the settle window (we may adopt a resident's/initiator's game), but we need a live engine to
+    // publish our hello and to receive admission traffic on `onAdmission`.
+    const provisional = await this.buildProvisionalSeat(code, proposal);
     const connected = await this.beginEngine(code, provisional.game, provisional.color, provisional.seatMap);
     if (!connected) return; // beginEngine surfaced connect-failed + reset to offline.
 
@@ -374,27 +384,127 @@ export class NetSession {
   }
 
   /**
-   * Build the PROVISIONAL game + seat this peer runs on until the settle window finalizes it: a fresh
-   * {@link Game} (empty) and a seat map holding THIS peer in white for a `new`/`defer` provisional
-   * claim, or the reclaimed seat for a `resume`/`current` (which carries its own game identity). This
-   * is only the pre-settle placeholder so the engine is live to publish a hello + receive admission;
+   * Build the PROVISIONAL game + seat this peer runs on until the settle window finalizes it. It
+   * seeds from the DURABLE, persisted state that makes reclaim-by-identity survive an EMPTY room
+   * (design §2.3/§6.4) — NOT always a fresh empty game (the old #31-followup bug):
+   *
+   *  - **`resume`/`current`** — load the game whose `uuid` the proposal names (design §3) from the
+   *    archive, so our engine holds the SAME identity we publish in our hello. Without this the
+   *    arbiter's honesty guard rejects its OWN resume as `game-mismatch` (the provisional fresh uuid
+   *    would differ from the reconciled `existing` uuid). We reclaim the seat that game's persisted
+   *    seat map owns for us (or take first-available white if it records no owner yet).
+   *  - **`defer`/`new`, but we OWN a seat in this room's persisted game** — reload that persisted
+   *    game + seat map and RECLAIM our color. This is what lets the FIRST returning owner re-seed an
+   *    empty room as the color it owned (black stays black) instead of grabbing white by arrival
+   *    (design §6.4, scenario 4).
+   *  - **otherwise** — a genuinely fresh game, first-available white on an empty map (true creation).
+   *
+   * This is the pre-settle placeholder so the engine is live to publish a hello + receive admission;
    * it is REPLACED by the resident's/initiator's authoritative game if we are admitted, and kept (as
    * the established game) only if we turn out to be alone.
    */
-  private buildProvisionalSeat(): {
+  private async buildProvisionalSeat(
+    code: string,
+    proposal: Proposal,
+  ): Promise<{
     game: Game;
     color: SeatColor;
     seatMap: SeatMap;
-  } {
-    // A `new`/`defer` peer provisionally takes white in a fresh empty game (first-available on an
-    // empty map). A `resume`/`current` peer would carry its persisted game; this build keeps the
-    // seam simple (a fresh empty game) — the persisted-game resume path is finalized on establish.
+  }> {
+    // 1. A concrete resume/current: seed the actual game named by the proposal's uuid.
+    if (proposal.kind === 'resume' || proposal.kind === 'current') {
+      const seeded = await this.seedFromUuid(proposal.uuid);
+      if (seeded !== null) return seeded;
+      // The named game is not in our archive — fall through to a fresh game (an honest degrade: we
+      // could not resume what we do not hold, so we bring an empty game rather than a wrong one).
+    }
+    // 2. defer/new (or a resume we could not resolve): if we already OWN a seat in this room's
+    //    persisted game, reload it and reclaim our color — the durable empty-room reclaim.
+    const room = await this.loadRoomState(code);
+    if (room !== null && seatOf(room.seatMap, this.deps.playerId) !== null) {
+      const claim = claimSeat(room.seatMap, this.deps.playerId);
+      if (!claim.ok) throw new Error('reclaim of an owned seat must succeed');
+      return { game: room.game, color: claim.color, seatMap: claim.seatMap };
+    }
+    // 3. Genuine creation: a fresh empty game, first-available white on an empty map. claimSeat on an
+    //    empty map always succeeds; assert rather than branch on an unreachable reject (keeps the
+    //    tripwire, agent-principles).
     const game = new Game(this.deps.size);
     const claim = claimSeat(emptySeatMap(), this.deps.playerId);
-    // claimSeat on an empty map always succeeds (first-available white), so `claim.ok` holds; assert
-    // rather than branch on an unreachable reject (keeps the tripwire, agent-principles).
     if (!claim.ok) throw new Error('provisional claim on an empty map must succeed');
     return { game, color: claim.color, seatMap: claim.seatMap };
+  }
+
+  /**
+   * Seed a provisional from the archived game whose stable `uuid` matches (a `resume`/`current`
+   * proposal). Returns the reconstructed game + our reclaimed seat + its persisted seat map, or
+   * `null` if we hold no such game. If the persisted seat map records no owner for us yet (e.g. a
+   * local game being seeded into a room for the first time), we take first-available white.
+   */
+  private async seedFromUuid(
+    uuid: string,
+  ): Promise<{ game: Game; color: SeatColor; seatMap: SeatMap } | null> {
+    const loaded = await loadNetGameByUuid(this.deps.db, uuid);
+    if (loaded === undefined) return null;
+    const seatMap: SeatMap = loaded.seats ?? emptySeatMap();
+    const claim = claimSeat(seatMap, this.deps.playerId);
+    if (!claim.ok) throw new Error('seed-from-uuid claim must succeed (owner or first-available)');
+    return { game: loaded.game, color: claim.color, seatMap: claim.seatMap };
+  }
+
+  /**
+   * The IndexedDB key under which this session persists a room's authoritative game + identity-owned
+   * seat map (design §2.4 "each peer's persisted game"): a room-scoped autosave id. Keeping it
+   * room-scoped is what lets the FIRST returning owner re-seed an empty room by IDENTITY — it looks
+   * the room up by code, reclaims the color the persisted seat map says it owns, and re-publishes the
+   * same game uuid.
+   */
+  private roomStateId(code: string): string {
+    return `net-room:${code}`;
+  }
+
+  /**
+   * Load this room's persisted authoritative game + seat map (the durable value that survives an
+   * empty room), or `null` if this browser has never established/adopted a game in this room. A
+   * corrupt record surfaces its {@link ArchiveError} honestly rather than being masked.
+   */
+  private async loadRoomState(code: string): Promise<{ game: Game; seatMap: SeatMap } | null> {
+    const loaded = await loadNetGame(this.deps.db, this.roomStateId(code));
+    if (loaded === undefined || loaded.seats === null) return null;
+    return { game: loaded.game, seatMap: loaded.seats };
+  }
+
+  /**
+   * The most recent durable {@link persistRoomState} write in flight, exposed via {@link whenPersisted}.
+   * A caller that must observe this room's persisted state on a LATER reconnect (the empty-room reclaim)
+   * awaits it after {@link enter}, so it reads a COMMITTED write, not a racing one — the durability
+   * guarantee is deterministic, never a "usually committed by then" flake (agent-principles #2: proof
+   * must be reliably observable). A rejected write surfaces through {@link whenPersisted} rather than
+   * being silently swallowed. `enter` itself does NOT block on it (see {@link finishEnter}).
+   */
+  private pendingPersist: Promise<void> = Promise.resolve();
+
+  /**
+   * Persist this room's authoritative game + identity-owned seat map under the room-scoped id (design
+   * §2.3/§2.4), so a later reconnect into an EMPTY room reclaims the seat by identity and re-seeds the
+   * same game. Called whenever we establish, adopt an admit, or update our durable seat map as the
+   * arbiter. Records the in-flight write in {@link pendingPersist} so {@link finishEnter} can await
+   * durability; a failed write rejects honestly (never a swallowed error).
+   */
+  private persistRoomState(): Promise<void> {
+    const engine = this.engine;
+    const code = this.code;
+    if (engine === null || code === null || this.seatMap === null) return Promise.resolve();
+    const write = saveGame(this.deps.db, this.roomStateId(code), engine.game(), {
+      players: {},
+      // The INTERNAL room-state marker (design §2.4) — excluded from the user-facing archive listing
+      // + resume lookup so this durable coordination shard never shows as a spurious extra game.
+      result: NET_ROOM_RESULT,
+      startedAt: this.deps.now(),
+      seats: this.seatMap,
+    });
+    this.pendingPersist = write;
+    return write;
   }
 
   /**
@@ -520,14 +630,21 @@ export class NetSession {
   }
 
   /**
-   * ESTABLISH the room as the lone arriver (design §4 Case 2 "truly alone"): keep our provisional
-   * fresh game + white seat as the authoritative game + seat map, mark ourselves ESTABLISHED (so we
-   * arbitrate the next hello), and reach `connected`.
+   * ESTABLISH the room as the lone arriver (design §4 Case 2 "truly alone"): keep our provisional game
+   * + seat as the authoritative game + seat map, mark ourselves ESTABLISHED (so we arbitrate the next
+   * hello), persist the durable room state, and reach `connected`. The provisional was already seeded
+   * by {@link buildProvisionalSeat} — a FRESH game + first-available white for genuine creation, or a
+   * RELOADED persisted game + reclaimed seat when we already owned a seat in this room (design §6.4),
+   * so a returning owner re-seeds an empty room as the color it owned, not white-by-arrival.
    */
   private establishAlone(): void {
     this.established = true;
     this.reflectEngineStatus();
     if (this.phase === 'connecting') this.phase = 'connected';
+    // Persist the room's game + seat map so a later reconnect into an empty room reclaims by identity
+    // (design §6.4). Fire-and-forget the durable write — a failure rejects honestly (unhandled), never
+    // masked; the in-memory state is already correct for this session.
+    void this.persistRoomState();
     this.emit();
   }
 
@@ -556,6 +673,7 @@ export class NetSession {
     this.established = true;
     this.reflectEngineStatus();
     if (this.phase === 'connecting') this.phase = 'connected';
+    void this.persistRoomState();
     this.emit();
   }
 
@@ -630,6 +748,8 @@ export class NetSession {
     // We are the live ARBITER (design §4 Case 1): arbitrate the newcomer against our durable seat map
     // (the SAME rule the initiator applies), updating our seat map with the seat it granted.
     this.seatMap = this.arbitrate(hello, this.seatMap);
+    // Persist the updated durable seat map so a reserved/absent owner survives our own later drop.
+    void this.persistRoomState();
     this.emit();
   }
 
@@ -665,6 +785,10 @@ export class NetSession {
     engine.attach();
     this.reflectEngineStatus();
     if (this.phase === 'connecting') this.phase = 'connected';
+    // Persist the adopted game + seat map so if the arbiter later leaves and we become the sole
+    // resident, our own reconnect (or a re-establish) reclaims this seat + game by identity (design
+    // §2.3/§6.4). This is what makes scenario 4 (both drop, both rejoin) preserve ownership.
+    void this.persistRoomState();
     this.emit();
     this.finishEnter();
   }
@@ -686,7 +810,14 @@ export class NetSession {
     return toSyncMessage(engine.game().log, engine.epoch());
   }
 
-  /** Resolve the pending {@link enter} promise exactly once (settle → establish/admit/reject done). */
+  /**
+   * Resolve the pending {@link enter} promise exactly once (settle → establish/admit/reject done).
+   * Deliberately does NOT block on the durable {@link persistRoomState} write: `enter` reports the
+   * live session state as soon as it is negotiated (a fast, timer-driven path), and the durability
+   * ordering a later reconnect needs is awaited separately via {@link whenPersisted} — coupling the
+   * two would make `enter` sensitive to the archive write's async completion (it stalls a fake-timer
+   * test), for no observable benefit to the caller (the seat/game state is already correct here).
+   */
   private finishEnter(): void {
     if (this.settleTimer !== null) {
       clearTimeout(this.settleTimer);
@@ -695,6 +826,18 @@ export class NetSession {
     const resolve = this.enterResolve;
     this.enterResolve = null;
     if (resolve !== null) resolve();
+  }
+
+  /**
+   * Resolve once the most recent durable {@link persistRoomState} write has COMMITTED (design
+   * §2.3/§6.4). A reconnect that must observe this room's persisted seat map + game (the empty-room
+   * reclaim) awaits this after {@link enter} so it reads a settled write, not a racing one — the
+   * durability is deterministic rather than "usually committed by then" (agent-principles #2: proof
+   * must be reliably observable). Resolves immediately when nothing was persisted (a reject/offline
+   * entry). A failed write rejects here rather than being swallowed.
+   */
+  async whenPersisted(): Promise<void> {
+    await this.pendingPersist;
   }
 
   /** The observed arrival rank of a seen hello's peer (earlier = smaller), else a large fallback. */
@@ -1014,6 +1157,15 @@ export class NetSession {
     // nothing was pending. Evaluated before mutating `peerPresent` so the edge is unambiguous.
     if (this.peerPresent && !present) {
       this.setHandshake(onPeerGone(this.handshake));
+      // ARBITER HANDOFF (design §2.4 "whoever is currently in the room validates newcomers", §6.5):
+      // when the peer we were playing leaves and we are now the SOLE resident holding an established
+      // game + our seat, WE become the arbiter for the next arrival — otherwise a stranger entering
+      // an "empty" room (from the relay's view) would see no resident to refuse it and could take a
+      // RESERVED seat. An admitted peer (which was NOT the establisher) thus assumes arbitration on
+      // its partner's departure; the durable seat map it persisted keeps the absent owner reserved.
+      if (this.phase === 'connected' && this.engine !== null && this.seatMap !== null && this.seat !== null) {
+        this.established = true;
+      }
     }
     this.peerPresent = present;
     this.emit();
