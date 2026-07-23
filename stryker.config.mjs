@@ -52,6 +52,20 @@
  *     Equivalent through the public seam — killing them would require asserting on the private
  *     helper's internal return, i.e. on non-behavior. (The corrupt-record-degrades-to-empty behavior
  *     the helper enables IS asserted, via the public list/record paths.)
+ *   - admission.ts: BOTH `<` → `<=` comparisons in the `beats` tie-break are equivalent, each
+ *     for a structural reason:
+ *       · the arrival compare `return p.arrivalOrder < best.arrivalOrder` is GUARDED by
+ *         `if (p.arrivalOrder !== best.arrivalOrder)`, so it only ever runs when the two
+ *         arrivals are UNEQUAL — where `<` and `<=` are identical. The equal case never
+ *         reaches this return (it falls through to the playerId compare). Equivalent.
+ *       · the playerId compare `return p.playerId < best.playerId` differs from `<=` ONLY when
+ *         `p.playerId === best.playerId` — two peers with an identical (playerId, arrivalOrder).
+ *         There `<=` swaps the winner to the duplicate, but it carries the SAME playerId and
+ *         `electInitiator` returns `winner.playerId` — so the elected id is identical either way.
+ *         Equivalent (killing it would require asserting WHICH duplicate object won, not the
+ *         elected playerId, i.e. non-behavior).
+ *     The genuine tie-break behavior IS asserted (earlier-arrival wins; equal-arrival breaks to
+ *     the lower playerId; a same-arrival higher id listed after the leader does not displace it).
  *     Kill genuine (non-equivalent) survivors with real tests; never suppress.
  *
  * Gate-rejection is re-proven on every review-gate run (agent-principles #7): temporarily
@@ -82,6 +96,12 @@ export default {
     '!src/util/**/*.test.ts',
     'src/net/seats.ts',
     'src/net/sync.ts',
+    // Pure admission + reconciliation (Task S.3, epic #35, closes #31): the reconciliation matrix
+    // (0/1/2 concrete proposals; defer/new empties; same-uuid match vs divergent-headHash vs
+    // different-uuid → typed reject) and the deterministic initiator election (earlier arrival, then
+    // lower playerId). Order-insensitive, total, never-invents-a-game. Separated from the
+    // NetSession.enter IO glue (S.5) so it is mutation-gated like the other pure net logic.
+    'src/net/admission.ts',
     // Pure net-routing decisions (Task 6.1): where a placement flows (session vs local) and whether
     // the scene renders the session game — the issue #4 "one authoritative game per session" logic,
     // separated from the scene/session IO glue so it is mutation-gated like the other pure net logic.
