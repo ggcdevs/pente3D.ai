@@ -48,6 +48,8 @@ import { opponent, type GameState, type Player } from '../core/gameState';
 import { flagConflicted, type ArchivedMeta } from '../persist/archive';
 import { createEmitter, type Emitter } from '../util/emitter';
 import type { Transport, TransportMessage } from './transport';
+import type { Proposal } from './admission';
+import type { SeatMap } from './seats';
 
 /** The sync wire-format version. Bumped only on a breaking message-shape change. */
 export const SYNC_VERSION = 1 as const;
@@ -130,20 +132,119 @@ export interface ResponseMessage {
 }
 
 /**
+ * ## Admission messages (Task S.4, epic #35) — the room-ENTRY protocol
+ *
+ * These are DISTINCT from the in-game `'proposal'`/`'response'` handshake (rematch/undo/redo,
+ * N.1): those negotiate an action WITHIN a live shared game; these negotiate WHICH game two
+ * peers play when they first meet in a room (design §4 "Entry / admission protocol"). Keeping
+ * them separate kinds means an admission `hello` can never be mistaken for a rematch proposal
+ * and vice-versa — the pump routes each to the right consumer by `kind`.
+ *
+ * Every admission message carries a UNIQUE, sender-chosen `id`. Admission traffic is published
+ * NON-RETAINED (design §Guardrails: "non-retained + id-deduped"), but a relay may still deliver
+ * at-least-once and a reconnect must never replay a stale proposal — so a receiver DEDUPES on
+ * `id` ({@link AdmissionDeduper}) and drops a re-seen message. The `id` is the dedup key; it is
+ * NOT correlated the way a {@link ResponseMessage} correlates to a proposal (admission has no
+ * accept/decline round-trip — the arbiter answers a `hello` with an `admit` or a `reject`).
+ *
+ * A **hello**: a peer announces its arrival with its stable `playerId`, its seed
+ * {@link Proposal} (what game it brings — new/resume/current/defer), and an `arrivalTag` (its
+ * live-presence arrival rank, feeding the initiator election in `admission.ts`). The arbiter
+ * (or the elected initiator) reconciles the pair of proposals and answers.
+ */
+export interface HelloMessage {
+  readonly kind: 'hello';
+  /** Unique message id (dedup on receive; a reconnect must not replay a stale hello). */
+  readonly id: string;
+  /** The announcing peer's stable playerId (owns a seat across reconnects). */
+  readonly playerId: string;
+  /** The seed proposal this peer brings (design §3/§5; reconciled in `admission.ts`). */
+  readonly proposal: Proposal;
+  /** The peer's live-presence arrival rank — feeds the initiator election (earlier = smaller). */
+  readonly arrivalTag: number;
+}
+
+/**
+ * An **admit**: the arbiter's grant. It carries the AUTHORITATIVE game the pair agreed on (as a
+ * full {@link SyncMessage} sync payload, so the admitted peer adopts it through the ordinary
+ * hash-chain-verified {@link parseSyncMessage} path — same-identity is provable), plus the
+ * durable identity-owned {@link SeatMap} that assigns each seat to its owning playerId. The
+ * admitted peer validates the game (headHash re-verify) and takes the seat the map gives it.
+ */
+export interface AdmitMessage {
+  readonly kind: 'admit';
+  /** Unique message id (dedup on receive). */
+  readonly id: string;
+  /** The authoritative game to adopt — a full sync payload, hash-chain re-verifiable. */
+  readonly game: { readonly kind: 'sync' } & SyncMessage;
+  /** The identity-owned seat map (real playerIds; no `'host'` sentinel). */
+  readonly seats: SeatMap;
+}
+
+/**
+ * The typed reasons an admission is refused (design §7). A machine-readable reason surfaced to
+ * the UI VERBATIM — never a silent failure or a mislabeled log (agent-principles: reject
+ * honestly). This is the UNION of the seat-level ({@link import('./seats').ClaimRejection}) and
+ * game-level ({@link import('./admission').ReconcileReject}) refusals, plus `seat-reserved`:
+ *
+ *   - `room-full`      — both seats are owned; the newcomer owns neither (spectate is #36).
+ *   - `seat-reserved`  — a seat is reserved for an absent owner and the newcomer is not that owner.
+ *   - `game-mismatch`  — the peers proposed DIFFERENT games (different uuids).
+ *   - `game-divergent` — the SAME game uuid but forked histories (divergent headHash) — the #38 seam.
+ */
+export type AdmissionReject =
+  | 'room-full'
+  | 'seat-reserved'
+  | 'game-mismatch'
+  | 'game-divergent';
+
+/** The set of valid {@link AdmissionReject} reasons — the single source of truth for validation. */
+const ADMISSION_REJECT_REASONS: readonly AdmissionReject[] = [
+  'room-full',
+  'seat-reserved',
+  'game-mismatch',
+  'game-divergent',
+];
+
+/**
+ * A **reject**: the arbiter's typed refusal. Carries a machine-readable {@link AdmissionReject}
+ * the net panel surfaces to the user (design §7) — the seam #38 later turns `game-*` into a
+ * merge/diff/rewind flow. Never a masked or mislabeled failure.
+ */
+export interface RejectMessage {
+  readonly kind: 'reject';
+  /** Unique message id (dedup on receive). */
+  readonly id: string;
+  /** The typed refusal reason, surfaced verbatim to the UI. */
+  readonly reason: AdmissionReject;
+}
+
+/**
  * The networked wire message as a DISCRIMINATED UNION on `kind`:
  *
  *   - `'sync'`     — the existing full-log sync payload ({@link SyncMessage} fields),
  *                    unchanged on the wire except for the added `kind` tag.
- *   - `'proposal'` — an out-of-band ask ({@link ProposalMessage}).
+ *   - `'proposal'` — an in-game out-of-band ask ({@link ProposalMessage}; rematch/undo/redo).
  *   - `'response'` — the accept/decline of a proposal ({@link ResponseMessage}).
+ *   - `'hello'`    — a peer announcing room ENTRY with its seed proposal ({@link HelloMessage}).
+ *   - `'admit'`    — the arbiter's grant: authoritative game + seat map ({@link AdmitMessage}).
+ *   - `'reject'`   — the arbiter's typed refusal ({@link RejectMessage}).
  *
- * Every message crossing the transport is one of these; {@link parseGameMessage}
+ * The `'hello'`/`'admit'`/`'reject'` ADMISSION kinds are deliberately DISTINCT from the in-game
+ * `'proposal'`/`'response'` handshake so an entry negotiation can never be conflated with a
+ * rematch/undo ask. Every message crossing the transport is one of these; {@link parseGameMessage}
  * validates the shape and narrows the kind before anything acts on it.
  */
 export type GameMessage =
   | ({ readonly kind: 'sync' } & SyncMessage)
   | ProposalMessage
-  | ResponseMessage;
+  | ResponseMessage
+  | HelloMessage
+  | AdmitMessage
+  | RejectMessage;
+
+/** An admission message (room-entry protocol) — the id-deduped, non-retained subset. */
+export type AdmissionMessage = HelloMessage | AdmitMessage | RejectMessage;
 
 /**
  * Validate an inbound `unknown` transport payload into a well-typed
@@ -203,6 +304,44 @@ export function parseGameMessage(msg: unknown): GameMessage {
       }
       return { kind: 'response', proposalId: rec.proposalId, accepted: rec.accepted };
     }
+    case 'hello': {
+      if (typeof rec.id !== 'string') {
+        throw new SyncError('hello message requires a string id');
+      }
+      if (typeof rec.playerId !== 'string') {
+        throw new SyncError('hello message requires a string playerId');
+      }
+      // `Number.isFinite` returns false WITHOUT coercion for every non-number (string, null,
+      // boolean, undefined) AND for NaN/±Infinity, so this single predicate rejects both a
+      // non-numeric and a non-finite arrivalTag — no redundant `typeof` sub-clause for a mutant
+      // to render equivalent (same technique as {@link normalizeEpoch}).
+      if (!Number.isFinite(rec.arrivalTag)) {
+        throw new SyncError('hello message requires a finite numeric arrivalTag');
+      }
+      const proposal = parseProposal(rec.proposal);
+      // `Number.isFinite` guaranteed a finite number above but does not narrow `unknown`; the cast
+      // is sound (the guard threw for anything else).
+      return { kind: 'hello', id: rec.id, playerId: rec.playerId, proposal, arrivalTag: rec.arrivalTag as number };
+    }
+    case 'admit': {
+      if (typeof rec.id !== 'string') {
+        throw new SyncError('admit message requires a string id');
+      }
+      const game = parseAdmitGame(rec.game);
+      const seats = parseSeatMap(rec.seats);
+      return { kind: 'admit', id: rec.id, game, seats };
+    }
+    case 'reject': {
+      if (typeof rec.id !== 'string') {
+        throw new SyncError('reject message requires a string id');
+      }
+      if (!isAdmissionReject(rec.reason)) {
+        throw new SyncError(
+          `reject message requires a known reason (one of ${ADMISSION_REJECT_REASONS.join('/')}); got ${String(rec.reason)}`,
+        );
+      }
+      return { kind: 'reject', id: rec.id, reason: rec.reason };
+    }
     default:
       throw new SyncError(`unknown game message kind: ${String(kind)}`);
   }
@@ -220,6 +359,118 @@ function looksLikeSync(rec: Record<string, unknown>): boolean {
     typeof rec.headHash === 'string' &&
     Array.isArray(rec.log)
   );
+}
+
+/**
+ * Validate an inbound raw value into a well-typed {@link Proposal} (the seed proposal a
+ * {@link HelloMessage} carries), throwing a {@link SyncError} on any malformed shape. Each of
+ * the four kinds is validated for its OWN required fields — `resume`/`current` must carry a
+ * string `uuid` + string `headHash`; `defer`/`new` carry no payload. An unknown kind, a
+ * non-object, or a history proposal missing its identity is rejected honestly rather than
+ * silently coerced (a half-parsed proposal would let a peer's malformed entry through).
+ */
+function parseProposal(raw: unknown): Proposal {
+  if (typeof raw !== 'object' || raw === null) {
+    throw new SyncError('hello message requires a proposal object');
+  }
+  const p = raw as Record<string, unknown>;
+  switch (p.kind) {
+    case 'defer':
+      return { kind: 'defer' };
+    case 'new':
+      return { kind: 'new' };
+    case 'resume':
+    case 'current': {
+      if (typeof p.uuid !== 'string' || p.uuid.length === 0) {
+        throw new SyncError(`${p.kind} proposal requires a non-empty string uuid`);
+      }
+      if (typeof p.headHash !== 'string' || p.headHash.length === 0) {
+        throw new SyncError(`${p.kind} proposal requires a non-empty string headHash`);
+      }
+      return { kind: p.kind, uuid: p.uuid, headHash: p.headHash };
+    }
+    default:
+      throw new SyncError(`unknown proposal kind: ${String(p.kind)}`);
+  }
+}
+
+/**
+ * Validate the `game` field of an {@link AdmitMessage}: it must be a full `kind:'sync'` sync
+ * ENVELOPE (so the admitted peer can adopt it through the hash-chain-verified sync path). This
+ * validates the envelope only (via {@link parseGameMessage} recursion); the deeper chain
+ * re-verification is done by {@link parseSyncMessage} when the game is actually applied.
+ */
+function parseAdmitGame(raw: unknown): { readonly kind: 'sync' } & SyncMessage {
+  const inner = parseGameMessage(raw);
+  if (inner.kind !== 'sync') {
+    throw new SyncError(`admit message game must be a sync payload, got kind ${inner.kind}`);
+  }
+  return inner;
+}
+
+/**
+ * Validate the `seats` field of an {@link AdmitMessage} into a {@link SeatMap}: each seat is a
+ * string playerId or `null` (never a `'host'` sentinel — every owner is a real id). A missing
+ * field, a non-object, or a seat that is neither a string nor `null` is rejected.
+ */
+function parseSeatMap(raw: unknown): SeatMap {
+  if (typeof raw !== 'object' || raw === null) {
+    throw new SyncError('admit message requires a seats object');
+  }
+  const s = raw as Record<string, unknown>;
+  return { white: parseSeat(s.white, 'white'), black: parseSeat(s.black, 'black') };
+}
+
+/** One seat of a {@link SeatMap}: a string playerId or `null`; anything else is rejected. */
+function parseSeat(raw: unknown, color: 'white' | 'black'): string | null {
+  if (raw === null) return null;
+  if (typeof raw === 'string') return raw;
+  throw new SyncError(`admit message ${color} seat must be a string playerId or null`);
+}
+
+/**
+ * True iff `raw` is one of the four typed {@link AdmissionReject} reasons. Membership in the
+ * fixed reason set is the ONLY predicate: `includes` returns false for every non-string (a
+ * number/null/object never equals a string reason under SameValueZero), so no separate
+ * `typeof === 'string'` sub-clause is needed — one predicate, nothing for a mutant to render
+ * equivalent (same technique as the {@link normalizeEpoch}/arrivalTag guards).
+ */
+function isAdmissionReject(raw: unknown): raw is AdmissionReject {
+  return (ADMISSION_REJECT_REASONS as readonly unknown[]).includes(raw);
+}
+
+/**
+ * An id-based deduper for {@link AdmissionMessage}s (Task S.4). Admission traffic is published
+ * NON-RETAINED, but a relay may deliver at-least-once and a reconnect could re-surface a message,
+ * so the receiver must treat a re-seen `id` as a no-op — a stale proposal must NEVER replay
+ * (design §Guardrails). This is the pure state machine that decides freshness; the transport glue
+ * (S.5) constructs one per session and gates admission handling on {@link fresh}.
+ *
+ * It is deliberately SEPARATE from the sync-log replay-safety (which is intrinsic to the
+ * append-only log's prefix/hash decision): admission messages are not a log, so they need their
+ * own explicit dedup. Idempotent by construction — the FIRST sighting of an id returns `true`
+ * exactly once; every later sighting of the SAME id returns `false`, whatever the order or count
+ * (property-tested with fast-check).
+ */
+export class AdmissionDeduper {
+  private readonly seen = new Set<string>();
+
+  /**
+   * Record `id` and report whether this is its FIRST sighting: `true` the first time an id is
+   * seen (the message is fresh — handle it), `false` on every repeat (a duplicate — drop it).
+   * Recording and reporting in one call makes the "seen-once" invariant impossible to violate by
+   * forgetting to record after a check.
+   */
+  fresh(id: string): boolean {
+    if (this.seen.has(id)) return false;
+    this.seen.add(id);
+    return true;
+  }
+
+  /** Whether `id` has been seen before (a pure query; does NOT record). */
+  hasSeen(id: string): boolean {
+    return this.seen.has(id);
+  }
 }
 
 /**
@@ -376,6 +627,41 @@ export function toSyncMessage(
 }
 
 /**
+ * Build a `kind:'hello'` admission message (Task S.4). `id` is the sender-chosen UNIQUE id used
+ * to dedup on receive; `playerId` is the announcing peer's stable identity; `proposal` is its
+ * seed proposal; `arrivalTag` is its live-presence arrival rank for the initiator election.
+ */
+export function toHelloMessage(
+  id: string,
+  playerId: string,
+  proposal: Proposal,
+  arrivalTag: number,
+): HelloMessage {
+  return { kind: 'hello', id, playerId, proposal, arrivalTag };
+}
+
+/**
+ * Build a `kind:'admit'` admission message (Task S.4) carrying the authoritative `game` (a full
+ * sync payload the admitted peer adopts through the hash-chain-verified path) and the durable
+ * identity-owned `seats` map. `id` is the UNIQUE dedup id.
+ */
+export function toAdmitMessage(
+  id: string,
+  game: { readonly kind: 'sync' } & SyncMessage,
+  seats: SeatMap,
+): AdmitMessage {
+  return { kind: 'admit', id, game, seats };
+}
+
+/**
+ * Build a `kind:'reject'` admission message (Task S.4) carrying a typed {@link AdmissionReject}
+ * reason surfaced verbatim to the UI. `id` is the UNIQUE dedup id.
+ */
+export function toRejectMessage(id: string, reason: AdmissionReject): RejectMessage {
+  return { kind: 'reject', id, reason };
+}
+
+/**
  * Validate an inbound {@link SyncMessage} and reconstruct its {@link EventLog},
  * recomputing the hash chain from the events and asserting it matches the message's
  * claimed `headHash`. Throws on a wrong version, a malformed shape, or a headHash
@@ -479,6 +765,20 @@ export class SyncEngine {
    * sync path so a proposal never touches the append-only move-log.
    */
   private readonly messages: Emitter<ProposalMessage | ResponseMessage> = createEmitter();
+  /**
+   * Emitter for inbound ADMISSION messages (`'hello'` / `'admit'` / `'reject'`) — the room-ENTRY
+   * seam the S.5 session subscribes via {@link onAdmission}. Deliberately separate from the
+   * in-game {@link messages} handshake seam so an entry negotiation can never be conflated with a
+   * rematch/undo ask, and never touches the append-only move-log.
+   */
+  private readonly admission: Emitter<AdmissionMessage> = createEmitter();
+  /**
+   * Dedups inbound ADMISSION messages by their unique `id`: a re-delivered / replayed admission
+   * message is dropped so a stale proposal never replays (design §Guardrails: non-retained +
+   * id-deduped). Sync messages are NOT deduped here — their replay-safety is intrinsic to the
+   * append-only log's prefix/hash decision, a different mechanism for a different concern.
+   */
+  private readonly admissionDedup = new AdmissionDeduper();
 
   /**
    * @param game The initial local game (usually fresh; may already hold moves).
@@ -783,23 +1083,50 @@ export class SyncEngine {
   }
 
   /**
+   * Subscribe to inbound ADMISSION messages (`'hello'` / `'admit'` / `'reject'`) as they arrive
+   * over the transport — the room-ENTRY seam the S.5 session wires to run the admission protocol
+   * (design §4). Returns an unsubscribe fn. Only FRESH messages are delivered: a re-seen `id` is
+   * dropped by the {@link admissionDedup} at the pump, so a subscriber never handles a replayed /
+   * stale proposal. Kept separate from {@link onMessage} (the in-game handshake) and from
+   * {@link receive} (the sync log) so the three concerns stay independent.
+   */
+  onAdmission(listener: (msg: AdmissionMessage) => void): () => void {
+    return this.admission.subscribe(listener);
+  }
+
+  /**
    * Transport message pump: VALIDATE the raw payload into a typed
    * {@link GameMessage} (never a blind cast), then route by kind. A `'sync'`
    * message goes through the guarded, replay-safe {@link receive}; a `'proposal'` /
    * `'response'` is emitted to {@link onMessage} subscribers so the out-of-band
-   * handshake (never the append-only log) handles it. A malformed / unknown-kind
-   * payload throws a {@link SyncError} out of {@link parseGameMessage} — it is NOT
-   * silently dropped.
+   * handshake (never the append-only log) handles it; a `'hello'` / `'admit'` /
+   * `'reject'` ADMISSION message is DEDUPED by id and, only if fresh, emitted to
+   * {@link onAdmission} subscribers (a replayed/stale admission message is dropped).
+   * A malformed / unknown-kind payload throws a {@link SyncError} out of
+   * {@link parseGameMessage} — it is NOT silently dropped.
    */
   private onTransportMessage(raw: TransportMessage): void {
     const msg = parseGameMessage(raw);
-    if (msg.kind === 'sync') {
-      this.receive(msg);
-      return;
+    switch (msg.kind) {
+      case 'sync':
+        this.receive(msg);
+        return;
+      case 'proposal':
+      case 'response':
+        // Out-of-band in-game handshake, never touches the move-log. Deliver to the
+        // handshake seam (the N.1 consumers subscribe via onMessage).
+        this.messages.emit(msg);
+        return;
+      case 'hello':
+      case 'admit':
+      case 'reject':
+        // Admission (room entry): dedup by id so a replayed/stale message never re-fires, then
+        // deliver only a FRESH one to the onAdmission seam. Never touches the move-log.
+        if (this.admissionDedup.fresh(msg.id)) {
+          this.admission.emit(msg);
+        }
+        return;
     }
-    // 'proposal' | 'response': out-of-band, never touches the move-log. Deliver to the
-    // handshake seam (the N.1 consumers subscribe via onMessage).
-    this.messages.emit(msg);
   }
 
   /**

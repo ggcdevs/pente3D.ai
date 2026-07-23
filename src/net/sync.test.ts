@@ -12,8 +12,12 @@ import {
   normalizeEpoch,
   decideUndo,
   toSyncMessage,
+  toHelloMessage,
+  toAdmitMessage,
+  toRejectMessage,
   parseSyncMessage,
   parseGameMessage,
+  AdmissionDeduper,
   SYNC_VERSION,
   SyncEngine,
   SyncError,
@@ -21,7 +25,14 @@ import {
   type GameMessage,
   type ProposalMessage,
   type ResponseMessage,
+  type HelloMessage,
+  type AdmitMessage,
+  type RejectMessage,
+  type AdmissionMessage,
+  type AdmissionReject,
 } from './sync';
+import { emptySeatMap, type SeatMap } from './seats';
+import type { Proposal } from './admission';
 
 /**
  * The shared game uuid for logs built by {@link logOf}. Sync decisions (prefix /
@@ -554,6 +565,324 @@ describe('parseGameMessage — discriminated-union envelope validation', () => {
         ),
       );
     });
+  });
+});
+
+describe('parseGameMessage — admission messages (Task S.4: hello / admit / reject)', () => {
+  // A valid authoritative game payload the admit message carries.
+  const gamePayload = toSyncMessage(logOf('0,0,0', '1,1,1'));
+  const seats: SeatMap = { white: 'player-w', black: 'player-b' };
+
+  describe('kind: hello', () => {
+    const hello: HelloMessage = {
+      kind: 'hello',
+      id: 'h-1',
+      playerId: 'player-a',
+      proposal: { kind: 'defer' },
+      arrivalTag: 0,
+    };
+
+    it('parses a well-formed hello, preserving every field', () => {
+      const parsed: GameMessage = parseGameMessage({ ...hello });
+      expect(parsed).toEqual(hello);
+    });
+
+    it('round-trips through JSON (the real wire path) unchanged', () => {
+      const wire = JSON.parse(JSON.stringify(hello)) as unknown;
+      expect(parseGameMessage(wire)).toEqual(hello);
+    });
+
+    it('accepts each of the four proposal kinds, preserving its payload', () => {
+      const proposals: Proposal[] = [
+        { kind: 'defer' },
+        { kind: 'new' },
+        { kind: 'resume', uuid: 'g-1', headHash: 'hh-1' },
+        { kind: 'current', uuid: 'g-2', headHash: 'hh-2' },
+      ];
+      for (const proposal of proposals) {
+        const msg = { ...hello, proposal };
+        expect(parseGameMessage(JSON.parse(JSON.stringify(msg)))).toEqual(msg);
+      }
+    });
+
+    it('rejects a hello missing its id (non-string)', () => {
+      const bad = { kind: 'hello', playerId: 'p', proposal: { kind: 'defer' }, arrivalTag: 0 };
+      expect(() => parseGameMessage(bad)).toThrow(SyncError);
+      expect(() => parseGameMessage(bad)).toThrow(/hello message requires a string id/);
+    });
+
+    it('rejects a hello with a non-string id (numeric)', () => {
+      const bad = { kind: 'hello', id: 7, playerId: 'p', proposal: { kind: 'defer' }, arrivalTag: 0 };
+      expect(() => parseGameMessage(bad)).toThrow(/hello message requires a string id/);
+    });
+
+    it('rejects a hello missing its playerId (non-string)', () => {
+      const bad = { kind: 'hello', id: 'h', proposal: { kind: 'defer' }, arrivalTag: 0 };
+      expect(() => parseGameMessage(bad)).toThrow(/string playerId/);
+    });
+
+    it('rejects a hello whose arrivalTag is not a finite number', () => {
+      for (const arrivalTag of ['0', null, Number.NaN, Number.POSITIVE_INFINITY, undefined]) {
+        const bad = { kind: 'hello', id: 'h', playerId: 'p', proposal: { kind: 'defer' }, arrivalTag };
+        expect(() => parseGameMessage(bad)).toThrow(/finite numeric arrivalTag/);
+      }
+    });
+
+    it('accepts arrivalTag 0 (the earliest rank — not falsy-rejected)', () => {
+      // 0 is a valid arrival rank; a falsy `!arrivalTag` guard would wrongly reject it.
+      const parsed = parseGameMessage({ ...hello, arrivalTag: 0 });
+      expect(parsed.kind === 'hello' && parsed.arrivalTag).toBe(0);
+    });
+
+    it('rejects a hello whose proposal is not an object (string or null)', () => {
+      // A non-object AND a null both fail the proposal-object guard (null is typeof 'object' but
+      // must be rejected explicitly — pins the `raw === null` half of the guard).
+      for (const proposal of ['defer', null]) {
+        const bad = { kind: 'hello', id: 'h', playerId: 'p', proposal, arrivalTag: 0 };
+        expect(() => parseGameMessage(bad)).toThrow(/requires a proposal object/);
+      }
+    });
+
+    it('rejects a hello whose proposal has an unknown kind', () => {
+      const bad = { kind: 'hello', id: 'h', playerId: 'p', proposal: { kind: 'random' }, arrivalTag: 0 };
+      expect(() => parseGameMessage(bad)).toThrow(/unknown proposal kind: random/);
+    });
+
+    it('rejects a resume/current proposal missing its uuid', () => {
+      for (const kind of ['resume', 'current'] as const) {
+        const bad = { kind: 'hello', id: 'h', playerId: 'p', proposal: { kind, headHash: 'hh' }, arrivalTag: 0 };
+        expect(() => parseGameMessage(bad)).toThrow(new RegExp(`${kind} proposal requires a non-empty string uuid`));
+      }
+    });
+
+    it('rejects a resume/current proposal with an EMPTY-string uuid', () => {
+      const bad = { kind: 'hello', id: 'h', playerId: 'p', proposal: { kind: 'resume', uuid: '', headHash: 'hh' }, arrivalTag: 0 };
+      expect(() => parseGameMessage(bad)).toThrow(/non-empty string uuid/);
+    });
+
+    it('rejects a resume/current proposal missing its headHash', () => {
+      const bad = { kind: 'hello', id: 'h', playerId: 'p', proposal: { kind: 'current', uuid: 'g' }, arrivalTag: 0 };
+      expect(() => parseGameMessage(bad)).toThrow(/current proposal requires a non-empty string headHash/);
+    });
+
+    it('rejects a resume/current proposal with an EMPTY-string headHash', () => {
+      const bad = { kind: 'hello', id: 'h', playerId: 'p', proposal: { kind: 'resume', uuid: 'g', headHash: '' }, arrivalTag: 0 };
+      expect(() => parseGameMessage(bad)).toThrow(/non-empty string headHash/);
+    });
+  });
+
+  describe('kind: admit', () => {
+    const admit: AdmitMessage = { kind: 'admit', id: 'a-1', game: gamePayload, seats };
+
+    it('parses a well-formed admit, preserving the game payload and seats', () => {
+      const parsed: GameMessage = parseGameMessage(JSON.parse(JSON.stringify(admit)));
+      expect(parsed).toEqual(admit);
+      // The carried game is a real, hash-chain-verifiable sync payload.
+      if (parsed.kind !== 'admit') throw new Error('expected admit');
+      expect(headHash(parseSyncMessage(parsed.game))).toBe(gamePayload.headHash);
+    });
+
+    it('accepts a seat map with a null (unowned) seat', () => {
+      const oneOwned: AdmitMessage = { ...admit, seats: { white: 'player-w', black: null } };
+      const parsed = parseGameMessage(JSON.parse(JSON.stringify(oneOwned)));
+      expect(parsed).toEqual(oneOwned);
+    });
+
+    it('accepts an empty (both-null) seat map', () => {
+      const empty: AdmitMessage = { ...admit, seats: emptySeatMap() };
+      expect(parseGameMessage(JSON.parse(JSON.stringify(empty)))).toEqual(empty);
+    });
+
+    it('rejects an admit missing its id (non-string)', () => {
+      const bad = { kind: 'admit', game: gamePayload, seats };
+      expect(() => parseGameMessage(bad)).toThrow(/admit message requires a string id/);
+    });
+
+    it('rejects an admit whose game is not a sync payload (a proposal masquerading)', () => {
+      const bad = { kind: 'admit', id: 'a', game: { kind: 'proposal', id: 'x', action: 'undo', proposedBy: 'white' }, seats };
+      expect(() => parseGameMessage(bad)).toThrow(/admit message game must be a sync payload/);
+    });
+
+    it('rejects an admit whose game is malformed (propagates the inner sync error)', () => {
+      const bad = { kind: 'admit', id: 'a', game: { kind: 'sync', version: 1, headHash: 'x', log: 'nope' }, seats };
+      expect(() => parseGameMessage(bad)).toThrow(SyncError);
+      expect(() => parseGameMessage(bad)).toThrow(/array log/);
+    });
+
+    it('rejects an admit whose seats is not an object (string or null)', () => {
+      // A string AND an explicit null both fail the seats-object guard (null is typeof 'object'
+      // but must be rejected — pins the `raw === null` half of the guard).
+      for (const seatsVal of ['nope', null]) {
+        const bad = { kind: 'admit', id: 'a', game: gamePayload, seats: seatsVal };
+        expect(() => parseGameMessage(bad)).toThrow(/requires a seats object/);
+      }
+    });
+
+    it('rejects an admit whose seats is missing entirely', () => {
+      const bad = { kind: 'admit', id: 'a', game: gamePayload };
+      expect(() => parseGameMessage(bad)).toThrow(/requires a seats object/);
+    });
+
+    it('rejects a seat that is neither a string nor null (numeric owner)', () => {
+      const badWhite = { kind: 'admit', id: 'a', game: gamePayload, seats: { white: 42, black: null } };
+      expect(() => parseGameMessage(badWhite)).toThrow(/white seat must be a string playerId or null/);
+      const badBlack = { kind: 'admit', id: 'a', game: gamePayload, seats: { white: null, black: {} } };
+      expect(() => parseGameMessage(badBlack)).toThrow(/black seat must be a string playerId or null/);
+    });
+
+    it('reads a missing seat field as an invalid (undefined) seat, not null', () => {
+      // An absent seat is NOT the same as an explicit null owner; it is a malformed map.
+      const bad = { kind: 'admit', id: 'a', game: gamePayload, seats: { white: 'w' } };
+      expect(() => parseGameMessage(bad)).toThrow(/black seat must be a string playerId or null/);
+    });
+  });
+
+  describe('kind: reject', () => {
+    const reasons: AdmissionReject[] = ['room-full', 'seat-reserved', 'game-mismatch', 'game-divergent'];
+
+    it('parses each of the four typed reject reasons, preserving it verbatim', () => {
+      for (const reason of reasons) {
+        const msg: RejectMessage = { kind: 'reject', id: `r-${reason}`, reason };
+        expect(parseGameMessage(JSON.parse(JSON.stringify(msg)))).toEqual(msg);
+      }
+    });
+
+    it('rejects a reject missing its id (non-string)', () => {
+      const bad = { kind: 'reject', reason: 'room-full' };
+      expect(() => parseGameMessage(bad)).toThrow(/reject message requires a string id/);
+    });
+
+    it('rejects a reject with an UNKNOWN reason (not one of the four), echoing it', () => {
+      const bad = { kind: 'reject', id: 'r', reason: 'because-i-said-so' };
+      expect(() => parseGameMessage(bad)).toThrow(SyncError);
+      expect(() => parseGameMessage(bad)).toThrow(/known reason/);
+      expect(() => parseGameMessage(bad)).toThrow(/because-i-said-so/);
+    });
+
+    it('rejects a reject with a missing reason', () => {
+      const bad = { kind: 'reject', id: 'r' };
+      expect(() => parseGameMessage(bad)).toThrow(/known reason/);
+    });
+
+    it('rejects a reject with a non-string reason', () => {
+      const bad = { kind: 'reject', id: 'r', reason: 7 };
+      expect(() => parseGameMessage(bad)).toThrow(/known reason/);
+    });
+  });
+
+  describe('message builders (toHelloMessage / toAdmitMessage / toRejectMessage)', () => {
+    it('toHelloMessage builds a hello that round-trips through parseGameMessage', () => {
+      const proposal: Proposal = { kind: 'resume', uuid: 'g-9', headHash: 'hh-9' };
+      const msg = toHelloMessage('h-42', 'player-x', proposal, 3);
+      expect(msg).toEqual({ kind: 'hello', id: 'h-42', playerId: 'player-x', proposal, arrivalTag: 3 });
+      expect(parseGameMessage(JSON.parse(JSON.stringify(msg)))).toEqual(msg);
+    });
+
+    it('toAdmitMessage builds an admit that round-trips (game re-verifies through the hash chain)', () => {
+      const msg = toAdmitMessage('a-42', gamePayload, seats);
+      expect(msg).toEqual({ kind: 'admit', id: 'a-42', game: gamePayload, seats });
+      const parsed = parseGameMessage(JSON.parse(JSON.stringify(msg)));
+      expect(parsed).toEqual(msg);
+      if (parsed.kind !== 'admit') throw new Error('expected admit');
+      expect(headHash(parseSyncMessage(parsed.game))).toBe(gamePayload.headHash);
+    });
+
+    it('toRejectMessage builds a reject that round-trips, carrying the typed reason', () => {
+      const msg = toRejectMessage('r-42', 'seat-reserved');
+      expect(msg).toEqual({ kind: 'reject', id: 'r-42', reason: 'seat-reserved' });
+      expect(parseGameMessage(JSON.parse(JSON.stringify(msg)))).toEqual(msg);
+    });
+  });
+
+  describe('property: every well-formed admission message round-trips', () => {
+    const arbProposal: fc.Arbitrary<Proposal> = fc.oneof(
+      fc.constant<Proposal>({ kind: 'defer' }),
+      fc.constant<Proposal>({ kind: 'new' }),
+      fc.record({ uuid: fc.string({ minLength: 1 }), headHash: fc.string({ minLength: 1 }) }).map(
+        ({ uuid, headHash: hh }): Proposal => ({ kind: 'resume', uuid, headHash: hh }),
+      ),
+      fc.record({ uuid: fc.string({ minLength: 1 }), headHash: fc.string({ minLength: 1 }) }).map(
+        ({ uuid, headHash: hh }): Proposal => ({ kind: 'current', uuid, headHash: hh }),
+      ),
+    );
+
+    it('any hello with a string id/playerId + valid proposal + finite arrivalTag round-trips', () => {
+      fc.assert(
+        fc.property(fc.string(), fc.string(), arbProposal, fc.integer(), (id, playerId, proposal, arrivalTag) => {
+          const msg = toHelloMessage(id, playerId, proposal, arrivalTag);
+          expect(parseGameMessage(JSON.parse(JSON.stringify(msg)))).toEqual(msg);
+        }),
+      );
+    });
+
+    it('any reject with one of the four typed reasons round-trips, preserving the reason', () => {
+      fc.assert(
+        fc.property(
+          fc.string(),
+          fc.constantFrom<AdmissionReject>('room-full', 'seat-reserved', 'game-mismatch', 'game-divergent'),
+          (id, reason) => {
+            const msg = toRejectMessage(id, reason);
+            const parsed = parseGameMessage(JSON.parse(JSON.stringify(msg)));
+            expect(parsed).toEqual(msg);
+          },
+        ),
+      );
+    });
+  });
+});
+
+describe('AdmissionDeduper — id-based dedup (a stale proposal must never replay)', () => {
+  it('reports FRESH the first time an id is seen, DUPLICATE every time after', () => {
+    const d = new AdmissionDeduper();
+    expect(d.fresh('id-1')).toBe(true);
+    expect(d.fresh('id-1')).toBe(false);
+    expect(d.fresh('id-1')).toBe(false);
+  });
+
+  it('tracks distinct ids independently', () => {
+    const d = new AdmissionDeduper();
+    expect(d.fresh('a')).toBe(true);
+    expect(d.fresh('b')).toBe(true);
+    expect(d.fresh('a')).toBe(false);
+    expect(d.fresh('b')).toBe(false);
+    expect(d.fresh('c')).toBe(true);
+  });
+
+  it('hasSeen queries without recording (a pure predicate)', () => {
+    const d = new AdmissionDeduper();
+    expect(d.hasSeen('x')).toBe(false);
+    // Querying does NOT mark it seen, so a later fresh() is still the FIRST sighting.
+    expect(d.hasSeen('x')).toBe(false);
+    expect(d.fresh('x')).toBe(true);
+    expect(d.hasSeen('x')).toBe(true);
+  });
+
+  it('property: fresh(id) is true EXACTLY once per id, regardless of order or repeats', () => {
+    fc.assert(
+      fc.property(fc.array(fc.string(), { minLength: 1 }), (ids) => {
+        const d = new AdmissionDeduper();
+        const firstSeen = new Set<string>();
+        for (const id of ids) {
+          const isFresh = d.fresh(id);
+          // fresh() is true iff this is the id's FIRST occurrence in the stream.
+          expect(isFresh).toBe(!firstSeen.has(id));
+          firstSeen.add(id);
+        }
+        // After the whole stream, every distinct id is marked seen exactly once.
+        for (const id of firstSeen) expect(d.hasSeen(id)).toBe(true);
+      }),
+    );
+  });
+
+  it('property: re-delivering the SAME id any number of times yields one fresh + all-false rest', () => {
+    fc.assert(
+      fc.property(fc.string(), fc.integer({ min: 1, max: 20 }), (id, repeats) => {
+        const d = new AdmissionDeduper();
+        const results = Array.from({ length: repeats }, () => d.fresh(id));
+        expect(results[0]).toBe(true);
+        expect(results.slice(1).every((r) => r === false)).toBe(true);
+      }),
+    );
   });
 });
 
@@ -1225,6 +1554,87 @@ describe('SyncEngine.onMessage — the pump validates + routes the tagged union'
     ).toThrow(/conflict|stopped/i);
     // The refused proposal never crossed the relay to A (proof the guard bit, not a log claim).
     expect(seenOnA).toEqual([]);
+  });
+
+  // ── Task S.4: admission messages route to onAdmission, dedup on id, never touch the log ─────────
+
+  it('routes an inbound ADMISSION message (hello) to onAdmission — NOT onMessage, NOT the log', async () => {
+    const { a, b, ta } = await pair();
+    const onAdm: AdmissionMessage[] = [];
+    const onHs: (ProposalMessage | ResponseMessage)[] = [];
+    b.onAdmission((m) => onAdm.push(m));
+    b.onMessage((m) => onHs.push(m));
+    const hello = toHelloMessage('h-1', 'player-a', { kind: 'new' }, 0);
+    // A publishes a raw hello over the relay; B's pump validates + routes it by kind.
+    ta.publish(hello as unknown as Parameters<typeof ta.publish>[0]);
+    // Delivered to B's ADMISSION seam, fields intact…
+    expect(onAdm).toEqual([hello]);
+    // …NOT to the in-game handshake seam, and NEVER to the append-only log.
+    expect(onHs).toEqual([]);
+    expect(b.game().log.entries.length).toBe(0);
+    expect(a).toBeDefined();
+  });
+
+  it('routes admit and reject to onAdmission too (all three admission kinds share the seam)', async () => {
+    const { b, ta } = await pair();
+    const onAdm: AdmissionMessage[] = [];
+    b.onAdmission((m) => onAdm.push(m));
+    const admit = toAdmitMessage('a-1', toSyncMessage(logOf('0,0,0')), { white: 'w', black: null });
+    const reject = toRejectMessage('r-1', 'room-full');
+    ta.publish(admit as unknown as Parameters<typeof ta.publish>[0]);
+    ta.publish(reject as unknown as Parameters<typeof ta.publish>[0]);
+    expect(onAdm).toEqual([admit, reject]);
+    // Neither touched the move-log.
+    expect(b.game().log.entries.length).toBe(0);
+  });
+
+  it('DEDUPES a replayed admission id — a re-delivered hello fires onAdmission only ONCE', async () => {
+    const { b, ta } = await pair();
+    const onAdm: AdmissionMessage[] = [];
+    b.onAdmission((m) => onAdm.push(m));
+    const hello = toHelloMessage('dup-1', 'player-a', { kind: 'defer' }, 0);
+    ta.publish(hello as unknown as Parameters<typeof ta.publish>[0]); // first: fresh → fires
+    ta.publish(hello as unknown as Parameters<typeof ta.publish>[0]); // replay: same id → dropped
+    ta.publish({ ...hello } as unknown as Parameters<typeof ta.publish>[0]); // another replay → dropped
+    // Fired exactly once despite three deliveries — the stale replay never re-fired.
+    expect(onAdm).toEqual([hello]);
+  });
+
+  it('does NOT dedup DISTINCT admission ids (a genuinely new message still fires)', async () => {
+    const { b, ta } = await pair();
+    const onAdm: AdmissionMessage[] = [];
+    b.onAdmission((m) => onAdm.push(m));
+    const first = toHelloMessage('id-1', 'player-a', { kind: 'new' }, 0);
+    const second = toHelloMessage('id-2', 'player-a', { kind: 'new' }, 1);
+    ta.publish(first as unknown as Parameters<typeof ta.publish>[0]);
+    ta.publish(second as unknown as Parameters<typeof ta.publish>[0]);
+    ta.publish(first as unknown as Parameters<typeof ta.publish>[0]); // replay of the first → dropped
+    expect(onAdm).toEqual([first, second]);
+  });
+
+  it('a malformed admission-shaped payload throws a SyncError out of the pump (never silently dropped)', async () => {
+    const { ta, b } = await pair();
+    const onAdm: AdmissionMessage[] = [];
+    b.onAdmission((m) => onAdm.push(m));
+    // A reject with an unknown reason: the pump validates via parseGameMessage and throws.
+    const bad = { kind: 'reject', id: 'r', reason: 'nonsense' } as unknown;
+    expect(() => ta.publish(bad as Parameters<typeof ta.publish>[0])).toThrow(SyncError);
+    expect(() => ta.publish(bad as Parameters<typeof ta.publish>[0])).toThrow(/known reason/);
+    // Nothing reached the admission seam (the invalid message was rejected up front).
+    expect(onAdm).toEqual([]);
+  });
+
+  it('sync traffic is UNCHANGED by the admission additions — a move still adopts, not misrouted', async () => {
+    const { a, b } = await pair();
+    const onAdm: AdmissionMessage[] = [];
+    const onHs: (ProposalMessage | ResponseMessage)[] = [];
+    b.onAdmission((m) => onAdm.push(m));
+    b.onMessage((m) => onHs.push(m));
+    a.place([0, 0, 0]);
+    // The sync message adopted onto B's board and went to NEITHER the admission nor handshake seam.
+    expect(b.game().state().pieces['0,0,0']).toBe('white');
+    expect(onAdm).toEqual([]);
+    expect(onHs).toEqual([]);
   });
 });
 
