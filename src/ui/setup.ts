@@ -25,6 +25,8 @@ import { menuWidget, type MenuScope } from './widgets/menu.ts';
 import { settingsWidget, type SettingsScope } from './widgets/settings.ts';
 import { netWidget } from './widgets/net.ts';
 import { netPanelWidget, type NetPanelScope } from './widgets/netPanel.ts';
+import type { SeedSources } from './widgets/netPanelModel.ts';
+import type { Proposal } from '../net/admission.ts';
 import type { NetSessionState } from './widgets/netModel.ts';
 import { historySliderWidget } from './widgets/historySlider.ts';
 import type { HistoryFacts } from './widgets/sliderModel.ts';
@@ -113,6 +115,23 @@ export interface UiDeps {
    * dispatches the argument-free `joinGame` command; the session reads it.
    */
   setPendingJoinCode(code: string): void;
+  /**
+   * The seed sources the Network-Game panel offers (Task S.6, design §3) — the resume-able persisted
+   * games (a simple list; the rich list is #37) + whether a live local game exists. Supplied by the
+   * app (over the archive + scene game) so the UI shell never imports `src/persist` / `src/net`.
+   */
+  seedSources(): SeedSources;
+  /**
+   * The currently-loaded local game's identity (`uuid` + `headHash`) for the `current` seed proposal
+   * (Task S.6), or `null` if there is no live local game. Supplied by the app off the scene's game.
+   */
+  currentGame(): { readonly uuid: string; readonly headHash: string } | null;
+  /**
+   * Enter a networked room with a canonical `code` + the chosen seed `proposal` (Task S.6, design
+   * §3/§4) — the app's `NetSession.enter` (S.5). The unified-entry action the Network-Game panel's
+   * single Enter button drives, replacing the old Host/Join controls.
+   */
+  enter(code: string, proposal: Proposal): void;
   /**
    * Copy text to the clipboard (Task 5.5) — the net widget's "Copy game code". Supplied by the app
    * (the real `navigator.clipboard.writeText`) so the widget never reaches for a global directly.
@@ -215,6 +234,9 @@ export function createUi(container: HTMLElement, deps: UiDeps): UiHandle {
       getHelpSources: deps.getHelpSources,
       getNet: deps.getNet,
       setPendingJoinCode: deps.setPendingJoinCode,
+      seedSources: deps.seedSources,
+      currentGame: deps.currentGame,
+      enter: deps.enter,
       copyToClipboard: deps.copyToClipboard,
       getHistory: deps.getHistory,
       scrubTo: deps.scrubTo,

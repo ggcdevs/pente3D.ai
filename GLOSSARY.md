@@ -89,8 +89,33 @@ the tie-breaker.
   (`connect`/`publish`/`onMessage`/`onPresence`/`disconnect`). MQTT is one implementation.
 - **Relay** — the dumb MQTT broker (Mosquitto on shitchell.com) that forwards messages;
   knows nothing about Pente.
-- **Room** — a game session, keyed by a **game code**; one topic namespace on the relay.
-- **Seat** — one of two player slots (**white** / **black**), owned by a persistent
-  **playerId**. First joiner → white, second → black.
-- **playerId** — a per-browser stable id (localStorage) that owns a seat and enables
-  reconnect/reclaim.
+- **Room / code** — a **rendezvous channel** on the relay (one topic namespace), named by a
+  short **game code**. It is only where two peers find each other; it **identifies no game**
+  and is **reusable** (code `TESTTT` can host game G1 today and an unrelated G2 tomorrow).
+  ⚠️ Deprecated framing: earlier docs called the room "a game session keyed by a code" — the
+  code was never the game's identity. The **game UUID** (below) is the game's identity.
+- **Game UUID** — a game's stable identity, **minted once at genesis** and carried **in the
+  event-log** (part of the hashed history, not merely a local archive key), so two peers
+  referencing "the same game" is verifiable and "same UUID but divergent **headHash**" is a
+  detectable conflict. A game is **portable** across rooms and partners by its UUID.
+- **Seat** — one of two player slots (**white** / **black**), **owned by a persistent
+  playerId** and **bound in the persisted game** (the game remembers who is white). Seats are
+  assigned by **first-available + tiebreak ONLY at genuine game creation**; after that a
+  returning owner **reclaims by identity** (validated by **headHash**), never by which button
+  was pressed. Every owner is a real `playerId` or `null` — there is **no `'host'` sentinel**.
+- **Reserved seat** — a seat that stays **owned by its absent playerId**. "Room full" means
+  **both seats owned**, even while an owner is temporarily gone — so a non-owner entering a
+  full room is rejected (spectating is a future feature, #36).
+- **Seed proposal** — what **game** a peer brings when entering a room (design §3):
+  **new** (mint a fresh game), **resume** (a specific persisted game by UUID + headHash),
+  **current** (the currently-loaded local game), or **defer** ("dealer's choice" — bring
+  nothing, adopt the opponent's). (**random** — a shared randomized board — is future #34.)
+- **Reconciliation** — the pure decision that turns a **pair of seed proposals** into a single
+  agreed game or a **typed reject** (`game-mismatch` / `game-divergent`) surfaced to the UI:
+  0 concrete → new; 1 → play it; 2 same-UUID+matching-headHash → resume together; 2 same-UUID
+  divergent → `game-divergent`; 2 different-UUID → `game-mismatch`.
+- **Initiator election** — the deterministic pick (earlier live-presence **arrival**, then
+  lower **playerId**) of which of two **simultaneously-arriving** peers computes reconciliation
+  and publishes the agreed game — killing the initial double-white race.
+- **playerId** — a per-browser stable id (localStorage) that **owns a seat** and enables
+  reconnect / reclaim-by-identity.

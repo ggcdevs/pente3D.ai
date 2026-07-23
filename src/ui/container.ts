@@ -145,10 +145,21 @@ const UI_STYLESHEET = `
 .pente-netpanel-recent-remove { cursor: pointer; padding: 4px 8px; border-radius: 4px; border: none; background: transparent; color: rgba(230,230,234,0.7); font-size: 14px; line-height: 1; }
 .pente-netpanel-recent-remove:hover { background: rgba(255,80,80,0.25); color: #ffb0b0; }
 .pente-netpanel-error { color: #ffb0b0; font-size: 12px; }
+.pente-netpanel-seed { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.pente-netpanel-seed-option { cursor: pointer; padding: 8px 10px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.16); background: rgba(255,255,255,0.05); color: #e6e6ea; font-size: 13px; text-align: center; }
+.pente-netpanel-seed-option:hover:not(:disabled) { background: rgba(255,255,255,0.12); }
+.pente-netpanel-seed-option[data-selected="true"] { border-color: rgba(74,144,217,0.9); background: rgba(74,144,217,0.35); }
+.pente-netpanel-seed-option:disabled { cursor: default; opacity: 0.35; }
+.pente-netpanel-games[hidden] { display: none; }
+.pente-netpanel-games { list-style: none; margin: 0; padding: 4px; display: flex; flex-direction: column; gap: 2px; max-height: 160px; overflow-y: auto; border-radius: 4px; border: 1px solid rgba(255,255,255,0.12); background: rgba(0,0,0,0.35); }
+.pente-netpanel-game-row { display: flex; }
+.pente-netpanel-game { flex: 1; text-align: left; cursor: pointer; padding: 6px 8px; border-radius: 4px; border: none; background: transparent; color: #e6e6ea; font-size: 13px; }
+.pente-netpanel-game:hover { background: rgba(74,144,217,0.35); }
+.pente-netpanel-game-row[data-selected="true"] .pente-netpanel-game { background: rgba(74,144,217,0.5); }
 .pente-netpanel-actions { display: flex; gap: 8px; margin-top: 4px; }
-.pente-netpanel-host, .pente-netpanel-join { flex: 1; cursor: pointer; padding: 8px 12px; border-radius: 4px; border: none; background: rgba(74,144,217,0.4); color: #e6e6ea; font-size: 14px; }
-.pente-netpanel-host:hover, .pente-netpanel-join:hover { background: rgba(74,144,217,0.6); }
-.pente-netpanel-host:disabled, .pente-netpanel-join:disabled { cursor: default; opacity: 0.4; }
+.pente-netpanel-enter { flex: 1; cursor: pointer; padding: 8px 12px; border-radius: 4px; border: none; background: rgba(74,144,217,0.4); color: #e6e6ea; font-size: 14px; }
+.pente-netpanel-enter:hover:not(:disabled) { background: rgba(74,144,217,0.6); }
+.pente-netpanel-enter:disabled { cursor: default; opacity: 0.4; }
 @media (prefers-reduced-motion: reduce) { .pente-netpanel-modal { transition: none; } }
 .pente-widget--net { display: flex; flex-direction: column; gap: 8px; min-width: 200px; padding: 10px 12px; border-radius: 6px; background: rgba(16,16,20,0.72); color: #e6e6ea; font-family: system-ui, sans-serif; font-size: 13px; }
 /* [hidden] must beat the class display:flex (else the attribute is a no-op) — incl. the root

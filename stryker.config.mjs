@@ -67,6 +67,14 @@
  *     The genuine tie-break behavior IS asserted (earlier-arrival wins; equal-arrival breaks to
  *     the lower playerId; a same-arrival higher id listed after the leader does not displace it).
  *     Kill genuine (non-equivalent) survivors with real tests; never suppress.
+ *   - netPanelModel.ts: the `state.resumeId !== null` guard in `isSeedActionable`'s `resume` arm
+ *     (`&&` short-circuit). Mutated to `true &&`, it is equivalent because the following
+ *     `state.games.some((g) => g.id === state.resumeId)` is ALREADY false when `resumeId` is null —
+ *     no game `id` (typed `string`) can equal `null`. The guard is a kept intent tripwire (a resume
+ *     with no pick is not actionable) that the some-check happens to also cover; killing it would
+ *     require a game with a `null` id, which the type forbids — i.e. asserting on non-behavior. The
+ *     resume actionability behavior IS asserted (no-pick → not actionable; member pick → actionable;
+ *     stale/non-member pick → not actionable).
  *
  * Gate-rejection is re-proven on every review-gate run (agent-principles #7): temporarily
  * raising `break` above the current score makes `npm run mutate` exit non-zero.

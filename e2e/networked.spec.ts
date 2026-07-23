@@ -198,45 +198,49 @@ async function waitObservedWithResync(
 }
 
 /**
- * Host on `page` through the drawer panel (issue #13 / #16): open the "Network Game" panel, read the
- * fresh random code offered as the input's PLACEHOLDER, click the panel's Host button WITHOUT typing
- * (so the empty→placeholder fallback is exercised), wait until the session reports `connected`, and
- * return the room code the session actually claimed. Driving the real panel DOM (not a raw
- * `dispatch('hostGame')`) makes the combobox → `setPendingJoinCode` → `hostGame` seam load-bearing
- * here: if it regresses the host never connects and this function's `waitConnected` times out.
+ * Establish a game on `page` through the drawer panel's UNIFIED ENTRY (S.6, design §3): open the
+ * "Network Game" panel, read the fresh random code offered as the input's PLACEHOLDER, keep the
+ * default `New` seed, and click the panel's single Enter button WITHOUT typing (so the
+ * empty→placeholder fallback is exercised). Wait until the session reports `connected`, and return the
+ * room code the session actually claimed. Driving the real panel DOM (not a raw `dispatch`) makes the
+ * combobox → seed-selector → `enter(code, {new})` seam load-bearing here: if it regresses the session
+ * never connects and this function's `waitConnected` times out. (Named `host` for the callers' intent —
+ * the first arriver establishes as the room's first owner; there is no Host button any more.)
  */
 async function host(page: Page): Promise<string> {
   await openNetPanel(page);
   const panel = page.locator('[data-testid="netpanel-modal"]');
   const input = panel.locator('[data-testid="netpanel-code-input"]');
-  // The panel opens with an EMPTY input and a valid random code as its placeholder; grab it, then
-  // Host with the input still empty (the effective code falls back to the placeholder).
+  // The panel opens with an EMPTY input, a valid random code as its placeholder, and the `New` seed
+  // selected by default; grab the placeholder, then Enter with the input still empty.
   await expect(input).toHaveValue('');
+  await expect(panel).toHaveAttribute('data-seed-kind', 'new');
   const picked = (await input.getAttribute('placeholder')) ?? '';
   expect(picked, 'the panel must offer a random placeholder code on open').not.toBe('');
-  await panel.locator('[data-testid="netpanel-host"]').click();
+  await panel.locator('[data-testid="netpanel-enter"]').click();
   await waitConnected(page);
   const code = (await net(page))?.code;
-  expect(code, 'host must claim a room code').not.toBeNull();
-  // The code the session hosted is exactly the placeholder the panel offered (the combobox fed the session).
-  expect(code, 'the hosted room is the placeholder code the panel offered').toBe(picked);
+  expect(code, 'entry must claim a room code').not.toBeNull();
+  // The code the session used is exactly the placeholder the panel offered (the combobox fed the session).
+  expect(code, 'the room is the placeholder code the panel offered').toBe(picked);
   return code!;
 }
 
 /**
- * Join `code` on `page` through the drawer panel (issue #16): open the panel, TYPE the host's code
- * into the combobox input, and click the panel's Join button. This exercises the real user's join
- * path — the panel validates the typed code, stashes it via `setPendingJoinCode`, and dispatches
- * `joinGame`.
+ * Join `code` on `page` through the drawer panel's unified entry (S.6): open the panel, TYPE the host's
+ * code into the combobox input, choose the `Dealer's choice` (defer) seed — the second arriver brings
+ * nothing and adopts the resident's game (design §3) — and click Enter. The panel validates the typed
+ * code and enters the room with `enter(code, {defer})`; admission (S.5) seats this peer by identity.
  */
 async function join(page: Page, code: string): Promise<void> {
   await openNetPanel(page);
   const panel = page.locator('[data-testid="netpanel-modal"]');
   await panel.locator('[data-testid="netpanel-code-input"]').fill(code);
-  // A valid code enables Join; a broken validation seam would leave it disabled and the click would
-  // no-op (the test would then fail at waitConnected — the gate bites).
-  await expect(panel).toHaveAttribute('data-code-valid', 'true');
-  await panel.locator('[data-testid="netpanel-join"]').click();
+  await panel.locator('[data-testid="netpanel-seed-defer"]').click();
+  // A valid code + an actionable seed enables Enter; a broken validation seam would leave it disabled
+  // and the click would no-op (the test would then fail at waitConnected — the gate bites).
+  await expect(panel).toHaveAttribute('data-can-enter', 'true');
+  await panel.locator('[data-testid="netpanel-enter"]').click();
   await waitConnected(page);
 }
 

@@ -27,6 +27,8 @@ import {
 } from './persist/gameLifecycle.ts';
 import type { Game } from './core/game.ts';
 import type { ArchiveListing } from './ui/widgets/archiveModel.ts';
+import type { SeedGame, SeedSources } from './ui/widgets/netPanelModel.ts';
+import type { Proposal } from './net/admission.ts';
 import { randomId } from './util/randomId.ts';
 
 const log = createLogger('app:boot');
@@ -175,6 +177,12 @@ let getNetSeatOwners: () => SeatMap | null = () => null;
 let getNetGameUuid: () => string | null = () => null;
 let getNetLastReject: () => AdmissionReject | null = () => null;
 
+// The unified-entry action the Network-Game panel's Enter button drives (Task S.6, design §3): enter a
+// room with a canonical code + the chosen seed proposal. Set once the net session wires up (below);
+// until then (offline / pre-wiring) it is an honest no-op — the panel is present but entering does
+// nothing until the session exists, never a crash (the same honest-until-wired pattern above).
+let enterRoom: (code: string, proposal: Proposal) => void = () => {};
+
 // The move-notification + auto-reconnect glue (Task N.5.2, issue #20), set once the net session wires
 // up. Until then (offline / pre-wiring) there is no session to notify for, so the readout reports the
 // pristine title with zeroed counters — the same honest-until-wired pattern the other net holders use.
@@ -267,6 +275,10 @@ async function autosaveTick(): Promise<void> {
   // Save the live game under the current id (the freshly-minted one on a mint, the same one otherwise;
   // on a finalize this captures the won game's terminal state under its own id).
   await saveGame(archiveDb, autosaveId, game, autosaveMeta());
+  // The archive just changed — refresh the seed-games cache so the Network-Game panel's Resume list
+  // reflects it on the next open (a newly-finalized game becomes resume-able; the current game stays
+  // excluded). Best-effort: a refresh failure only leaves a stale list, never a broken save.
+  await refreshSeedGames().catch((err: unknown) => log.error('seed-games refresh failed', err));
 }
 
 void openDatabase(resolveDbName())
@@ -293,6 +305,9 @@ void openDatabase(resolveDbName())
     });
     // Persist the initial state immediately so a fresh game is browsable even before the first move.
     await saveGame(db, autosaveId, authoritativeGame(), autosaveMeta());
+    // Prime the seed-games cache off the now-open archive so the Network-Game panel's Resume list is
+    // populated on its first open (before any autosave tick has run).
+    await refreshSeedGames();
     log.info('autosave wired', { id: autosaveId });
   })
   .catch((err: unknown) => {
@@ -307,6 +322,54 @@ void openDatabase(resolveDbName())
 async function listArchive(): Promise<readonly ArchiveListing[]> {
   if (archiveDb === null) return [];
   return await listArchivedGames(archiveDb);
+}
+
+/**
+ * The resume-able persisted games the Network-Game panel offers as seeds (Task S.6, design §3 "Resume
+ * — pick from your games list"). A SYNCHRONOUS cache the panel reads on open (it can't await IndexedDB
+ * mid-open), refreshed off the archive at boot and after every autosave ({@link refreshSeedGames}). The
+ * rich games list is #37; here it is a simple newest-first projection. The CURRENT autosave record is
+ * excluded — resuming the game you already have loaded is the separate "Current local board" seed, and
+ * offering it under both would be a confusing duplicate. Each row carries the game's `uuid` + `headHash`
+ * so the panel's `resolveProposal` builds a `resume(uuid, headHash)` proposal with no second DB read.
+ */
+let seedGamesCache: readonly SeedGame[] = [];
+
+/** Rebuild {@link seedGamesCache} from the archive (async; called at boot + after each autosave). */
+async function refreshSeedGames(): Promise<void> {
+  if (archiveDb === null) return;
+  const listings = await listArchivedGames(archiveDb);
+  seedGamesCache = listings
+    .filter((l) => l.id !== autosaveId) // exclude the current game (that is "Current local board")
+    .map((l) => ({
+      id: l.id,
+      // A human, deterministic label — the seat players + outcome the archive round-trips. Rendered
+      // via textContent in the panel (never eval'd), so opaque strings are safe.
+      label: `${l.meta.players.white ?? '?'} vs ${l.meta.players.black ?? '?'} · ${l.meta.result}`,
+      uuid: l.meta.uuid,
+      headHash: l.meta.headHash,
+    }));
+}
+
+/**
+ * The seed sources the Network-Game panel offers (Task S.6, design §3): the resume-able games (the
+ * cache above) + whether a live local game exists to seed as "Current local board". The scene always
+ * holds a game, so `hasCurrent` is true — the option seeds the currently-loaded game (a played board
+ * or a hand-set one). Read synchronously on panel open.
+ */
+function seedSources(): SeedSources {
+  return { games: seedGamesCache, hasCurrent: true };
+}
+
+/**
+ * The currently-loaded local game's identity for the `current` seed proposal (Task S.6): its stable
+ * `uuid` (minted at genesis, S.1) + `headHash`. Read off the scene's live local game (NOT the net
+ * session game — "Current local board" is the game you have loaded before entering a room). Never
+ * `null` here (the scene always has a game); typed nullable to keep the panel's guard honest.
+ */
+function currentGame(): { readonly uuid: string; readonly headHash: string } | null {
+  const g = scene.getGame();
+  return { uuid: g.uuid, headHash: headHash(g.log) };
 }
 
 /**
@@ -529,6 +592,16 @@ void createAppNetSession(scene.getState().size)
     getNetGameUuid = () => session.gameUuid();
     getNetLastReject = () => session.lastRejectReason();
 
+    // Unified entry (Task S.6, design §3): the Network-Game panel's single Enter button routes HERE with
+    // the canonical code + the chosen seed proposal. It goes through the SAME `startNetGame` boundary
+    // the old host/join hooks use (archive+reset a played local board, bump the generation once), then
+    // drives `NetSession.enter(code, proposal)` — the S.5 admission protocol seats this peer by identity
+    // rather than by which button was pressed (the #31 fix). A `defer`/`new` mirrors the old join/host;
+    // `current`/`resume` carry a real game identity the protocol reconciles against the peer's.
+    enterRoom = (code, proposal) => {
+      startNetGame(() => void session.enter(code, proposal).then(refreshUi));
+    };
+
     // MUTUAL-ACCEPT in-place rematch reset (Task N.2.2, plan N.2 decision 2: "both reset to a fresh
     // game in the SAME room/connection — NO disconnect/re-host", "colors ALTERNATE every game"). When
     // the out-of-band rematch handshake RESOLVES to `accepted` (either WE proposed and the peer
@@ -672,6 +745,12 @@ const ui = createUi(container, {
   // stashes a validated join code via setPendingJoinCode, and copies the game code to the clipboard.
   getNet: () => scene.getNet(),
   setPendingJoinCode: (code) => scene.setPendingJoinCode(code),
+  // Unified entry seed selection (Task S.6, issue #35): the Network-Game panel reads the resume-able
+  // games + whether a current local board exists (`seedSources`), the current game's identity for the
+  // `current` proposal (`currentGame`), and enters the room with the chosen code + proposal (`enter`).
+  seedSources: () => seedSources(),
+  currentGame: () => currentGame(),
+  enter: (code, proposal) => enterRoom(code, proposal),
   copyToClipboard: (text) => navigator.clipboard.writeText(text),
   // History slider (Task 5.6): the slider reads the scene's read-only history readout and drives
   // its local scrub seam — no command dispatch (it emits/syncs nothing; design Part 6 / GLOSSARY).

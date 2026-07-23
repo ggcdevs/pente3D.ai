@@ -1,47 +1,53 @@
 /**
- * Network-Game drawer panel widget (issue #13 / #16) — the DOM/dispatch + input-scope IO glue for the
- * pure {@link deriveNetPanel} view-model (`netPanelModel.ts`). Picker SIMPLIFIED on issue #16 from the
- * three-source (custom/saved/random) tabs to ONE unified combobox; plan of record
- * `planning/2026-07-21-menu-live-settings-batch.md`.
+ * Network-Game drawer panel widget (issue #13 / #16; unified entry — S.6, epic #35, closes #31) — the
+ * DOM/dispatch + input-scope IO glue for the pure {@link deriveNetPanel} view-model (`netPanelModel.ts`).
  *
- * It relocates the Host/Join INITIATION out of the always-on `connectionStatus` overlay INTO the
+ * It relocates the game-ENTRY initiation out of the always-on `connectionStatus` overlay INTO the
  * non-blocking drawer (issue #13 / #24): the menu's "Network Game" entry dispatches `openNetwork`,
- * which opens THIS panel. The panel carries a SINGLE game-code COMBOBOX — a text input plus a dropdown
- * of recently-used codes — then a Host button (create this room) and a Join button (enter this room).
- * It reuses Increment B's non-blocking-panel-in-drawer pattern EXACTLY (mirrors `settings.ts`):
- * opening PUSHES a NON-blocking scope ({@link NET_PANEL_SCOPE_BLOCKING} === false) so the board stays
- * interactive under it, and closing POPS it — every close path (Escape, outside-click, the ✕ button,
- * choosing Host/Join) pops exactly once, so the stack never leaks.
+ * which opens THIS panel. The Host-vs-Join UX is REPLACED (design §3) by ONE game-code COMBOBOX (the
+ * room CODE = a rendezvous channel, GLOSSARY "Room / code") — a text input plus a dropdown of
+ * recently-used codes — PLUS a SEED SELECTOR choosing what GAME to bring (New / Resume / Current local
+ * board / Dealer's choice; Randomized is #34, deliberately absent), and a SINGLE **Enter** button that
+ * carries the chosen code + seed into the session's `enter(code, proposal)` seam. It reuses Increment
+ * B's non-blocking-panel-in-drawer pattern EXACTLY (mirrors `settings.ts`): opening PUSHES a
+ * NON-blocking scope ({@link NET_PANEL_SCOPE_BLOCKING} === false) so the board stays interactive under
+ * it, and closing POPS it — every close path (Escape, outside-click, the ✕ button, Enter) pops exactly
+ * once, so the stack never leaks.
  *
  * The combobox input shows a FRESH random code as its PLACEHOLDER (generated via `generateGameCode`
- * when the panel opens — greyed, NOT the value). The EFFECTIVE code Host/Join act on is the typed
- * text when non-empty, else that placeholder (so hosting without typing uses the offered random
- * room). The dropdown lists the recent codes (newest-first from the C.1 store); clicking a row fills
- * the input, and each row's remove control deletes just that code from the store. All these DECISIONS
- * (effective code, validation, button enablement) live in the pure model; this file only paints the
- * model onto DOM, forwards clicks, generates the random placeholder via the injected rng, and
- * mutates the C.1 store.
+ * when the panel opens — greyed, NOT the value). The EFFECTIVE code Enter acts on is the typed text
+ * when non-empty, else that placeholder. The dropdown lists the recent codes (newest-first from the
+ * C.1 store); clicking a row fills the input, and each row's remove control deletes just that code.
+ * The seed selector offers the four kinds; `Resume` reveals a simple list of persisted games (the
+ * rich games list is #37) supplied by the glue's {@link NetPanelDeps.seedSources}. All DECISIONS
+ * (effective code, validation, seed actionability, the canonical seed choice, Enter enablement) live
+ * in the pure model; this file only paints the model onto DOM, forwards clicks, generates the random
+ * placeholder via the injected rng, reads the seed sources, and mutates the C.1 store.
  *
- * It DISPATCHES the SAME command ids a keybinding / the old inline controls fired (design Principle 3,
- * one action layer): Host → {@link HOST_GAME_COMMAND}; Join → stash the validated code via
- * `setPendingJoinCode` THEN dispatch {@link JOIN_GAME_COMMAND}. It does NOT reimplement the net
- * session/transport — that stays in `session.ts`/`appSession.ts`. On host/join it records the used
- * code into the C.1 recent-codes store (`recordRecentCode`) so it feeds the dropdown next time. It
- * touches `document`, so it is the Playwright-verified IO boundary (asserted on `window.__pente`
- * getNet() + real interactions + screenshots), not unit/mutation-gated. `data-testid`s expose the
- * rendered model + open state for readback (agent-principles #3: observable behavior).
+ * On Enter it records the used code into the C.1 recent-codes store (`recordRecentCode`) and hands the
+ * canonical code + the resolved admission {@link Proposal} to {@link NetPanelDeps.enter} (which the app
+ * wires to `NetSession.enter` — S.5). It does NOT reimplement the net session/transport. It touches
+ * `document`, so it is the Playwright-verified IO boundary (asserted on `window.__pente` getNet() +
+ * real interactions + screenshots), not unit/mutation-gated. `data-testid`s expose the rendered model
+ * + open state for readback (agent-principles #3: observable behavior).
  */
 
 import type { Widget, WidgetFactory } from '../registry.ts';
-import { HOST_GAME_COMMAND, JOIN_GAME_COMMAND, generateGameCode } from './netModel.ts';
+import { generateGameCode } from './netModel.ts';
+import type { Proposal } from '../../net/admission.ts';
 import { listRecentCodes, recordRecentCode, removeRecentCode } from './recentCodes.ts';
 import {
   initialNetPanel,
   setPanelText,
   chooseRecent,
   removeRecent,
+  setSeedKind,
+  chooseResume,
   deriveNetPanel,
   type NetPanelState,
+  type SeedSources,
+  type SeedGame,
+  type SeedKind,
 } from './netPanelModel.ts';
 
 /** The stable widget id — matches the `networkGame` entry in the tracked `layout` default. */
@@ -68,24 +74,39 @@ export interface NetPanelScope {
 
 /**
  * The deps the Network-Game panel needs. Mirrors the settings/net widgets: a document (injected for
- * testability), the command `dispatch` (the SAME registry a keybinding uses, Principle 3), the
- * scope-stack `pushScope`/`popScope` (the open panel pushes/pops the non-blocking `networkGame`
- * scope), `registerOpenNetwork` (the widget hands its `open()` back so the `openNetwork` command
- * opens it), and `setPendingJoinCode` (the seam the widget stashes a validated join code on before
- * dispatching the argument-free `joinGame` command — reused from the inline widget, NOT reinvented).
+ * testability), the scope-stack `pushScope`/`popScope` (the open panel pushes/pops the non-blocking
+ * `networkGame` scope), `registerOpenNetwork` (the widget hands its `open()` back so the `openNetwork`
+ * command opens it), `seedSources` (the resume-able persisted games + whether a current local game
+ * exists — read fresh on each open so the seed selector reflects the live archive), and `enter` (the
+ * S.6 unified-entry seam the app wires to `NetSession.enter(code, proposal)`).
  */
 export interface NetPanelDeps {
   readonly doc: Document;
-  /** Dispatch a command id (Host / Join). Returns whether a command ran. */
-  dispatch(commandId: string): boolean;
   /** Push the NON-blocking `networkGame` scope when the panel opens (board stays live under it). */
   pushScope(scope: NetPanelScope): void;
   /** Pop the topmost input scope (the `networkGame` scope) when the panel closes. */
   popScope(): void;
   /** Register the widget's `open()` so the `openNetwork` command opens this panel. */
   registerOpenNetwork(open: () => void): void;
-  /** Stash a validated join code for the next `joinGame` dispatch (the argument seam, from `net.ts`). */
-  setPendingJoinCode(code: string): void;
+  /**
+   * The seed sources to offer when the panel opens (design §3): the resume-able persisted games (a
+   * simple list — the rich games list is #37) and whether a live local game exists (so `current` is
+   * offerable). Read fresh on each open so the selector reflects the current archive + board.
+   */
+  seedSources(): SeedSources;
+  /**
+   * The currently-loaded local game's identity (`uuid` + `headHash`) for the `current` seed proposal,
+   * or `null` if there is no live local game. Read at Enter time (design §3 "Current local board").
+   * Kept off {@link SeedSources} (which the pure model reads) so the model only knows WHETHER a current
+   * game exists (`hasCurrent`), never its identity — the identity resolution stays in this IO glue.
+   */
+  currentGame(): { readonly uuid: string; readonly headHash: string } | null;
+  /**
+   * Enter a room with a canonical `code` and the chosen seed `proposal` (design §3/§4). The app wires
+   * this to `NetSession.enter` (S.5): the single unified-entry action that replaces the old Host/Join
+   * commands. The panel only ever passes a canonical (validated) code + a resolved proposal.
+   */
+  enter(code: string, proposal: Proposal): void;
 }
 
 /** Build the NON-blocking `networkGame` scope the open panel pushes (mirrors the settings scope). */
@@ -170,27 +191,59 @@ export function netPanelWidget(): WidgetFactory {
       error.hidden = true;
       panel.appendChild(error);
 
-      // --- Host + Join actions. ------------------------------------------------------------------
+      // --- The seed selector: WHAT game to bring (New / Resume / Current / Dealer's). -------------
+      const seedGroup = doc.createElement('div');
+      seedGroup.className = 'pente-netpanel-seed';
+      seedGroup.setAttribute('data-testid', 'netpanel-seed');
+      seedGroup.setAttribute('role', 'radiogroup');
+      seedGroup.setAttribute('aria-label', 'What game to bring');
+      panel.appendChild(seedGroup);
+
+      // Per-kind seed buttons, keyed so render() can flip their selected/disabled/label state. Built
+      // once from the model's option rows so their order + labels are the pure model's SSOT.
+      const seedButtons = new Map<SeedKind, HTMLButtonElement>();
+      for (const opt of deriveNetPanel(initialNetPanel('', [], { games: [], hasCurrent: false }))
+        .seedOptions) {
+        const btn = doc.createElement('button');
+        btn.type = 'button';
+        btn.className = 'pente-netpanel-seed-option';
+        btn.setAttribute('data-testid', `netpanel-seed-${opt.kind}`);
+        btn.setAttribute('role', 'radio');
+        btn.setAttribute('data-seed-kind', opt.kind);
+        btn.textContent = opt.label;
+        btn.addEventListener('click', () => selectSeed(opt.kind));
+        seedButtons.set(opt.kind, btn);
+        seedGroup.appendChild(btn);
+      }
+
+      // --- The resume games list (revealed only when the Resume seed is selected). ----------------
+      const gamesList = doc.createElement('ul');
+      gamesList.className = 'pente-netpanel-games';
+      gamesList.setAttribute('data-testid', 'netpanel-games');
+      gamesList.setAttribute('role', 'listbox');
+      gamesList.setAttribute('aria-label', 'Games to resume');
+      gamesList.hidden = true;
+      panel.appendChild(gamesList);
+
+      // --- The single Enter action (carries the code + the chosen seed proposal). -----------------
       const actions = doc.createElement('div');
       actions.className = 'pente-netpanel-actions';
-      const hostButton = doc.createElement('button');
-      hostButton.className = 'pente-netpanel-host';
-      hostButton.setAttribute('data-testid', 'netpanel-host');
-      hostButton.textContent = 'Host';
-      const joinButton = doc.createElement('button');
-      joinButton.className = 'pente-netpanel-join';
-      joinButton.setAttribute('data-testid', 'netpanel-join');
-      joinButton.textContent = 'Join';
-      actions.appendChild(hostButton);
-      actions.appendChild(joinButton);
+      const enterButton = doc.createElement('button');
+      enterButton.className = 'pente-netpanel-enter';
+      enterButton.setAttribute('data-testid', 'netpanel-enter');
+      enterButton.textContent = 'Enter';
+      actions.appendChild(enterButton);
       panel.appendChild(actions);
 
       element.appendChild(panel);
 
       let open = false;
       let dropdownOpen = false;
-      // The combobox state (the single source of truth the pure model reads). Rebuilt on each open.
-      let state: NetPanelState = initialNetPanel(generateGameCode(Math.random), listRecentCodes());
+      // The panel state (the single source of truth the pure model reads). Rebuilt on each open.
+      let state: NetPanelState = initialNetPanel(generateGameCode(Math.random), listRecentCodes(), {
+        games: [],
+        hasCurrent: false,
+      });
 
       /** Rebuild the DOM from the pure model derived off the combobox state. */
       function render(): void {
@@ -209,7 +262,7 @@ export function netPanelWidget(): WidgetFactory {
         }
         toggle.disabled = model.recentRows.length === 0;
 
-        // Error line + button enablement come straight from the pure model.
+        // Error line comes straight from the pure model.
         if (model.codeError !== null) {
           error.textContent = model.codeError;
           error.hidden = false;
@@ -217,10 +270,31 @@ export function netPanelWidget(): WidgetFactory {
           error.textContent = '';
           error.hidden = true;
         }
-        hostButton.disabled = !model.codeValid;
-        joinButton.disabled = !model.codeValid;
+
+        // Seed options: selected + availability (disabled) reflect the pure model. A non-available
+        // option is still shown (so the user sees WHY Enter is blocked) but disabled.
+        for (const opt of model.seedOptions) {
+          const btn = seedButtons.get(opt.kind);
+          if (btn === undefined) continue;
+          btn.disabled = !opt.available;
+          btn.setAttribute('aria-checked', String(opt.selected));
+          btn.setAttribute('data-selected', String(opt.selected));
+        }
+
+        // The resume games list is only shown (and populated) when the Resume seed is selected.
+        gamesList.replaceChildren();
+        for (const row of model.seedGameRows) {
+          gamesList.appendChild(gameRow(doc, row.id, row.label, row.selected, chooseGame));
+        }
+        gamesList.hidden = model.seedKind !== 'resume';
+
+        // Enter enablement = a valid code AND an actionable seed (both from the pure model).
+        enterButton.disabled = !model.canEnter;
         element.setAttribute('data-code-valid', String(model.codeValid));
         element.setAttribute('data-recent-count', String(model.recentRows.length));
+        element.setAttribute('data-seed-kind', model.seedKind);
+        element.setAttribute('data-seed-actionable', String(model.seedActionable));
+        element.setAttribute('data-can-enter', String(model.canEnter));
       }
 
       /** Show/hide the recent dropdown (reflected on the toggle's aria-expanded). */
@@ -248,6 +322,18 @@ export function netPanelWidget(): WidgetFactory {
         if (state.recent.length === 0) setDropdown(false);
       }
 
+      /** Select a seed KIND (New / Resume / Current / Dealer's). A disabled option never reaches here. */
+      function selectSeed(kind: SeedKind): void {
+        state = setSeedKind(state, kind);
+        render();
+      }
+
+      /** Pick a specific resume game by its archive id, then repaint (picks the game + resume kind). */
+      function chooseGame(id: string): void {
+        state = chooseResume(state, id);
+        render();
+      }
+
       // --- Wiring ---------------------------------------------------------------------------------
       codeInput.addEventListener('input', () => {
         state = setPanelText(state, codeInput.value);
@@ -258,30 +344,31 @@ export function netPanelWidget(): WidgetFactory {
         setDropdown(!dropdownOpen);
       });
 
-      hostButton.addEventListener('click', () => act(HOST_GAME_COMMAND));
-      joinButton.addEventListener('click', () => act(JOIN_GAME_COMMAND));
+      enterButton.addEventListener('click', () => enterRoom());
 
       /**
-       * Perform a Host or Join with the canonical effective code: record it into the recent-codes
-       * store, stash it on the pending-code seam, dispatch the command, and close the panel. BOTH
-       * Host and Join ride the chosen code — issue #13's "one code, two actions": Host creates the
-       * room THIS code names, Join enters it (the app's host/join hooks read the stashed code). Guarded
-       * by the model's validity — a disabled button never fires, but the guard is defensive
-       * (agent-principles: never dispatch an empty/malformed code to the transport).
+       * ENTER the room with the canonical code + the resolved seed proposal (design §3/§4). Records the
+       * code into the recent-codes store, resolves the pure model's {@link SeedChoice} into an admission
+       * {@link Proposal} (mapping the chosen resume game's id → its uuid/headHash from the seed sources),
+       * closes the panel (pops our scope), then hands the code + proposal to {@link NetPanelDeps.enter}.
+       * Guarded by the model — a disabled Enter never fires — but the guard is defensive
+       * (agent-principles: never hand an empty/malformed code or an incomplete seed to the transport).
        */
-      function act(commandId: string): void {
+      function enterRoom(): void {
         const model = deriveNetPanel(state);
-        if (model.canonicalCode === null) return; // invalid — never dispatch (buttons are disabled)
+        if (model.canonicalCode === null || model.seedChoice === null) return; // Enter is disabled.
+        const proposal = resolveProposal(
+          model.seedChoice.kind,
+          model.seedChoice.resumeId,
+          state.games,
+          deps.currentGame(),
+        );
+        if (proposal === null) return; // a resume/current game that no longer resolves — never half-formed.
         const canonical = model.canonicalCode;
-        // Remember the code for next time (feeds the dropdown). Canonical → the store keeps it.
         recordRecentCode(canonical);
-        // Stash the chosen code for BOTH actions: Host creates this room, Join enters it (the app's
-        // host/join hooks consume the stashed code). The command id itself stays argument-free.
-        deps.setPendingJoinCode(canonical);
-        // Close FIRST (pop our scope) THEN dispatch, mirroring the menu: a command that changes scope
-        // downstream sees a clean stack.
+        // Close FIRST (pop our scope) THEN enter, mirroring the menu: downstream sees a clean stack.
         close();
-        deps.dispatch(commandId);
+        deps.enter(canonical, proposal);
       }
 
       function onKeyDown(event: KeyboardEvent): void {
@@ -301,8 +388,9 @@ export function netPanelWidget(): WidgetFactory {
       function openPanel(): void {
         if (open) return; // idempotent — a second open must not push a second scope
         open = true;
-        // Fresh combobox each open: a fresh random placeholder generated, the recent list re-read.
-        state = initialNetPanel(generateGameCode(Math.random), listRecentCodes());
+        // Fresh panel each open: a fresh random placeholder, the recent list re-read, the seed sources
+        // (resume-able games + whether a current local game exists) re-read from the live archive/board.
+        state = initialNetPanel(generateGameCode(Math.random), listRecentCodes(), deps.seedSources());
         setDropdown(false);
         render();
         element.classList.add('pente-netpanel-modal--open');
@@ -376,4 +464,66 @@ function recentRow(
   li.appendChild(removeBtn);
 
   return li;
+}
+
+/**
+ * Build one resume-game row: a clickable cell (picks the game to resume) carrying its archive id +
+ * label + selected flag. Clicking hands the id back so the widget resumes exactly that game.
+ */
+function gameRow(
+  doc: Document,
+  id: string,
+  label: string,
+  selected: boolean,
+  onChoose: (id: string) => void,
+): HTMLLIElement {
+  const li = doc.createElement('li');
+  li.className = 'pente-netpanel-game-row';
+  li.setAttribute('role', 'option');
+  li.setAttribute('data-testid', 'netpanel-game-row');
+  li.setAttribute('data-game-id', id);
+  li.setAttribute('aria-selected', String(selected));
+  li.setAttribute('data-selected', String(selected));
+
+  const btn = doc.createElement('button');
+  btn.type = 'button';
+  btn.className = 'pente-netpanel-game';
+  btn.setAttribute('data-testid', 'netpanel-game');
+  btn.textContent = label;
+  btn.addEventListener('click', () => onChoose(id));
+  li.appendChild(btn);
+
+  return li;
+}
+
+/**
+ * Resolve a pure {@link SeedKind} + optional chosen resume id into the concrete admission
+ * {@link Proposal} the session's `enter()` consumes (design §4): `new` → `{ kind: 'new' }`; `defer` →
+ * `{ kind: 'defer' }`; `resume` → the chosen game's `uuid` + `headHash` (looked up in the seed games);
+ * `current` → the live local game's `uuid` + `headHash` (from `currentGame`, kept out of the resume
+ * list). Returns `null` if a `resume`/`current` game cannot be resolved (a stale id, or `current` with
+ * no live game) — the caller then never enters half-formed (agent-principles: honest, never a masked
+ * bad proposal). The model already gates Enter on actionability, so `null` here is the defensive
+ * backstop for a source that changed between selection and Enter.
+ */
+function resolveProposal(
+  kind: SeedKind,
+  resumeId: string | null,
+  games: readonly SeedGame[],
+  currentGame: { readonly uuid: string; readonly headHash: string } | null,
+): Proposal | null {
+  switch (kind) {
+    case 'new':
+      return { kind: 'new' };
+    case 'defer':
+      return { kind: 'defer' };
+    case 'current':
+      return currentGame === null
+        ? null
+        : { kind: 'current', uuid: currentGame.uuid, headHash: currentGame.headHash };
+    case 'resume': {
+      const g = resumeId === null ? undefined : games.find((row) => row.id === resumeId);
+      return g === undefined ? null : { kind: 'resume', uuid: g.uuid, headHash: g.headHash };
+    }
+  }
 }

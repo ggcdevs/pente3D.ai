@@ -4,24 +4,29 @@ import { dirname, resolve } from 'node:path';
 import layoutDefault from '../src/config/defaults/layout.json' with { type: 'json' };
 import { CODE_LENGTH, CODE_ALPHABET, CODE_ERROR_TEXT } from '../src/ui/widgets/netModel.ts';
 import { NET_PANEL_SCOPE_ID } from '../src/ui/widgets/netPanel.ts';
+import { SEED_LABEL } from '../src/ui/widgets/netPanelModel.ts';
 
 /**
- * issue #13 / #16 e2e — the Network-Game DRAWER PANEL is the DOM/dispatch IO boundary for the game-
- * code COMBOBOX (a text input + a dropdown of recent codes), verified by driving the REAL app and
- * asserting on `window.__pente` real state (getNet / getInput) + the rendered DOM + screenshots
- * (agent-principles #3: observable behavior, never a log line). The PURE combobox view-model
+ * issue #13 / #16 + S.6 (epic #35, closes #31) e2e — the Network-Game DRAWER PANEL is the DOM/dispatch
+ * IO boundary for the UNIFIED ENTRY: a game-code COMBOBOX (a text input + a dropdown of recent codes)
+ * PLUS a SEED SELECTOR (New / Resume / Current local board / Dealer's choice — Host-vs-Join is gone,
+ * design §3) and a single Enter button. Verified by driving the REAL app and asserting on
+ * `window.__pente` real state (getNet / getInput / getNetGameUuid) + the rendered DOM + screenshots
+ * (agent-principles #3: observable behavior, never a log line). The PURE panel view-model
  * (`netPanelModel.ts`) is mutation-gated in Vitest; here we prove the WIRING:
  *   - the menu's "Network Game" entry opens the panel (a NON-blocking scope pushed — board stays live);
  *   - opening shows the input with a FRESH random PLACEHOLDER (an unambiguous-alphabet code of
- *     CODE_LENGTH) and an EMPTY value; Host/Join are enabled (the placeholder is always valid);
- *   - Host/Join with an EMPTY input use that placeholder code;
- *   - typing a custom code OVERRIDES the placeholder; a malformed typed code disables Host/Join +
- *     shows the error (a gate that BITES);
+ *     CODE_LENGTH) and an EMPTY value; the `New` seed is selected by default; Enter is enabled;
+ *   - Enter with an EMPTY input + the default `New` seed uses that placeholder code and enters `new`;
+ *   - typing a custom code OVERRIDES the placeholder; a malformed typed code disables Enter + shows the
+ *     error (a gate that BITES);
+ *   - switching the seed to `Dealer's choice` (defer) keeps Enter enabled and enters that room;
+ *   - the seed selector offers all four kinds with their labels; `Resume` reveals the games list;
  *   - the dropdown lists the recent codes newest-first; clicking one fills the input; the per-row
  *     remove control drops just that code from the store.
  *
- * A deterministic in-page MOCK transport is injected before boot (the `appSession.ts` seam), so
- * host/join connect instantly and hermetically. The widget id / zone / command ids / alphabet all
+ * A deterministic in-page MOCK transport is injected before boot (the `appSession.ts` seam), so entry
+ * connects instantly and hermetically. The widget id / zone / command ids / alphabet / seed labels all
  * derive from the config + model, so nothing is hardcoded (agent-principles #8).
  */
 
@@ -39,7 +44,11 @@ interface InputReadout {
   scopes: string[];
   commands: string[];
 }
-type Pente = { getNet(): NetState | null; getInput(): InputReadout | null };
+type Pente = {
+  getNet(): NetState | null;
+  getInput(): InputReadout | null;
+  getNetGameUuid(): string | null;
+};
 
 async function installMock(page: import('@playwright/test').Page) {
   await page.addInitScript(() => {
@@ -118,18 +127,18 @@ async function openNetPanel(page: import('@playwright/test').Page) {
   await expect(panel(page)).toHaveClass(/pente-netpanel-modal--open/);
 }
 
-/** Host a KNOWN code by typing it, so a later run finds it in the recent-codes store. */
-async function hostCode(page: import('@playwright/test').Page, code: string) {
+/** Enter a KNOWN code by typing it (default `New` seed), so a later run finds it in the recent store. */
+async function enterCode(page: import('@playwright/test').Page, code: string) {
   await openNetPanel(page);
   await pt(page, 'netpanel-code-input').fill(code);
-  await pt(page, 'netpanel-host').click();
+  await pt(page, 'netpanel-enter').click();
   await page.waitForFunction(() => {
     const p = (window as unknown as { __pente: { getNet(): NetState | null } }).__pente;
     return p.getNet()?.phase === 'connected';
   });
 }
 
-test('the Network-Game entry mounts and, when chosen, opens the non-blocking combobox panel', async ({
+test('the Network-Game entry mounts and, when chosen, opens the non-blocking unified-entry panel', async ({
   page,
 }) => {
   await ready(page);
@@ -150,19 +159,21 @@ test('the Network-Game entry mounts and, when chosen, opens the non-blocking com
   const input = await getInput(page);
   expect(input.scopes[input.scopes.length - 1]).toBe(NET_PANEL_SCOPE_ID);
 
-  // The unified combobox is present: a single input + the dropdown toggle (no source tabs).
+  // The unified entry is present: the combobox (input + dropdown toggle), the seed selector, and the
+  // single Enter button. The old Host/Join buttons are GONE (design §3 removed Host-vs-Join).
   await expect(pt(page, 'netpanel-code-input')).toBeVisible();
   await expect(pt(page, 'netpanel-toggle')).toBeVisible();
-  await expect(pt(page, 'netpanel-source-custom')).toHaveCount(0);
-  await expect(pt(page, 'netpanel-source-saved')).toHaveCount(0);
-  await expect(pt(page, 'netpanel-source-random')).toHaveCount(0);
+  await expect(pt(page, 'netpanel-seed')).toBeVisible();
+  await expect(pt(page, 'netpanel-enter')).toBeVisible();
+  await expect(pt(page, 'netpanel-host')).toHaveCount(0);
+  await expect(pt(page, 'netpanel-join')).toHaveCount(0);
 
   const shot = resolve('e2e/artifacts/netpanel-open.png');
   mkdirSync(dirname(shot), { recursive: true });
   await page.screenshot({ path: shot });
 });
 
-test('opening shows a FRESH random PLACEHOLDER (unambiguous alphabet, right length) with an empty value', async ({
+test('opening shows a FRESH random PLACEHOLDER (unambiguous alphabet, right length), empty value, New seed', async ({
   page,
 }) => {
   await ready(page);
@@ -174,22 +185,45 @@ test('opening shows a FRESH random PLACEHOLDER (unambiguous alphabet, right leng
   expect(ph).toHaveLength(CODE_LENGTH);
   for (const ch of ph) expect(CODE_ALPHABET).toContain(ch);
 
-  // The placeholder is always valid → Host + Join are enabled with an empty input.
-  await expect(panel(page)).toHaveAttribute('data-code-valid', 'true');
-  await expect(pt(page, 'netpanel-host')).toBeEnabled();
-  await expect(pt(page, 'netpanel-join')).toBeEnabled();
+  // The `New` seed is selected by default and Enter is enabled (placeholder valid + New actionable).
+  await expect(panel(page)).toHaveAttribute('data-seed-kind', 'new');
+  await expect(panel(page)).toHaveAttribute('data-can-enter', 'true');
+  await expect(pt(page, 'netpanel-seed-new')).toHaveAttribute('data-selected', 'true');
+  await expect(pt(page, 'netpanel-enter')).toBeEnabled();
 });
 
-test('Host with an EMPTY input uses the PLACEHOLDER code (connects on it, remembers it)', async ({
+test('the seed selector offers New / Resume / Current / Dealer’s with their labels', async ({
   page,
 }) => {
   await ready(page);
   await openNetPanel(page);
 
-  // Read the offered placeholder, then Host WITHOUT typing anything.
+  // All four kinds are offered, with the model's SSOT labels (no hardcoded copy here).
+  await expect(pt(page, 'netpanel-seed-new')).toHaveText(SEED_LABEL.new);
+  await expect(pt(page, 'netpanel-seed-resume')).toHaveText(SEED_LABEL.resume);
+  await expect(pt(page, 'netpanel-seed-current')).toHaveText(SEED_LABEL.current);
+  await expect(pt(page, 'netpanel-seed-defer')).toHaveText(SEED_LABEL.defer);
+
+  // Randomized (#34) is deliberately absent — no dead control.
+  await expect(pt(page, 'netpanel-seed-random')).toHaveCount(0);
+
+  // With no persisted games yet, Resume is disabled (unavailable); New / Current / Dealer's are enabled.
+  await expect(pt(page, 'netpanel-seed-resume')).toBeDisabled();
+  await expect(pt(page, 'netpanel-seed-new')).toBeEnabled();
+  await expect(pt(page, 'netpanel-seed-current')).toBeEnabled();
+  await expect(pt(page, 'netpanel-seed-defer')).toBeEnabled();
+});
+
+test('Enter with an EMPTY input + New seed uses the PLACEHOLDER code (connects, mints a game, remembers it)', async ({
+  page,
+}) => {
+  await ready(page);
+  await openNetPanel(page);
+
+  // Read the offered placeholder, then Enter WITHOUT typing anything (default New seed).
   const ph = await placeholder(page);
   await expect(pt(page, 'netpanel-code-input')).toHaveValue('');
-  await pt(page, 'netpanel-host').click();
+  await pt(page, 'netpanel-enter').click();
 
   // The session connected on EXACTLY the placeholder code (the empty→placeholder fallback bit).
   await page.waitForFunction(() => {
@@ -197,19 +231,24 @@ test('Host with an EMPTY input uses the PLACEHOLDER code (connects on it, rememb
     return p.getNet()?.phase === 'connected';
   });
   const state = await getNet(page);
-  expect(state.seat).toBe('white');
+  expect(state.seat).toBe('white'); // the lone establisher is the first owner → white
   expect(state.code).toBe(ph);
   const room = await page.evaluate(() =>
     (window as unknown as { __mockRoom(): string | null }).__mockRoom(),
   );
   expect(room).toBe(ph);
+  // The `new` seed minted a real game UUID (S.1) — observable proof the seed drove genuine entry.
+  const uuid = await page.evaluate(() =>
+    (window as unknown as { __pente: Pente }).__pente.getNetGameUuid(),
+  );
+  expect(uuid, 'a New seed mints a real game UUID').toBeTruthy();
 
   // The status widget (persistent, on the board) now shows the placeholder code + seat.
   const net = page.locator(`[data-widget-id="${NET_ID}"]`);
   await expect(net.locator('[data-testid="net-code"]')).toHaveText(ph);
   await expect(net.locator('[data-testid="net-seat"]')).toHaveText('You are White');
 
-  // Hosting recorded the placeholder code into the C.1 store — the dropdown now lists it.
+  // Entering recorded the placeholder code into the C.1 store — the dropdown now lists it.
   await openNetPanel(page);
   await pt(page, 'netpanel-toggle').click();
   await expect(pt(page, 'netpanel-recent')).toBeVisible();
@@ -217,35 +256,35 @@ test('Host with an EMPTY input uses the PLACEHOLDER code (connects on it, rememb
   expect(codes).toContain(ph);
 });
 
-test('typing a custom code OVERRIDES the placeholder; a malformed one disables Host/Join (gate bites)', async ({
+test('typing a custom code OVERRIDES the placeholder; a malformed one disables Enter (gate bites)', async ({
   page,
 }) => {
   await ready(page);
   await openNetPanel(page);
 
-  // Too short → invalid, buttons disabled, the too-short message shown (the validation gate BITES).
+  // Too short → invalid, Enter disabled, the too-short message shown (the validation gate BITES).
   await pt(page, 'netpanel-code-input').fill('ABC');
   await expect(panel(page)).toHaveAttribute('data-code-valid', 'false');
+  await expect(panel(page)).toHaveAttribute('data-can-enter', 'false');
   await expect(pt(page, 'netpanel-error')).toHaveText(CODE_ERROR_TEXT['too-short']);
-  await expect(pt(page, 'netpanel-host')).toBeDisabled();
-  await expect(pt(page, 'netpanel-join')).toBeDisabled();
+  await expect(pt(page, 'netpanel-enter')).toBeDisabled();
 
   // A bad-chars typed code also bites, with its own message.
   await pt(page, 'netpanel-code-input').fill(`${CODE_ALPHABET.slice(0, CODE_LENGTH - 1)}0`); // '0' excluded
   await expect(panel(page)).toHaveAttribute('data-code-valid', 'false');
   await expect(pt(page, 'netpanel-error')).toHaveText(CODE_ERROR_TEXT['bad-chars']);
 
-  // A valid (lower-cased) typed code → valid, no error, buttons enabled, and it OVERRIDES the
-  // placeholder: hosting connects on the TYPED code, not the offered random one.
+  // A valid (lower-cased) typed code → valid, no error, Enter enabled, and it OVERRIDES the
+  // placeholder: entering connects on the TYPED code, not the offered random one.
   const typed = CODE_ALPHABET.slice(0, CODE_LENGTH);
   const ph = await placeholder(page);
   expect(typed).not.toBe(ph);
   await pt(page, 'netpanel-code-input').fill(typed.toLowerCase());
-  await expect(panel(page)).toHaveAttribute('data-code-valid', 'true');
+  await expect(panel(page)).toHaveAttribute('data-can-enter', 'true');
   await expect(pt(page, 'netpanel-error')).toBeHidden();
-  await expect(pt(page, 'netpanel-host')).toBeEnabled();
+  await expect(pt(page, 'netpanel-enter')).toBeEnabled();
 
-  await pt(page, 'netpanel-host').click();
+  await pt(page, 'netpanel-enter').click();
   await page.waitForFunction(() => {
     const p = (window as unknown as { __pente: { getNet(): NetState | null } }).__pente;
     return p.getNet()?.phase === 'connected';
@@ -254,21 +293,82 @@ test('typing a custom code OVERRIDES the placeholder; a malformed one disables H
   expect(state.code).toBe(typed); // the typed code won, not the placeholder
 });
 
-test('the dropdown lists recent codes newest-first; clicking one fills the input, then Join uses it', async ({
+test('choosing the Dealer’s-choice seed keeps Enter enabled and enters that room', async ({
+  page,
+}) => {
+  await ready(page);
+  await openNetPanel(page);
+
+  const typed = CODE_ALPHABET.slice(1, 1 + CODE_LENGTH);
+  await pt(page, 'netpanel-code-input').fill(typed);
+  // Switch the seed to Dealer's choice (defer) — bring nothing, adopt the opponent's game.
+  await pt(page, 'netpanel-seed-defer').click();
+  await expect(panel(page)).toHaveAttribute('data-seed-kind', 'defer');
+  await expect(pt(page, 'netpanel-seed-defer')).toHaveAttribute('data-selected', 'true');
+  await expect(panel(page)).toHaveAttribute('data-can-enter', 'true');
+
+  await pt(page, 'netpanel-enter').click();
+  await page.waitForFunction(() => {
+    const p = (window as unknown as { __pente: { getNet(): NetState | null } }).__pente;
+    return p.getNet()?.phase === 'connected';
+  });
+  const state = await getNet(page);
+  expect(state.code).toBe(typed);
+});
+
+test('selecting Resume reveals a games list once a finished game exists; picking one enables Enter', async ({
   page,
 }) => {
   await ready(page);
 
-  // Seed two codes into the store by hosting them in order (a then b → b is newest).
+  // No persisted games at first → Resume is unavailable (disabled) and shows no list.
+  await openNetPanel(page);
+  await expect(pt(page, 'netpanel-seed-resume')).toBeDisabled();
+  await pt(page, 'netpanel-close').click();
+
+  // Play a couple of local moves so the current game accumulates, then start a NEW local game (reset)
+  // so the played one becomes a finalized, resume-able archive record (distinct from the current one).
+  await page.evaluate(() => {
+    const p = (window as unknown as { __pente: { place(c: number[]): unknown } }).__pente;
+    p.place([0, 0, 0]);
+    p.place([1, 0, 0]);
+  });
+  await page.evaluate(() =>
+    (window as unknown as { __pente: { dispatch(id: string): unknown } }).__pente.dispatch('reset'),
+  );
+  // Wait until the archive holds the finalized game (the seed-games cache refreshes off autosave).
+  await openNetPanel(page);
+  await pt(page, 'netpanel-seed-resume').click();
+  await expect(pt(page, 'netpanel-games')).toBeVisible();
+  await expect(pt(page, 'netpanel-game-row').first()).toBeVisible();
+
+  // Before a pick, resume is not actionable → Enter is disabled even with a valid code.
+  await expect(panel(page)).toHaveAttribute('data-seed-kind', 'resume');
+  await expect(panel(page)).toHaveAttribute('data-can-enter', 'false');
+  await expect(pt(page, 'netpanel-enter')).toBeDisabled();
+
+  // Pick the first game → resume is actionable, Enter enabled.
+  await pt(page, 'netpanel-game').first().click();
+  await expect(pt(page, 'netpanel-game-row').first()).toHaveAttribute('data-selected', 'true');
+  await expect(panel(page)).toHaveAttribute('data-can-enter', 'true');
+  await expect(pt(page, 'netpanel-enter')).toBeEnabled();
+});
+
+test('the dropdown lists recent codes newest-first; clicking one fills the input, then Enter uses it', async ({
+  page,
+}) => {
+  await ready(page);
+
+  // Seed two codes into the store by entering them in order (a then b → b is newest).
   const a = CODE_ALPHABET.slice(0, CODE_LENGTH);
   const b = CODE_ALPHABET.slice(2, 2 + CODE_LENGTH);
-  await hostCode(page, a);
+  await enterCode(page, a);
   await page.reload();
   await page.waitForFunction(() => {
     const p = (window as unknown as { __pente?: { getNet(): unknown } }).__pente;
     return !!p && p.getNet() !== null;
   });
-  await hostCode(page, b);
+  await enterCode(page, b);
 
   // Reset the session to offline (the store persists across the reload).
   await page.reload();
@@ -280,20 +380,19 @@ test('the dropdown lists recent codes newest-first; clicking one fills the input
   await openNetPanel(page);
   await pt(page, 'netpanel-toggle').click();
   await expect(pt(page, 'netpanel-recent')).toBeVisible();
-  // Newest-first: b (hosted last) precedes a.
+  // Newest-first: b (entered last) precedes a.
   const codes = await pt(page, 'netpanel-recent-code').allTextContents();
   expect(codes).toEqual([b, a]);
 
   // Clicking a recent code fills the input with it.
   await pt(page, 'netpanel-recent-code').filter({ hasText: a }).click();
   await expect(pt(page, 'netpanel-code-input')).toHaveValue(a);
-  await expect(panel(page)).toHaveAttribute('data-code-valid', 'true');
+  await expect(panel(page)).toHaveAttribute('data-can-enter', 'true');
 
-  // Join it → connects on THIS code. With no resident in the (single-context) room, this lone peer
-  // ESTABLISHES the game as its first owner → white (the #31 redesign removed role-derived seats; the
-  // second peer to arrive is admitted onto black — the two-context specs prove that). This test's job
-  // is the combobox → Join SEAM (the chosen recent code drives the connect), not the seat color.
-  await pt(page, 'netpanel-join').click();
+  // Enter it (default New seed) → connects on THIS code. With no resident in the (single-context) room,
+  // this lone peer ESTABLISHES the game as its first owner → white. This test's job is the combobox →
+  // Enter SEAM (the chosen recent code drives the connect), not the seat color.
+  await pt(page, 'netpanel-enter').click();
   await page.waitForFunction(() => {
     const p = (window as unknown as { __pente: { getNet(): NetState | null } }).__pente;
     return p.getNet()?.phase === 'connected';
@@ -302,7 +401,7 @@ test('the dropdown lists recent codes newest-first; clicking one fills the input
   expect(state.seat).toBe('white');
   expect(state.code).toBe(a);
 
-  const shot = resolve('e2e/artifacts/netpanel-recent-join.png');
+  const shot = resolve('e2e/artifacts/netpanel-recent-enter.png');
   mkdirSync(dirname(shot), { recursive: true });
   await page.screenshot({ path: shot });
 });
@@ -312,13 +411,13 @@ test('the per-row remove control drops JUST that code from the store', async ({ 
 
   const a = CODE_ALPHABET.slice(0, CODE_LENGTH);
   const b = CODE_ALPHABET.slice(2, 2 + CODE_LENGTH);
-  await hostCode(page, a);
+  await enterCode(page, a);
   await page.reload();
   await page.waitForFunction(() => {
     const p = (window as unknown as { __pente?: { getNet(): unknown } }).__pente;
     return !!p && p.getNet() !== null;
   });
-  await hostCode(page, b);
+  await enterCode(page, b);
   await page.reload();
   await page.waitForFunction(() => {
     const p = (window as unknown as { __pente: { getNet(): NetState | null } }).__pente;
@@ -344,7 +443,7 @@ test('the per-row remove control drops JUST that code from the store', async ({ 
   expect(codes).not.toContain(b);
 });
 
-test('choosing Host closes the panel (the transient drawer does not linger) and pops its scope', async ({
+test('choosing Enter closes the panel (the transient drawer does not linger) and pops its scope', async ({
   page,
 }) => {
   await ready(page);
@@ -352,7 +451,7 @@ test('choosing Host closes the panel (the transient drawer does not linger) and 
   // Scope pushed while open.
   expect((await getInput(page)).scopes).toContain(NET_PANEL_SCOPE_ID);
 
-  await pt(page, 'netpanel-host').click();
+  await pt(page, 'netpanel-enter').click();
 
   // The panel closed (its scope popped) — the status display persists on the board, not the drawer.
   await expect(panel(page)).not.toHaveClass(/pente-netpanel-modal--open/);
