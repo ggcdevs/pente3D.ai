@@ -61,6 +61,7 @@ function sampleRecord(id: string): GameRecord {
       players: { white: 'alice', black: 'bob' },
       result: 'in-progress',
       startedAt: 1_700_000_000_000,
+      uuid: 'game-uuid-1',
       headHash: 'deadbeef',
     },
   };
@@ -198,6 +199,7 @@ describe('IndexedDB games store wrapper', () => {
         players: { white: 'carol', black: 'dave' },
         result: 'white-wins',
         startedAt: 42,
+        uuid: 'game-uuid-2',
         headHash: 'cafef00d',
       },
     };

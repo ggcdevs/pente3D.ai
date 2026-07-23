@@ -68,10 +68,22 @@ export class ArchiveError extends Error {
  * board `size` needed to reconstruct each fork.
  */
 interface ConflictedRecord extends GameRecord {
-  /** The two forked event logs, as plain events (game-core design "both forks"). */
+  /**
+   * The two forked event logs, as plain events (game-core design "both forks"),
+   * each with its own game uuid so a fork reconstructs with the *right* identity.
+   * A conflict is either same-uuid/divergent-history (the two uuids coincide) or
+   * two-different-games (the uuids differ); storing both keeps that distinction
+   * (design §5). A record written before S.1 has no `forkUuids`; each fork then
+   * lazily mints one on load.
+   */
   readonly forks: {
     readonly mine: StoredLog;
     readonly theirs: StoredLog;
+  };
+  /** Per-fork game uuids, mirroring `forks`. Absent on pre-S.1 records. */
+  readonly forkUuids?: {
+    readonly mine: string;
+    readonly theirs: string;
   };
   /** Board size for reconstructing both forks. */
   readonly size: number;
@@ -102,9 +114,19 @@ function toPlainLog(log: EventLog): StoredLog {
  * Reconstruct a `Game` from a stored plain event log of the given size, translating
  * any core error (corrupt/unknown event, illegal move sequence) into an
  * {@link ArchiveError} that names the id — never returning a broken `Game`.
+ *
+ * `uuid` is threaded into the reconstruction so a save→load round-trip preserves the
+ * game's identity (and thus its `headHash`). A record written before S.1 stored no
+ * uuid; passing `undefined` lets {@link importGame} lazily mint a fresh one — correct
+ * for a legacy/local game that was never networked (design §2.2).
  */
-function gameFromStoredLog(id: string, size: number, log: readonly unknown[]): Game {
-  const dump: GameExport = { size, settings: {}, log: log as readonly Event[] };
+function gameFromStoredLog(
+  id: string,
+  size: number,
+  log: readonly unknown[],
+  uuid: string | undefined,
+): Game {
+  const dump: GameExport = { uuid, size, settings: {}, log: log as readonly Event[] };
   try {
     return importGame(dump);
   } catch (e) {
@@ -138,6 +160,7 @@ export async function saveGame(
       players: meta.players,
       result: meta.result,
       startedAt: meta.startedAt,
+      uuid: game.uuid,
       headHash: headHash(game.log),
     },
   };
@@ -157,7 +180,10 @@ export async function loadGame(
   const record = await getGame(db, id);
   if (record === undefined) return undefined;
   const size = (record as Partial<ConflictedRecord>).size ?? DEFAULT_SIZE;
-  return gameFromStoredLog(id, size, record.log);
+  // A record written before S.1 has no `meta.uuid`; pass it through as-is (possibly
+  // undefined) so importGame lazily mints one for legacy games while a modern record
+  // preserves its stored identity across the round-trip.
+  return gameFromStoredLog(id, size, record.log, record.meta.uuid);
 }
 
 /**
@@ -202,10 +228,13 @@ export async function flagConflicted(
     log: mine,
     size,
     forks: { mine, theirs },
+    forkUuids: { mine: input.mineLog.uuid, theirs: input.theirsLog.uuid },
     meta: {
       players: input.meta.players,
       result: 'conflicted',
       startedAt: input.meta.startedAt,
+      // Metadata identity mirrors the local fork (as `headHash` does).
+      uuid: input.mineLog.uuid,
       headHash: headHash(input.mineLog),
     },
   };
@@ -230,7 +259,7 @@ export async function loadConflicted(
   }
   const size = record.size ?? DEFAULT_SIZE;
   return {
-    mine: gameFromStoredLog(`${id} (mine)`, size, record.forks.mine),
-    theirs: gameFromStoredLog(`${id} (theirs)`, size, record.forks.theirs),
+    mine: gameFromStoredLog(`${id} (mine)`, size, record.forks.mine, record.forkUuids?.mine),
+    theirs: gameFromStoredLog(`${id} (theirs)`, size, record.forks.theirs, record.forkUuids?.theirs),
   };
 }

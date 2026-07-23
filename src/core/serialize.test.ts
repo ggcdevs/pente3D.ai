@@ -27,12 +27,15 @@ function scriptedGame(): Game {
 }
 
 describe('exportGame — human-readable snapshot', () => {
-  it('produces { size, settings, log }', () => {
+  it('produces { uuid, size, settings, log }', () => {
     const g = scriptedGame();
     const dump = exportGame(g);
     expect(dump.size).toBe(9);
     expect(dump).toHaveProperty('settings');
     expect(dump).toHaveProperty('log');
+    // The game uuid (minted at genesis, S.1) is threaded through the export.
+    expect(dump.uuid).toBe(g.uuid);
+    expect(typeof dump.uuid).toBe('string');
     // The log carries the events, not derived pieces.
     expect(Array.isArray(dump.log)).toBe(true);
     expect(dump.log[0]).toEqual({ type: 'place', node: '0,0,0' });
@@ -59,9 +62,12 @@ describe('exportGame — human-readable snapshot', () => {
 });
 
 describe('importGame — round-trip fidelity', () => {
-  it('reconstructs an identical Game (same headHash, state, ply)', () => {
+  it('reconstructs an identical Game (same uuid, headHash, state, ply)', () => {
     const g = scriptedGame();
     const restored = importGame(exportGame(g));
+    // The uuid round-trips, so the headHash matches — under S.1 that means the
+    // reconstruction is the SAME game identity, not merely the same moves.
+    expect(restored.uuid).toBe(g.uuid);
     expect(headHash(restored.log)).toBe(headHash(g.log));
     expect(restored.state()).toEqual(g.state());
     expect(restored.ply()).toBe(g.ply());
@@ -348,6 +354,68 @@ describe('importGame / deserializeGame — corrupt input throws a clear error', 
   });
 });
 
+describe('importGame — game uuid (S.1)', () => {
+  it('lazily mints a fresh uuid for a legacy dump with NO uuid (was never networked)', () => {
+    // A dump written before S.1 has no uuid. importGame mints one — a fresh id is
+    // correct because such a game was never networked (design §2.2). The result is a
+    // valid game whose headHash is self-consistent with the minted uuid.
+    const dump = { size: 9, settings: {}, log: [{ type: 'place', node: '4,4,4' }] };
+    const g = importGame(dump as unknown as GameExport);
+    expect(typeof g.uuid).toBe('string');
+    expect(g.uuid.length).toBeGreaterThan(0);
+    // The reconstructed headHash is the uuid-seeded chain over the one move: an
+    // independently-built game with the SAME minted uuid and the same move matches.
+    const ref = new Game(9, g.uuid);
+    ref.place([4, 4, 4]);
+    expect(headHash(g.log)).toBe(headHash(ref.log));
+  });
+
+  it('two legacy dumps (no uuid) mint DISTINCT uuids → distinct headHashes', () => {
+    const dump = { size: 9, settings: {}, log: [{ type: 'place', node: '4,4,4' }] };
+    const g1 = importGame({ ...dump } as unknown as GameExport);
+    const g2 = importGame({ ...dump } as unknown as GameExport);
+    expect(g1.uuid).not.toBe(g2.uuid);
+    expect(headHash(g1.log)).not.toBe(headHash(g2.log));
+  });
+
+  it('preserves an explicit uuid on import (round-trip identity)', () => {
+    const dump = {
+      uuid: 'carried-uuid',
+      size: 9,
+      settings: {},
+      log: [{ type: 'place', node: '4,4,4' }],
+    };
+    const g = importGame(dump as unknown as GameExport);
+    expect(g.uuid).toBe('carried-uuid');
+  });
+
+  it('rejects a present-but-EMPTY uuid (corrupt, not legacy — must not silently mint over it)', () => {
+    // A missing uuid is legacy (mint). A present-but-empty uuid is corruption — masking
+    // it by minting would hide a broken payload. It must throw, not paper over.
+    expect(() =>
+      importGame({ uuid: '', size: 9, settings: {}, log: [] } as unknown as GameExport),
+    ).toThrow(ExportError);
+    expect(() =>
+      importGame({ uuid: '', size: 9, settings: {}, log: [] } as unknown as GameExport),
+    ).toThrow(/invalid uuid: expected a non-empty string/);
+  });
+
+  it('rejects a non-string uuid', () => {
+    expect(() =>
+      importGame({ uuid: 42, size: 9, settings: {}, log: [] } as unknown as GameExport),
+    ).toThrow(/invalid uuid: expected a non-empty string, got 42/);
+    expect(() =>
+      importGame({ uuid: null, size: 9, settings: {}, log: [] } as unknown as GameExport),
+    ).toThrow(ExportError);
+  });
+
+  it('the uuid survives the full JSON string round-trip (deserializeGame)', () => {
+    const g = scriptedGame();
+    const restored = deserializeGame(serializeGame(g));
+    expect(restored.uuid).toBe(g.uuid);
+  });
+});
+
 describe('property: export/import is an identity on any reachable game', () => {
   it('round-trips state, headHash, and ply for arbitrary action streams', () => {
     const arbMove = fc.tuple(
@@ -374,9 +442,37 @@ describe('property: export/import is an identity on any reachable game', () => {
           }
         }
         const restored = deserializeGame(serializeGame(g));
+        expect(restored.uuid).toBe(g.uuid); // uuid stable across serialize round-trip
         expect(headHash(restored.log)).toBe(headHash(g.log));
         expect(restored.state()).toEqual(g.state());
         expect(restored.ply()).toBe(g.ply());
+      }),
+    );
+  });
+
+  it('a minted uuid is stable across a serialize round-trip for a legacy (uuid-less) dump', () => {
+    const arbMove = fc.tuple(
+      fc.integer({ min: 0, max: 8 }),
+      fc.integer({ min: 0, max: 8 }),
+      fc.integer({ min: 0, max: 8 }),
+    );
+    fc.assert(
+      fc.property(fc.array(arbMove, { maxLength: 12 }), (moves) => {
+        // Build a legacy dump (no uuid) from a set of distinct legal moves.
+        const seen = new Set<string>();
+        const log: { type: 'place'; node: string }[] = [];
+        for (const [x, y, z] of moves) {
+          const node = `${x},${y},${z}`;
+          if (seen.has(node)) continue;
+          seen.add(node);
+          log.push({ type: 'place', node });
+        }
+        const legacy = { size: 9, settings: {}, log } as unknown as GameExport;
+        const g = importGame(legacy); // mints a uuid
+        // Re-exporting now carries the minted uuid, and re-importing preserves it.
+        const g2 = importGame(exportGame(g));
+        expect(g2.uuid).toBe(g.uuid);
+        expect(headHash(g2.log)).toBe(headHash(g.log));
       }),
     );
   });

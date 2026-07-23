@@ -67,6 +67,15 @@ export interface GameMeta {
   readonly result: string;
   /** Epoch millis when the game began. */
   readonly startedAt: number;
+  /**
+   * The game's UUID — its stable identity, minted at genesis and part of the
+   * hashed history (S.1). Stored in the metadata so the archive browser and the
+   * networked-resume flow can identify a game (and match it against a peer's
+   * proposal) without loading its full log. Distinct from {@link GameRecord.id},
+   * which is only the local IndexedDB primary key; for games saved under S.1 the
+   * two coincide, but the uuid is the *portable, shared* identity.
+   */
+  readonly uuid: string;
   /** The event log's `headHash` — fingerprints the whole history (O(1) identity). */
   readonly headHash: string;
 }

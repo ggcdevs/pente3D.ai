@@ -42,6 +42,7 @@ import {
 import { initialState, IllegalMove, type GameState } from './gameState';
 import { placePiece } from './placePiece';
 import { coordsOf, keyOf, type Coord } from './coords';
+import { randomId } from '../util/randomId';
 
 export class Game {
   /** The append-only event log — the canonical, syncable source of truth. */
@@ -55,19 +56,32 @@ export class Game {
   /** The current ply: `_snapshots[_cursor]` is the live state. */
   private _cursor: number;
 
-  constructor(size: number) {
-    this._log = emptyLog();
+  /**
+   * Create a new game, minting its **game UUID at genesis** (S.1). The uuid is
+   * folded into the event-log's hash-chain seed, so it is part of the hashed
+   * history from ply 0 and travels with every serialize/persist/sync of the log.
+   *
+   * @param size Board edge length `N` (the board is `N×N×N`).
+   * @param uuid The game's stable identity. Defaults to a freshly-minted id via
+   *   {@link randomId} (insecure-context-safe, GitHub #6). Callers reconstructing a
+   *   *known* game (replay/import/resume) pass the existing uuid so identity — and
+   *   thus `headHash` — is preserved; {@link fromLog} does exactly this. This is the
+   *   one non-deterministic seam in the otherwise-pure core, isolated to genesis.
+   */
+  constructor(size: number, uuid: string = randomId()) {
+    this._log = emptyLog(uuid);
     this._snapshots = [initialState(size)];
     this._cursor = 0;
   }
 
   /**
    * Reconstruct a `Game` by replaying an existing event log. The result has an
-   * identical state, `headHash`, and ply to the game that produced `log` — the
-   * fold is deterministic, so a log fully determines the game.
+   * identical state, `headHash`, ply, **and uuid** as the game that produced
+   * `log` — the fold is deterministic and the log carries its uuid, so a log fully
+   * determines the game (identity included).
    */
   static fromLog(size: number, log: EventLog): Game {
-    const game = new Game(size);
+    const game = new Game(size, log.uuid);
     for (const entry of log.entries) {
       game.applyEvent(entry.event);
     }
@@ -77,6 +91,11 @@ export class Game {
   /** The current event log (append-only; syncs and persists as-is). */
   get log(): EventLog {
     return this._log;
+  }
+
+  /** The game's stable identity (UUID), minted at genesis and carried in the log. */
+  get uuid(): string {
+    return this._log.uuid;
   }
 
   /** The live game state (the snapshot at the current cursor). */

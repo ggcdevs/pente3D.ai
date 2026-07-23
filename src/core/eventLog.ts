@@ -47,31 +47,51 @@ export interface LogEntry {
   readonly hash: string;
 }
 
-/** An append-only log of entries. Never mutated in place; `append` returns a new log. */
+/**
+ * An append-only log of entries. Never mutated in place; `append` returns a new log.
+ *
+ * The log carries the **game UUID** minted at genesis (S.1). The uuid is folded
+ * into the chain seed ({@link genesisHash}) so it participates in the hash chain:
+ * two logs with different uuids have different `headHash`es even when both are
+ * empty, and `headHash` equality therefore implies *same game identity AND same
+ * history* — the property the networked resume model relies on ("same UUID but
+ * divergent headHash" = a genuine conflict, distinct from "two different games").
+ */
 export interface EventLog {
+  /** The game's stable identity, minted at genesis and folded into the chain seed. */
+  readonly uuid: string;
   readonly entries: readonly LogEntry[];
 }
 
 /**
- * The seed of the hash chain: the fingerprint of the empty history.
+ * The seed of the hash chain for a game: the fingerprint of its empty history.
  *
- * A fixed non-empty seed so that even a single-entry log's hash mixes a stable
- * prefix, and the empty log has a well-defined, deterministic `headHash`.
+ * A fixed prefix mixed with the game `uuid`, so (a) even a single-entry log's hash
+ * mixes a stable, uuid-bearing prefix, (b) the empty log has a well-defined,
+ * deterministic `headHash`, and (c) two distinct games — even both empty — have
+ * distinct `headHash`es. The `hashStep` delimiter guarantees the prefix/uuid
+ * boundary cannot shift to collide with a different split.
  */
-const EMPTY_HASH = 'pente3d:genesis';
+export function genesisHash(uuid: string): string {
+  return hashStep('pente3d:genesis', uuid);
+}
 
-/** A fresh, empty log. */
-export function emptyLog(): EventLog {
-  return { entries: [] };
+/**
+ * A fresh, empty log carrying the game `uuid`. The uuid is required — it is minted
+ * once at genesis (by the {@link Game} constructor) and threaded through here so it
+ * is part of the hashed history from the very first entry.
+ */
+export function emptyLog(uuid: string): EventLog {
+  return { uuid, entries: [] };
 }
 
 /**
  * The cumulative hash at the head of the log — the fingerprint of its entire
- * history. The empty log hashes to the fixed genesis seed.
+ * history. The empty log hashes to the uuid-seeded genesis hash.
  */
 export function headHash(log: EventLog): string {
   const last = log.entries[log.entries.length - 1];
-  return last === undefined ? EMPTY_HASH : last.hash;
+  return last === undefined ? genesisHash(log.uuid) : last.hash;
 }
 
 /**
@@ -83,7 +103,7 @@ export function headHash(log: EventLog): string {
  */
 export function append(log: EventLog, event: Event): EventLog {
   const hash = hashStep(headHash(log), serializeEvent(event));
-  return { entries: [...log.entries, { event, hash }] };
+  return { uuid: log.uuid, entries: [...log.entries, { event, hash }] };
 }
 
 /**
@@ -114,6 +134,15 @@ function serializeEvent(event: Event): string {
  * incoming log iff mine is a prefix of it (game-core design, Part 3).
  */
 export function isPrefix(a: EventLog, b: EventLog): boolean {
+  // NB: this compares HISTORIES (entry hashes), not game IDENTITY. It deliberately
+  // does NOT gate on `a.uuid === b.uuid`: an empty log (no entries) is a prefix of
+  // any log, which is what lets a peer that brought no game ADOPT an incoming one
+  // (the move-sync "empty adopts anything" rule the join flow relies on). Two
+  // NON-empty logs of different games still fail here anyway, because the
+  // uuid-seeded genesis (S.1) makes their very first entry hashes differ — so a
+  // genuine fork is caught at ply 0 regardless. Same-uuid/divergent-history
+  // detection (the S.1 identity check) lives at the ADMISSION layer (compare
+  // uuid + headHash), NOT in this low-level move-sync primitive.
   if (a.entries.length > b.entries.length) return false;
   for (let i = 0; i < a.entries.length; i++) {
     if (a.entries[i]!.hash !== b.entries[i]!.hash) return false;

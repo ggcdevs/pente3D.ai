@@ -278,12 +278,73 @@ describe('Game — property: replaying the log reproduces state + headHash', () 
             // Illegal actions are ignored; the log is unchanged.
           }
         }
-        // Replaying the resulting log into a fresh Game reproduces everything.
+        // Replaying the resulting log into a fresh Game reproduces everything,
+        // INCLUDING the game uuid (fromLog seeds from the log's uuid) — so the
+        // headHash matches, which under S.1 means same-identity-and-history.
         const replay = Game.fromLog(9, g.log);
         expect(replay.state()).toEqual(g.state());
+        expect(replay.uuid).toBe(g.uuid);
         expect(headHash(replay.log)).toBe(headHash(g.log));
         expect(replay.ply()).toBe(g.ply());
       }),
     );
+  });
+});
+
+describe('Game — game uuid at genesis (S.1)', () => {
+  it('mints a uuid at construction, carried in the log', () => {
+    const g = new Game(9);
+    expect(typeof g.uuid).toBe('string');
+    expect(g.uuid.length).toBeGreaterThan(0);
+    expect(g.log.uuid).toBe(g.uuid);
+  });
+
+  it('two fresh games have DISTINCT uuids AND DISTINCT headHashes (even when both empty)', () => {
+    const a = new Game(9);
+    const b = new Game(9);
+    expect(a.uuid).not.toBe(b.uuid);
+    // The uuid is folded into the genesis hash, so two brand-new empty games are
+    // already distinguishable by headHash — the S.1 identity property.
+    expect(headHash(a.log)).not.toBe(headHash(b.log));
+  });
+
+  it('accepts an explicit uuid and preserves it (the resume/replay seam)', () => {
+    const g = new Game(9, 'fixed-uuid');
+    expect(g.uuid).toBe('fixed-uuid');
+    // Same uuid + same (empty) history → identical headHash: reproducible identity.
+    expect(headHash(g.log)).toBe(headHash(new Game(9, 'fixed-uuid').log));
+  });
+
+  it('the uuid is stable as the game grows (place/undo/redo never change it)', () => {
+    const g = new Game(9, 'stable-uuid');
+    g.place([4, 4, 4]);
+    g.place([0, 0, 0]);
+    g.undo();
+    g.redo();
+    g.place([1, 1, 1]);
+    expect(g.uuid).toBe('stable-uuid');
+    expect(g.log.uuid).toBe('stable-uuid');
+  });
+
+  it('a resumed game (fromLog) keeps its uuid', () => {
+    const g = new Game(9, 'resume-me');
+    g.place([4, 4, 4]);
+    g.place([0, 0, 0]);
+    const resumed = Game.fromLog(9, g.log);
+    expect(resumed.uuid).toBe('resume-me');
+    expect(headHash(resumed.log)).toBe(headHash(g.log));
+  });
+
+  it('two games with the SAME moves but DIFFERENT uuids have different headHashes', () => {
+    const build = (uuid: string): Game => {
+      const g = new Game(9, uuid);
+      g.place([4, 4, 4]);
+      g.place([0, 0, 0]);
+      return g;
+    };
+    const a = build('uuid-A');
+    const b = build('uuid-B');
+    expect(a.state()).toEqual(b.state()); // identical board
+    expect(headHash(a.log)).not.toBe(headHash(b.log)); // but distinct identity
   });
 });

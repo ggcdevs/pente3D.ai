@@ -82,6 +82,14 @@ export interface SyncMessage {
    * — so an un-upgraded peer's first game still converges (backward-compat).
    */
   readonly epoch: number;
+  /**
+   * The game's UUID (minted at genesis, part of the hashed history — S.1). Carried
+   * on the wire so the receiver reconstructs the log with the *same* genesis seed
+   * and the {@link headHash} re-verification is meaningful: a matching headHash now
+   * proves same-game-identity AND same-history, and a same-uuid/divergent-headHash
+   * is a detectable genuine conflict. Required — the uuid is intrinsic to the chain.
+   */
+  readonly uuid: string;
   /** The sender's head hash — re-verified on receipt against the reconstructed log. */
   readonly headHash: string;
   /** The full append-only log as plain events, in order. */
@@ -165,14 +173,14 @@ export function parseGameMessage(msg: unknown): GameMessage {
   const kind = rec.kind;
   // Backward-compat: an un-kinded legacy sync message (pre-tagged-union peer).
   if (kind === undefined && looksLikeSync(rec)) {
-    return { kind: 'sync', version: rec.version as number, epoch: epochOf(rec), headHash: rec.headHash as string, log: rec.log as readonly Event[] };
+    return { kind: 'sync', version: rec.version as number, epoch: epochOf(rec), uuid: rec.uuid as string, headHash: rec.headHash as string, log: rec.log as readonly Event[] };
   }
   switch (kind) {
     case 'sync': {
       if (!looksLikeSync(rec)) {
-        throw new SyncError('sync message requires numeric version, string headHash, and array log');
+        throw new SyncError('sync message requires numeric version, string uuid, string headHash, and array log');
       }
-      return { kind: 'sync', version: rec.version as number, epoch: epochOf(rec), headHash: rec.headHash as string, log: rec.log as readonly Event[] };
+      return { kind: 'sync', version: rec.version as number, epoch: epochOf(rec), uuid: rec.uuid as string, headHash: rec.headHash as string, log: rec.log as readonly Event[] };
     }
     case 'proposal': {
       if (typeof rec.id !== 'string') {
@@ -208,6 +216,7 @@ export function parseGameMessage(msg: unknown): GameMessage {
 function looksLikeSync(rec: Record<string, unknown>): boolean {
   return (
     typeof rec.version === 'number' &&
+    typeof rec.uuid === 'string' &&
     typeof rec.headHash === 'string' &&
     Array.isArray(rec.log)
   );
@@ -360,6 +369,7 @@ export function toSyncMessage(
     kind: 'sync',
     version: SYNC_VERSION,
     epoch,
+    uuid: log.uuid,
     headHash: headHash(log),
     log: log.entries.map((entry) => entry.event),
   };
@@ -384,7 +394,13 @@ export function parseSyncMessage(msg: SyncMessage): EventLog {
   if (!Array.isArray(msg.log)) {
     throw new SyncError('sync message log must be an array of events');
   }
-  let log: EventLog = emptyLog();
+  if (typeof msg.uuid !== 'string' || msg.uuid.length === 0) {
+    throw new SyncError('sync message requires a non-empty string uuid');
+  }
+  // Seed with the message's uuid so the reconstructed genesis hash matches the
+  // sender's — the uuid is intrinsic to the chain (S.1). The headHash check below
+  // then proves same-identity-and-history in one comparison.
+  let log: EventLog = emptyLog(msg.uuid);
   for (const event of msg.log) {
     log = append(log, event);
   }

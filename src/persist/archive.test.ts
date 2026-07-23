@@ -57,9 +57,19 @@ afterEach(() => {
   }
 });
 
+/**
+ * Fixed uuids so a "sample"/"forked" game is DETERMINISTIC across calls: since S.1
+ * folds the uuid into the genesis hash, two `new Game(9)` calls would otherwise get
+ * distinct uuids and thus distinct `headHash`es, breaking any test that builds the
+ * game twice and compares fingerprints. Pinning the uuid keeps the round-trip
+ * assertions about identity, not about a per-call random id.
+ */
+const SAMPLE_UUID = 'sample-game-uuid';
+const FORKED_UUID = 'forked-game-uuid';
+
 /** A short real game (three legal placements on a 9-board): white, black, white. */
 function sampleGame(): Game {
-  const g = new Game(9);
+  const g = new Game(9, SAMPLE_UUID);
   g.place([4, 4, 4]);
   g.place([4, 4, 5]);
   g.place([4, 5, 4]);
@@ -68,7 +78,7 @@ function sampleGame(): Game {
 
 /** A different game so conflict forks are genuinely distinct histories. */
 function forkedGame(): Game {
-  const g = new Game(9);
+  const g = new Game(9, FORKED_UUID);
   g.place([4, 4, 4]);
   g.place([0, 0, 0]);
   g.place([1, 1, 1]);
@@ -92,6 +102,9 @@ describe('game archive', () => {
       const loaded = await loadGame(db, 'g1');
 
       expect(loaded).toBeInstanceOf(Game);
+      // The uuid round-trips through the archive (stored in meta, seeded on load), so
+      // the reconstructed headHash matches — same identity, not just same moves (S.1).
+      expect(loaded!.uuid).toBe(game.uuid);
       // The log fully determines the game: the reconstructed headHash matches.
       expect(headHash(loaded!.log)).toBe(headHash(game.log));
       expect(loaded!.ply()).toBe(game.ply());
@@ -124,6 +137,42 @@ describe('game archive', () => {
       expect(record!.meta.startedAt).toBe(1_700_000_000_000);
       // headHash is derived from the game and stored in the metadata.
       expect(record!.meta.headHash).toBe(headHash(game.log));
+      // The game uuid (minted at genesis, S.1) is stored in the metadata so the
+      // archive can identify a game without loading its log.
+      expect(record!.meta.uuid).toBe(game.uuid);
+      expect(typeof record!.meta.uuid).toBe('string');
+      expect(record!.meta.uuid.length).toBeGreaterThan(0);
+    });
+
+    it('loadGame lazily mints a uuid for a LEGACY record with no meta.uuid (pre-S.1)', async () => {
+      const { db } = await open();
+      // Write a raw record shaped like a pre-S.1 archive entry: valid log, size, and
+      // metadata but NO uuid field (cast through unknown to bypass the current type).
+      const legacy = {
+        id: 'legacy',
+        log: [
+          { type: 'place', node: '4,4,4' },
+          { type: 'place', node: '0,0,0' },
+        ],
+        size: 9,
+        meta: {
+          players: { white: 'a', black: 'b' },
+          result: 'in-progress',
+          startedAt: 1,
+          headHash: 'ignored-on-load',
+        },
+      };
+      await putGame(db, legacy as unknown as GameRecord);
+
+      const loaded = await loadGame(db, 'legacy');
+      expect(loaded).toBeInstanceOf(Game);
+      // A fresh uuid was minted (correct — a legacy game was never networked, §2.2).
+      expect(typeof loaded!.uuid).toBe('string');
+      expect(loaded!.uuid.length).toBeGreaterThan(0);
+      // The moves still reconstruct faithfully despite the minted identity.
+      expect(loaded!.state().pieces['4,4,4']).toBe('white');
+      expect(loaded!.state().pieces['0,0,0']).toBe('black');
+      expect(loaded!.ply()).toBe(2);
     });
 
     it('overwrites (autosaves) the same id as the game grows', async () => {
@@ -226,6 +275,7 @@ describe('game archive', () => {
           players: {},
           result: 'in-progress',
           startedAt: 0,
+          uuid: 'corrupt-uuid',
           headHash: 'x',
         },
       };
@@ -253,6 +303,7 @@ describe('game archive', () => {
           players: {},
           result: 'in-progress',
           startedAt: 0,
+          uuid: 'illegal-uuid',
           headHash: 'x',
         },
       };
@@ -369,6 +420,10 @@ describe('game archive', () => {
 
       const loaded = await loadConflicted(db, 'c1');
       expect(loaded).toBeDefined();
+      // Each fork reconstructs with ITS OWN game uuid (S.1), so the headHashes match
+      // — without per-fork uuids the seed would be wrong and neither would verify.
+      expect(loaded!.mine.uuid).toBe(mine.uuid);
+      expect(loaded!.theirs.uuid).toBe(theirs.uuid);
       expect(headHash(loaded!.mine.log)).toBe(headHash(mine.log));
       expect(headHash(loaded!.theirs.log)).toBe(headHash(theirs.log));
       // The forks are genuinely different histories (that is the whole point).

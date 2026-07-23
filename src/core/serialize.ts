@@ -21,6 +21,7 @@ import { Game } from './game';
 import { emptyLog, append, type Event, type EventLog } from './eventLog';
 import { coordsOf, inBounds, keyOf, type NodeKey } from './coords';
 import { IllegalMove } from './gameState';
+import { randomId } from '../util/randomId';
 
 /**
  * Opaque, JSON-serializable game settings (board options, house rules, cosmetic
@@ -36,6 +37,16 @@ export type GameSettings = Readonly<Record<string, unknown>>;
  * so they are not stored — the chain is derivable and self-verifying).
  */
 export interface GameExport {
+  /**
+   * The game's stable identity (UUID), minted at genesis and part of the hashed
+   * history. Threaded through export/import so a round-trip preserves identity —
+   * and thus `headHash`. Optional in the *input* shape only for backward
+   * compatibility: a legacy/local dump written before S.1 has no uuid, and
+   * {@link importGame} mints a fresh one on load (those games were never
+   * networked, so a fresh id is correct — design §2.2). {@link exportGame} always
+   * writes it.
+   */
+  readonly uuid?: string;
   /** Board edge length `N` (the board is `N×N×N`). */
   readonly size: number;
   /** Opaque, round-tripped settings. */
@@ -60,6 +71,7 @@ export class ExportError extends Error {
  */
 export function exportGame(game: Game, settings: GameSettings = {}): GameExport {
   return {
+    uuid: game.uuid,
     size: game.state().size,
     settings,
     log: game.log.entries.map((entry) => entry.event),
@@ -81,10 +93,13 @@ export function serializeGame(game: Game, settings: GameSettings = {}): string {
  */
 export function importGame(dump: GameExport): Game {
   const size = validateSize(dump);
+  const uuid = validateUuid(dump);
   const events = validateLog(dump);
   // Rebuild the log entry-by-entry so the hash chain is recomputed from the
-  // canonical events, then fold it — the fold re-validates every move.
-  let log: EventLog = emptyLog();
+  // canonical events, seeded by the game's uuid, then fold it — the fold
+  // re-validates every move. Seeding with the *exported* uuid is what preserves
+  // headHash across a round-trip (the uuid is part of the genesis hash).
+  let log: EventLog = emptyLog(uuid);
   for (const event of events) {
     log = append(log, event);
   }
@@ -113,6 +128,29 @@ export function deserializeGame(json: string): Game {
     );
   }
   return importGame(parsed as GameExport);
+}
+
+/**
+ * Extract the game uuid, lazily minting one when the dump has none.
+ *
+ * A present uuid must be a **non-empty string** (an empty or non-string uuid is a
+ * corrupt payload, not a legacy one — reject it rather than silently mint over it,
+ * which would mask corruption). An *absent* uuid is the legacy/local case: those
+ * games predate S.1 and were never networked, so a fresh id is correct
+ * (design §2.2). The whole payload must be an object first — {@link validateSize}
+ * already guarantees that when this runs.
+ */
+function validateUuid(dump: GameExport): string {
+  const uuid = (dump as { uuid?: unknown }).uuid;
+  if (uuid === undefined) {
+    return randomId();
+  }
+  if (typeof uuid !== 'string' || uuid.length === 0) {
+    throw new ExportError(
+      `invalid uuid: expected a non-empty string, got ${String(uuid)}`,
+    );
+  }
+  return uuid;
 }
 
 /** Validate and extract the board size; the whole payload must be an object first. */
