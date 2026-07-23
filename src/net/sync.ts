@@ -843,6 +843,20 @@ export class SyncEngine {
   }
 
   /**
+   * ATTACH this engine to an ALREADY-CONNECTED transport (S.5 admission adopt): (re)register the
+   * inbound message pump so THIS engine receives subsequent room traffic, then publish our current
+   * log so the peer converges. The non-async half of {@link connect} without the `transport.connect`
+   * — for when a session ADOPTS an authoritative game (a different genesis uuid) over a live transport
+   * by swapping in a fresh engine: the transport's `onMessage` still points at the OLD engine until
+   * this re-registers it (the "latest registration wins" transport contract), so a move arriving after
+   * the adopt would otherwise be delivered to the discarded engine and never render. Idempotent.
+   */
+  attach(): void {
+    this.transport.onMessage((raw) => this.onTransportMessage(raw));
+    this.publishState();
+  }
+
+  /**
    * Place the current player's piece at `coords` as a real, synced move: apply it
    * locally, then publish the full log. Refused once the game is stopped by a
    * conflict.

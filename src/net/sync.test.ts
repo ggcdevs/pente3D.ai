@@ -929,6 +929,54 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
     await b.whenSettled(); // resolves immediately when no conflict occurred
   });
 
+  it('attach() re-routes the transport pump onto a NEW engine over a LIVE transport (S.5 adopt)', async () => {
+    // B connects a provisional game, then ADOPTS a different authoritative game by swapping in a fresh
+    // engine over B's SAME live transport and calling attach() (the S.5 admission adopt path). The
+    // proof: a subsequent move from A is delivered to the NEW engine and renders — NOT to the discarded
+    // provisional one. Without attach() the transport's onMessage still points at the old engine, so
+    // the move would never reach the new one (the concrete two-context regression this defends).
+    const hub = new MockRelayHub();
+    const ta = new MockTransport(hub, 'peer-a');
+    const tb = new MockTransport(hub, 'peer-b');
+    const a = new SyncEngine(new Game(9, PAIR_UUID), ta, db, () => meta, 'white');
+    // B's PROVISIONAL engine carries a DIFFERENT genesis uuid (its own fresh game before admission).
+    const bProvisional = new SyncEngine(new Game(9, 'b-provisional-uuid'), tb, db, () => meta, 'black');
+    await a.connect('adopt-room');
+    await bProvisional.connect('adopt-room');
+
+    // B ADOPTS A's authoritative game: a fresh engine on the SAME game identity as A, over tb.
+    const bAdopted = new SyncEngine(new Game(9, PAIR_UUID), tb, db, () => meta, 'black');
+    bAdopted.attach();
+
+    // A plays a move; it must reach the ADOPTED engine (the new one), not the provisional.
+    a.place([2, 2, 2]);
+    expect(bAdopted.game().state().pieces['2,2,2']).toBe('white');
+    expect(headHash(bAdopted.game().log)).toBe(headHash(a.game().log));
+    // The discarded provisional engine (different uuid) did NOT receive the move — attach superseded it.
+    expect(bProvisional.game().state().pieces['2,2,2']).toBeUndefined();
+  });
+
+  it('attach() publishes the adopting engine current log so the peer converges', async () => {
+    // After B adopts + attaches, its publishState (inside attach) reaches A. Here B's adopted game
+    // already holds a move (a resumed game); attach must PUBLISH it so A adopts the strict extension.
+    const hub = new MockRelayHub();
+    const ta = new MockTransport(hub, 'peer-a-x');
+    const tb = new MockTransport(hub, 'peer-b-x');
+    const a = new SyncEngine(new Game(9, PAIR_UUID), ta, db, () => meta, 'white');
+    const bProvisional = new SyncEngine(new Game(9, 'b-prov-x'), tb, db, () => meta, 'black');
+    await a.connect('adopt-room-x');
+    await bProvisional.connect('adopt-room-x');
+
+    // B adopts a game that ALREADY has one white move (the resumed board), then attaches.
+    const resumed = Game.fromLog(9, logOf('4,4,4'));
+    const bAdopted = new SyncEngine(resumed, tb, db, () => meta, 'black');
+    bAdopted.attach();
+
+    // attach()'s publish carried B's one-move log to A, which adopts the strict extension → renders.
+    expect(a.game().state().pieces['4,4,4']).toBe('white');
+    expect(headHash(a.game().log)).toBe(headHash(bAdopted.game().log));
+  });
+
   it('converges bidirectionally: alternating moves keep both logs identical', async () => {
     const { a, b } = await pair();
     a.place([0, 0, 0]); // white

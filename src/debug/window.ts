@@ -24,6 +24,8 @@ import type { UiHandle } from '../ui/setup.ts';
 import type { LayoutReadout } from '../ui/container.ts';
 import type { BannerContext } from '../ui/widgets/banner.ts';
 import type { NetSessionState } from '../ui/widgets/netModel.ts';
+import type { SeatMap } from '../net/seats.ts';
+import type { AdmissionReject } from '../net/sync.ts';
 import type { HandshakeState } from '../net/handshake.ts';
 import type { EndState } from '../net/endState.ts';
 import type { NotifyReadout } from '../net/notifyGlue.ts';
@@ -202,6 +204,27 @@ export interface PenteInspect {
    */
   getNet(): NetSessionState | null;
   /**
+   * The live game's identity-owned SEAT OWNERS (Task S.5, epic #35): `{ white, black }` mapping each
+   * seat to the REAL `playerId` that owns it (never a `'host'` sentinel — every owner is a genuine id
+   * or `null`), or `null` offline. Lets the two-context session-model e2e assert on BOTH clients' seat
+   * ownership after admission — proof-by-state that the #31 both-Join-both-Black bug is gone (each seat
+   * has a DISTINCT real owner), not a log line (agent-principles #3).
+   */
+  getNetSeatOwners(): SeatMap | null;
+  /**
+   * The live networked game's stable UUID (Task S.5 / S.1), minted at genesis and intrinsic to the
+   * hash-chain, or `null` offline. Lets the e2e prove BOTH clients converged on the SAME game identity
+   * after admission (design §2.2) — observable state, not a log line (#3).
+   */
+  getNetGameUuid(): string | null;
+  /**
+   * The LAST admission reject reason (Task S.5, design §7) this client was refused entry with since the
+   * last enter, or `null` — a TYPED machine reason (`room-full` / `seat-reserved` / `game-mismatch` /
+   * `game-divergent`) surfaced VERBATIM. Lets the S.7 reject scenarios assert the honest reason by
+   * observable state (never a masked/mislabeled failure — agent-principles #3, honest rejects).
+   */
+  getNetLastReject(): AdmissionReject | null;
+  /**
    * Stash a validated join code (Task C.2) on the session's pending-code seam — the SAME seam the
    * drawer's Network-Game panel uses before dispatching the argument-free `joinGame` command. Lets a
    * Playwright networking test drive the join path without opening the panel UI (the panel's own
@@ -320,6 +343,22 @@ export interface ArchiveInspect {
    * the `Notification` API), not scene state. Wired onto `window.__pente.getNotify` for the #20 e2e.
    */
   getNotify(): NotifyReadout;
+  /**
+   * The live game's identity-owned seat owners (Task S.5) — the app's session `seatOwners()`, exposed
+   * here because the net session is an app-level object (needs a DB + transport), not scene state.
+   * Wired onto `window.__pente.getNetSeatOwners` for the two-context session-model e2e (S.7).
+   */
+  getNetSeatOwners(): SeatMap | null;
+  /**
+   * The live networked game's UUID (Task S.5 / S.1) — the app's session `gameUuid()`, exposed here
+   * for the same app-level reason. Wired onto `window.__pente.getNetGameUuid`.
+   */
+  getNetGameUuid(): string | null;
+  /**
+   * The last admission reject reason (Task S.5, design §7) — the app's session `lastRejectReason()`,
+   * exposed here for the same app-level reason. Wired onto `window.__pente.getNetLastReject`.
+   */
+  getNetLastReject(): AdmissionReject | null;
 }
 
 declare global {
@@ -406,6 +445,13 @@ export function installInspectApi(
     // exposed so the #20 e2e asserts the tab-title flash / browser-notification fired (real title +
     // counters), not a log line. Rides `archive` because the glue is app-level (owns document.title).
     getNotify: () => archive.getNotify(),
+    // Session-model readouts (Task S.5, epic #35) — the app's net session, exposed so the two-context
+    // e2e asserts BOTH clients' seat OWNERS + game UUID converged after admission, and the honest typed
+    // reject reason for the S.7 reject scenarios. App-level (net session needs a DB + transport), so
+    // they ride `archive` like getEndState/getNotify — not scene state.
+    getNetSeatOwners: () => archive.getNetSeatOwners(),
+    getNetGameUuid: () => archive.getNetGameUuid(),
+    getNetLastReject: () => archive.getNetLastReject(),
   };
   window.__pente = api;
   log.info('window.__pente installed', Object.keys(api));

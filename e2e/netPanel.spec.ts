@@ -289,14 +289,17 @@ test('the dropdown lists recent codes newest-first; clicking one fills the input
   await expect(pt(page, 'netpanel-code-input')).toHaveValue(a);
   await expect(panel(page)).toHaveAttribute('data-code-valid', 'true');
 
-  // Join it → connects on THIS code with the black seat (the joiner) via the mock room.
+  // Join it → connects on THIS code. With no resident in the (single-context) room, this lone peer
+  // ESTABLISHES the game as its first owner → white (the #31 redesign removed role-derived seats; the
+  // second peer to arrive is admitted onto black — the two-context specs prove that). This test's job
+  // is the combobox → Join SEAM (the chosen recent code drives the connect), not the seat color.
   await pt(page, 'netpanel-join').click();
   await page.waitForFunction(() => {
     const p = (window as unknown as { __pente: { getNet(): NetState | null } }).__pente;
     return p.getNet()?.phase === 'connected';
   });
   const state = await getNet(page);
-  expect(state.seat).toBe('black');
+  expect(state.seat).toBe('white');
   expect(state.code).toBe(a);
 
   const shot = resolve('e2e/artifacts/netpanel-recent-join.png');

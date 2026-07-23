@@ -215,7 +215,7 @@ test('a peer joining the room flips peerPresent and the status line to "Opponent
   await expect(testid(page, 'net-status-line')).toHaveText('Opponent connected');
 });
 
-test('joining via the pending-code seam + command connects and claims the black seat', async ({
+test('joining via the pending-code seam + command connects and ESTABLISHES the room (first owner → white)', async ({
   page,
 }) => {
   await ready(page);
@@ -231,10 +231,14 @@ test('joining via the pending-code seam + command connects and claims the black 
   });
   const state = await getNet(page);
   expect(state.phase).toBe('connected');
-  expect(state.seat).toBe('black');
+  // The #31 redesign removed role-derived seats: a lone peer entering an EMPTY room (no resident
+  // answers its hello within the settle window) ESTABLISHES the game as its FIRST OWNER — white,
+  // by first-available at genuine game creation (design §2.3/§4). "Join" no longer forces black; a
+  // second peer arriving later is admitted onto the free black seat (the two-context specs prove that).
+  expect(state.seat).toBe('white');
   expect(state.code).toBe(code);
   await expect(widget(page)).toHaveAttribute('data-panel', 'status');
-  await expect(testid(page, 'net-seat')).toHaveText('You are Black');
+  await expect(testid(page, 'net-seat')).toHaveText('You are White');
 
   // The room the mock transport connected to is the code (the wiring reached the transport).
   const room = await page.evaluate(() =>

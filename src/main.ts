@@ -8,6 +8,8 @@ import { shouldRenderSessionGame } from './net/netRouting.ts';
 import { shouldArchiveBeforeNetStart } from './net/rematch.ts';
 import { deriveEndState, REMATCH_ACTION, type EndState } from './net/endState.ts';
 import { NotifyGlue, type NotifyReadout, type NotificationApi } from './net/notifyGlue.ts';
+import type { SeatMap } from './net/seats.ts';
+import type { AdmissionReject } from './net/sync.ts';
 import { headHash } from './core/eventLog.ts';
 import { openDatabase, resolveDbName } from './persist/db.ts';
 import {
@@ -164,6 +166,14 @@ const HIDDEN_END_STATE: EndState = {
 // net session wires up (below). Until then (offline / pre-wiring) there is no net game, so the overlay
 // is hidden — the same honest-until-wired pattern `netAuthoritativeGame` uses.
 let getNetEndState: () => EndState = () => HIDDEN_END_STATE;
+
+// The live net session's identity-owned readouts (Task S.5, epic #35): seat OWNERS + game UUID + the
+// last typed admission reject reason. Set once the session wires up (below); until then (offline /
+// pre-wiring) there is no session, so they report `null` — the same honest-until-wired pattern the
+// other net holders use. Exposed on `window.__pente` for the two-context session-model e2e (S.7).
+let getNetSeatOwners: () => SeatMap | null = () => null;
+let getNetGameUuid: () => string | null = () => null;
+let getNetLastReject: () => AdmissionReject | null = () => null;
 
 // The move-notification + auto-reconnect glue (Task N.5.2, issue #20), set once the net session wires
 // up. Until then (offline / pre-wiring) there is no session to notify for, so the readout reports the
@@ -511,6 +521,13 @@ void createAppNetSession(scene.getState().size)
       if (netState === null) return HIDDEN_END_STATE;
       return deriveEndState(netState, session.getHandshake(), session.state().seat);
     };
+    // Session-model readouts (Task S.5, epic #35): the live game's identity-owned seat OWNERS + UUID +
+    // last typed admission reject reason, read straight off the session for `window.__pente`. These are
+    // the two-context e2e's proof-by-state that admission converged both clients onto one game with
+    // DISTINCT real seat owners (the #31 fix), and that a refused entry surfaces its honest typed reason.
+    getNetSeatOwners = () => session.seatOwners();
+    getNetGameUuid = () => session.gameUuid();
+    getNetLastReject = () => session.lastRejectReason();
 
     // MUTUAL-ACCEPT in-place rematch reset (Task N.2.2, plan N.2 decision 2: "both reset to a fresh
     // game in the SAME room/connection — NO disconnect/re-host", "colors ALTERNATE every game"). When
@@ -714,6 +731,11 @@ installInspectApi(scene, ui, {
   // The move-notification readout (Task N.5.2, issue #20) — the app-level notify glue's live
   // document.title + fire counters, for `window.__pente.getNotify` (the #20 e2e's proof-by-behaviour).
   getNotify: () => getNotifyReadout(),
+  // Session-model readouts (Task S.5, epic #35) — the live net session's identity-owned seat owners +
+  // game UUID + last typed admission reject reason, for the two-context session-model e2e (S.7).
+  getNetSeatOwners: () => getNetSeatOwners(),
+  getNetGameUuid: () => getNetGameUuid(),
+  getNetLastReject: () => getNetLastReject(),
 });
 
 log.info('app booted');
