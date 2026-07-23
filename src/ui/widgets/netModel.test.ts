@@ -123,6 +123,26 @@ describe('deriveNet — code + join error passthrough', () => {
     );
   });
 
+  it('maps a seat-reserved join error to its OWN human label (not collapsed to room-full)', () => {
+    // design §7: every reject reason surfaces a human message; seat-reserved is DISTINCT from
+    // room-full, so its label must differ (the two are the scenario-1-vs-5 distinction).
+    const text = deriveNet(state({ joinError: 'seat-reserved' })).joinErrorText;
+    expect(text).toBe('A seat there is being held for a player who stepped away. Try again later.');
+    expect(text).not.toBe(deriveNet(state({ joinError: 'room-full' })).joinErrorText);
+  });
+
+  it('maps a game-mismatch join error to its human label', () => {
+    expect(deriveNet(state({ joinError: 'game-mismatch' })).joinErrorText).toBe(
+      'You and the other player brought different games.',
+    );
+  });
+
+  it('maps a game-divergent join error to its human label', () => {
+    expect(deriveNet(state({ joinError: 'game-divergent' })).joinErrorText).toBe(
+      'That game has diverged from yours and can’t be joined yet.',
+    );
+  });
+
   it('maps a connect-failed join error to its human label', () => {
     expect(deriveNet(state({ joinError: 'connect-failed' })).joinErrorText).toBe(
       'Could not connect. Check the code and try again.',

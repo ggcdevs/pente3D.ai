@@ -38,7 +38,13 @@ interface NetState {
   code: string | null;
   seat: 'white' | 'black' | null;
   peerPresent: boolean;
-  joinError: 'room-full' | 'connect-failed' | null;
+  joinError:
+    | 'room-full'
+    | 'seat-reserved'
+    | 'game-mismatch'
+    | 'game-divergent'
+    | 'connect-failed'
+    | null;
 }
 type Pente = { getNet(): NetState | null };
 

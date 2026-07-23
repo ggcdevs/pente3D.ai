@@ -415,6 +415,17 @@ test.describe('two-context session model over the injected MockTransport (S.7, e
 
       expect(await lastReject(c.page)).toBe('room-full');
       expect(await seatOf(c.page)).toBeNull();
+
+      // PROOF-BY-UI (design §7, not merely proof-by-debug-hook): the reject surfaces a HUMAN message
+      // in C's net panel — the persistent status widget's join-error line — not a silent drop back to
+      // offline. This is the round-3 regression's behavioral proof: before the fix the panel showed
+      // nothing on a reject even though `getNetLastReject()` returned the reason (proof-by-debug-hook).
+      const joinErr = c.page.locator(
+        '[data-widget-id="connectionStatus"] [data-testid="net-join-error"]',
+      );
+      await expect(joinErr).toBeVisible();
+      await expect(joinErr).toHaveText('That room already has two players.');
+
       // The admitted pair is untouched — C's rejected entry never displaced A or B.
       const oa = await owners(a.page);
       expect(oa?.white).toBe('player-a');
@@ -605,6 +616,18 @@ test.describe('two-context session model over the injected MockTransport (S.7, e
       await waitOffline(c.page);
       expect(await seatOf(c.page)).toBeNull();
       expect(await lastReject(c.page)).toBe('seat-reserved');
+
+      // PROOF-BY-UI (design §7): the DISTINCT seat-reserved reason surfaces its OWN human message in
+      // C's net panel — NOT the generic room-full copy (the scenario-1-vs-5 distinction is visible to
+      // the user, not just in the debug readout).
+      const joinErr = c.page.locator(
+        '[data-widget-id="connectionStatus"] [data-testid="net-join-error"]',
+      );
+      await expect(joinErr).toBeVisible();
+      await expect(joinErr).toHaveText(
+        'A seat there is being held for a player who stepped away. Try again later.',
+      );
+
       // The surviving resident B still reserves A's white for player-a — the spot was never handed out.
       expect((await owners(b.page))?.white).toBe('player-a');
     } finally {

@@ -145,6 +145,12 @@ describe('NetSession.enter — a third peer is REJECTED room-full (design §4 / 
     expect(c.lastRejectReason()).toBe('room-full');
     expect(c.state().phase).toBe('offline');
     expect(c.state().seat).toBeNull();
+    // …AND the reject reason SURVIVES to the USER-FACING session state as `joinError` (design §7 —
+    // the net panel shows a human message for EVERY reject). This is the round-3 regression proof:
+    // before the fix, `disconnect()` → `resetToOffline(null)` nulled `joinError` before any emit, so
+    // the panel showed nothing. The reason must be on `state()` (what the widget derives from), not
+    // just the debug-only `lastRejectReason()` readout.
+    expect(c.state().joinError).toBe('room-full');
     // The admitted pair is untouched — C's rejected entry never displaced an owner.
     expect(a.seatOwners()).toEqual({ white: 'player-a', black: 'player-b' });
   });
@@ -486,6 +492,10 @@ describe('NetSession — an admitted peer arbitrates once its partner leaves (sc
     expect(c.state().phase).toBe('offline');
     expect(c.state().seat).toBeNull();
     expect(c.lastRejectReason()).toBe('seat-reserved');
+    // …and the DISTINCT `seat-reserved` reason ALSO surfaces on the user-facing `joinError` (design
+    // §7): a seat-reserved reject is not silent, and it is not collapsed to the generic `room-full`
+    // human message — the net panel shows the reason the arbiter actually gave.
+    expect(c.state().joinError).toBe('seat-reserved');
     // B never handed out A's reserved white — the surviving resident still reserves it for player-a.
     expect(b.seatOwners()).toEqual({ white: 'player-a', black: 'player-b' });
   });

@@ -87,10 +87,22 @@ export interface NetSessionState {
   readonly joinError: JoinErrorReason | null;
 }
 
-/** Why a join attempt failed, as reported by the live session (post-dispatch). */
+/**
+ * Why a join attempt failed, as reported by the live session (post-dispatch). Every typed admission
+ * reject (design §7 — `room-full` / `seat-reserved` / `game-mismatch` / `game-divergent`) surfaces
+ * as one of these so the net panel shows a HUMAN message for EVERY reject, not just room-full — plus
+ * `connect-failed` for a transport failure. Verbatim to the machine {@link AdmissionReject} reasons
+ * (`src/net/sync.ts`) so a new reject reason is a compile error here until it has a human label.
+ */
 export type JoinErrorReason =
-  /** The room already has two seated players (seat manager `room-full`). */
+  /** The room already has two seated players and both owners are present (seat manager `room-full`). */
   | 'room-full'
+  /** A seat is held for an absent owner and this peer is not that owner (seat manager `seat-reserved`). */
+  | 'seat-reserved'
+  /** The two peers proposed DIFFERENT games — different game uuids (admission `game-mismatch`). */
+  | 'game-mismatch'
+  /** The SAME game uuid but forked histories — divergent headHash (admission `game-divergent`). */
+  | 'game-divergent'
   /** The transport could not connect (relay unreachable / rejected). */
   | 'connect-failed';
 
@@ -135,9 +147,17 @@ export interface NetModel {
   readonly joinErrorText: string | null;
 }
 
-/** Human labels for a post-dispatch join failure — kept beside the model (SSOT for the widget). */
+/**
+ * Human labels for a post-dispatch join failure — kept beside the model (SSOT for the widget). One
+ * entry per {@link JoinErrorReason}; the `Record` type makes an unlabeled reason a compile error, so
+ * a reject reason can never reach the panel with no message (the exact silent-failure design §7
+ * forbids). `game-mismatch`/`game-divergent` name the #38 resolution seam in human terms.
+ */
 const JOIN_ERROR_TEXT: Record<JoinErrorReason, string> = {
   'room-full': 'That room already has two players.',
+  'seat-reserved': 'A seat there is being held for a player who stepped away. Try again later.',
+  'game-mismatch': 'You and the other player brought different games.',
+  'game-divergent': 'That game has diverged from yours and can’t be joined yet.',
   'connect-failed': 'Could not connect. Check the code and try again.',
 };
 

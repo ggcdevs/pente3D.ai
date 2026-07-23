@@ -563,9 +563,18 @@ export class NetSession {
     } catch {
       // Connect failed — surface it in observable state (an honest error, not a swallowed one) and
       // return to offline so the user can retry with the same or a different code.
-      transport.disconnect();
-      this.resetToOffline('connect-failed');
-      this.emit();
+      //
+      // BUT: an admission `reject` can arrive and settle us offline WHILE this connect is still
+      // in flight (the reject handler tears the transport down, which then makes this very connect
+      // throw). In that race the reject reason is the TRUE outcome — do NOT overwrite it with a
+      // generic `connect-failed`. We detect it by identity: `this.transport` is nulled/replaced the
+      // moment something else settled us, so a mismatch means "already handled — leave joinError as
+      // the reject reason it set" (design §7: the reject reason must survive to the net panel).
+      if (this.transport === transport) {
+        transport.disconnect();
+        this.resetToOffline('connect-failed');
+        this.emit();
+      }
       return false;
     }
     this.reflectEngineStatus();
@@ -820,9 +829,11 @@ export class NetSession {
     if (this.phase !== 'connecting') return; // already finalized (e.g. a duplicate racing an establish).
     const mySeat = seatOf(admit.seats, this.deps.playerId);
     if (mySeat === null) {
-      // The admit does not seat us — treat as an honest room-full-style refusal (we own no seat).
+      // The admit does not seat us — treat as an honest room-full-style refusal (we own no seat) and
+      // surface it as the human join error (design §7), not a silent drop. `tearDownToOffline` carries
+      // the reason to the emit so the net panel shows it (unlike a bare `disconnect()` which nulls it).
       this.lastReject = 'room-full';
-      this.disconnect();
+      this.tearDownToOffline('room-full');
       return this.finishEnter();
     }
     const transport = this.transport;
@@ -846,13 +857,19 @@ export class NetSession {
     this.finishEnter();
   }
 
-  /** Handle the arbiter's typed `reject`: record the reason, surface it, and go offline. */
+  /**
+   * Handle the arbiter's typed `reject`: record the machine reason (for the debug/e2e readout) AND
+   * surface it as the human-facing {@link joinError} that the net panel renders, then go offline
+   * (design §7 — EVERY reject carries a human message, never a silent drop). Every
+   * {@link AdmissionReject} reason (`room-full` / `seat-reserved` / `game-mismatch` /
+   * `game-divergent`) is also a {@link JoinErrorReason}, so the reason flows through
+   * {@link tearDownToOffline} INTO `resetToOffline(reason)` and survives to the emit — unlike the
+   * round-3 bug where `disconnect()` (→ `resetToOffline(null)`) nulled it before any emit.
+   */
   private onReject(reject: RejectMessage): void {
     if (this.phase !== 'connecting') return;
     this.lastReject = reject.reason;
-    // A seat-level room-full also feeds the netModel joinError so the existing widget surfaces it.
-    if (reject.reason === 'room-full') this.joinError = 'room-full';
-    this.disconnect();
+    this.tearDownToOffline(reject.reason);
     this.finishEnter();
   }
 
@@ -1128,8 +1145,20 @@ export class NetSession {
    * no-op while already offline. Idempotent (the transport's own `disconnect` is idempotent).
    */
   disconnect(): void {
+    this.tearDownToOffline(null);
+  }
+
+  /**
+   * Tear the transport down and return to `offline`, carrying an optional {@link JoinErrorReason}
+   * INTO {@link resetToOffline} so it survives to the {@link emit} (design §7: a reject must surface
+   * a human reason). {@link disconnect} passes `null` (a clean leave); {@link onReject} passes the
+   * typed reject reason so the net panel shows exactly why — WITHOUT `resetToOffline(null)` nulling
+   * the reason first (the round-3 silent-failure bug: setting `joinError` then calling `disconnect`
+   * overwrote it before any emit reached the widget).
+   */
+  private tearDownToOffline(err: JoinErrorReason | null): void {
     if (this.transport !== null) this.transport.disconnect();
-    this.resetToOffline(null);
+    this.resetToOffline(err);
     // Leaving the room voids any out-of-band ask (there is no peer + no engine to complete it); reset
     // the handshake so a later re-host/re-join starts clean and never surfaces a stale proposal.
     this.setHandshake(initialHandshake());

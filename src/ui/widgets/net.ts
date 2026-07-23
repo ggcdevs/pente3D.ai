@@ -142,14 +142,35 @@ export function netWidget(): WidgetFactory {
       conflict.setAttribute('role', 'alert');
       element.appendChild(conflict);
 
+      // --- Join-error line: the human reason the LAST entry was refused (design §7). Shown across
+      //     panels (a reject leaves us OFFLINE, so it must be visible while the controls panel is the
+      //     one selected) so EVERY typed reject — room-full / seat-reserved / game-mismatch /
+      //     game-divergent — surfaces a message instead of a silent drop back to offline.
+      const joinError = doc.createElement('div');
+      joinError.className = 'pente-net-join-error';
+      joinError.setAttribute('data-testid', 'net-join-error');
+      joinError.setAttribute('role', 'alert');
+      joinError.hidden = true;
+      element.appendChild(joinError);
+
       /** Paint a derived model onto the three panels (show exactly one). */
       function render(model: NetModel): void {
         element.setAttribute('data-panel', model.panel);
+
+        // Join-error line (design §7): the human reason the last entry was refused. A reject leaves
+        // the session OFFLINE, so this must show OVER the (empty) controls panel — otherwise a
+        // rejected peer silently drops back to offline with no visible reason (the exact silent
+        // failure design §7 forbids). Painted first so the visibility decision below can read it.
+        const hasJoinError = model.joinErrorText !== null;
+        joinError.textContent = model.joinErrorText ?? '';
+        joinError.hidden = !hasJoinError;
+
         // Hide the whole widget when idle: the `controls` panel is empty since #13/#16 moved
         // Host/Join into the drawer and dropped the board hint, so an offline widget has nothing
         // to show — don't leave a styled empty box on the board. It reappears the moment there's
-        // live status/conflict (the `status`/`conflict` panels) to display.
-        element.hidden = model.panel === 'controls';
+        // live status/conflict (the `status`/`conflict` panels) OR a join error (a reject to
+        // surface) to display.
+        element.hidden = model.panel === 'controls' && !hasJoinError;
         controls.hidden = model.panel !== 'controls';
         status.hidden = model.panel !== 'status';
         conflict.hidden = model.panel !== 'conflict';

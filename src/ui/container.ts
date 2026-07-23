@@ -164,7 +164,7 @@ const UI_STYLESHEET = `
 .pente-widget--net { display: flex; flex-direction: column; gap: 8px; min-width: 200px; padding: 10px 12px; border-radius: 6px; background: rgba(16,16,20,0.72); color: #e6e6ea; font-family: system-ui, sans-serif; font-size: 13px; }
 /* [hidden] must beat the class display:flex (else the attribute is a no-op) — incl. the root
    .pente-widget--net so an idle net widget leaves no empty box on the board. */
-.pente-widget--net[hidden], .pente-net-controls[hidden], .pente-net-status[hidden], .pente-net-conflict[hidden], .pente-net-code-row[hidden], .pente-net-seat[hidden] { display: none; }
+.pente-widget--net[hidden], .pente-net-controls[hidden], .pente-net-status[hidden], .pente-net-conflict[hidden], .pente-net-code-row[hidden], .pente-net-seat[hidden], .pente-net-join-error[hidden] { display: none; }
 /* Task C.2 / issue #13: the inline widget no longer HOSTS/JOINS (that moved to the drawer's
    Network-Game panel). issue #16: the passive "open the menu" board hint was removed, so while
    offline the controls panel is empty (nothing advertised on the board). */
@@ -175,6 +175,10 @@ const UI_STYLESHEET = `
 .pente-net-copy { cursor: pointer; padding: 3px 8px; border-radius: 4px; border: none; background: rgba(255,255,255,0.12); color: #e6e6ea; font-size: 12px; }
 .pente-net-seat { opacity: 0.85; }
 .pente-net-conflict { padding: 8px; border-radius: 4px; background: rgba(255,80,80,0.18); color: #ffb0b0; font-size: 12px; }
+/* The join-error line (design §7): the human reason the last entry was refused. Shown even while the
+   widget is otherwise idle (a reject leaves us offline), so a rejected peer sees WHY instead of a
+   silent drop. Amber (a recoverable "try again", distinct from the red stopped-game conflict). */
+.pente-net-join-error { padding: 8px; border-radius: 4px; background: rgba(240,180,80,0.18); color: #ffd9a0; font-size: 12px; }
 .pente-widget--history { display: flex; gap: 10px; align-items: center; padding: 6px 12px; border-radius: 6px; background: rgba(16,16,20,0.72); color: #e6e6ea; font-family: system-ui, sans-serif; font-size: 13px; }
 .pente-history-range { width: 240px; cursor: pointer; }
 .pente-history-range:disabled { cursor: default; opacity: 0.45; }
