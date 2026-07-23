@@ -61,6 +61,17 @@ instructions — not just to fix the instance.
 - Never emit optimistic messages on error paths. Errors must propagate honestly and never be
   masked, swallowed, or mislabeled — misleading logs corrupt diagnosis.
 
+## Commit hygiene & ticket traceability
+
+- **Every commit for ticketed work references its issue in the message** — `(#N)` inline, or
+  a trailing `Refs #N`. This makes the issue timeline the source of truth for which work
+  touched which ticket (GitHub auto-cross-references `#N`). Work that spans several tickets
+  names all of them.
+- Use a **closing keyword** (`Fixes #N` / `Closes #N`) *only* on the commit that genuinely
+  completes the ticket — and know it auto-closes the issue only once the commit reaches the
+  **default branch** (`main`), never on `dev`/`test`. Use plain `#N` for partial/progress work.
+- One logical change per commit; the subject says *what changed and why*, not "wip".
+
 ## Modifying code under test to satisfy a gate
 
 - Allowed, but it is a **mandatory review item** — flag it explicitly; it is never silently
