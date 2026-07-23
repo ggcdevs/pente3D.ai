@@ -21,13 +21,15 @@
  *
  * ## Seat model — v1 scope (stated, not disguised)
  *
- * v1 uses a **local, position-derived** seat assignment: the host takes white, a joiner takes
- * black, each via a genuine {@link claimSeat} against the session's seat-map view (so the identity-
- * owned reclaim + `room-full` rejection logic is exercised, not bypassed). A fully-negotiated
- * seat-map-over-the-relay handshake (two joiners racing the same seat; reclaim after a refresh via a
- * retained shared seat map) is the documented `seats.ts` deferred seam — it drops onto this same
- * `playerId` + `claimSeat` foundation without a rewrite. `TODO(shared-seat-map)`: negotiate the seat
- * map over a retained transport channel instead of assigning by host/join role.
+ * v1 uses a **local, role-derived** seat assignment: the host takes white, a joiner takes black.
+ * Each browser pre-seeds a seat map holding ITS OWN real `playerId` in its remembered role's seat
+ * (never a `'host'` sentinel — every owner is a genuine playerId or null, design §2.3 / build plan
+ * S.2) and then RECLAIMS it via the identity-owned {@link claimSeat} (so the reclaim + `room-full`
+ * logic is exercised, not bypassed). A fully-negotiated seat-map-over-the-relay handshake (two
+ * joiners racing the same seat; cross-peer reserve/room-full; reconciliation over both peers'
+ * proposals) is `NetSession.enter()` — build plan Task S.5, standing on this same `playerId` +
+ * `claimSeat` foundation. `TODO(shared-seat-map)`: replace the role-derived pre-seed with the S.3
+ * admission/reconciliation over the transport.
  */
 
 import { Game } from '../core/game';
@@ -48,7 +50,7 @@ import {
   incomingPending,
   type HandshakeState,
 } from './handshake';
-import { claimSeat, emptySeatMap, seatOf, type SeatColor, type SeatMap } from './seats';
+import { claimSeat, seatOf, type SeatColor, type SeatMap } from './seats';
 import { alternateSeats } from './endState';
 import {
   UNDO_ACTION,
@@ -237,13 +239,18 @@ export class NetSession {
     // SAME code in the SAME role reclaims this browser's sticky playerId seat via `claimSeat`.
     this.lastCode = normalizeGameCode(code);
     this.lastColor = preferredColor;
-    // Genuine seat claim against the session's seat-map view (identity-owned; see the class TODO on
-    // the deferred shared-seat-map negotiation). `claimSeat` is first-available white-preferred, so
-    // to seat a JOINER as black we present a map with white already taken by a placeholder "host"
-    // owner; a HOST claims from the empty map and lands on white. Both roles thus go through the
-    // real `claimSeat` (identity-owned reclaim + `room-full` logic exercised, not bypassed).
+    // Genuine seat claim against the session's seat-map view (identity-owned; every owner is a REAL
+    // playerId or null — there is no `'host'` sentinel, design §2.3 / build plan S.2). This v1-local
+    // path pre-seeds THIS browser into its remembered `preferredColor` seat with its own real
+    // `playerId`, then lets the identity-owned `claimSeat` RECLAIM it — so both the host (white) and
+    // the joiner (black) exercise the real reclaim path, and neither invents a fake owner for the
+    // other seat. The negotiated shared seat map over the relay (two joiners racing, cross-peer
+    // reserve/room-full) is `NetSession.enter()` — build plan S.5. `TODO(shared-seat-map)`: replace
+    // this role-derived pre-seed with the S.3 admission/reconciliation over the transport.
     const base: SeatMap =
-      preferredColor === 'black' ? { white: HOST_PLACEHOLDER, black: null } : emptySeatMap();
+      preferredColor === 'black'
+        ? { white: null, black: this.deps.playerId }
+        : { white: this.deps.playerId, black: null };
     const claim = claimSeat(base, this.deps.playerId);
     if (!claim.ok) {
       this.joinError = 'room-full';
@@ -617,10 +624,3 @@ export class NetSession {
     for (const listener of this.handshakeListeners) listener(next);
   }
 }
-
-/**
- * The placeholder owner seeded into the white seat when a JOINER claims, so `claimSeat`'s
- * white-preferred first-available rule lands the joiner on black. v1-local stand-in for the real
- * host's playerId, which a negotiated shared seat map would carry instead (`TODO(shared-seat-map)`).
- */
-const HOST_PLACEHOLDER = 'host';
