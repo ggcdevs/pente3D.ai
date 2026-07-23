@@ -498,3 +498,45 @@ no networking regression.
 **Verdict: N.4/N.5 complete. NETWORKING UX BATCH COMPLETE** (#12 rematch, #18 undo/redo, #17 history-local lock,
 #20 reconnect/notifications — all on /dev/). Follow-ups filed: #30 (codes), #31 (seats — design discussion), #32
 (aesthetics), #33 (networked slider), #28 (depth-sort). Prod promotion (both batches) awaits the maintainer.
+
+---
+
+## 2026-07-23 — Networked session model (epic #35, closes #31), S.1–S.7
+
+**Build:** workflow `pente-session-model.mjs` — game-UUID@genesis → identity-owned durable seats →
+pure `admission.ts` reconciliation/election → admission messages → `NetSession.enter()` → unified
+seed-selector UI → two-context scenario e2e. All 7 tasks committed to `dev` (5b64367..e3b10e9).
+
+**Review-gate round 1 (we93uqpqj):** mechanically green (lint0, coverage100, mutation 98.36) but
+reviewers rejected — 11 findings / 3 blockers: `buildProvisionalSeat` always minted a fresh empty
+game so the durable seat map was never persisted; 2 scenarios shipped `test.fixme`; initiator
+election elected itself on both peers; `seat-reserved` defined but never emitted. Classic
+integration-gap-past-component-gates. Fix-loop committed a531ce6 (durable persisted seats + arbiter
+handoff), 05be0ff (emit seat-reserved), 932f8f5 (election reads shared arrivalTag) but exhausted its
+3-round REVIEW budget before re-reviewing → escalated, no push.
+
+**Independent main-loop verify (a66fc456):** adversarial re-check of all 11 findings on HEAD 932f8f5
+— every one RESOLVED with proof (biting tests: swapping arrivalTag flips the elected winner; a
+returning BLACK owner winning election keeps black; seat map round-trips through archive/db;
+scenario 3 asserts same uuid+headHash on both peers; e2e stable — 156 passed full parallel, zero
+retries).
+
+**Review-gate round 2 (wimw7o36r):** reviewers APPROVED after one fix round. The fresh pass caught 2
+more majors — a rejected peer got NO user-facing feedback (`joinError` set for room-full then
+clobbered null by `disconnect()`), and the reject e2e asserted only the `__pente` debug hook not the
+UI. Fixed by 5cc1620 (surface EVERY reject in the net panel; e2e now asserts the HUMAN message —
+proof-by-UI). Round-2 review clean → approved. Gate declined the auto-push only on a self-imposed
+"no review-log entry" check (this entry resolves that).
+
+**Main-loop final verify HEAD `5cc1620`:** build 0, lint 0, unit 1251 passed/7 skipped, coverage 100%
+on the 9 pure files, mutation 98.36% (≥95), gate-bite re-proven. Reviewers approved.
+
+**Verdict: epic #35 core COMPLETE — pushing to /dev/.** #31 (both-Join→Black) fixed as a consequence.
+Not yet on `main` (awaits maintainer promotion). Follow-ups remain open: #34 randomized board, #36
+spectator, #37 games-list/review, #38 merge/diff/rewind. Real-relay MQTT e2e paths self-skipped
+(no broker egress in CI) — exercise once on /dev/ with a live relay.
+
+**Process notes:** (1) the review-gate can escalate with its own final-round fixes un-reviewed — its
+3-round cap counts REVIEW rounds; consider a final re-review after the last fix, or a higher cap.
+(2) the Gate agent invented a review-log precondition and withheld an approved push — the push
+contract is `passed AND approved`, not "a review-log entry exists"; tighten that prompt.
