@@ -72,6 +72,14 @@ export interface PieceReadout {
   roughness: number;
   /** The material's current metalness (Task A.3 live `materials`/`rendering` apply readout). */
   metalness: number;
+  /**
+   * The material's current `transparent` flag (issue #28 depth-sorting readout). A fully-faded-in
+   * FULLY-OPAQUE piece (`targetOpacity >= 1`) MUST be `false` so it draws in Three.js's OPAQUE pass
+   * — writing depth and z-testing against the `depthWrite:false` gridlines so a closer line occludes
+   * it correctly. It is `true` while fading (opacity < target) and stays `true` for a genuinely
+   * translucent piece (`pieceOpacity < 1`), which legitimately belongs in the transparent pass.
+   */
+  transparent: boolean;
 }
 
 /** The live pieces handle: the mesh container + inspectors + the diff-driven sync. */
@@ -198,6 +206,24 @@ export function createPieces(size: number): PiecesHandle {
     });
   }
 
+  /**
+   * Settle a fully-faded-in piece into the correct render pass (issue #28). A piece whose target
+   * opacity is FULLY OPAQUE (`>= 1`) must leave the transparent pass and become a normal OPAQUE
+   * object: `transparent:false` puts it in Three.js's opaque pass, where it WRITES the depth buffer
+   * and z-tests. The gridlines (drawn after, in the transparent pass, `depthWrite:false`) then blend
+   * against that depth so a line CLOSER than the piece occludes it and a line BEHIND does not — real
+   * 3D depth instead of centroid mis-sorting. A genuinely translucent piece (`targetOpacity < 1`)
+   * legitimately stays `transparent` (it must blend), so it is left untouched. Idempotent; safe to
+   * call every frame a piece is settled (a param set with no change flags no redundant recompile).
+   */
+  function settleOpacity(entry: PieceEntry): void {
+    const opaque = entry.targetOpacity >= 1;
+    if (entry.material.transparent === opaque) {
+      entry.material.transparent = !opaque;
+      entry.material.needsUpdate = true;
+    }
+  }
+
   function addPiece(node: NodeKey, owner: Player): void {
     const material = makeMaterial(owner);
     const mesh = new THREE.Mesh(geo, material);
@@ -218,6 +244,13 @@ export function createPieces(size: number): PiecesHandle {
     const entry = entries.get(node);
     if (!entry) return;
     entry.fadeDir = -1;
+    // A settled opaque piece was moved to the OPAQUE pass (issue #28); an opaque material ignores
+    // `opacity`, so restore `transparent:true` for the duration of the fade-out or the capture would
+    // pop out instantly instead of fading. It disposes at opacity 0, so this transient blend is fine.
+    if (!entry.material.transparent) {
+      entry.material.transparent = true;
+      entry.material.needsUpdate = true;
+    }
   }
 
   function disposeEntry(entry: PieceEntry): void {
@@ -254,7 +287,12 @@ export function createPieces(size: number): PiecesHandle {
       const next = entry.material.opacity + entry.fadeDir * step * entry.targetOpacity;
       if (entry.fadeDir === 1) {
         entry.material.opacity = Math.min(entry.targetOpacity, next);
-        if (entry.material.opacity >= entry.targetOpacity) entry.fadeDir = 0;
+        if (entry.material.opacity >= entry.targetOpacity) {
+          entry.fadeDir = 0;
+          // Fade-in complete: settle a fully-opaque piece into the opaque pass so closer gridlines
+          // occlude it correctly (issue #28). A translucent-target piece stays transparent.
+          settleOpacity(entry);
+        }
       } else {
         entry.material.opacity = Math.max(0, next);
         if (entry.material.opacity <= 0) {
@@ -296,7 +334,12 @@ export function createPieces(size: number): PiecesHandle {
         entry.targetOpacity = surface.targetOpacity;
         // A settled mesh is already at its old target: snap it to the new one now. A fading-in mesh
         // keeps fading and will land on the new target via `tick` (which clamps to targetOpacity).
-        if (entry.fadeDir === 0) entry.material.opacity = surface.targetOpacity;
+        if (entry.fadeDir === 0) {
+          entry.material.opacity = surface.targetOpacity;
+          // A live `pieceOpacity` edit can cross the opaque/translucent boundary (issue #28): a piece
+          // dropped below 1 must re-enter the transparent pass to blend, one raised to 1 must go opaque.
+          settleOpacity(entry);
+        }
       }
       entry.material.needsUpdate = true;
     }
@@ -352,6 +395,7 @@ export function createPieces(size: number): PiecesHandle {
         emissiveIntensity: entry.material.emissiveIntensity,
         roughness: entry.material.roughness,
         metalness: entry.material.metalness,
+        transparent: entry.material.transparent,
       });
     }
     return out;
