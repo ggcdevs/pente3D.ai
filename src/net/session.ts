@@ -217,13 +217,23 @@ export class NetSession {
   /**
    * The hellos seen from OTHER peers during (and after) the settle window, keyed by playerId — the
    * input to the initiator election (design §4 Case 2) and to the arbiter's per-newcomer reconcile.
-   * `arrivalTag` is the OBSERVED live-presence arrival rank we assign as each peer's hello arrives
-   * (monotonic), feeding {@link electInitiator}'s "earlier arrival, then lower playerId" order.
+   * Each hello carries the peer's OWN `arrivalTag` (the shared, comparable live-presence arrival
+   * value it stamped from its clock), which is what {@link electInitiator}'s "earlier arrival, then
+   * lower playerId" order compares against OUR own {@link myArrivalTag} — so BOTH peers, seeing the
+   * SAME two tags, independently elect the SAME initiator (design §11). Using each peer's own tag
+   * (not a locally-observed receive order) is what makes the election agree across peers regardless
+   * of which hello a given peer happened to receive first.
    */
   private readonly seenHellos = new Map<string, HelloMessage>();
 
-  /** Monotonic counter minting each seen peer's local arrival rank (earlier = smaller). */
-  private arrivalCounter = 0;
+  /**
+   * THIS peer's own `arrivalTag` — the value it stamped into its own hello (`this.deps.now()` at
+   * {@link enter}). Held so the settle-window election can rank OURSELVES by the SAME shared tag it
+   * ranks every remote peer by (design §11 "earlier live-presence arrival, then lower playerId"),
+   * instead of the old bug that hardcoded self to `arrivalOrder: 0` and always elected itself.
+   * `null` while offline / before an enter.
+   */
+  private myArrivalTag: number | null = null;
 
   /** The pending settle-window timer id, cleared on resolve/{@link disconnect} so it never double-fires. */
   private settleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -313,7 +323,11 @@ export class NetSession {
     this.myProposal = proposal;
     this.established = false;
     this.seenHellos.clear();
-    this.arrivalCounter = 0;
+    // Stamp OUR own live-presence arrival tag once, from the injected clock — the SAME value we put
+    // on our hello and the one the settle-window election ranks us by, so both peers compare the two
+    // shared tags and agree on the winner (design §11).
+    const myArrivalTag = this.deps.now();
+    this.myArrivalTag = myArrivalTag;
     // Remember the room for a background→return reconnect (N.5.2, #20): the reconnect re-enters the
     // SAME room reclaiming this browser's sticky playerId seat via `claimSeat`/admission.
     this.lastCode = code;
@@ -333,9 +347,11 @@ export class NetSession {
     const connected = await this.beginEngine(code, provisional.game, provisional.color, provisional.seatMap);
     if (!connected) return; // beginEngine surfaced connect-failed + reset to offline.
 
-    // Announce our arrival so a resident/co-arriver reconciles against our proposal.
+    // Announce our arrival so a resident/co-arriver reconciles against our proposal. The hello
+    // carries the SAME `myArrivalTag` we stamped above (not a fresh `now()`), so the value a co-
+    // arriver ranks us by in its election is IDENTICAL to the value we rank ourselves by in ours.
     this.publishAdmission(
-      toHelloMessage(this.deps.newMessageId(), this.deps.playerId, proposal, this.deps.now()),
+      toHelloMessage(this.deps.newMessageId(), this.deps.playerId, proposal, myArrivalTag),
     );
 
     // Wait for presence + hellos to settle, then branch (resident-admit / alone-establish / elect).
@@ -630,10 +646,17 @@ export class NetSession {
       return this.finishEnter();
     }
 
-    // Simultaneous arrival → elect the initiator deterministically.
+    // Simultaneous arrival → elect the initiator deterministically over the SHARED arrival tags:
+    // ourselves ranked by the tag we stamped on our own hello, each co-arriver by the tag on ITS
+    // hello. Because both peers compare the identical pair of tags (earlier arrival, then lower
+    // playerId), they independently elect the SAME initiator — no double-establish even when both
+    // settle timers fire before either admit crosses a real relay (design §4 Case 2 / §11). This
+    // replaces the old bug that hardcoded self to `arrivalOrder: 0` (so every peer elected itself).
+    const myArrivalTag = this.myArrivalTag;
+    if (myArrivalTag === null) throw new Error('election requires our own arrival tag');
     const peers: Peer[] = [
-      { playerId: this.deps.playerId, arrivalOrder: 0 },
-      ...others.map((h) => ({ playerId: h.playerId, arrivalOrder: this.arrivalOf(h) })),
+      { playerId: this.deps.playerId, arrivalOrder: myArrivalTag },
+      ...others.map((h) => ({ playerId: h.playerId, arrivalOrder: h.arrivalTag })),
     ];
     const initiator = electInitiator(peers);
     if (initiator === this.deps.playerId) {
@@ -665,23 +688,32 @@ export class NetSession {
   }
 
   /**
-   * ESTABLISH the room as the elected initiator (design §4 Case 2 "two arrived together"): reconcile
-   * OUR proposal against each co-arriver's, mint/keep the agreed authoritative game, build the durable
-   * seat map (we take the first-available seat, each admitted peer the next), and publish an `admit`
-   * (agreed game + seat map) or a typed `reject` to each. We keep our own game + seat and become the
-   * arbiter.
+   * ESTABLISH the room as the elected initiator (design §4 Case 2 "two arrived together"): keep OUR
+   * provisional game + reclaimed seat as the authoritative one, then reconcile every co-arriver's
+   * proposal against ours, seat each admitted peer onto the durable map, and publish an `admit`
+   * (agreed game + seat map) or a typed `reject` to each. We become the arbiter.
+   *
+   * Crucially we START from the PROVISIONAL seat map {@link buildProvisionalSeat} already populated
+   * — NOT a fresh `emptySeatMap()` that would grab first-available WHITE. That provisional map holds
+   * the color we OWN (reclaim-by-identity, design §2.3/§6.4): a returning owner of BLACK that wins
+   * the election re-seeds as BLACK, exactly as `establishAlone` keeps its reclaimed color. Seeding
+   * from empty here would violate reclaim-by-identity (the #2 review finding). Our own seat is
+   * already recorded in the provisional map (asserted below as a tripwire, not silently assumed).
    */
   private establishAsInitiator(others: readonly HelloMessage[]): void {
-    // Reconcile every co-arriver's proposal against ours; a divergent/mismatched pair is a typed
-    // reject to THAT peer (design §5). We keep our own agreed game (the `new`/`current` we brought).
-    // Seat OURSELVES first (first-available white on the empty durable map); an empty-map claim always
-    // succeeds, so assert rather than branch on an unreachable reject (keeps the tripwire).
-    const mine = claimSeat(emptySeatMap(), this.deps.playerId, this.presentPeers);
-    if (!mine.ok) throw new Error('initiator self-claim on an empty map must succeed');
-    let seatMap = mine.seatMap;
-    this.seat = mine.color;
-    this.seatMap = seatMap;
+    // Keep the seat + durable map buildProvisionalSeat seeded for US (our reclaimed color, or first-
+    // available white for a genuine creation). Our own seat MUST already be owned in that map — the
+    // provisional claim seated us before we ever published a hello; assert rather than re-claim on an
+    // empty map (which would discard a reclaimed BLACK and grab white).
+    let seatMap = this.seatMap;
+    if (seatMap === null || this.seat === null || seatOf(seatMap, this.deps.playerId) === null) {
+      throw new Error('initiator must already own a seat in its provisional map');
+    }
 
+    // Reconcile every co-arriver's proposal against ours; a divergent/mismatched pair is a typed
+    // reject to THAT peer (design §5). We keep our own agreed game (the `new`/`current` we brought)
+    // and its reconciled uuid — `arbitrate`'s honesty guard already refuses to serve a game we do
+    // not hold (`game-mismatch`) rather than mis-seeding the initiator's own identity.
     for (const hello of others) {
       seatMap = this.arbitrate(hello, seatMap);
     }
@@ -759,10 +791,10 @@ export class NetSession {
 
   /** Handle a peer's `hello`: arbitrate it if established, else record it for the settle election. */
   private onHello(hello: HelloMessage): void {
+    // Record the hello (keyed by playerId) so the settle-window election ranks this peer by the
+    // arrivalTag IT stamped — the shared value both peers compare, not a local receive order.
     if (!this.seenHellos.has(hello.playerId)) {
-      this.arrivalCounter += 1;
       this.seenHellos.set(hello.playerId, hello);
-      this.arrivalOrders.set(hello.playerId, this.arrivalCounter);
     }
     if (!this.established || this.engine === null || this.seatMap === null) return;
 
@@ -860,14 +892,6 @@ export class NetSession {
   async whenPersisted(): Promise<void> {
     await this.pendingPersist;
   }
-
-  /** The observed arrival rank of a seen hello's peer (earlier = smaller), else a large fallback. */
-  private arrivalOf(hello: HelloMessage): number {
-    return this.arrivalOrders.get(hello.playerId) ?? Number.MAX_SAFE_INTEGER;
-  }
-
-  /** Per-peer observed arrival rank (assigned as each hello arrives), feeding the initiator election. */
-  private readonly arrivalOrders = new Map<string, number>();
 
   /** Place a synced move (delegates to the engine). Throws if offline or the engine refuses. */
   place(coords: Coord): void {
@@ -1162,8 +1186,7 @@ export class NetSession {
     this.established = false;
     this.myProposal = null;
     this.seenHellos.clear();
-    this.arrivalOrders.clear();
-    this.arrivalCounter = 0;
+    this.myArrivalTag = null;
     this.phase = 'offline';
   }
 
@@ -1176,6 +1199,22 @@ export class NetSession {
     this.presentPeers = new Set([this.deps.playerId, ...peers]);
     const others = peers.filter((id) => id !== this.deps.playerId);
     const present = others.length > 0;
+    // RE-ANNOUNCE our hello when a peer JOINS while we are still resolving our OWN entry (design §4
+    // Case 2 "each sees the other within the window"). Our FIRST hello was published in `enter`
+    // BEFORE any co-arriver had subscribed, so a peer that connects a moment later never received it
+    // and — seeing no hello from us — would wrongly decide it is "truly alone" and establish,
+    // producing a double-white. Re-carrying the SAME proposal + arrivalTag now makes our hello reach
+    // the newcomer so BOTH peers see each other within the window and run the identical election.
+    // Only while `connecting` (pre-settle, not yet established/admitted): an established arbiter must
+    // NOT re-announce a hello (it answers newcomers with admit/reject, never re-enters the election),
+    // and a re-announce is idempotent for the newcomer (its own dedup-by-id would drop a stale
+    // repeat, but each re-announce carries a FRESH id so it is delivered — the arrivalTag it ranks us
+    // by is unchanged, so the election outcome is stable no matter how many times it is re-heard).
+    if (present && !this.peerPresent && this.phase === 'connecting' && this.myProposal !== null && this.myArrivalTag !== null) {
+      this.publishAdmission(
+        toHelloMessage(this.deps.newMessageId(), this.deps.playerId, this.myProposal, this.myArrivalTag),
+      );
+    }
     if (present === this.peerPresent) return;
     // AUTO-CANCEL on PEER-GONE (N.1 guardrail): if the peer just DROPPED (present → absent), the
     // handshake can never complete (there is no one to accept our ask, and an incoming ask's proposer

@@ -22,6 +22,7 @@ import { coordsOf } from '../core/coords';
 import { MockRelayHub, MockTransport, type Transport } from './transport';
 import { NetSession, type NetSessionDeps } from './session';
 import type { Proposal } from './admission';
+import type { NetSeat } from '../ui/widgets/netModel';
 
 const SIZE = 9;
 // A code from the unambiguous CODE_ALPHABET (no O/0/1/I/L) so `validateGameCode` accepts it and BOTH
@@ -241,33 +242,80 @@ describe('NetSession.enter — two peers ARRIVE TOGETHER → initiator election 
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it('both connect + hello before either settles; the elected initiator establishes, the other adopts', async () => {
+  /**
+   * Drive a GENUINE simultaneous arrival: both peers connect + hello inside the SAME long settle
+   * window, so neither has established before the window expires and the {@link electInitiator} —
+   * NOT the mock relay's synchronous delivery order — decides the winner. `aTag`/`bTag` are the
+   * arrivalTags each peer stamps on its hello (injected via `now`), the SOLE distinguishing input to
+   * the election.
+   *
+   * Both `enter()` calls are kicked WITHOUT awaiting between them, so both connect + publish their
+   * hello before either settle timer fires — each then sees the other JOIN presence and RE-ANNOUNCES
+   * its hello, so both hold the other's hello (and arrivalTag) within the window even though the
+   * first hello was published before the co-arriver had subscribed. This models the true relay race
+   * the election exists to kill (#31): convergence must come from the election agreeing across peers
+   * on the SAME winner, never from who happened to be delivered first. Uses fake timers so a fresh
+   * per-`it` clock (the describe's `beforeEach`) drives the window deterministically.
+   */
+  async function arriveTogether(
+    aTag: number,
+    bTag: number,
+  ): Promise<{
+    a: { seat: NetSeat; uuid: string | null };
+    b: { seat: NetSeat; uuid: string | null };
+  }> {
     const hub = new MockRelayHub();
-    // Earlier arrival wins the election; give A the earlier arrivalTag (now=0) and B a later one so
-    // the deterministic order is unambiguous. Both use a LONG settle window so neither settles until
-    // both have announced (the true simultaneous-arrival race).
-    const a = makeSession(hub, 'player-a', { settleMs: 1000, now: () => 0 });
-    const b = makeSession(hub, 'player-b', { settleMs: 1000, now: () => 1 });
+    const a = makeSession(hub, 'player-a', { settleMs: 1000, now: () => aTag });
+    const b = makeSession(hub, 'player-b', { settleMs: 1000, now: () => bTag });
 
-    // Kick BOTH enters without awaiting — both connect + publish hello before any settle fires.
     const pa = a.enter(ROOM, NEW);
     const pb = b.enter(ROOM, NEW);
-    // Let the connects + hello publishes flush (microtasks), still inside the settle window.
+    // Flush connects + hello publishes + presence re-announces (microtasks), still inside the window.
     await vi.advanceTimersByTimeAsync(0);
-    // Now expire the settle window: onSettle fires on both; A (earlier arrival) is elected initiator,
-    // reconciles both `new` proposals to one fresh game, and admits B; B adopts.
+    // Expire the window: onSettle fires on BOTH; both independently elect the same initiator by the
+    // shared arrivalTags; the winner establishes + admits, the loser adopts.
     await vi.advanceTimersByTimeAsync(1000);
     await pa;
     await pb;
 
+    // BOTH must reach a live game — a peer left `connecting` would mean it never got the winner's
+    // admit (the asymmetric-delivery bug), which the assertions below would then also catch.
     expect(a.state().phase).toBe('connected');
     expect(b.state().phase).toBe('connected');
-    // The elected initiator (A) took white; B was admitted onto black — DISTINCT seats, one game.
-    expect(a.state().seat).toBe('white');
-    expect(b.state().seat).toBe('black');
-    expect(b.gameUuid()).toBe(a.gameUuid());
-    expect(a.seatOwners()).toEqual({ white: 'player-a', black: 'player-b' });
-    expect(b.seatOwners()).toEqual({ white: 'player-a', black: 'player-b' });
+    return {
+      a: { seat: a.state().seat, uuid: a.gameUuid() },
+      b: { seat: b.state().seat, uuid: b.gameUuid() },
+    };
+  }
+
+  it('the EARLIER arrivalTag wins white (A earlier → A white, B black; one shared game)', async () => {
+    const aEarlier = await arriveTogether(0, 5);
+    expect(aEarlier.a.seat).toBe('white');
+    expect(aEarlier.b.seat).toBe('black');
+    expect(aEarlier.a.uuid).toBe(aEarlier.b.uuid);
+    expect(aEarlier.a.uuid).not.toBeNull();
+  });
+
+  it('SWAPPING the arrivalTags SWAPS the winner (B earlier → B white, A black) — the election bites', async () => {
+    // SWAP the ONLY distinguishing input relative to the test above: now B's tag is earlier. If the
+    // election reads the arrivalTag as designed the winner FLIPS to B; the pre-fix bug (each peer
+    // hardcoded its OWN arrivalOrder to 0 and elected ITSELF, so A always established first and took
+    // white regardless of the tag) left this UNCHANGED (A white, B black). These assertions are
+    // exactly the gate that rejects a broken/absent election (agent-principles #7) — proven by the
+    // swap experiment: with the bug present, B is black here; with the fix, B is white.
+    const bEarlier = await arriveTogether(5, 0);
+    expect(bEarlier.b.seat).toBe('white');
+    expect(bEarlier.a.seat).toBe('black');
+    expect(bEarlier.a.uuid).toBe(bEarlier.b.uuid);
+    expect(bEarlier.a.uuid).not.toBeNull();
+  });
+
+  it('EQUAL arrivalTags break the tie by the lexicographically-lower playerId (player-a wins white)', async () => {
+    // Same tag on both → the election falls through to the playerId tiebreak; 'player-a' < 'player-b'.
+    const tie = await arriveTogether(3, 3);
+    expect(tie.a.seat).toBe('white');
+    expect(tie.b.seat).toBe('black');
+    expect(tie.a.uuid).toBe(tie.b.uuid);
   });
 });
 
@@ -331,6 +379,71 @@ describe('NetSession — durable seats survive an empty room (design §6.4, scen
     expect(a2.state().seat).toBe('white');
     expect(a2.gameUuid()).toBe(uuidBefore);
     expect(a2.seatOwners()).toEqual({ white: 'player-a', black: 'player-b' });
+  });
+
+  it('a returning BLACK owner that WINS the election re-seeds as BLACK — not white-by-arrival', async () => {
+    // The reclaim-by-identity path on the ELECTED-INITIATOR branch (design §2.3/§6.4): when the winner
+    // of a simultaneous arrival already OWNS a color, it must keep that color — the pre-fix
+    // `establishAsInitiator` discarded the reclaimed seat and unconditionally claimed first-available
+    // WHITE, so a returning owner of BLACK that won would have stolen white (review finding #2).
+    // REAL timers throughout (this exercises the IndexedDB durable persist, which needs real
+    // macrotasks) — the simultaneous return is driven by a real short settle window + `flush`.
+    const hub = new MockRelayHub();
+    const dbA = await openDatabase(`net-reclaim-a-${Math.random().toString(36).slice(2)}`);
+    const dbB = await openDatabase(`net-reclaim-b-${Math.random().toString(36).slice(2)}`);
+
+    // Establish A=white, B=black, commit both browsers' durable room state, then both drop.
+    const a = makeSession(hub, 'player-a', { db: dbA });
+    const b = makeSession(hub, 'player-b', { db: dbB });
+    await a.enter(ROOM, NEW);
+    await b.enter(ROOM, DEFER);
+    await a.whenPersisted();
+    await b.whenPersisted();
+    await flush();
+    const uuidBefore = b.gameUuid();
+    expect(b.state().seat).toBe('black');
+    a.disconnect();
+    b.disconnect();
+    await flush();
+
+    // B and A now RETURN SIMULTANEOUSLY into the empty room. Give B the EARLIER arrivalTag so B — the
+    // returning BLACK owner — WINS the election and runs the initiator branch. B must re-seed BLACK
+    // (its owned color from its persisted map), NOT grab white; A adopts B's game + its reserved
+    // white. A short REAL settle window (long enough for both to connect + re-announce, driven by the
+    // real macrotask flush below) makes this a genuine co-arrival, not a sequential resident/join.
+    const b2 = makeSession(hub, 'player-b', {
+      db: dbB,
+      settleMs: 20,
+      now: () => 0,
+      newMessageId: idSource('player-b-return'),
+    });
+    const a2 = makeSession(hub, 'player-a', {
+      db: dbA,
+      settleMs: 20,
+      now: () => 5,
+      newMessageId: idSource('player-a-return'),
+    });
+    // Kick BOTH without awaiting so both connect + hello + re-announce inside the 20ms window. Both
+    // enter() promises resolve after the real settle window elapses (winner establishes + admits, the
+    // loser adopts the admit); `Promise.all` awaits both, then a real wait past the window drains any
+    // trailing admit/persist macrotask.
+    const pb = b2.enter(ROOM, DEFER);
+    const pa = a2.enter(ROOM, DEFER);
+    await Promise.all([pb, pa]);
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(b2.state().phase).toBe('connected');
+    expect(a2.state().phase).toBe('connected');
+    // The winning initiator B kept BLACK (reclaim-by-identity), A took the reserved WHITE — the seat
+    // map is identity-stable across the drop even though B won the election.
+    expect(b2.state().seat).toBe('black');
+    expect(a2.state().seat).toBe('white');
+    expect(b2.seatOwners()).toEqual({ white: 'player-a', black: 'player-b' });
+    expect(a2.seatOwners()).toEqual({ white: 'player-a', black: 'player-b' });
+    // B re-seeded the SAME game identity it owned (its reconciled `defer`/`defer` would otherwise mint
+    // a fresh one); both peers converge on that owned uuid.
+    expect(b2.gameUuid()).toBe(uuidBefore);
+    expect(a2.gameUuid()).toBe(uuidBefore);
   });
 });
 

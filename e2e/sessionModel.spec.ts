@@ -49,6 +49,20 @@ import relay from '../src/config/defaults/relay.json' with { type: 'json' };
  *      DISTINCT seats (one white, one black), asserted on BOTH contexts' seat + game uuid + headHash.
  *      [PROVEN — and shown to BITE: restoring the old empty-map seeding makes it fail; see the report.]
  *
+ * ## What these e2e scenarios do NOT cover: the SIMULTANEOUS-arrival initiator election
+ *
+ * Every scenario above is a SEQUENTIAL admission — a RESIDENT (already established) admits a LATER
+ * newcomer (host-then-join). None drives a genuine SIMULTANEOUS arrival where BOTH peers hello inside
+ * the settle window before either establishes and the {@link electInitiator} — not the delivery order
+ * — decides the winner. That path (design §4 Case 2 / §11) is proven by the UNIT gate over the real
+ * MockTransport in `src/net/session.test.ts` ("two peers ARRIVE TOGETHER → initiator election"): the
+ * arrivalTag each peer stamps on its hello is the SOLE distinguishing input, and SWAPPING it SWAPS the
+ * elected winner — a swap experiment shown to BITE (the pre-fix bug that hardcoded each peer's own
+ * `arrivalOrder` to 0 and self-elected leaves the outcome unchanged, failing that test). The app has
+ * no test hook to drive `enter` with a controlled settle window across two isolated browser contexts,
+ * so the election determinism is NOT claimed here — it is asserted where it can be observed, in the
+ * unit gate. (Do not re-annotate these sequential scenarios as proving the election.)
+ *
  * ## Real relay (self-skips without creds)
  *
  * A final scenario exercises the REAL relay (`relay.json`) with two isolated contexts running the app's
