@@ -171,6 +171,16 @@ export class NetSession {
   private code: string | null = null;
   private seat: NetSeat = null;
   private peerPresent = false;
+  /**
+   * The playerIds CURRENTLY present in the room (the live-presence snapshot from
+   * {@link onPresence}), always including our own id. This feeds {@link claimSeat}'s
+   * reject-reason distinction: when the arbiter refuses a newcomer because both seats are
+   * owned, a blocking owner who is ABSENT yields `seat-reserved` (its seat is held for its
+   * return — scenario 5), whereas all-owners-present yields `room-full` (a full active game —
+   * scenario 1). Distinct from the {@link peerPresent} boolean, which only asks "is anyone
+   * else here"; the arbiter needs to know WHICH ids are present to name the reason.
+   */
+  private presentPeers: ReadonlySet<string> = new Set();
   private joinError: JoinErrorReason | null = null;
 
   /**
@@ -422,7 +432,9 @@ export class NetSession {
     //    persisted game, reload it and reclaim our color — the durable empty-room reclaim.
     const room = await this.loadRoomState(code);
     if (room !== null && seatOf(room.seatMap, this.deps.playerId) !== null) {
-      const claim = claimSeat(room.seatMap, this.deps.playerId);
+      // A reclaim of an already-OWNED seat: the reject branch (and thus presence) is never
+      // reached, so the present-set only needs to be honest — ourselves.
+      const claim = claimSeat(room.seatMap, this.deps.playerId, this.presentPeers);
       if (!claim.ok) throw new Error('reclaim of an owned seat must succeed');
       return { game: room.game, color: claim.color, seatMap: claim.seatMap };
     }
@@ -430,7 +442,9 @@ export class NetSession {
     //    empty map always succeeds; assert rather than branch on an unreachable reject (keeps the
     //    tripwire, agent-principles).
     const game = new Game(this.deps.size);
-    const claim = claimSeat(emptySeatMap(), this.deps.playerId);
+    // First-available on an EMPTY map always succeeds — the reject branch (and presence) is
+    // never reached; pass our own present-set for honesty.
+    const claim = claimSeat(emptySeatMap(), this.deps.playerId, this.presentPeers);
     if (!claim.ok) throw new Error('provisional claim on an empty map must succeed');
     return { game, color: claim.color, seatMap: claim.seatMap };
   }
@@ -447,7 +461,9 @@ export class NetSession {
     const loaded = await loadNetGameByUuid(this.deps.db, uuid);
     if (loaded === undefined) return null;
     const seatMap: SeatMap = loaded.seats ?? emptySeatMap();
-    const claim = claimSeat(seatMap, this.deps.playerId);
+    // A reclaim-or-first-available seed of OUR OWN seat — never the reject branch, so presence
+    // is immaterial here; pass our own present-set for honesty.
+    const claim = claimSeat(seatMap, this.deps.playerId, this.presentPeers);
     if (!claim.ok) throw new Error('seed-from-uuid claim must succeed (owner or first-available)');
     return { game: loaded.game, color: claim.color, seatMap: claim.seatMap };
   }
@@ -660,7 +676,7 @@ export class NetSession {
     // reject to THAT peer (design §5). We keep our own agreed game (the `new`/`current` we brought).
     // Seat OURSELVES first (first-available white on the empty durable map); an empty-map claim always
     // succeeds, so assert rather than branch on an unreachable reject (keeps the tripwire).
-    const mine = claimSeat(emptySeatMap(), this.deps.playerId);
+    const mine = claimSeat(emptySeatMap(), this.deps.playerId, this.presentPeers);
     if (!mine.ok) throw new Error('initiator self-claim on an empty map must succeed');
     let seatMap = mine.seatMap;
     this.seat = mine.color;
@@ -702,7 +718,12 @@ export class NetSession {
       return seatMap;
     }
     // Reconciled + serveable → seat the newcomer (identity-reclaim or first-available on the map).
-    const claim = claimSeat(seatMap, hello.playerId);
+    // The present-set decides the REFUSAL reason when both seats are owned: `room-full` if every
+    // owner is present (scenario 1 — a full active game), `seat-reserved` if a blocking owner is
+    // ABSENT (scenario 5 — the arbiter survives, but the dropped owner's seat is held for its
+    // return). The newcomer is in `presentPeers` (it just announced via a hello → presence), so an
+    // absent OTHER owner is the sole way to reach `seat-reserved`.
+    const claim = claimSeat(seatMap, hello.playerId, this.presentPeers);
     if (!claim.ok) {
       this.publishAdmission(toRejectMessage(this.deps.newMessageId(), claim.reason));
       return seatMap;
@@ -1136,6 +1157,7 @@ export class NetSession {
     this.seatMap = null;
     this.code = null;
     this.peerPresent = false;
+    this.presentPeers = new Set();
     this.joinError = err;
     this.established = false;
     this.myProposal = null;
@@ -1147,6 +1169,11 @@ export class NetSession {
 
   /** Presence handler: mark the peer present iff any peer OTHER than us is in the room. */
   private onPresence(peers: readonly string[]): void {
+    // Record the full present-id snapshot (always including ourselves) so the arbiter's
+    // claimSeat can distinguish `room-full` (all owners present) from `seat-reserved` (a
+    // blocking owner absent). Kept in sync on EVERY presence tick, even when the boolean
+    // peerPresent is unchanged (e.g. a third peer arrives while one was already present).
+    this.presentPeers = new Set([this.deps.playerId, ...peers]);
     const others = peers.filter((id) => id !== this.deps.playerId);
     const present = others.length > 0;
     if (present === this.peerPresent) return;

@@ -16,8 +16,13 @@
  * - **Reserve vacated seats:** a seat OWNED by a different `playerId` is never reassigned
  *   to a new claimant, even while its owner is absent. There is no "free the seat" — an
  *   owner keeps its seat until the game ends. Absence does not vacate ownership.
- * - **Room full = both seats owned** (by anyone). A player who owns NEITHER seat when
- *   both are owned is **rejected** (`room-full`). Spectating is #36 (out of scope).
+ * - **Both seats owned → rejected, with a reason that distinguishes WHY** (design §6/§7):
+ *   - `room-full`     — every blocking owner is **present** — a genuinely full, active
+ *     game (scenario 1: A, B both here, C is the third). No seat is being held open.
+ *   - `seat-reserved` — a blocking seat is owned by an **absent** player, held for its
+ *     return (scenario 5: A dropped, its white is reserved; C is not A). The distinct
+ *     reason is what the #38 seam later turns into a "the seat's owner stepped out"
+ *     UX, kept separate from an outright full room. Spectating is #36 (out of scope).
  *
  * ## Purity & the shared-state seam
  *
@@ -55,8 +60,17 @@ export interface SeatMap {
   readonly black: string | null;
 }
 
-/** Why a {@link claimSeat} was refused. Extended by admission (S.3) with more reasons. */
-export type ClaimRejection = 'room-full';
+/**
+ * Why a {@link claimSeat} was refused (design §6/§7):
+ *
+ *   - `room-full`     — both seats are owned and every blocking owner is PRESENT (a full,
+ *     active game; scenario 1).
+ *   - `seat-reserved` — both seats are owned but a blocking seat is held for an ABSENT owner
+ *     (scenario 5: an owner dropped and its seat is reserved for its return). Distinct from
+ *     `room-full` so the UI / the #38 seam can tell "the room is full" from "someone's seat
+ *     is being held".
+ */
+export type ClaimRejection = 'room-full' | 'seat-reserved';
 
 /**
  * The result of a {@link claimSeat}: either a granted seat with the resulting new map, or
@@ -82,6 +96,12 @@ export function emptySeatMap(): SeatMap {
  * Attempt to claim a seat for `playerId` against `seatMap` (pure — returns a new map,
  * never mutates the input).
  *
+ * `present` is the set of playerIds CURRENTLY in the room (the live-presence snapshot the
+ * caller holds). It never changes WHO may claim (ownership alone does that); it only
+ * distinguishes the TWO refusal reasons when both seats are owned by others — a genuinely
+ * full active game vs a seat being held for an absent owner (design §6/§7). A self-claim /
+ * reclaim never reaches that branch, so the caller may pass any honest snapshot there.
+ *
  * Resolution order (identity-owned, reserve-vacated, first-available white-preferred):
  * 1. **Reclaim** — if `playerId` already owns a seat, return it (same color; map
  *    unchanged in value). A refresh/reconnect is thus a non-event.
@@ -89,10 +109,17 @@ export function emptySeatMap(): SeatMap {
  *    order. This is the ONLY arrival-based assignment, and it fires only on a `null` seat
  *    (genuine creation); a seat OWNED by a different playerId is RESERVED and skipped —
  *    never reassigned to `playerId`.
- * 3. **Room full** — else (both seats owned by OTHER playerIds) → reject `room-full`.
- *    Ownership by an absent player still counts as owned: the seat stays reserved.
+ * 3. **Rejected** — else (both seats owned by OTHER playerIds) → reject. The REASON depends
+ *    on presence (design §6/§7): if EVERY blocking owner is present it is `room-full` (a
+ *    full, active game); if ANY blocking owner is ABSENT it is `seat-reserved` (a seat is
+ *    being held for its owner's return). Ownership by an absent player still counts as
+ *    owned either way — the seat is never handed to the newcomer.
  */
-export function claimSeat(seatMap: SeatMap, playerId: string): ClaimResult {
+export function claimSeat(
+  seatMap: SeatMap,
+  playerId: string,
+  present: ReadonlySet<string>,
+): ClaimResult {
   // 1. Reclaim — identity ownership makes a refresh/reconnect a non-event.
   const owned = seatOf(seatMap, playerId);
   if (owned !== null) {
@@ -109,8 +136,27 @@ export function claimSeat(seatMap: SeatMap, playerId: string): ClaimResult {
       };
     }
   }
-  // 3. Both seats owned by others (reserved) → room full.
-  return { ok: false, reason: 'room-full', seatMap: cloneSeatMap(seatMap) };
+  // 3. Both seats owned by others (reserved). The refusal reason distinguishes a full active
+  //    game from a seat held for an absent owner: `seat-reserved` if ANY owner blocking this
+  //    claim is absent, else `room-full`. Only the blocking owners (the ones we are NOT) are
+  //    considered — the claimant owns neither here, so both current owners block it.
+  const reason: ClaimRejection = blockingOwnersAllPresent(seatMap, present)
+    ? 'room-full'
+    : 'seat-reserved';
+  return { ok: false, reason, seatMap: cloneSeatMap(seatMap) };
+}
+
+/**
+ * True iff every seat owner in `seatMap` is in the `present` set — i.e. the room is
+ * genuinely full and active (no seat is being held for an absent owner). Called only when
+ * the claimant owns neither seat and both are owned, so both owners are the blocking pair.
+ */
+function blockingOwnersAllPresent(seatMap: SeatMap, present: ReadonlySet<string>): boolean {
+  for (const color of SEAT_ORDER) {
+    const owner = seatMap[color];
+    if (owner !== null && !present.has(owner)) return false;
+  }
+  return true;
 }
 
 /** The color `playerId` owns in `seatMap`, or `null` if it owns neither seat. */

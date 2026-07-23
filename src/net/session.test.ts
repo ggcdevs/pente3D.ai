@@ -359,8 +359,10 @@ describe('NetSession — an admitted peer arbitrates once its partner leaves (sc
     a.disconnect();
     await flush();
 
-    // C enters claiming a spot with `defer`. It owns neither seat; white is RESERVED for absent A and
-    // black is B's → room full. The resident B refuses C with the honest typed reason.
+    // C enters claiming a spot with `defer`. It owns neither seat; white is RESERVED for ABSENT A and
+    // black is present B's → the resident B refuses C with the DISTINCT `seat-reserved` reason (a seat
+    // held for its owner's return — design §6/§7 scenario 5), NOT the generic `room-full` (that is
+    // scenario 1, where both owners are present). A dropped, so A is not in B's presence snapshot.
     const c = makeSession(hub, 'player-c', {
       db: dbC,
       newMessageId: idSource('player-c'),
@@ -370,7 +372,7 @@ describe('NetSession — an admitted peer arbitrates once its partner leaves (sc
 
     expect(c.state().phase).toBe('offline');
     expect(c.state().seat).toBeNull();
-    expect(c.lastRejectReason()).toBe('room-full');
+    expect(c.lastRejectReason()).toBe('seat-reserved');
     // B never handed out A's reserved white — the surviving resident still reserves it for player-a.
     expect(b.seatOwners()).toEqual({ white: 'player-a', black: 'player-b' });
   });

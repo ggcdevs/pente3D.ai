@@ -583,12 +583,14 @@ test.describe('two-context session model over the injected MockTransport (S.7, e
         pente.dispatch('joinGame');
       }, code);
 
-      // The DESIRED outcome (design §6.5): C is REJECTED with a typed reason and never seated onto A's
-      // reserved white. Asserted on C's own observable state (proof-by-state). This is the target the
-      // fixme waits on — B must arbitrate on A's departure + seats must be durable for it to hold.
+      // The DESIRED outcome (design §6.5 / §7 scenario 5): C is REJECTED with the DISTINCT typed reason
+      // `seat-reserved` — A's white is held for its ABSENT owner, NOT the generic `room-full` (scenario
+      // 1, both owners present). Pinned to the exact value on C's own observable state (proof-by-state),
+      // mirroring scenario 1's `.toBe('room-full')` — the scenario-1-vs-5 reason distinction the design
+      // requires. C is never seated onto A's reserved white.
       await waitOffline(c.page);
       expect(await seatOf(c.page)).toBeNull();
-      expect(await lastReject(c.page)).not.toBeNull();
+      expect(await lastReject(c.page)).toBe('seat-reserved');
       // The surviving resident B still reserves A's white for player-a — the spot was never handed out.
       expect((await owners(b.page))?.white).toBe('player-a');
     } finally {
