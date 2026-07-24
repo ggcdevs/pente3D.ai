@@ -68,31 +68,53 @@ function glyphAt(g: GameState, key: string, lastMove: string | null): string {
   return key === lastMove ? GLYPH_LAST[p] : GLYPH[p];
 }
 
-/**
- * `layers` — the N z-slices side by side ("a matrix of matrices"). Within a slice
- * columns are x (0→N-1, left→right) and rows are y (N-1→0, top→bottom) so the
- * usual cartesian "up is up" holds. The last move shows as a lowercase glyph.
- */
-const layersView: View = (s) => {
-  const g = s.game;
-  if (!g) return header(s);
-  const n = g.size;
-  const axis = Array.from({ length: n }, (_, i) => i);
+type Axis = 'x' | 'y' | 'z';
 
-  const titleRow =
-    '   ' + axis.map((z) => `z=${z}`.padEnd(n * 2 + 1)).join('  ');
-  const rows: string[] = [titleRow];
-  for (let y = n - 1; y >= 0; y--) {
-    const slices = axis.map((z) =>
-      axis.map((x) => glyphAt(g, `${x},${y},${z}`, s.lastMove)).join(' '),
-    );
-    rows.push(` ${y} ` + slices.join('    '));
-  }
-  const xLegend = '   ' + 'x:' + axis.join(' ');
-  rows.push(xLegend);
-
-  return `${header(s)}\n\n${rows.join('\n')}\n\nglyphs: O=white X=black ${EMPTY}=empty (lowercase = last move)`;
+/** For a given slice axis, which axis is the panels' rows and which is the columns. */
+const FRAME: Record<Axis, { row: Axis; col: Axis }> = {
+  z: { row: 'y', col: 'x' }, // the original layout — up is y, across is x
+  y: { row: 'z', col: 'x' },
+  x: { row: 'z', col: 'y' },
 };
+
+function keyFor(sliceAxis: Axis, s: number, row: Axis, r: number, col: Axis, c: number): string {
+  const v: Record<Axis, number> = { x: 0, y: 0, z: 0 };
+  v[sliceAxis] = s;
+  v[row] = r;
+  v[col] = c;
+  return `${v.x},${v.y},${v.z}`;
+}
+
+/**
+ * Build a "matrix of matrices" view that slices the cube along `sliceAxis`: the N
+ * slices sit side by side, each a 2D grid over the other two axes (rows high→low so
+ * "up is up"). `layers` slices along z (the original); `layers-y` / `layers-x` cut
+ * the other ways — handy when the action has flattened onto one plane. The last move
+ * shows as a lowercase glyph.
+ */
+function makeSlicesView(sliceAxis: Axis): View {
+  const { row, col } = FRAME[sliceAxis];
+  return (s) => {
+    const g = s.game;
+    if (!g) return header(s);
+    const n = g.size;
+    const axis = Array.from({ length: n }, (_, i) => i);
+
+    const titleRow = '   ' + axis.map((v) => `${sliceAxis}=${v}`.padEnd(n * 2 + 1)).join('  ');
+    const rows: string[] = [titleRow];
+    for (let r = n - 1; r >= 0; r--) {
+      const panels = axis.map((sv) =>
+        axis.map((c) => glyphAt(g, keyFor(sliceAxis, sv, row, r, col, c), s.lastMove)).join(' '),
+      );
+      rows.push(` ${r} ` + panels.join('    '));
+    }
+    rows.push('   ' + `${col}:` + axis.join(' ') + `   (rows = ${row})`);
+
+    return `${header(s)}\n\n${rows.join('\n')}\n\nglyphs: O=white X=black ${EMPTY}=empty (lowercase = last move)`;
+  };
+}
+
+const layersView = makeSlicesView('z');
 
 /** `list` — every placed stone, in play order isn't tracked so sorted by coord. */
 const listView: View = (s) => {
@@ -112,7 +134,10 @@ const listView: View = (s) => {
 };
 
 export const VIEWS: Record<string, View> = {
-  layers: layersView,
+  layers: layersView, // z-slices (default)
+  'layers-z': layersView,
+  'layers-y': makeSlicesView('y'),
+  'layers-x': makeSlicesView('x'),
   list: listView,
 };
 
