@@ -29,8 +29,11 @@ type Pente = {
   getPieces(): { node: string }[] | null;
   getHeadHash(): string | null;
   getNet(): { phase: string; seat: string | null; code: string | null } | null;
+  getNetGameUuid(): string | null;
   place(coords: [number, number, number]): unknown;
   dispatch(id: string): boolean | null;
+  setPendingJoinCode(code: string): void;
+  leaveNet(): void;
 };
 
 /**
@@ -125,12 +128,31 @@ const headHash = (page: import('@playwright/test').Page) =>
   page.evaluate(() => (window as unknown as { __pente: Pente }).__pente.getHeadHash());
 const state = (page: import('@playwright/test').Page) =>
   page.evaluate(() => (window as unknown as { __pente: Pente }).__pente.getState());
+const gameUuid = (page: import('@playwright/test').Page) =>
+  page.evaluate(() => (window as unknown as { __pente: Pente }).__pente.getNetGameUuid());
 
 async function waitConnected(page: import('@playwright/test').Page) {
   await page.waitForFunction(() => {
     const p = (window as unknown as { __pente: Pente }).__pente;
     return p.getNet()?.phase === 'connected';
   });
+}
+
+async function waitOffline(page: import('@playwright/test').Page) {
+  await page.waitForFunction(() => {
+    const p = (window as unknown as { __pente: Pente }).__pente;
+    return p.getNet()?.phase === 'offline';
+  });
+}
+
+/** Host a `new` game at a SPECIFIC room code (the panel's stash-code-then-hostGame seam). */
+async function hostAt(page: import('@playwright/test').Page, code: string) {
+  await page.evaluate((c: string) => {
+    const p = (window as unknown as { __pente: Pente }).__pente;
+    p.setPendingJoinCode(c);
+    p.dispatch('hostGame');
+  }, code);
+  await waitConnected(page);
 }
 
 test('LOCAL move routes through the session (headHash advances on the authoritative game)', async ({
@@ -268,4 +290,51 @@ test('JOINER-INHERITS-BOARD: a late joiner adopts the host board that already ha
   expect(await headHash(joiner)).toBe(await headHash(host));
 
   await context.close();
+});
+
+/**
+ * CODE REUSE FOR A NEW GAME (#43) — the single-browser /dev/ repro end-to-end. Host a game at a
+ * chosen code, place pieces (leaving a persisted `net-room:{code}` record), leave, then re-host
+ * ("New Game") at the SAME code. Re-using a code with `new` must MINT a FRESH game — an EMPTY board
+ * with a DIFFERENT game uuid — never resurrect the prior board. The bug kept the prior pieces (the
+ * durable empty-room reclaim adopted the persisted room game regardless of the `new` proposal kind).
+ * Asserts on OBSERVABLE state (rendered pieces + game uuid), never a log line (agent-principles #3).
+ */
+test('CODE-REUSE-NEW: re-hosting the SAME code with New Game starts a FRESH empty board, new uuid (#43)', async ({
+  page,
+}) => {
+  await installBroadcastMock(page, 'reuse-host');
+  await ready(page);
+
+  const CODE = 'REUSE1';
+
+  // First game at CODE: host, then place a couple of pieces so a non-empty board is persisted.
+  await hostAt(page, CODE);
+  expect((await net(page))?.code).toBe(CODE);
+  const firstUuid = await gameUuid(page);
+  expect(firstUuid).not.toBeNull();
+  // Place white's move (this solo host owns white; the turn gate blocks the absent black), leaving a
+  // non-empty board — one piece is enough for the repro (a re-used code must not resurrect it).
+  await page.evaluate(() => (window as unknown as { __pente: Pente }).__pente.place([0, 0, 0]));
+  expect((await state(page))?.pieces['0,0,0']).toBe('white');
+  expect(Object.keys((await state(page))!.pieces).length).toBe(1);
+
+  // Leave the room; the persisted room-state record for CODE now holds the played board.
+  await page.evaluate(() => (window as unknown as { __pente: Pente }).__pente.leaveNet());
+  await waitOffline(page);
+
+  // Re-host the SAME code — this is the "New Game at a re-used code" the user tried. It must start
+  // OVER, not reclaim the old board.
+  await hostAt(page, CODE);
+  expect((await net(page))?.code).toBe(CODE);
+
+  // FRESH: the board is empty and the game identity is DIFFERENT from the prior game. The bug kept
+  // the prior piece + re-used firstUuid.
+  const reuseState = await state(page);
+  expect(Object.keys(reuseState!.pieces).length).toBe(0);
+  const secondUuid = await gameUuid(page);
+  expect(secondUuid).not.toBeNull();
+  expect(secondUuid).not.toBe(firstUuid);
+  // A `new` game claims white as first owner on a fresh board.
+  expect((await net(page))?.seat).toBe('white');
 });

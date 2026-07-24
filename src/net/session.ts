@@ -420,11 +420,16 @@ export class NetSession {
    *    arbiter's honesty guard rejects its OWN resume as `game-mismatch` (the provisional fresh uuid
    *    would differ from the reconciled `existing` uuid). We reclaim the seat that game's persisted
    *    seat map owns for us (or take first-available white if it records no owner yet).
-   *  - **`defer`/`new`, but we OWN a seat in this room's persisted game** — reload that persisted
-   *    game + seat map and RECLAIM our color. This is what lets the FIRST returning owner re-seed an
-   *    empty room as the color it owned (black stays black) instead of grabbing white by arrival
-   *    (design §6.4, scenario 4).
-   *  - **otherwise** — a genuinely fresh game, first-available white on an empty map (true creation).
+   *  - **`defer` (dealer's choice / a reconnect), and we OWN a seat in this room's persisted game** —
+   *    reload that persisted game + seat map and RECLAIM our color. This is what lets the FIRST
+   *    returning owner re-seed an empty room as the color it owned (black stays black) instead of
+   *    grabbing white by arrival (design §6.4, scenario 4), and carries a `reconnect()` back onto its
+   *    in-progress game. GATED to `defer` (issue #43): a `new` proposal is a "start over" request, so
+   *    it must NOT adopt the persisted room game even when we own a seat in it — a room code is a
+   *    rendezvous channel, not a game (design §2.1). `new` falls through to genuine creation below.
+   *  - **`new` (or `defer` with no owned seat here)** — a genuinely fresh game, first-available white
+   *    on an empty map (true creation). For `new` this OVERWRITES the stale `net-room:{code}` record
+   *    when the fresh game establishes/persists, so re-using a code never resurrects the old board.
    *
    * This is the pre-settle placeholder so the engine is live to publish a hello + receive admission;
    * it is REPLACED by the resident's/initiator's authoritative game if we are admitted, and kept (as
@@ -445,17 +450,28 @@ export class NetSession {
       // The named game is not in our archive — fall through to a fresh game (an honest degrade: we
       // could not resume what we do not hold, so we bring an empty game rather than a wrong one).
     }
-    // 2. defer/new (or a resume we could not resolve): if we already OWN a seat in this room's
-    //    persisted game, reload it and reclaim our color — the durable empty-room reclaim.
-    const room = await this.loadRoomState(code);
-    if (room !== null && seatOf(room.seatMap, this.deps.playerId) !== null) {
-      // A reclaim of an already-OWNED seat: the reject branch (and thus presence) is never
-      // reached, so the present-set only needs to be honest — ourselves.
-      const claim = claimSeat(room.seatMap, this.deps.playerId, this.presentPeers);
-      if (!claim.ok) throw new Error('reclaim of an owned seat must succeed');
-      return { game: room.game, color: claim.color, seatMap: claim.seatMap };
+    // 2. `defer` ("dealer's choice" / a reconnect) with an already-OWNED seat in this room's persisted
+    //    game: reload it and reclaim our color — the durable empty-room reclaim (design §6.4, scenario
+    //    4) that also carries a `reconnect()` back onto its in-progress game + seat (#40/#35).
+    //
+    //    This is GATED to `defer` (issue #43): a `new` proposal is a request to START OVER, so it must
+    //    NEVER adopt the game persisted under `net-room:{code}`. A room code is a rendezvous channel,
+    //    not a game (design §2.1) — re-using a code with `new` must MINT a fresh game (case 3 below),
+    //    which then OVERWRITES the stale room record when it establishes/persists. Adopting the stale
+    //    room game for `new` was the #43 bug: "New Game" at a re-used code resurrected the old board.
+    //    (`resume`/`current` never reach here — they returned above with the game their uuid names.)
+    if (proposal.kind === 'defer') {
+      const room = await this.loadRoomState(code);
+      if (room !== null && seatOf(room.seatMap, this.deps.playerId) !== null) {
+        // A reclaim of an already-OWNED seat: the reject branch (and thus presence) is never
+        // reached, so the present-set only needs to be honest — ourselves.
+        const claim = claimSeat(room.seatMap, this.deps.playerId, this.presentPeers);
+        if (!claim.ok) throw new Error('reclaim of an owned seat must succeed');
+        return { game: room.game, color: claim.color, seatMap: claim.seatMap };
+      }
     }
-    // 3. Genuine creation: a fresh empty game, first-available white on an empty map. claimSeat on an
+    // 3. Genuine creation (a `new` proposal, or a `defer` with no owned seat here): a fresh empty game,
+    //    first-available white on an empty map. claimSeat on an
     //    empty map always succeeds; assert rather than branch on an unreachable reject (keeps the
     //    tripwire, agent-principles).
     const game = new Game(this.deps.size);

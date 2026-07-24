@@ -15,7 +15,7 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { openDatabase } from '../persist/db';
-import { saveGame } from '../persist/archive';
+import { saveGame, NET_ROOM_RESULT } from '../persist/archive';
 import { Game } from '../core/game';
 import { headHash } from '../core/eventLog';
 import { coordsOf } from '../core/coords';
@@ -596,6 +596,98 @@ describe('NetSession — durable seats survive an empty room (design §6.4, scen
     // a fresh one); both peers converge on that owned uuid.
     expect(b2.gameUuid()).toBe(uuidBefore);
     expect(a2.gameUuid()).toBe(uuidBefore);
+  });
+});
+
+/**
+ * CODE REUSE FOR A NEW GAME (#43, design §2.1/§6 "Code reuse for a new game"): a room code is a
+ * rendezvous channel, NOT a game — reusing a code with a `new` (or `random`) proposal must MINT a
+ * FRESH game, never resurrect the prior game persisted under `net-room:{code}`. The bug: the durable
+ * empty-room reclaim in `buildProvisionalSeat` adopted the persisted room game whenever THIS browser
+ * owned a seat in it — REGARDLESS of the proposal kind — so a `new` proposal at a re-used code
+ * reclaimed the stale board (same uuid, same pieces) instead of starting over.
+ *
+ * These model the SINGLE-BROWSER /dev/ repro: play a game at code X (leaving a persisted room record
+ * with ≥1 piece + our owned seat), then re-enter code X choosing "New Game". The seed of the prior
+ * record is written directly under the room-scoped key — exactly what a real prior game leaves — so
+ * the test asserts on the OUTCOME (a fresh empty game, new uuid) independent of when persistence ran.
+ */
+describe('NetSession — re-using a code with a NEW proposal MINTS a fresh game (#43)', () => {
+  /**
+   * Persist a `net-room:{ROOM}` record holding `game` with `seatMap` — the durable artifact a prior
+   * game at this code leaves behind (via `persistRoomState`). Mirrors the internal room-scoped key
+   * (`net-room:{code}`) and the `NET_ROOM_RESULT` marker so `loadRoomState` reads it back verbatim.
+   */
+  async function seedRoomState(
+    into: IDBDatabase,
+    game: Game,
+    seatMap: { white: string | null; black: string | null },
+  ): Promise<void> {
+    await saveGame(into, `net-room:${ROOM}`, game, {
+      players: {},
+      result: NET_ROOM_RESULT,
+      startedAt: 0,
+      seats: seatMap,
+    });
+  }
+
+  it('a `new` proposal at a code with a prior game starts EMPTY with a DIFFERENT uuid (not the stale board)', async () => {
+    const hub = new MockRelayHub();
+    const own = await openDatabase(`net-reuse-new-${Math.random().toString(36).slice(2)}`);
+
+    // A prior game at ROOM left a durable record: a non-empty board whose white seat WE own.
+    const prior = new Game(SIZE);
+    prior.place(coordsOf('0,0,0'));
+    prior.place(coordsOf('1,1,1'));
+    prior.place(coordsOf('2,2,2'));
+    const priorUuid = prior.uuid;
+    expect(Object.keys(prior.state().pieces).length).toBe(3); // sanity: the prior board has pieces.
+    await seedRoomState(own, prior, { white: 'player-a', black: 'player-b' });
+
+    // Re-use ROOM choosing "New Game" (a `new` proposal). Reusing a code must NOT resurrect the game.
+    const a = makeSession(hub, 'player-a', { db: own });
+    await a.enter(ROOM, NEW);
+    await a.whenPersisted();
+    await flush();
+
+    expect(a.state().phase).toBe('connected');
+    // The board is FRESH — empty, with a game identity DISTINCT from the stale one. The bug kept the
+    // 3 prior pieces (adopted `room.game`) and re-used `priorUuid`.
+    expect(Object.keys(a.gameState()!.pieces).length).toBe(0);
+    expect(a.gameUuid()).not.toBe(priorUuid);
+    expect(a.gameUuid()).not.toBeNull();
+    // A `new` game claims WHITE as first owner on a FRESH map — black is unowned, not the stale owner.
+    expect(a.state().seat).toBe('white');
+    expect(a.seatOwners()).toEqual({ white: 'player-a', black: null });
+  });
+
+  it("overwrites the stale `net-room:{code}` record so a later reconnect reclaims the FRESH game, not the old one", async () => {
+    const hub = new MockRelayHub();
+    const own = await openDatabase(`net-reuse-overwrite-${Math.random().toString(36).slice(2)}`);
+
+    const prior = new Game(SIZE);
+    prior.place(coordsOf('0,0,0'));
+    const priorUuid = prior.uuid;
+    await seedRoomState(own, prior, { white: 'player-a', black: 'player-b' });
+
+    const a = makeSession(hub, 'player-a', { db: own });
+    await a.enter(ROOM, NEW);
+    await a.whenPersisted();
+    const freshUuid = a.gameUuid();
+    a.disconnect();
+    await flush();
+
+    // A reconnect (defer) into the empty room reclaims from the persisted record: it must be the FRESH
+    // game the `new` established (overwrote the stale record), never the pre-reuse board.
+    const a2 = makeSession(hub, 'player-a', { db: own, newMessageId: idSource('player-a-return') });
+    await a2.enter(ROOM, DEFER);
+    await a2.whenPersisted();
+    await flush();
+
+    expect(a2.state().phase).toBe('connected');
+    expect(a2.gameUuid()).toBe(freshUuid);
+    expect(a2.gameUuid()).not.toBe(priorUuid);
+    expect(Object.keys(a2.gameState()!.pieces).length).toBe(0);
   });
 });
 
