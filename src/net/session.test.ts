@@ -201,6 +201,152 @@ describe('NetSession.reconnect — a returning owner RECLAIMS its seat by identi
     expect(a.state().phase).toBe('connected');
     expect(a.state().seat).toBe('white');
   });
+
+  /**
+   * BUG #40 (cross-feature: rematch color-alternation #12 × identity-owned reconnect #35). After a
+   * mutual rematch the seats SWAP (design/#12: "colors ALTERNATE every game"). If a player then drops
+   * and reconnects, it must reclaim the color it owns in the CURRENT (post-swap) game — NOT its
+   * pre-swap color. The bug: `resetForRematch` swapped only `this.seat` and left the durable seat map
+   * (`this.seatMap`, and the persisted `net-room:{code}` record) holding the PRE-swap ownership, so a
+   * resident arbiter re-admitted the returner onto its OLD color → two same-color seats → turn-gate
+   * deadlock ("no one can move"). This asserts the fix on OBSERVABLE state on BOTH contexts.
+   */
+  it('a reconnect after a rematch color-swap reclaims the CURRENT (swapped) color, not the pre-swap one (#40)', async () => {
+    const hub = new MockRelayHub();
+    // TWO distinct browsers (each its own IndexedDB) so their room-scoped persisted seat maps do not
+    // collide — mirrors the e2e's per-context isolation and the real /dev/ repro.
+    const dbA = await openDatabase(`net-rematch-a-${Math.random().toString(36).slice(2)}`);
+    const dbB = await openDatabase(`net-rematch-b-${Math.random().toString(36).slice(2)}`);
+    const a = makeSession(hub, 'player-a', { db: dbA });
+    const b = makeSession(hub, 'player-b', { db: dbB });
+
+    // A enters → white; B enters → black (the #31-fixed distinct seats).
+    await a.enter(ROOM, NEW);
+    await b.enter(ROOM, DEFER);
+    await a.whenPersisted();
+    await b.whenPersisted();
+    await flush();
+    expect(a.state().seat).toBe('white');
+    expect(b.state().seat).toBe('black');
+
+    // Play a couple of moves so the game is genuinely underway before the rematch (faithful to the
+    // "complete a game then rematch" repro; the reset does not depend on a win, only on a live game).
+    a.syncEngine()!.place(coordsOf('0,0,0')); // white
+    await flush();
+    b.syncEngine()!.place(coordsOf('1,1,1')); // black
+    await flush();
+
+    // MUTUAL rematch: BOTH clients reset in place on the accepted resolution (proposer + accepter),
+    // each alternating its OWN color deterministically → colors SWAP (design/#12).
+    expect(a.resetForRematch()).toBe(true);
+    expect(b.resetForRematch()).toBe(true);
+    // Await the durable writes the reset must now commit so the reconnect below reads COMMITTED state.
+    await a.whenPersisted();
+    await b.whenPersisted();
+    await flush();
+
+    // Colors have SWAPPED on both contexts: A is now black, B is now white.
+    expect(a.state().seat).toBe('black');
+    expect(b.state().seat).toBe('white');
+    // The durable seat map on BOTH contexts reflects the SWAP (this is what a reconnect reclaims from).
+    expect(a.seatOwners()).toEqual({ white: 'player-b', black: 'player-a' });
+    expect(b.seatOwners()).toEqual({ white: 'player-b', black: 'player-a' });
+
+    // B (now WHITE) drops. A stays resident and is the arbiter for B's return.
+    b.disconnect();
+    await flush();
+
+    // B reconnects (same playerId = same browser; fresh admission ids so its hello is not deduped).
+    const b2 = makeSession(hub, 'player-b', {
+      db: dbB,
+      newMessageId: idSource('player-b-return'),
+    });
+    await b2.enter(ROOM, DEFER);
+    await flush();
+
+    // B must resume WHITE — the color it owns in the CURRENT post-swap game — NOT its pre-swap black.
+    expect(b2.state().phase).toBe('connected');
+    expect(b2.state().seat).toBe('white');
+    // Seats stay DISTINCT and identity-stable across the reconnect: A black, B white. Two same-color
+    // seats (the bug) would fail here.
+    expect(b2.seatOwners()).toEqual({ white: 'player-b', black: 'player-a' });
+    expect(a.seatOwners()).toEqual({ white: 'player-b', black: 'player-a' });
+    expect(a.state().seat).toBe('black');
+
+    // Turn gate is HEALTHY: on a fresh post-rematch board white moves first, so exactly ONE seat may
+    // place. B (white) may place; A (black) may not — not the deadlock where neither/both could.
+    expect(b2.canPlace()).toBe(true);
+    expect(a.canPlace()).toBe(false);
+  });
+
+  /**
+   * BUG #40, empty-room facet: after a rematch swap BOTH players drop, then the first owner returns
+   * into the EMPTY room and must reclaim its SWAPPED color from the PERSISTED `net-room:{code}` record
+   * — proving `resetForRematch` now persists the swapped seat map (not just updates it in memory). If
+   * the reset failed to persist, the returner would reclaim its PRE-swap color from the stale durable
+   * record (the same two-same-color deadlock, this time via the empty-room reclaim path).
+   */
+  it('after a rematch swap BOTH drop; the first returner reclaims its SWAPPED color from the PERSISTED map (#40)', async () => {
+    const hub = new MockRelayHub();
+    const dbA = await openDatabase(`net-rematch-empty-a-${Math.random().toString(36).slice(2)}`);
+    const dbB = await openDatabase(`net-rematch-empty-b-${Math.random().toString(36).slice(2)}`);
+    const a = makeSession(hub, 'player-a', { db: dbA });
+    const b = makeSession(hub, 'player-b', { db: dbB });
+
+    await a.enter(ROOM, NEW);
+    await b.enter(ROOM, DEFER);
+    await a.whenPersisted();
+    await b.whenPersisted();
+    await flush();
+    expect(a.state().seat).toBe('white');
+    expect(b.state().seat).toBe('black');
+
+    // Mutual rematch → colors swap: A black, B white. Commit both browsers' durable post-swap state.
+    expect(a.resetForRematch()).toBe(true);
+    expect(b.resetForRematch()).toBe(true);
+    await a.whenPersisted();
+    await b.whenPersisted();
+    await flush();
+    const swappedUuid = a.gameUuid();
+    expect(a.state().seat).toBe('black');
+    expect(b.state().seat).toBe('white');
+
+    // BOTH drop → the room empties on the relay. Ownership now lives ONLY in each browser's persisted
+    // room-state record, which the reset must have written as the SWAPPED map.
+    a.disconnect();
+    b.disconnect();
+    await flush();
+
+    // B returns FIRST into the empty room: it must re-seed as WHITE (its post-swap owned color),
+    // reclaiming from its OWN persisted record — not its pre-swap black.
+    const b2 = makeSession(hub, 'player-b', {
+      db: dbB,
+      newMessageId: idSource('player-b-return'),
+    });
+    await b2.enter(ROOM, DEFER);
+    await b2.whenPersisted();
+    await flush();
+
+    expect(b2.state().phase).toBe('connected');
+    expect(b2.state().seat).toBe('white');
+    expect(b2.seatOwners()).toEqual({ white: 'player-b', black: 'player-a' });
+
+    // A returns second: the resident B admits it back onto its RESERVED black.
+    const a2 = makeSession(hub, 'player-a', {
+      db: dbA,
+      newMessageId: idSource('player-a-return'),
+    });
+    await a2.enter(ROOM, DEFER);
+    await flush();
+
+    expect(a2.state().seat).toBe('black');
+    expect(a2.seatOwners()).toEqual({ white: 'player-b', black: 'player-a' });
+    // Both converge on the post-rematch game identity, and the turn gate is healthy (white to move).
+    expect(a2.gameUuid()).toBe(swappedUuid);
+    expect(b2.gameUuid()).toBe(swappedUuid);
+    expect(b2.canPlace()).toBe(true);
+    expect(a2.canPlace()).toBe(false);
+  });
 });
 
 describe('NetSession.enter — a live session refuses a second enter (no double-connect)', () => {

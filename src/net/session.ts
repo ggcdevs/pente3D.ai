@@ -996,17 +996,26 @@ export class NetSession {
    * @returns `true` if the in-place reset ran, `false` if not connected/seated.
    */
   resetForRematch(): boolean {
-    if (this.engine === null || this.seat === null) return false;
+    if (this.engine === null || this.seat === null || this.seatMap === null) return false;
     const me = this.deps.playerId;
-    // Alternate THIS client's seat from its own current color (deterministic; no peer coordination).
-    const swapped = alternateSeats(
-      this.seat === 'white' ? { white: me, black: null } : { white: null, black: me },
-    );
+    // Alternate the WHOLE identity-owned seat map (a pure involution: white↔black), NOT just this
+    // client's own color. Both peers alternate their own copy of the same map deterministically, so
+    // the swap needs no coordination and stays identity-stable: {white:A,black:B} → {white:B,black:A}.
+    // This is the durable ownership a later reconnect reclaims from — leaving it at the PRE-swap map
+    // (the #40 bug) let a resident arbiter re-admit a returner onto its OLD color → two same-color
+    // seats → turn-gate deadlock.
+    const swapped = alternateSeats(this.seatMap);
     const nextColor = seatOf(swapped, me) ?? this.seat;
     this.seat = nextColor;
+    this.seatMap = swapped;
     // Swap a fresh empty game into the live engine over the SAME transport, re-basing the undo rule
     // onto the swapped color and bumping the epoch so the peer adopts the fresh generation.
     this.engine.resetGame(new Game(this.deps.size), nextColor as Player);
+    // Persist the SWAPPED seat map + the fresh rematch game under the room-scoped id (design §2.3/§6.4),
+    // reusing the SAME durable seam `enter`/establish use — so a subsequent reconnect (empty-room reclaim
+    // OR resident re-admission) reclaims the CURRENT color, not the stale pre-swap one (#40 fix). Records
+    // the write in `pendingPersist` so `whenPersisted()` observes durability; a failure rejects honestly.
+    void this.persistRoomState();
     // The rematch resolved and has now been applied — clear it so it cannot re-fire and the fresh
     // game starts from an idle handshake.
     this.handshake = clearResolution(this.handshake);
