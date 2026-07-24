@@ -29,6 +29,7 @@ graph LR
         src_input_setup_ts["setup.ts"]
     end
     subgraph src/net
+        src_net_admission_ts["admission.ts"]
         src_net_appSession_ts["appSession.ts"]
         src_net_endState_ts["endState.ts"]
         src_net_handshake_ts["handshake.ts"]
@@ -84,7 +85,6 @@ graph LR
         src_ui_widgets_historySlider_ts["historySlider.ts"]
         src_ui_widgets_menu_ts["menu.ts"]
         src_ui_widgets_menuModel_ts["menuModel.ts"]
-        src_ui_widgets_net_ts["net.ts"]
         src_ui_widgets_netModel_ts["netModel.ts"]
         src_ui_widgets_netPanel_ts["netPanel.ts"]
         src_ui_widgets_netPanelModel_ts["netPanelModel.ts"]
@@ -105,6 +105,7 @@ graph LR
     src_core_game_ts --> src_core_eventLog_ts
     src_core_game_ts --> src_core_gameState_ts
     src_core_game_ts --> src_core_placePiece_ts
+    src_core_game_ts --> src_util_randomId_ts
     src_core_gameState_ts --> src_core_coords_ts
     src_core_lines_ts --> src_core_axes_ts
     src_core_lines_ts --> src_core_coords_ts
@@ -115,6 +116,7 @@ graph LR
     src_core_serialize_ts --> src_core_eventLog_ts
     src_core_serialize_ts --> src_core_game_ts
     src_core_serialize_ts --> src_core_gameState_ts
+    src_core_serialize_ts --> src_util_randomId_ts
     src_debug_window_ts --> src_config_config_ts
     src_debug_window_ts --> src_core_coords_ts
     src_debug_window_ts --> src_core_gameState_ts
@@ -125,6 +127,8 @@ graph LR
     src_debug_window_ts --> src_net_endState_ts
     src_debug_window_ts --> src_net_handshake_ts
     src_debug_window_ts --> src_net_notifyGlue_ts
+    src_debug_window_ts --> src_net_seats_ts
+    src_debug_window_ts --> src_net_sync_ts
     src_debug_window_ts --> src_net_undoRedo_ts
     src_debug_window_ts --> src_render_cameraControls_ts
     src_debug_window_ts --> src_render_hover_ts
@@ -151,17 +155,21 @@ graph LR
     src_main_ts --> src_core_game_ts
     src_main_ts --> src_debug_log_ts
     src_main_ts --> src_debug_window_ts
+    src_main_ts --> src_net_admission_ts
     src_main_ts --> src_net_appSession_ts
     src_main_ts --> src_net_endState_ts
     src_main_ts --> src_net_netRouting_ts
     src_main_ts --> src_net_notifyGlue_ts
     src_main_ts --> src_net_rematch_ts
+    src_main_ts --> src_net_seats_ts
+    src_main_ts --> src_net_sync_ts
     src_main_ts --> src_persist_archive_ts
     src_main_ts --> src_persist_db_ts
     src_main_ts --> src_persist_gameLifecycle_ts
     src_main_ts --> src_render_scene_ts
     src_main_ts --> src_ui_setup_ts
     src_main_ts --> src_ui_widgets_archiveModel_ts
+    src_main_ts --> src_ui_widgets_netPanelModel_ts
     src_main_ts --> src_util_randomId_ts
     src_net_appSession_ts --> src_config_config_ts
     src_net_appSession_ts --> src_debug_log_ts
@@ -191,6 +199,7 @@ graph LR
     src_net_session_ts --> src_core_coords_ts
     src_net_session_ts --> src_core_game_ts
     src_net_session_ts --> src_core_gameState_ts
+    src_net_session_ts --> src_net_admission_ts
     src_net_session_ts --> src_net_endState_ts
     src_net_session_ts --> src_net_handshake_ts
     src_net_session_ts --> src_net_seats_ts
@@ -200,10 +209,13 @@ graph LR
     src_net_session_ts --> src_net_undoRedo_ts
     src_net_session_ts --> src_persist_archive_ts
     src_net_session_ts --> src_ui_widgets_netModel_ts
+    src_net_session_ts --> src_util_randomId_ts
     src_net_sync_ts --> src_core_coords_ts
     src_net_sync_ts --> src_core_eventLog_ts
     src_net_sync_ts --> src_core_game_ts
     src_net_sync_ts --> src_core_gameState_ts
+    src_net_sync_ts --> src_net_admission_ts
+    src_net_sync_ts --> src_net_seats_ts
     src_net_sync_ts --> src_net_transport_ts
     src_net_sync_ts --> src_persist_archive_ts
     src_net_sync_ts --> src_util_emitter_ts
@@ -282,6 +294,7 @@ graph LR
     src_ui_container_ts --> src_ui_layout_ts
     src_ui_container_ts --> src_ui_registry_ts
     src_ui_setup_ts --> src_config_config_ts
+    src_ui_setup_ts --> src_net_admission_ts
     src_ui_setup_ts --> src_net_endState_ts
     src_ui_setup_ts --> src_ui_container_ts
     src_ui_setup_ts --> src_ui_layout_ts
@@ -294,9 +307,9 @@ graph LR
     src_ui_setup_ts --> src_ui_widgets_helpModel_ts
     src_ui_setup_ts --> src_ui_widgets_historySlider_ts
     src_ui_setup_ts --> src_ui_widgets_menu_ts
-    src_ui_setup_ts --> src_ui_widgets_net_ts
     src_ui_setup_ts --> src_ui_widgets_netModel_ts
     src_ui_setup_ts --> src_ui_widgets_netPanel_ts
+    src_ui_setup_ts --> src_ui_widgets_netPanelModel_ts
     src_ui_setup_ts --> src_ui_widgets_settings_ts
     src_ui_setup_ts --> src_ui_widgets_sliderModel_ts
     src_ui_widgets_archive_ts --> src_ui_registry_ts
@@ -305,6 +318,8 @@ graph LR
     src_ui_widgets_banner_ts --> src_net_undoRedo_ts
     src_ui_widgets_banner_ts --> src_ui_registry_ts
     src_ui_widgets_banner_ts --> src_ui_widgets_bannerModel_ts
+    src_ui_widgets_banner_ts --> src_ui_widgets_netModel_ts
+    src_ui_widgets_banner_ts --> src_ui_widgets_sliderModel_ts
     src_ui_widgets_bannerModel_ts --> src_core_gameState_ts
     src_ui_widgets_endStateOverlay_ts --> src_net_endState_ts
     src_ui_widgets_endStateOverlay_ts --> src_ui_registry_ts
@@ -314,8 +329,7 @@ graph LR
     src_ui_widgets_historySlider_ts --> src_ui_widgets_sliderModel_ts
     src_ui_widgets_menu_ts --> src_ui_registry_ts
     src_ui_widgets_menu_ts --> src_ui_widgets_menuModel_ts
-    src_ui_widgets_net_ts --> src_ui_registry_ts
-    src_ui_widgets_net_ts --> src_ui_widgets_netModel_ts
+    src_ui_widgets_netPanel_ts --> src_net_admission_ts
     src_ui_widgets_netPanel_ts --> src_ui_registry_ts
     src_ui_widgets_netPanel_ts --> src_ui_widgets_netModel_ts
     src_ui_widgets_netPanel_ts --> src_ui_widgets_netPanelModel_ts

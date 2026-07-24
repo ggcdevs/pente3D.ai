@@ -18,6 +18,11 @@ import layoutDefault from '../src/config/defaults/layout.json' with { type: 'jso
  *   - a real DRAG of the range thumb (pointer, not just a programmatic fill) changes the count;
  *   - placing a piece WHILE scrubbed back snaps the view to live (a real move returns to live);
  *   - a pristine game disables the slider (nothing to review).
+ *
+ * Issue #44 — the Undo / Redo / Reset controls RELOCATED here, directly UNDER the slider (out of the
+ * banner). Their DOM/dispatch wiring is now proven here: the controls mount under the slider, their
+ * enabled/disabled tracks REAL history reachability (`getBannerContext`), a real Undo BUTTON CLICK
+ * rewinds the live game, and a real Reset button click clears the board.
  * The widget id + zone derive from `layout.json` so nothing is hardcoded (agent-principles #8).
  */
 
@@ -33,9 +38,13 @@ interface HistoryReadout {
   viewedPly: number;
   scrubbing: boolean;
 }
+interface BannerContext {
+  history: { canUndo: boolean; canRedo: boolean; canReset: boolean };
+}
 type Pente = {
   getState(): GameStateReadout | null;
   getHistory(): HistoryReadout | null;
+  getBannerContext(): BannerContext | null;
   scrubTo(k: number): void;
   place(coords: [number, number, number]): GameStateReadout | null;
 };
@@ -48,6 +57,7 @@ async function ready(page: import('@playwright/test').Page) {
       !!p &&
       typeof p.getState === 'function' &&
       typeof p.getHistory === 'function' &&
+      typeof p.getBannerContext === 'function' &&
       typeof p.scrubTo === 'function' &&
       typeof p.place === 'function' &&
       !!document.querySelector('[data-widget-id="historySlider"]')
@@ -66,6 +76,8 @@ const widget = (page: import('@playwright/test').Page) =>
   page.locator(`[data-widget-id="${HISTORY_ID}"]`);
 const range = (page: import('@playwright/test').Page) =>
   widget(page).locator('[data-testid="history-range"]');
+const historyBtn = (page: import('@playwright/test').Page, commandId: string) =>
+  widget(page).locator(`[data-testid="history-button-${commandId}"]`);
 
 /** Place four non-capturing pieces on a size-5 board so the live head is ply 4 (distinct nodes). */
 async function placeFour(page: import('@playwright/test').Page): Promise<void> {
@@ -211,4 +223,94 @@ test('placing a piece while scrubbed back snaps the view to live', async ({ page
   expect(Object.keys(state.pieces).length).toBe(5);
   expect(state.pieces['2,2,2']).toBe('white');
   await expect(widget(page)).toHaveAttribute('data-at-live', 'true');
+});
+
+test('the relocated Undo/Redo/Reset controls mount UNDER the slider, each with its command id', async ({
+  page,
+}) => {
+  await ready(page);
+
+  // Issue #44: the three history controls now live in the history-slider widget (out of the banner),
+  // rendered under the range. Each carries the command id it dispatches (design Principle 3).
+  for (const commandId of ['undo', 'redo', 'reset']) {
+    await expect(historyBtn(page, commandId)).toHaveAttribute('data-command', commandId);
+  }
+  // They are gone from the banner (proven present-in-slider here, absent-in-banner in banner.spec).
+  await expect(page.locator('[data-widget-id="statusBanner"] [data-testid^="history-button-"]')).toHaveCount(
+    0,
+  );
+});
+
+test('control enabled/disabled tracks real history reachability (relocated under the slider)', async ({
+  page,
+}) => {
+  await ready(page);
+  const undoBtn = historyBtn(page, 'undo');
+  const redoBtn = historyBtn(page, 'redo');
+  const resetBtn = historyBtn(page, 'reset');
+
+  // Pristine: nothing to undo/redo/reset — every control disabled, matching getBannerContext (the
+  // scene-computed reachability the container passes through to the slider on every update, #44).
+  const ctx0 = await get(page, (p) => p.getBannerContext()!);
+  expect(ctx0.history).toEqual({ canUndo: false, canRedo: false, canReset: false });
+  await expect(undoBtn).toBeDisabled();
+  await expect(redoBtn).toBeDisabled();
+  await expect(resetBtn).toBeDisabled();
+
+  // After a placement: undo + reset become available; redo is still not (no undone tail).
+  await get(page, (p) => p.place([2, 2, 2]));
+  const ctx1 = await get(page, (p) => p.getBannerContext()!);
+  expect(ctx1.history).toEqual({ canUndo: true, canRedo: false, canReset: true });
+  await expect(undoBtn).toBeEnabled();
+  await expect(redoBtn).toBeDisabled();
+  await expect(resetBtn).toBeEnabled();
+
+  // After a real Undo button click: redo becomes available; undo goes back off (at ply 0).
+  await undoBtn.click();
+  const ctx2 = await get(page, (p) => p.getBannerContext()!);
+  expect(ctx2.history).toEqual({ canUndo: false, canRedo: true, canReset: true });
+  await expect(undoBtn).toBeDisabled();
+  await expect(redoBtn).toBeEnabled();
+});
+
+test('a real Undo control click rewinds the live game (relocated under the slider)', async ({
+  page,
+}) => {
+  await ready(page);
+
+  // Place, so there is something to undo, and the turn is black.
+  const placed = await get(page, (p) => p.place([1, 1, 1]));
+  expect(placed!.pieces['1,1,1']).toBe('white');
+  expect(placed!.turn).toBe('black');
+
+  // CLICK the real Undo control (not a synthetic dispatch). The click must fire the `undo`
+  // command through the same registry a keybinding uses (design Principle 3).
+  await historyBtn(page, 'undo').click();
+
+  // Proof-by-state (agent-principles #3): the placed piece is gone and it is white's turn again.
+  const state = await get(page, (p) => p.getState()!);
+  expect(state.pieces['1,1,1']).toBeUndefined();
+  expect(state.turn).toBe('white');
+});
+
+test('a real Reset control click clears the board (relocated under the slider)', async ({
+  page,
+}) => {
+  await ready(page);
+
+  // Build up a couple of pieces.
+  await get(page, (p) => p.place([0, 0, 0]));
+  await get(page, (p) => p.place([1, 1, 1]));
+  const mid = await get(page, (p) => p.getState()!);
+  expect(Object.keys(mid.pieces).length).toBe(2);
+
+  // CLICK Reset — the board returns to pristine (no pieces, white to move).
+  await historyBtn(page, 'reset').click();
+
+  const after = await get(page, (p) => p.getState()!);
+  expect(after.pieces).toEqual({});
+  expect(after.turn).toBe('white');
+  expect(after.winner).toBeNull();
+  // Reset now has nothing to clear → the button disables itself again (reachability repaint).
+  await expect(historyBtn(page, 'reset')).toBeDisabled();
 });

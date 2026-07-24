@@ -23,7 +23,6 @@ import { createUiContainer, type LayoutReadout, type UiContainerHandle } from '.
 import { bannerWidget } from './widgets/banner.ts';
 import { menuWidget, type MenuScope } from './widgets/menu.ts';
 import { settingsWidget, type SettingsScope } from './widgets/settings.ts';
-import { netWidget } from './widgets/net.ts';
 import { netPanelWidget, type NetPanelScope } from './widgets/netPanel.ts';
 import type { SeedSources } from './widgets/netPanelModel.ts';
 import type { Proposal } from '../net/admission.ts';
@@ -195,7 +194,6 @@ export function defaultWidgetFactories(): WidgetFactory[] {
     bannerWidget(),
     menuWidget(),
     settingsWidget(),
-    netWidget(),
     netPanelWidget(),
     historySliderWidget(),
     helpWidget(),

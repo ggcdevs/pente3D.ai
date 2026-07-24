@@ -70,11 +70,16 @@ const state = (page: Page) =>
 const prompt = (page: Page) =>
   page.evaluate(() => (window as unknown as { __pente: Pente }).__pente.getUndoRedoPrompt());
 
-/** Read a banner control button's live rendered state (present + disabled) off the DOM. */
+/**
+ * Read a history control button's live rendered state (present + disabled) off the DOM. Issue #44
+ * relocated Undo/Redo/Reset OUT of the banner and UNDER the history slider (`history-button-*`);
+ * their enable/disable logic and command ids are unchanged, so this still proves the networked
+ * Undo/Redo enablement — just at the new location.
+ */
 const bannerBtn = (page: Page, command: 'undo' | 'redo') =>
   page.evaluate((cmd) => {
     const btn = document.querySelector(
-      `[data-testid="banner-button-${cmd}"]`,
+      `[data-testid="history-button-${cmd}"]`,
     ) as HTMLButtonElement | null;
     return btn === null ? null : { disabled: btn.disabled };
   }, command);

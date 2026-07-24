@@ -10,15 +10,17 @@ import {
 } from '../src/ui/widgets/netModel.ts';
 
 /**
- * Task 5.5 / C.2 e2e — the `connectionStatus` widget is now the PERSISTENT connection/seat/turn/
- * conflict STATUS display on the board (Host/Join INITIATION moved to the drawer's Network-Game panel,
- * `netPanel.spec.ts`). Verified by driving the REAL app and asserting on `window.__pente` real state
- * (getNet) + the rendered DOM (agent-principles #3: observable behavior, never a log line). Here we
- * prove the STATUS half:
- *   - the widget mounts in its configured zone (`top-left` per the tracked layout) and starts OFFLINE
- *     showing the passive prompt (NO inline Host button / Join input — those moved to the panel);
+ * Task 5.5 / C.2 / issue #44 e2e — the PERSISTENT connection/seat/turn/conflict STATUS display is now
+ * MERGED INTO the score banner (issue #44 folded the former standalone `connectionStatus` widget into
+ * `statusBanner`; Host/Join INITIATION still lives in the drawer's Network-Game panel,
+ * `netPanel.spec.ts`). The merged net-status sub-panel keeps the same `net-*` testids/classes and a
+ * `data-widget-id="connectionStatus"` marker so these selectors still resolve — now NESTED inside the
+ * banner in `top-center`. Verified by driving the REAL app and asserting on `window.__pente` real
+ * state (getNet) + the rendered DOM (agent-principles #3: observable behavior, never a log line):
+ *   - the merged net-status marker sits INSIDE the banner in its `top-center` zone and starts idle
+ *     (hidden sub-panel — NO inline Host button / Join input; those moved to the panel);
  *   - dispatching the SAME `hostGame` command the panel fires CONNECTS the session, CLAIMS the white
- *     seat, and the status widget shows a valid game code + Copy (design Principle 3, one action layer);
+ *     seat, and the status shows a valid game code + Copy (design Principle 3, one action layer);
  *   - a peer joining flips `peerPresent` and the status line to "Opponent connected" (presence over
  *     the injected relay — observable, not a log line);
  *   - a JOIN via the command path + pending-code seam claims the BLACK seat and reaches the transport;
@@ -136,22 +138,25 @@ const widget = (page: import('@playwright/test').Page) =>
 const testid = (page: import('@playwright/test').Page, id: string) =>
   widget(page).locator(`[data-testid="${id}"]`);
 
-test('the net STATUS widget mounts in its configured zone and starts offline with NO board hint (no inline Host/Join)', async ({
+test('the merged net-status sits INSIDE the banner (top-center) and starts offline hidden (no inline Host/Join)', async ({
   page,
 }) => {
   await ready(page);
 
-  expect(layoutDefault.widgets.connectionStatus.zone).toBe('top-left');
-  const inZone = page.locator(`[data-zone="top-left"] [data-widget-id="${NET_ID}"]`);
-  await expect(inZone).toHaveCount(1);
+  // Issue #44: the net status is merged into the banner. Its marker is NESTED inside the banner
+  // widget, which sits in the `top-center` zone the tracked layout gives the banner.
+  expect(layoutDefault.widgets.statusBanner.zone).toBe('top-center');
+  const inBanner = page.locator(
+    `[data-zone="top-center"] [data-widget-id="statusBanner"] [data-widget-id="${NET_ID}"]`,
+  );
+  await expect(inBanner).toHaveCount(1);
 
-  // Offline: the widget has NOTHING to show — the controls panel is empty (#13 moved Host/Join to the
-  // drawer, #16 removed the board hint), so the whole widget is HIDDEN and leaves no empty box on the
-  // board. Its data-panel stays 'controls' and the status/conflict panels stay hidden underneath.
+  // Offline: the net sub-panel has NOTHING to show — the controls are empty (#13 moved Host/Join to
+  // the drawer, #16 removed the board hint), so the sub-panel is HIDDEN and leaves no gap in the
+  // banner. Its data-panel stays 'controls' and the status/conflict lines stay hidden underneath.
   await expect(widget(page)).toBeHidden();
   await expect(widget(page)).toHaveAttribute('data-panel', 'controls');
-  await expect(testid(page, 'net-offline-prompt')).toHaveCount(0);
-  await expect(testid(page, 'net-status')).toBeHidden();
+  await expect(testid(page, 'net-status-line')).toBeHidden();
   await expect(testid(page, 'net-conflict')).toBeHidden();
 
   // The inline Host button / Join input are GONE (moved to the drawer's Network-Game panel, #13).

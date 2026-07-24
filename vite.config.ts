@@ -47,11 +47,12 @@ export default defineConfig({
         'src/ui/widgets/banner.ts',
         'src/ui/widgets/menu.ts',
         'src/ui/widgets/settings.ts',
-        // Task 5.5 net widget + the app-level net-session IO wiring (SyncEngine + seat orchestration
-        // over a transport + IndexedDB). All touch the DOM / network / browser globals — verified by
-        // the Task 5.5 Playwright spec, not unit coverage. The PURE `netModel.ts` is pinned to the
-        // 100% floor below (and in the mutation scope). Excluded file-by-file so netModel stays measured.
-        'src/ui/widgets/net.ts',
+        // The app-level net-session IO wiring (SyncEngine + seat orchestration over a transport +
+        // IndexedDB) touches the DOM / network / browser globals — verified by Playwright, not unit
+        // coverage. The PURE `netModel.ts` is pinned to the 100% floor below (and in the mutation
+        // scope). Excluded file-by-file so netModel stays measured. (Issue #44: the former standalone
+        // `net.ts` net widget was folded into the banner — the merged net-status DOM now lives in
+        // `banner.ts`, already excluded above, and `netModel.ts` stays the pure data source.)
         // Task C.2 Network-Game drawer panel: the DOM/dispatch + scope-push glue for the code picker.
         // Touches the DOM — verified by the Task C.2 Playwright spec, not unit coverage. The PURE
         // `netPanelModel.ts` is pinned to the 100% floor below (and in the mutation scope). Excluded

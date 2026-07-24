@@ -37,6 +37,63 @@ export const UI_STYLE_ID = 'pente-ui-style';
  * `layout.ts`), so it lives here as constant CSS rather than in the mutation-gated pure layer.
  */
 const UI_STYLESHEET = `
+/* --------------------------------------------------------------------------------------------
+ * SHARED UI THEME + INPUT STYLING (issue #44). One source of truth for the overlay chrome's
+ * accent / surface / text / danger colors and for the modern rounded look of EVERY button + input
+ * (including the menu, settings, net panel, banner, and history controls). Defined as CSS custom
+ * properties on the root (and inherited by the fixed modal panels, which are DOM descendants of
+ * widgets mounted under the root even though they position: fixed), so a tweak here re-themes the
+ * whole HUD rather than editing per-widget copies. These consolidate the accent (was the repeated
+ * rgba(74,144,217,…)) / surface / text / danger values the stylesheet already owned — the 3D-scene
+ * palette lives in config/colors.json; this is the UI-chrome palette the stylesheet is SSOT for.
+ * ------------------------------------------------------------------------------------------------ */
+.pente-ui-root {
+  --pente-ui-text: #e6e6ea;
+  --pente-ui-surface: rgba(16, 16, 20, 0.72);
+  --pente-ui-panel: rgba(20, 20, 26, 0.94);
+  --pente-ui-control-bg: rgba(255, 255, 255, 0.08);
+  --pente-ui-control-bg-hover: rgba(255, 255, 255, 0.16);
+  --pente-ui-control-border: rgba(255, 255, 255, 0.16);
+  --pente-ui-field-bg: rgba(0, 0, 0, 0.3);
+  --pente-ui-accent: rgba(74, 144, 217, 1);
+  --pente-ui-accent-soft: rgba(74, 144, 217, 0.4);
+  --pente-ui-accent-strong: rgba(74, 144, 217, 0.6);
+  --pente-ui-danger-text: #ffb0b0;
+  --pente-ui-danger-bg: rgba(255, 80, 80, 0.18);
+  --pente-ui-danger-bg-hover: rgba(255, 80, 80, 0.28);
+  --pente-ui-radius: 8px;
+  --pente-ui-focus-ring: 0 0 0 2px rgba(74, 144, 217, 0.55);
+  --pente-ui-font: system-ui, sans-serif;
+}
+/* Shared modern base for EVERY control in the overlay: rounded corners, consistent padding, a
+ * subtle surface, hover/active feedback, and a visible focus ring (a11y). Applied generally via the
+ * root scope so buttons/inputs need no per-widget style; individual rules below only add layout or
+ * an intent color (accent / danger), inheriting this look. Keyboard-focus only (:focus-visible) so a
+ * mouse click doesn't leave a ring. Excludes the range input, which has its own native styling. */
+.pente-ui-root button,
+.pente-ui-root input:not([type='range']) {
+  font-family: var(--pente-ui-font);
+  font-size: 13px;
+  color: var(--pente-ui-text);
+  border: 1px solid transparent;
+  border-radius: var(--pente-ui-radius);
+  padding: 6px 12px;
+  background: var(--pente-ui-control-bg);
+  transition: background 130ms ease, box-shadow 130ms ease, opacity 130ms ease;
+}
+.pente-ui-root button { cursor: pointer; }
+.pente-ui-root button:hover:not(:disabled) { background: var(--pente-ui-control-bg-hover); }
+.pente-ui-root button:active:not(:disabled) { transform: translateY(0.5px); }
+.pente-ui-root button:disabled { cursor: default; opacity: 0.45; }
+.pente-ui-root input:not([type='range']) {
+  border-color: var(--pente-ui-control-border);
+  background: var(--pente-ui-field-bg);
+}
+.pente-ui-root button:focus-visible,
+.pente-ui-root input:not([type='range']):focus-visible {
+  outline: none;
+  box-shadow: var(--pente-ui-focus-ring);
+}
 .pente-ui-root { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
 .pente-ui-zone { position: absolute; display: flex; gap: 8px; padding: 12px; }
 .pente-ui-zone > * { pointer-events: auto; }
@@ -49,8 +106,11 @@ const UI_STYLESHEET = `
 .pente-ui-zone--bottom-left { bottom: 0; left: 0; flex-direction: column; align-items: flex-start; }
 .pente-ui-zone--bottom-center { bottom: 0; left: 50%; transform: translateX(-50%); flex-direction: column; align-items: center; }
 .pente-ui-zone--bottom-right { bottom: 0; right: 0; flex-direction: column; align-items: flex-end; }
-.pente-widget--banner { display: flex; gap: 12px; align-items: center; padding: 6px 12px; border-radius: 6px; background: rgba(16,16,20,0.72); color: #e6e6ea; font-family: system-ui, sans-serif; font-size: 14px; }
-.pente-banner-status { border-radius: 4px; padding: 0 4px; }
+/* Issue #44: the banner is the whole score+net HUD bar. LEFT-aligned flex that WRAPS on small /
+   mobile widths so its items (status, captures, net code, net status, seat) collapse to new rows
+   instead of overflowing. max-width keeps it from stretching edge-to-edge on desktop. */
+.pente-widget--banner { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: flex-start; max-width: min(92vw, 640px); padding: 6px 12px; border-radius: var(--pente-ui-radius); background: var(--pente-ui-surface); color: var(--pente-ui-text); font-family: var(--pente-ui-font); font-size: 14px; }
+.pente-banner-status { border-radius: 6px; padding: 0 4px; }
 /* Score row: the two "Name: N" labels sit either side of a visible middle-dot separator (issue #14 —
    they used to render adjacent as "White: 0Black: 0"); the flex gap spaces the label/sep/label. */
 .pente-banner-captures { display: flex; gap: 6px; align-items: baseline; }
@@ -64,10 +124,18 @@ const UI_STYLESHEET = `
   30% { background: rgba(74,144,217,0.45); opacity: 0.75; }
   100% { background: rgba(74,144,217,0); opacity: 1; }
 }
-.pente-banner-controls { display: flex; gap: 6px; }
-.pente-banner-button { cursor: pointer; }
-.pente-banner-button:disabled { cursor: default; opacity: 0.45; }
-.pente-menu-button { cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 8px; border-radius: 6px; border: none; background: rgb(18,18,22); color: #e6e6ea; opacity: 0.55; transition: opacity 150ms ease; }
+/* Issue #44: the merged NET STATUS sub-panel inside the banner. Inline-flex so its items (status
+   line, code + Copy, seat, conflict, join error) sit on the banner row and wrap with everything
+   else; each net-* child can hide itself via [hidden]. Hidden entirely when the session is idle. */
+.pente-banner-net { display: inline-flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; font-size: 13px; }
+.pente-banner-net[hidden], .pente-banner-net .pente-net-status-line[hidden], .pente-banner-net .pente-net-code-row[hidden], .pente-banner-net .pente-net-seat[hidden], .pente-banner-net .pente-net-conflict[hidden], .pente-banner-net .pente-net-join-error[hidden] { display: none; }
+.pente-banner-net .pente-net-code-row { display: inline-flex; gap: 6px; align-items: center; }
+.pente-banner-net .pente-net-code { font-family: ui-monospace, monospace; font-size: 15px; letter-spacing: 2px; }
+.pente-banner-net .pente-net-copy { padding: 3px 10px; font-size: 12px; }
+.pente-banner-net .pente-net-seat { opacity: 0.85; }
+.pente-banner-net .pente-net-conflict { padding: 2px 8px; border-radius: 6px; background: var(--pente-ui-danger-bg); color: var(--pente-ui-danger-text); font-size: 12px; }
+.pente-banner-net .pente-net-join-error { padding: 2px 8px; border-radius: 6px; background: rgba(240,180,80,0.18); color: #ffd9a0; font-size: 12px; }
+.pente-menu-button { display: inline-flex; align-items: center; justify-content: center; padding: 8px; background: rgb(18,18,22); opacity: 0.55; transition: opacity 150ms ease, box-shadow 130ms ease; }
 .pente-menu-button:hover { opacity: 1; }
 .pente-menu-button .pente-hamburger { display: block; }
 /* #24/#16 slide-in DRAWER: a LEFT-edge panel that OVERLAYS the live canvas (no backdrop, no reflow —
@@ -161,28 +229,16 @@ const UI_STYLESHEET = `
 .pente-netpanel-enter:hover:not(:disabled) { background: rgba(74,144,217,0.6); }
 .pente-netpanel-enter:disabled { cursor: default; opacity: 0.4; }
 @media (prefers-reduced-motion: reduce) { .pente-netpanel-modal { transition: none; } }
-.pente-widget--net { display: flex; flex-direction: column; gap: 8px; min-width: 200px; padding: 10px 12px; border-radius: 6px; background: rgba(16,16,20,0.72); color: #e6e6ea; font-family: system-ui, sans-serif; font-size: 13px; }
-/* [hidden] must beat the class display:flex (else the attribute is a no-op) — incl. the root
-   .pente-widget--net so an idle net widget leaves no empty box on the board. */
-.pente-widget--net[hidden], .pente-net-controls[hidden], .pente-net-status[hidden], .pente-net-conflict[hidden], .pente-net-code-row[hidden], .pente-net-seat[hidden], .pente-net-join-error[hidden] { display: none; }
-/* Task C.2 / issue #13: the inline widget no longer HOSTS/JOINS (that moved to the drawer's
-   Network-Game panel). issue #16: the passive "open the menu" board hint was removed, so while
-   offline the controls panel is empty (nothing advertised on the board). */
-.pente-net-controls { display: flex; flex-direction: column; gap: 8px; }
-.pente-net-status { display: flex; flex-direction: column; gap: 6px; }
-.pente-net-code-row { display: flex; gap: 6px; align-items: center; }
-.pente-net-code { font-family: ui-monospace, monospace; font-size: 16px; letter-spacing: 2px; }
-.pente-net-copy { cursor: pointer; padding: 3px 8px; border-radius: 4px; border: none; background: rgba(255,255,255,0.12); color: #e6e6ea; font-size: 12px; }
-.pente-net-seat { opacity: 0.85; }
-.pente-net-conflict { padding: 8px; border-radius: 4px; background: rgba(255,80,80,0.18); color: #ffb0b0; font-size: 12px; }
-/* The join-error line (design §7): the human reason the last entry was refused. Shown even while the
-   widget is otherwise idle (a reject leaves us offline), so a rejected peer sees WHY instead of a
-   silent drop. Amber (a recoverable "try again", distinct from the red stopped-game conflict). */
-.pente-net-join-error { padding: 8px; border-radius: 4px; background: rgba(240,180,80,0.18); color: #ffd9a0; font-size: 12px; }
-.pente-widget--history { display: flex; gap: 10px; align-items: center; padding: 6px 12px; border-radius: 6px; background: rgba(16,16,20,0.72); color: #e6e6ea; font-family: system-ui, sans-serif; font-size: 13px; }
-.pente-history-range { width: 240px; cursor: pointer; }
+/* Issue #44: the history slider now stacks the range + label on top and the relocated Undo / Redo /
+   Reset controls directly UNDERNEATH (their conceptual home, moved out of the banner). */
+.pente-widget--history { display: flex; flex-direction: column; gap: 8px; align-items: center; padding: 6px 12px; border-radius: var(--pente-ui-radius); background: var(--pente-ui-surface); color: var(--pente-ui-text); font-family: var(--pente-ui-font); font-size: 13px; }
+.pente-history-range { width: 240px; max-width: 60vw; cursor: pointer; }
 .pente-history-range:disabled { cursor: default; opacity: 0.45; }
 .pente-history-label { min-width: 72px; text-align: center; font-variant-numeric: tabular-nums; }
+/* The relocated history controls (issue #44): a centered row of Undo / Redo / Reset directly under
+   the slider. Buttons inherit the shared rounded/hover/focus look; only layout + sizing here. */
+.pente-history-controls { display: flex; gap: 6px; justify-content: center; }
+.pente-history-button { padding: 4px 12px; font-size: 12px; }
 .pente-archive-modal[hidden] { display: none; }
 .pente-archive-modal { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.45); pointer-events: auto; z-index: 30; }
 .pente-archive-panel { position: relative; display: flex; flex-direction: column; gap: 6px; min-width: 360px; max-height: 80vh; overflow-y: auto; padding: 24px; border-radius: 10px; background: #1a1a20; color: #e6e6ea; font-family: system-ui, sans-serif; box-shadow: 0 8px 32px rgba(0,0,0,0.5); }

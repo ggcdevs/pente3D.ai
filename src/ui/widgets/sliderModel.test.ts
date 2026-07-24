@@ -2,7 +2,10 @@ import { describe, it, expect } from 'vitest';
 import {
   resolveScrub,
   deriveSlider,
+  deriveHistoryControls,
+  HISTORY_COMMANDS,
   type HistoryFacts,
+  type HistoryControls,
   type SliderModel,
 } from './sliderModel.ts';
 
@@ -139,5 +142,73 @@ describe('deriveSlider — model derivation', () => {
     expect(m.value).toBe(0);
     expect(m.enabled).toBe(false);
     expect(m.atLive).toBe(true);
+  });
+});
+
+/**
+ * Issue #44 — the history controls (Undo / Redo / Reset) MOVED here from `bannerModel.ts`. Given the
+ * scene's history-reachability flags, `deriveHistoryControls` yields the ordered button set the
+ * slider widget renders under the range: each button's stable command id, label, and `enabled` flag.
+ * Strict unit + mutation gate: genuine assertions plus negative cases —
+ *   - the buttons appear in order (Undo, Redo, Reset), each bound to its exact command id;
+ *   - each button's `enabled` follows its MATCHING flag, proven by flipping one flag at a time so
+ *     no button can borrow another's bit;
+ *   - a pristine game (no reachability) disables every button.
+ */
+describe('deriveHistoryControls — button set (ids, order, labels)', () => {
+  const allHistory = (over: Partial<HistoryControls> = {}): HistoryControls => ({
+    canUndo: true,
+    canRedo: true,
+    canReset: true,
+    ...over,
+  });
+  const byId = (buttons: ReturnType<typeof deriveHistoryControls>, commandId: string) =>
+    buttons.find((b) => b.commandId === commandId)!;
+
+  it('emits Undo/Redo/Reset in order, each bound to its command id', () => {
+    const buttons = deriveHistoryControls(allHistory());
+    expect(buttons.map((b) => b.commandId)).toEqual([
+      HISTORY_COMMANDS.undo,
+      HISTORY_COMMANDS.redo,
+      HISTORY_COMMANDS.reset,
+    ]);
+    expect(buttons.map((b) => b.label)).toEqual(['Undo', 'Redo', 'Reset']);
+  });
+
+  it('binds the exact command ids the input layer dispatches (one action layer)', () => {
+    // Pin the literal ids — these MUST match the scene's command registry / keybindings so a
+    // button and a hotkey fire the identical command (design Principle 3).
+    expect(HISTORY_COMMANDS).toEqual({ undo: 'undo', redo: 'redo', reset: 'reset' });
+  });
+
+  it('all buttons enabled when every history flag is set', () => {
+    const buttons = deriveHistoryControls(allHistory());
+    expect(buttons.map((b) => b.enabled)).toEqual([true, true, true]);
+  });
+
+  it('disables ONLY Undo when canUndo is false (others stay enabled)', () => {
+    const buttons = deriveHistoryControls(allHistory({ canUndo: false }));
+    expect(byId(buttons, HISTORY_COMMANDS.undo).enabled).toBe(false);
+    expect(byId(buttons, HISTORY_COMMANDS.redo).enabled).toBe(true);
+    expect(byId(buttons, HISTORY_COMMANDS.reset).enabled).toBe(true);
+  });
+
+  it('disables ONLY Redo when canRedo is false (others stay enabled)', () => {
+    const buttons = deriveHistoryControls(allHistory({ canRedo: false }));
+    expect(byId(buttons, HISTORY_COMMANDS.undo).enabled).toBe(true);
+    expect(byId(buttons, HISTORY_COMMANDS.redo).enabled).toBe(false);
+    expect(byId(buttons, HISTORY_COMMANDS.reset).enabled).toBe(true);
+  });
+
+  it('disables ONLY Reset when canReset is false (others stay enabled)', () => {
+    const buttons = deriveHistoryControls(allHistory({ canReset: false }));
+    expect(byId(buttons, HISTORY_COMMANDS.undo).enabled).toBe(true);
+    expect(byId(buttons, HISTORY_COMMANDS.redo).enabled).toBe(true);
+    expect(byId(buttons, HISTORY_COMMANDS.reset).enabled).toBe(false);
+  });
+
+  it('disables every button when the game is pristine (no history at all)', () => {
+    const buttons = deriveHistoryControls({ canUndo: false, canRedo: false, canReset: false });
+    expect(buttons.map((b) => b.enabled)).toEqual([false, false, false]);
   });
 });

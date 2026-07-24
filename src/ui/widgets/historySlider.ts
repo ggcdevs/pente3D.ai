@@ -8,25 +8,37 @@
  * `update(state, config)` that re-renders from the live history readout — knowing NOTHING about
  * its placement (the zone-based `layout` config drives that).
  *
- * READ-ONLY, LOCAL, EMITS NOTHING. Unlike the banner's Undo/Redo (real, synced game actions that
- * dispatch command ids), the slider dispatches NO command and syncs NOTHING. Dragging back drives
- * the scene's `scrubTo(k)` seam, which re-renders `game.stateAt(k)` for the LOCAL viewer only —
+ * READ-ONLY, LOCAL SCRUB (the slider itself). The `<input type=range>` SCRUB dispatches NO command
+ * and syncs NOTHING — dragging back drives the scene's `scrubTo(k)` seam, which re-renders
+ * `game.stateAt(k)` for the LOCAL viewer only —
  * later pieces vanish for this viewer, the canonical `Game` (log / cursor / headHash) is untouched.
  * Reaching the end snaps back to live (`scrubTo` with a `>= maxPly` value clears the local view).
  * A real state change (place/undo/redo/reset) is expected to snap the scene back to live; `update`
- * then repaints the slider from the fresh readout. This is why it takes a bespoke `scrubTo` /
- * `getHistory` deps seam rather than the shared command `dispatch` — the read-only contract is
- * structural, not a policy the widget could accidentally break by firing a command.
+ * then repaints the slider from the fresh readout.
  *
- * All range/label/enabled DECISIONS live in the pure model; this file only paints the model onto a
- * `<input type=range>`, forwards drags to `scrubTo`, and reads the live `getHistory()` readout. It
- * touches `document`, so it is the Playwright-verified IO boundary (asserted on `window.__pente`
- * getState/getHistory + real drags), not unit/mutation-gated. `data-*`/`data-testid` expose the
- * rendered model for readback (agent-principles #3: observable behavior, never a log line).
+ * HISTORY CONTROLS (issue #44): the Undo / Redo / Reset buttons MOVED here from the banner and now
+ * render directly UNDER the slider — their conceptual home. Distinct from the scrub, these DO
+ * dispatch command ids (the shared `dispatch` seam — design Principle 3, one action layer), and
+ * `update` repaints their enabled state from the context's history-reachability flags. The scrub
+ * itself remains command-free; only these explicit controls dispatch.
+ *
+ * All range/label/enabled DECISIONS live in the pure model (`deriveSlider` + `deriveHistoryControls`);
+ * this file only paints them onto a `<input type=range>` + buttons, forwards drags to `scrubTo`,
+ * forwards control clicks to `dispatch`, and reads the live `getHistory()` readout. It touches
+ * `document`, so it is the Playwright-verified IO boundary (asserted on `window.__pente`
+ * getState/getHistory + real drags/clicks), not unit/mutation-gated. `data-*`/`data-testid` expose
+ * the rendered model for readback (agent-principles #3: observable behavior, never a log line).
  */
 
 import type { Widget, WidgetFactory } from '../registry.ts';
-import { deriveSlider, resolveScrub, type HistoryFacts, type SliderModel } from './sliderModel.ts';
+import {
+  deriveSlider,
+  resolveScrub,
+  deriveHistoryControls,
+  type HistoryFacts,
+  type HistoryControls,
+  type SliderModel,
+} from './sliderModel.ts';
 
 /** The stable widget id — matches the `historySlider` entry in the tracked `layout` default. */
 export const HISTORY_SLIDER_WIDGET_ID = 'historySlider';
@@ -34,12 +46,28 @@ export const HISTORY_SLIDER_WIDGET_ID = 'historySlider';
 /** The pristine facts used before any history readout is supplied (mount / first paint). */
 const PRISTINE_FACTS: HistoryFacts = { maxPly: 0, viewedPly: 0 };
 
+/** Pristine reachability used before any context arrives (nothing to undo/redo/reset yet). */
+const NO_HISTORY_CONTROLS: HistoryControls = { canUndo: false, canRedo: false, canReset: false };
+
+/**
+ * The context the slider reads off the container's `update(state, config)` — the SAME
+ * {@link BannerContext}-shaped object every widget receives. The slider only needs the `history`
+ * reachability flags (issue #44 moved the Undo/Redo/Reset controls under the slider); everything
+ * else on that object is ignored. Typed structurally so the slider need not import the banner.
+ */
+interface HistoryControlsContext {
+  readonly history?: HistoryControls;
+}
+
 /**
  * The deps a history slider needs: a document to build in (injected for testability), a live
  * `getHistory()` readout of the scene's `Game` (live head + the viewed ply), and `scrubTo(k)` —
  * the scene's READ-ONLY local scrub seam. `scrubTo` re-renders `game.stateAt(k)` for the local
- * viewer without mutating the game; a `k >= maxPly` snaps back to live. No command `dispatch`
- * here on purpose: the slider emits/syncs nothing (design Part 6 / GLOSSARY "History slider").
+ * viewer without mutating the game; a `k >= maxPly` snaps back to live.
+ *
+ * `dispatch` (issue #44) fires the relocated Undo / Redo / Reset controls — the SAME command ids a
+ * keybinding does (design Principle 3, one action layer). The scrub seam stays command-free (the
+ * slider emits/syncs nothing for scrubbing); only the explicit history controls dispatch.
  */
 export interface HistorySliderDeps {
   readonly doc: Document;
@@ -47,6 +75,8 @@ export interface HistorySliderDeps {
   getHistory(): HistoryFacts;
   /** Scrub the LOCAL view to ply `k` (read-only; `k >= maxPly` snaps back to live). */
   scrubTo(k: number): void;
+  /** Dispatch a command id (the relocated Undo/Redo/Reset controls). Returns whether it ran. */
+  dispatch(commandId: string): boolean;
 }
 
 /**
@@ -81,6 +111,41 @@ export function historySliderWidget(): WidgetFactory {
       label.className = 'pente-history-label';
       label.setAttribute('data-testid', 'history-label');
       element.appendChild(label);
+
+      // History controls (issue #44): the Undo / Redo / Reset buttons, MOVED here from the banner and
+      // rendered directly UNDER the slider (their conceptual home). Built once from the derived button
+      // set so ids/order/handlers are stable; each dispatches the SAME command id a keybinding fires
+      // (design Principle 3). A disabled button's `disabled` attribute blocks the click, but the guard
+      // stops a programmatic click firing a command the model says is unavailable. `update` repaints
+      // only labels/enabled from the context's reachability flags — the wiring never re-binds.
+      const controls = doc.createElement('div');
+      controls.className = 'pente-history-controls';
+      const buttonEls = new Map<string, HTMLButtonElement>();
+      for (const spec of deriveHistoryControls(NO_HISTORY_CONTROLS)) {
+        const btn = doc.createElement('button');
+        btn.className = `pente-history-button pente-history-button--${spec.commandId}`;
+        btn.setAttribute('data-testid', `history-button-${spec.commandId}`);
+        btn.setAttribute('data-command', spec.commandId);
+        btn.textContent = spec.label;
+        btn.disabled = !spec.enabled;
+        btn.addEventListener('click', () => {
+          if (btn.disabled) return;
+          deps.dispatch(spec.commandId);
+        });
+        controls.appendChild(btn);
+        buttonEls.set(spec.commandId, btn);
+      }
+      element.appendChild(controls);
+
+      /** Paint the derived history-control buttons (labels + enabled) from the reachability flags. */
+      function renderControls(history: HistoryControls): void {
+        for (const spec of deriveHistoryControls(history)) {
+          const btn = buttonEls.get(spec.commandId);
+          if (btn === undefined) continue;
+          btn.textContent = spec.label;
+          btn.disabled = !spec.enabled;
+        }
+      }
 
       // Dragging the range scrubs the LOCAL view. The pure `resolveScrub` clamps the raw value
       // against the live head and decides live-vs-earlier; we drive the scene's read-only seam
@@ -120,13 +185,17 @@ export function historySliderWidget(): WidgetFactory {
       // First paint from the live readout (falls back to pristine if the scene is not yet wired).
       render(deriveSlider(PRISTINE_FACTS));
       refresh();
+      renderControls(NO_HISTORY_CONTROLS);
 
       return {
         element,
         // Repaint from the live history readout on every state change the shell pushes (a place
-        // while reviewing snaps the scene back to live; `getHistory` then reports the new head).
-        update(): void {
+        // while reviewing snaps the scene back to live; `getHistory` then reports the new head), and
+        // repaint the relocated Undo/Redo/Reset controls from the context's reachability flags (#44).
+        update(_state: unknown, config: unknown): void {
           refresh();
+          const context = config as HistoryControlsContext | null;
+          renderControls(context?.history ?? NO_HISTORY_CONTROLS);
         },
       };
     },

@@ -1,38 +1,65 @@
 /**
- * Score/status banner widget (Task 5.2) — the DOM/dispatch IO glue for the pure
- * {@link deriveBanner} view-model (`bannerModel.ts`). Render-ui design Part 6.
+ * Score/status banner widget (Task 5.2) — the DOM IO glue for the pure {@link deriveBanner}
+ * view-model (`bannerModel.ts`). Render-ui design Part 6.
  *
  * A self-contained widget by the design-Part-6 contract: a stable string id (`statusBanner`,
  * the id the tracked `layout` default places in `top-center`), `mount() → DOM element`, and
  * `update(state, config)` that re-renders from live state — knowing NOTHING about its placement
- * (the zone-based `layout` config drives that). It **reads** the {@link GameState} and the
- * scene's history-reachability flags, and **dispatches command ids** (design Principle 3 "one
- * action layer": the Undo/Redo/Reset buttons fire the exact same `undo`/`redo`/`reset` commands
- * a keybinding does — via the deps-supplied `dispatch`, the scene's command registry).
+ * (the zone-based `layout` config drives that). It **reads** the {@link GameState} and repaints.
  *
- * All placement/turn/capture/enabled DECISIONS live in the pure model; this file only paints the
- * model onto DOM and forwards clicks to `dispatch`. It touches `document`, so it is the
- * Playwright-verified IO boundary (asserted on `window.__pente` state + real button clicks), not
- * unit/mutation-gated. `getState`/`data-*` attributes are exposed so a test reads the rendered
- * model back off the live DOM (agent-principles #3: observable behavior, never a log line).
+ * HISTORY CONTROLS MOVED (issue #44): the Undo / Redo / Reset buttons relocated to the history
+ * slider (`historySlider.ts`), their conceptual home (directly under the slider). This widget no
+ * longer renders them or dispatches their commands; it is now a pure score/status readout (plus the
+ * off-turn cue and the incoming networked undo/redo accept/decline prompt).
+ *
+ * NET STATUS MERGED IN (issue #44): the networking display — game code + copy, connection/status
+ * line, seat, conflict banner, join error — now renders INSIDE this banner (its `getNet()` /
+ * `copyToClipboard` deps), keeping the same `net-*` testids/classes but co-located with the score so
+ * the whole HUD reads as one left-aligned, wrapping bar. `netModel.ts` stays the pure data source.
+ *
+ * All placement/turn/capture DECISIONS live in the pure models; this file only paints them onto DOM.
+ * It touches `document`, so it is the Playwright-verified IO boundary (asserted on `window.__pente`
+ * state + real interactions), not unit/mutation-gated. `getState`/`data-*` attributes are exposed so
+ * a test reads the rendered model back off the live DOM (agent-principles #3: observable behavior).
  */
 
 import type { Widget, WidgetFactory } from '../registry.ts';
 import type { GameState } from '../../core/gameState.ts';
-import { deriveBanner, type BannerHistory, type BannerModel } from './bannerModel.ts';
+import { deriveBanner, type BannerModel } from './bannerModel.ts';
+import type { HistoryControls } from './sliderModel.ts';
+import { deriveNet, type NetSessionState, type NetModel } from './netModel.ts';
 import type { UndoRedoPrompt } from '../../net/undoRedo.ts';
 
 /** The stable widget id — matches the `statusBanner` entry in the tracked `layout` default. */
 export const BANNER_WIDGET_ID = 'statusBanner';
 
 /**
- * The deps a banner needs: a document to build in (injected for testability) and the command
- * `dispatch` (the scene's registry — the SAME path a keybinding uses, design Principle 3).
+ * The `data-widget-id` marker the merged net-status sub-panel carries (issue #44). The net display
+ * used to be a standalone `connectionStatus` widget; folding it into the banner keeps this marker on
+ * the sub-panel so the few e2e specs that scoped their `net-*` queries by
+ * `[data-widget-id="connectionStatus"]` keep resolving. It is NOT a registry widget any more.
+ */
+export const NET_MARKER_ID = 'connectionStatus';
+
+/**
+ * The deps a banner needs: a document to build in (injected for testability), plus the networking
+ * readout + clipboard copy the merged net-status sub-panel needs (issue #44). No command `dispatch`
+ * here any more — the Undo/Redo/Reset controls moved to the history slider.
  */
 export interface BannerDeps {
   readonly doc: Document;
-  /** Dispatch a command id (Undo/Redo/Reset). Returns whether a command ran. */
-  dispatch(commandId: string): boolean;
+  /**
+   * The live networking-session readout the merged net-status sub-panel renders (issue #44) — the
+   * scene's `getNet`, produced off the app's net session. The banner reflects it into the code /
+   * status / seat / conflict lines; `netModel.deriveNet` stays the pure data source.
+   */
+  getNet(): NetSessionState;
+  /**
+   * Copy the shown game code to the clipboard (issue #44 — the merged net "Copy" button). Injected
+   * so the widget never reaches for a global `navigator`; a rejection is surfaced as a copy-failed
+   * hint on the button rather than thrown.
+   */
+  copyToClipboard(text: string): Promise<void>;
   /**
    * Respond accept (`true`) / decline (`false`) to the INCOMING networked undo/redo proposal (Task
    * N.3.2, issue #18). The banner surfaces the accept/decline prompt (NOT the end-state overlay — the
@@ -49,7 +76,15 @@ export interface BannerDeps {
  * `GameState` cannot know, so it rides alongside rather than being inferred from the piece map.
  */
 export interface BannerContext {
-  readonly history: BannerHistory;
+  /**
+   * The history-reachability flags (`canUndo` / `canRedo` / `canReset`) the scene computes from its
+   * `Game`. The banner no longer renders the Undo/Redo/Reset buttons (they moved to the history
+   * slider, issue #44), but this context still rides through the container's `update(state, config)`
+   * — the SAME config object every widget receives — so the history slider reads `history` off it to
+   * enable/disable its relocated controls. Kept here so the scene's `getBannerContext` stays the one
+   * place that computes these flags.
+   */
+  readonly history: HistoryControls;
   /**
    * The seat-turn gate's running off-turn block count (Task 6.2, issue #4c). The banner compares it to
    * the value it last rendered; when it ADVANCED (an off-turn placement was just rejected), it briefly
@@ -69,13 +104,20 @@ export interface BannerContext {
   readonly undoRedoPrompt?: UndoRedoPrompt;
 }
 
-/** Pristine flags used before any state arrives (nothing to undo/redo/reset yet). */
-const NO_HISTORY: BannerHistory = { canUndo: false, canRedo: false, canReset: false };
+/** The pristine offline net state used before any session readout is supplied (mount / first paint). */
+const OFFLINE_NET: NetSessionState = {
+  phase: 'offline',
+  code: null,
+  seat: null,
+  peerPresent: false,
+  joinError: null,
+};
 
 /**
  * Build the score/status banner {@link WidgetFactory}. The mounted element carries the current
- * player, both capture counts, and the Undo/Redo/Reset buttons; `update` re-derives the pure
- * model and repaints. Clicking an enabled button dispatches its command id.
+ * player, both capture counts, and the merged net-status sub-panel (code / status / seat / conflict /
+ * join error); `update` re-derives the pure models and repaints. History controls (Undo/Redo/Reset)
+ * live under the slider now (issue #44).
  */
 export function bannerWidget(): WidgetFactory {
   return {
@@ -135,30 +177,102 @@ export function bannerWidget(): WidgetFactory {
       captures.append(whiteCap, capSep, blackCap);
       element.appendChild(captures);
 
-      // Controls: one button per model button, each dispatching its command id on click. Built
-      // once from the initial (empty) model's button set so the ids/order/handlers are stable;
-      // `update` only repaints labels/enabled — the button↔command wiring never re-binds.
-      const controls = doc.createElement('div');
-      controls.className = 'pente-banner-controls';
-      const initial = deriveBanner(emptyStateFallback(), NO_HISTORY);
-      const buttonEls = new Map<string, HTMLButtonElement>();
-      for (const spec of initial.buttons) {
-        const btn = doc.createElement('button');
-        btn.className = `pente-banner-button pente-banner-button--${spec.commandId}`;
-        btn.setAttribute('data-testid', `banner-button-${spec.commandId}`);
-        btn.setAttribute('data-command', spec.commandId);
-        btn.textContent = spec.label;
-        // Dispatch the SAME command id a keybinding fires (design Principle 3). A disabled
-        // button's `disabled` attribute already blocks the click, but guard anyway so a
-        // programmatic click can't fire a command the model says is unavailable.
-        btn.addEventListener('click', () => {
-          if (btn.disabled) return;
-          deps.dispatch(spec.commandId);
-        });
-        controls.appendChild(btn);
-        buttonEls.set(spec.commandId, btn);
+      // --- Merged NET STATUS sub-panel (issue #44) --------------------------------------------------
+      // Moved INTO the banner from the former standalone `connectionStatus` widget so the whole HUD
+      // reads as one left-aligned, wrapping bar (score + captures + code + status). Same `net-*`
+      // testids/classes as before (page-wide selectors keep resolving); wrapped in a marker carrying
+      // `data-widget-id="connectionStatus"` so the few net specs that scoped by that id still resolve,
+      // and so `getNet`-driven status reads back off the live DOM (#3). `netModel.deriveNet` stays the
+      // pure data source; this only paints it. The panel HIDES itself when idle (offline, no error).
+      const net = doc.createElement('div');
+      net.className = 'pente-banner-net';
+      net.setAttribute('data-widget-id', NET_MARKER_ID);
+      net.setAttribute('data-testid', 'net-widget');
+
+      const netStatusLine = doc.createElement('span');
+      netStatusLine.className = 'pente-net-status-line';
+      netStatusLine.setAttribute('data-testid', 'net-status-line');
+      net.appendChild(netStatusLine);
+
+      const codeRow = doc.createElement('span');
+      codeRow.className = 'pente-net-code-row';
+      const codeLabel = doc.createElement('span');
+      codeLabel.className = 'pente-net-code';
+      codeLabel.setAttribute('data-testid', 'net-code');
+      codeRow.appendChild(codeLabel);
+      const copyButton = doc.createElement('button');
+      copyButton.className = 'pente-net-copy';
+      copyButton.setAttribute('data-testid', 'net-copy');
+      copyButton.setAttribute('aria-label', 'Copy game code');
+      copyButton.textContent = 'Copy';
+      copyButton.addEventListener('click', () => {
+        const code = deps.getNet().code;
+        if (code === null) return;
+        // Copy is best-effort: reflect success/failure in the button label (observable), never throw.
+        void deps.copyToClipboard(code).then(
+          () => {
+            copyButton.textContent = 'Copied';
+            copyButton.setAttribute('data-copied', 'true');
+          },
+          () => {
+            copyButton.textContent = 'Copy failed';
+            copyButton.setAttribute('data-copied', 'false');
+          },
+        );
+      });
+      codeRow.appendChild(copyButton);
+      net.appendChild(codeRow);
+
+      const seatLine = doc.createElement('span');
+      seatLine.className = 'pente-net-seat';
+      seatLine.setAttribute('data-testid', 'net-seat');
+      net.appendChild(seatLine);
+
+      const conflict = doc.createElement('span');
+      conflict.className = 'pente-net-conflict';
+      conflict.setAttribute('data-testid', 'net-conflict');
+      conflict.setAttribute('role', 'alert');
+      net.appendChild(conflict);
+
+      const joinError = doc.createElement('span');
+      joinError.className = 'pente-net-join-error';
+      joinError.setAttribute('data-testid', 'net-join-error');
+      joinError.setAttribute('role', 'alert');
+      joinError.hidden = true;
+      net.appendChild(joinError);
+
+      element.appendChild(net);
+
+      /** Paint a derived net model onto the merged status sub-panel (issue #44). */
+      function renderNet(model: NetModel): void {
+        net.setAttribute('data-panel', model.panel);
+
+        const hasJoinError = model.joinErrorText !== null;
+        joinError.textContent = model.joinErrorText ?? '';
+        joinError.hidden = !hasJoinError;
+
+        // Hide the whole net sub-panel while idle (offline, empty controls panel, no join error) so
+        // it leaves no gap in the banner — matching the former standalone widget's hide behavior.
+        net.hidden = model.panel === 'controls' && !hasJoinError;
+
+        // Status line: connecting/connected copy (offline yields empty text).
+        netStatusLine.textContent = model.statusText;
+        netStatusLine.hidden = model.statusText === '';
+
+        const hasCode = model.code !== null;
+        codeRow.hidden = !hasCode;
+        codeLabel.textContent = model.code ?? '';
+        if (!hasCode) {
+          copyButton.textContent = 'Copy';
+          copyButton.removeAttribute('data-copied');
+        }
+
+        seatLine.textContent = model.seatText ?? '';
+        seatLine.hidden = model.seatText === null;
+
+        conflict.textContent = model.conflictText ?? '';
+        conflict.hidden = model.conflictText === null;
       }
-      element.appendChild(controls);
 
       // Networked undo/redo accept/decline PROMPT (Task N.3.2, issue #18). Surfaced HERE in the banner
       // (NOT the end-state overlay — the game is not over) when the peer proposes an undo/redo. The
@@ -201,7 +315,7 @@ export function bannerWidget(): WidgetFactory {
         promptText.textContent = show && p ? p.promptText : '';
       }
 
-      /** Paint a derived model onto the DOM (status text, captures, button labels/enabled). */
+      /** Paint a derived model onto the DOM (status text + captures). */
       function render(model: BannerModel): void {
         status.textContent =
           model.status === 'winner'
@@ -215,27 +329,27 @@ export function bannerWidget(): WidgetFactory {
         whiteCap.textContent = model.whiteCapturesLabel;
         capSep.textContent = model.capturesSeparator;
         blackCap.textContent = model.blackCapturesLabel;
-
-        for (const spec of model.buttons) {
-          const btn = buttonEls.get(spec.commandId);
-          if (btn === undefined) continue;
-          btn.textContent = spec.label;
-          btn.disabled = !spec.enabled;
-        }
       }
 
-      render(initial);
+      /** Re-read the live session readout and repaint the merged net-status sub-panel. */
+      function refreshNet(): void {
+        renderNet(deriveNet(deps.getNet?.() ?? OFFLINE_NET));
+      }
+
+      render(deriveBanner(emptyStateFallback()));
       renderUndoRedoPrompt(undefined);
+      refreshNet();
 
       return {
         element,
         update(state: unknown, config: unknown): void {
-          // Before a game exists the shell still renders (pristine fallback). The history flags
-          // ride in via the context bag; absent it, nothing is undo/redo/reset-able.
+          // Before a game exists the shell still renders (pristine fallback).
           const gameState = (state as GameState | null) ?? emptyStateFallback();
           const context = config as BannerContext | null;
-          const history = context?.history ?? NO_HISTORY;
-          render(deriveBanner(gameState, history));
+          render(deriveBanner(gameState));
+          // Merged net status (issue #44): repaint from the live session readout every update
+          // (host/join/presence/conflict all route through the scene's onStateChange).
+          refreshNet();
           // Off-turn cue (Task 6.2): if the scene's off-turn block count ADVANCED since our last
           // paint, the local seat just attempted a move on the opponent's turn — pulse the status line.
           const blocks = context?.offTurnBlocks ?? 0;

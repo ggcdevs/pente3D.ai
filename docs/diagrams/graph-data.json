@@ -244,6 +244,7 @@
       "append",
       "emptyLog",
       "firstDivergence",
+      "genesisHash",
       "headHash",
       "isPrefix"
     ],
@@ -304,7 +305,8 @@
         "extends": [],
         "methods": [],
         "properties": [
-          "readonly entries: readonly LogEntry[]"
+          "readonly entries: readonly LogEntry[]",
+          "readonly uuid: string"
         ]
       }
     ],
@@ -319,6 +321,7 @@
       "append",
       "emptyLog",
       "firstDivergence",
+      "genesisHash",
       "headHash",
       "isPrefix",
       "serializeEvent"
@@ -329,6 +332,13 @@
       "Game"
     ],
     "imports": [
+      {
+        "source": "../util/randomId",
+        "target": "src/util/randomId.ts",
+        "specifiers": [
+          "randomId"
+        ]
+      },
       {
         "source": "./coords",
         "target": "src/core/coords.ts",
@@ -374,6 +384,7 @@
           "canRedo(): boolean",
           "canUndo(): boolean",
           "get log(): EventLog",
+          "get uuid(): string",
           "place(coords: Coord): void",
           "ply(): number",
           "redo(): void",
@@ -599,6 +610,13 @@
     ],
     "imports": [
       {
+        "source": "../util/randomId",
+        "target": "src/util/randomId.ts",
+        "specifiers": [
+          "randomId"
+        ]
+      },
+      {
         "source": "./coords",
         "target": "src/core/coords.ts",
         "specifiers": [
@@ -651,7 +669,8 @@
         "properties": [
           "readonly log: readonly Event[]",
           "readonly settings: GameSettings",
-          "readonly size: number"
+          "readonly size: number",
+          "readonly uuid: string"
         ]
       }
     ],
@@ -670,7 +689,8 @@
       "serializeGame",
       "validateEvent",
       "validateLog",
-      "validateSize"
+      "validateSize",
+      "validateUuid"
     ]
   },
   "src/debug/log.ts": {
@@ -785,6 +805,20 @@
         "target": "src/net/notifyGlue.ts",
         "specifiers": [
           "NotifyReadout"
+        ]
+      },
+      {
+        "source": "../net/seats.ts",
+        "target": "src/net/seats.ts",
+        "specifiers": [
+          "SeatMap"
+        ]
+      },
+      {
+        "source": "../net/sync.ts",
+        "target": "src/net/sync.ts",
+        "specifiers": [
+          "AdmissionReject"
         ]
       },
       {
@@ -927,6 +961,9 @@
           "getLighting(): LightingReadout | null",
           "getMarkers(query: readonly string[]): MarkersReadout | null",
           "getNet(): NetSessionState | null",
+          "getNetGameUuid(): string | null",
+          "getNetLastReject(): AdmissionReject | null",
+          "getNetSeatOwners(): SeatMap | null",
           "getNotify(): NotifyReadout",
           "getPieces(): PieceReadout[] | null",
           "getState(): GameState | null",
@@ -958,6 +995,9 @@
         "extends": [],
         "methods": [
           "getEndState(): EndState",
+          "getNetGameUuid(): string | null",
+          "getNetLastReject(): AdmissionReject | null",
+          "getNetSeatOwners(): SeatMap | null",
           "getNotify(): NotifyReadout",
           "listArchive(): Promise<readonly ArchiveListing[]>"
         ],
@@ -1365,6 +1405,13 @@
         ]
       },
       {
+        "source": "./net/admission.ts",
+        "target": "src/net/admission.ts",
+        "specifiers": [
+          "Proposal"
+        ]
+      },
+      {
         "source": "./net/appSession.ts",
         "target": "src/net/appSession.ts",
         "specifiers": [
@@ -1401,6 +1448,20 @@
         "target": "src/net/rematch.ts",
         "specifiers": [
           "shouldArchiveBeforeNetStart"
+        ]
+      },
+      {
+        "source": "./net/seats.ts",
+        "target": "src/net/seats.ts",
+        "specifiers": [
+          "SeatMap"
+        ]
+      },
+      {
+        "source": "./net/sync.ts",
+        "target": "src/net/sync.ts",
+        "specifiers": [
+          "AdmissionReject"
         ]
       },
       {
@@ -1454,6 +1515,14 @@
         ]
       },
       {
+        "source": "./ui/widgets/netPanelModel.ts",
+        "target": "src/ui/widgets/netPanelModel.ts",
+        "specifiers": [
+          "SeedGame",
+          "SeedSources"
+        ]
+      },
+      {
         "source": "./util/randomId.ts",
         "target": "src/util/randomId.ts",
         "specifiers": [
@@ -1479,15 +1548,94 @@
       "autosaveMeta",
       "autosaveTick",
       "bumpGeneration",
+      "currentGame",
       "currentGeneration",
       "getNotifyReadout",
       "listArchive",
       "loadArchivedIntoScene",
       "loadConflictedIfAny",
+      "refreshSeedGames",
       "refreshUi",
       "resolveAutosaveId",
       "resumeArchived",
-      "reviewArchived"
+      "reviewArchived",
+      "seedSources"
+    ]
+  },
+  "src/net/admission.ts": {
+    "exports": [
+      "AgreedGame",
+      "Peer",
+      "Proposal",
+      "ReconcileReject",
+      "ReconcileResult",
+      "Reject",
+      "currentProposal",
+      "deferProposal",
+      "electInitiator",
+      "isConcrete",
+      "newProposal",
+      "reconcile",
+      "resumeProposal"
+    ],
+    "imports": [],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "Reject",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly ok: false",
+          "readonly reason: ReconcileReject"
+        ]
+      },
+      {
+        "name": "Peer",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly arrivalOrder: number",
+          "readonly playerId: string"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [
+      {
+        "name": "Proposal",
+        "type": "| { readonly kind: 'defer' }\n  | { readonly kind: 'new' }\n  | { readonly kind: 'resume'; readonly uuid: string; readonly headHash: string }\n  | { readonly kind: 'current'; readonly uuid: string; readonly headHash: string }"
+      },
+      {
+        "name": "HistoryProposal",
+        "type": "Extract<Proposal, { uuid: string; headHash: string }>"
+      },
+      {
+        "name": "AgreedGame",
+        "type": "| { readonly kind: 'new' }\n  | { readonly kind: 'existing'; readonly uuid: string; readonly headHash: string }"
+      },
+      {
+        "name": "ReconcileReject",
+        "type": "'game-mismatch' | 'game-divergent'"
+      },
+      {
+        "name": "ReconcileResult",
+        "type": "{ readonly ok: true; readonly game: AgreedGame } | Reject"
+      }
+    ],
+    "functions": [
+      "agree",
+      "beats",
+      "currentProposal",
+      "deferProposal",
+      "electInitiator",
+      "hasHistory",
+      "isConcrete",
+      "newProposal",
+      "playHistory",
+      "reconcile",
+      "reject",
+      "resumeProposal"
     ]
   },
   "src/net/appSession.ts": {
@@ -2175,7 +2323,6 @@
       "emptySeatMap",
       "isFull",
       "occupantOf",
-      "releaseSeat",
       "seatOf"
     ],
     "imports": [],
@@ -2199,7 +2346,7 @@
       },
       {
         "name": "ClaimRejection",
-        "type": "'room-full'"
+        "type": "'room-full' | 'seat-reserved'"
       },
       {
         "name": "ClaimResult",
@@ -2207,12 +2354,12 @@
       }
     ],
     "functions": [
+      "blockingOwnersAllPresent",
       "claimSeat",
       "cloneSeatMap",
       "emptySeatMap",
       "isFull",
       "occupantOf",
-      "releaseSeat",
       "seatOf"
     ]
   },
@@ -2250,7 +2397,11 @@
         "source": "../persist/archive",
         "target": "src/persist/archive.ts",
         "specifiers": [
-          "ArchivedMeta"
+          "ArchivedMeta",
+          "NET_ROOM_RESULT",
+          "loadNetGame",
+          "loadNetGameByUuid",
+          "saveGame"
         ]
       },
       {
@@ -2262,8 +2413,24 @@
           "NetSeat",
           "NetSessionState",
           "generateGameCode",
-          "normalizeGameCode",
           "validateGameCode"
+        ]
+      },
+      {
+        "source": "../util/randomId",
+        "target": "src/util/randomId.ts",
+        "specifiers": [
+          "randomId"
+        ]
+      },
+      {
+        "source": "./admission",
+        "target": "src/net/admission.ts",
+        "specifiers": [
+          "Peer",
+          "Proposal",
+          "electInitiator",
+          "reconcile"
         ]
       },
       {
@@ -2308,6 +2475,22 @@
         ]
       },
       {
+        "source": "./sync",
+        "target": "src/net/sync.ts",
+        "specifiers": [
+          "AdmissionMessage",
+          "AdmissionReject",
+          "AdmitMessage",
+          "HelloMessage",
+          "RejectMessage",
+          "parseSyncMessage",
+          "toAdmitMessage",
+          "toHelloMessage",
+          "toRejectMessage",
+          "toSyncMessage"
+        ]
+      },
+      {
         "source": "./transport",
         "target": "src/net/transport.ts",
         "specifiers": [
@@ -2343,10 +2526,13 @@
           "applyAcceptedUndoRedo(): boolean",
           "canPlace(): boolean",
           "disconnect(): void",
+          "enter(rawCode: string, proposal: Proposal): Promise<void>",
           "gameState(): GameState | null",
+          "gameUuid(): string | null",
           "getHandshake(): HandshakeState",
           "host(rawCode: string): Promise<void>",
           "join(rawCode: string): Promise<boolean>",
+          "lastRejectReason(): AdmissionReject | null",
           "onChange(listener: NetChangeListener): () => void",
           "onHandshakeChange(listener: HandshakeChangeListener): () => void",
           "place(coords: Coord): void",
@@ -2356,11 +2542,13 @@
           "redo(): void",
           "resetForRematch(): boolean",
           "respond(accepted: boolean): boolean",
+          "seatOwners(): SeatMap | null",
           "state(): NetSessionState",
           "syncEngine(): SyncEngine | null",
           "undo(): void",
           "undoRedoAvail(): { readonly canUndo: boolean; readonly canRedo: boolean }",
-          "undoRedoPrompt(): UndoRedoPrompt"
+          "undoRedoPrompt(): UndoRedoPrompt",
+          "whenPersisted(): Promise<void>"
         ],
         "properties": [],
         "isAbstract": false
@@ -2374,11 +2562,13 @@
           "createTransport(): Transport"
         ],
         "properties": [
+          "newMessageId: () => string",
           "now: () => number",
           "rand: () => number",
           "readonly db: IDBDatabase",
           "readonly playerId: string",
-          "readonly size: number"
+          "readonly size: number",
+          "settleMs: number"
         ]
       }
     ],
@@ -2397,9 +2587,15 @@
   },
   "src/net/sync.ts": {
     "exports": [
+      "AdmissionDeduper",
+      "AdmissionMessage",
+      "AdmissionReject",
+      "AdmitMessage",
       "GameMessage",
+      "HelloMessage",
       "MetaProvider",
       "ProposalMessage",
+      "RejectMessage",
       "ResponseMessage",
       "SYNC_VERSION",
       "SyncDecision",
@@ -2415,6 +2611,9 @@
       "normalizeEpoch",
       "parseGameMessage",
       "parseSyncMessage",
+      "toAdmitMessage",
+      "toHelloMessage",
+      "toRejectMessage",
       "toSyncMessage"
     ],
     "imports": [
@@ -2471,6 +2670,20 @@
         ]
       },
       {
+        "source": "./admission",
+        "target": "src/net/admission.ts",
+        "specifiers": [
+          "Proposal"
+        ]
+      },
+      {
+        "source": "./seats",
+        "target": "src/net/seats.ts",
+        "specifiers": [
+          "SeatMap"
+        ]
+      },
+      {
         "source": "./transport",
         "target": "src/net/transport.ts",
         "specifiers": [
@@ -2480,6 +2693,17 @@
       }
     ],
     "classes": [
+      {
+        "name": "AdmissionDeduper",
+        "extends": null,
+        "implements": [],
+        "methods": [
+          "fresh(id: string): boolean",
+          "hasSeen(id: string): boolean"
+        ],
+        "properties": [],
+        "isAbstract": false
+      },
       {
         "name": "SyncError",
         "extends": "Error",
@@ -2494,10 +2718,12 @@
         "implements": [],
         "methods": [
           "applyAgreedUndo(): void",
+          "attach(): void",
           "conflictForks(): { readonly mine: EventLog; readonly theirs: EventLog } | null",
           "connect(roomCode: string): Promise<void>",
           "epoch(): number",
           "game(): Game",
+          "onAdmission(listener: (msg: AdmissionMessage) => void): () => void",
           "onChange(listener: () => void): () => void",
           "onMessage(listener: (msg: ProposalMessage | ResponseMessage) => void): () => void",
           "place(coords: Coord): void",
@@ -2524,6 +2750,7 @@
           "readonly epoch: number",
           "readonly headHash: string",
           "readonly log: readonly Event[]",
+          "readonly uuid: string",
           "readonly version: number"
         ]
       },
@@ -2547,13 +2774,54 @@
           "readonly kind: 'response'",
           "readonly proposalId: string"
         ]
+      },
+      {
+        "name": "HelloMessage",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly arrivalTag: number",
+          "readonly id: string",
+          "readonly kind: 'hello'",
+          "readonly playerId: string",
+          "readonly proposal: Proposal"
+        ]
+      },
+      {
+        "name": "AdmitMessage",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly game: { readonly kind: 'sync' } & SyncMessage",
+          "readonly id: string",
+          "readonly kind: 'admit'",
+          "readonly seats: SeatMap"
+        ]
+      },
+      {
+        "name": "RejectMessage",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly id: string",
+          "readonly kind: 'reject'",
+          "readonly reason: AdmissionReject"
+        ]
       }
     ],
     "enums": [],
     "typeAliases": [
       {
+        "name": "AdmissionReject",
+        "type": "| 'room-full'\n  | 'seat-reserved'\n  | 'game-mismatch'\n  | 'game-divergent'"
+      },
+      {
         "name": "GameMessage",
-        "type": "| ({ readonly kind: 'sync' } & SyncMessage)\n  | ProposalMessage\n  | ResponseMessage"
+        "type": "| ({ readonly kind: 'sync' } & SyncMessage)\n  | ProposalMessage\n  | ResponseMessage\n  | HelloMessage\n  | AdmitMessage\n  | RejectMessage"
+      },
+      {
+        "name": "AdmissionMessage",
+        "type": "HelloMessage | AdmitMessage | RejectMessage"
       },
       {
         "name": "SyncDecision",
@@ -2581,10 +2849,18 @@
       "decideSyncEpoched",
       "decideUndo",
       "epochOf",
+      "isAdmissionReject",
       "looksLikeSync",
       "normalizeEpoch",
+      "parseAdmitGame",
       "parseGameMessage",
+      "parseProposal",
+      "parseSeat",
+      "parseSeatMap",
       "parseSyncMessage",
+      "toAdmitMessage",
+      "toHelloMessage",
+      "toRejectMessage",
       "toSyncMessage"
     ]
   },
@@ -2790,10 +3066,14 @@
       "ArchivedMeta",
       "ConflictInput",
       "ConflictedGame",
+      "NET_ROOM_RESULT",
+      "PersistedSeats",
       "flagConflicted",
       "listArchivedGames",
       "loadConflicted",
       "loadGame",
+      "loadNetGame",
+      "loadNetGameByUuid",
       "saveGame"
     ],
     "imports": [
@@ -2845,12 +3125,22 @@
     ],
     "interfaces": [
       {
+        "name": "PersistedSeats",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly black: string | null",
+          "readonly white: string | null"
+        ]
+      },
+      {
         "name": "ArchivedMeta",
         "extends": [],
         "methods": [],
         "properties": [
           "readonly players: Readonly<Record<string, string>>",
           "readonly result: string",
+          "readonly seats: {\n    readonly white: string | null;\n    readonly black: string | null;\n  }",
           "readonly startedAt: number"
         ]
       },
@@ -2861,6 +3151,7 @@
         ],
         "methods": [],
         "properties": [
+          "readonly forkUuids: {\n    readonly mine: string;\n    readonly theirs: string;\n  }",
           "readonly forks: {\n    readonly mine: StoredLog;\n    readonly theirs: StoredLog;\n  }",
           "readonly size: number"
         ]
@@ -2899,6 +3190,8 @@
       "listArchivedGames",
       "loadConflicted",
       "loadGame",
+      "loadNetGame",
+      "loadNetGameByUuid",
       "saveGame",
       "toPlainLog"
     ]
@@ -2937,7 +3230,9 @@
           "readonly headHash: string",
           "readonly players: Readonly<Record<string, string>>",
           "readonly result: string",
-          "readonly startedAt: number"
+          "readonly seats: {\n    readonly white: string | null;\n    readonly black: string | null;\n  }",
+          "readonly startedAt: number",
+          "readonly uuid: string"
         ]
       },
       {
@@ -3967,7 +4262,8 @@
           "opacity: number",
           "owner: Player",
           "position: { x: number; y: number; z: number }",
-          "roughness: number"
+          "roughness: number",
+          "transparent: boolean"
         ]
       },
       {
@@ -4017,6 +4313,7 @@
       "recolorPiece",
       "setColors",
       "setMaterial",
+      "settleOpacity",
       "startFadeOut",
       "sync",
       "tick",
@@ -5029,6 +5326,13 @@
         ]
       },
       {
+        "source": "../net/admission.ts",
+        "target": "src/net/admission.ts",
+        "specifiers": [
+          "Proposal"
+        ]
+      },
+      {
         "source": "../net/endState.ts",
         "target": "src/net/endState.ts",
         "specifiers": [
@@ -5119,13 +5423,6 @@
         ]
       },
       {
-        "source": "./widgets/net.ts",
-        "target": "src/ui/widgets/net.ts",
-        "specifiers": [
-          "netWidget"
-        ]
-      },
-      {
         "source": "./widgets/netModel.ts",
         "target": "src/ui/widgets/netModel.ts",
         "specifiers": [
@@ -5138,6 +5435,13 @@
         "specifiers": [
           "NetPanelScope",
           "netPanelWidget"
+        ]
+      },
+      {
+        "source": "./widgets/netPanelModel.ts",
+        "target": "src/ui/widgets/netPanelModel.ts",
+        "specifiers": [
+          "SeedSources"
         ]
       },
       {
@@ -5163,7 +5467,9 @@
         "extends": [],
         "methods": [
           "copyToClipboard(text: string): Promise<void>",
+          "currentGame(): { readonly uuid: string; readonly headHash: string } | null",
           "dispatch(commandId: string): boolean",
+          "enter(code: string, proposal: Proposal): void",
           "getEndState(): EndState",
           "getHelpSources(): HelpSources",
           "getHistory(): HistoryFacts",
@@ -5181,6 +5487,7 @@
           "resumeArchived(id: string): Promise<void>",
           "reviewArchived(id: string): Promise<void>",
           "scrubTo(k: number): void",
+          "seedSources(): SeedSources",
           "setPendingJoinCode(code: string): void"
         ],
         "properties": []
@@ -5356,6 +5663,7 @@
       "BANNER_WIDGET_ID",
       "BannerContext",
       "BannerDeps",
+      "NET_MARKER_ID",
       "bannerWidget"
     ],
     "imports": [
@@ -5385,9 +5693,24 @@
         "source": "./bannerModel.ts",
         "target": "src/ui/widgets/bannerModel.ts",
         "specifiers": [
-          "BannerHistory",
           "BannerModel",
           "deriveBanner"
+        ]
+      },
+      {
+        "source": "./netModel.ts",
+        "target": "src/ui/widgets/netModel.ts",
+        "specifiers": [
+          "NetModel",
+          "NetSessionState",
+          "deriveNet"
+        ]
+      },
+      {
+        "source": "./sliderModel.ts",
+        "target": "src/ui/widgets/sliderModel.ts",
+        "specifiers": [
+          "HistoryControls"
         ]
       }
     ],
@@ -5397,7 +5720,8 @@
         "name": "BannerDeps",
         "extends": [],
         "methods": [
-          "dispatch(commandId: string): boolean",
+          "copyToClipboard(text: string): Promise<void>",
+          "getNet(): NetSessionState",
           "respondUndoRedo(accepted: boolean): boolean"
         ],
         "properties": [
@@ -5409,7 +5733,7 @@
         "extends": [],
         "methods": [],
         "properties": [
-          "readonly history: BannerHistory",
+          "readonly history: HistoryControls",
           "readonly offTurnBlocks: number",
           "readonly undoRedoPrompt: UndoRedoPrompt"
         ]
@@ -5422,15 +5746,14 @@
       "cap",
       "emptyStateFallback",
       "flashOffTurn",
+      "refreshNet",
       "render",
+      "renderNet",
       "renderUndoRedoPrompt"
     ]
   },
   "src/ui/widgets/bannerModel.ts": {
     "exports": [
-      "BANNER_COMMANDS",
-      "BannerButton",
-      "BannerHistory",
       "BannerModel",
       "CAPTURES_SEPARATOR",
       "deriveBanner"
@@ -5448,33 +5771,12 @@
     "classes": [],
     "interfaces": [
       {
-        "name": "BannerHistory",
-        "extends": [],
-        "methods": [],
-        "properties": [
-          "readonly canRedo: boolean",
-          "readonly canReset: boolean",
-          "readonly canUndo: boolean"
-        ]
-      },
-      {
-        "name": "BannerButton",
-        "extends": [],
-        "methods": [],
-        "properties": [
-          "readonly commandId: string",
-          "readonly enabled: boolean",
-          "readonly label: string"
-        ]
-      },
-      {
         "name": "BannerModel",
         "extends": [],
         "methods": [],
         "properties": [
           "readonly blackCaptures: number",
           "readonly blackCapturesLabel: string",
-          "readonly buttons: readonly BannerButton[]",
           "readonly capturesSeparator: string",
           "readonly player: Player",
           "readonly status: 'turn' | 'winner'",
@@ -5666,8 +5968,10 @@
         "source": "./sliderModel.ts",
         "target": "src/ui/widgets/sliderModel.ts",
         "specifiers": [
+          "HistoryControls",
           "HistoryFacts",
           "SliderModel",
+          "deriveHistoryControls",
           "deriveSlider",
           "resolveScrub"
         ]
@@ -5676,9 +5980,18 @@
     "classes": [],
     "interfaces": [
       {
+        "name": "HistoryControlsContext",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly history: HistoryControls"
+        ]
+      },
+      {
         "name": "HistorySliderDeps",
         "extends": [],
         "methods": [
+          "dispatch(commandId: string): boolean",
           "getHistory(): HistoryFacts",
           "scrubTo(k: number): void"
         ],
@@ -5692,7 +6005,8 @@
     "functions": [
       "historySliderWidget",
       "refresh",
-      "render"
+      "render",
+      "renderControls"
     ]
   },
   "src/ui/widgets/menu.ts": {
@@ -5827,53 +6141,6 @@
       "toggleMenu"
     ]
   },
-  "src/ui/widgets/net.ts": {
-    "exports": [
-      "NET_WIDGET_ID",
-      "NetDeps",
-      "netWidget"
-    ],
-    "imports": [
-      {
-        "source": "../registry.ts",
-        "target": "src/ui/registry.ts",
-        "specifiers": [
-          "Widget",
-          "WidgetFactory"
-        ]
-      },
-      {
-        "source": "./netModel.ts",
-        "target": "src/ui/widgets/netModel.ts",
-        "specifiers": [
-          "NetModel",
-          "NetSessionState",
-          "deriveNet"
-        ]
-      }
-    ],
-    "classes": [],
-    "interfaces": [
-      {
-        "name": "NetDeps",
-        "extends": [],
-        "methods": [
-          "copyToClipboard(text: string): Promise<void>",
-          "getNet(): NetSessionState"
-        ],
-        "properties": [
-          "readonly doc: Document"
-        ]
-      }
-    ],
-    "enums": [],
-    "typeAliases": [],
-    "functions": [
-      "netWidget",
-      "refresh",
-      "render"
-    ]
-  },
   "src/ui/widgets/netModel.ts": {
     "exports": [
       "CODE_ALPHABET",
@@ -5936,7 +6203,7 @@
       },
       {
         "name": "JoinErrorReason",
-        "type": "| 'room-full'\n  /** The transport could not connect (relay unreachable / rejected). */\n  | 'connect-failed'"
+        "type": "| 'room-full'\n  /** A seat is held for an absent owner and this peer is not that owner (seat manager `seat-reserved`). */\n  | 'seat-reserved'\n  /** The two peers proposed DIFFERENT games — different game uuids (admission `game-mismatch`). */\n  | 'game-mismatch'\n  /** The SAME game uuid but forked histories — divergent headHash (admission `game-divergent`). */\n  | 'game-divergent'\n  /** The transport could not connect (relay unreachable / rejected). */\n  | 'connect-failed'"
       },
       {
         "name": "CodeError",
@@ -5970,6 +6237,13 @@
     ],
     "imports": [
       {
+        "source": "../../net/admission.ts",
+        "target": "src/net/admission.ts",
+        "specifiers": [
+          "Proposal"
+        ]
+      },
+      {
         "source": "../registry.ts",
         "target": "src/ui/registry.ts",
         "specifiers": [
@@ -5981,8 +6255,6 @@
         "source": "./netModel.ts",
         "target": "src/ui/widgets/netModel.ts",
         "specifiers": [
-          "HOST_GAME_COMMAND",
-          "JOIN_GAME_COMMAND",
           "generateGameCode"
         ]
       },
@@ -5991,11 +6263,16 @@
         "target": "src/ui/widgets/netPanelModel.ts",
         "specifiers": [
           "NetPanelState",
+          "SeedGame",
+          "SeedKind",
+          "SeedSources",
           "chooseRecent",
+          "chooseResume",
           "deriveNetPanel",
           "initialNetPanel",
           "removeRecent",
-          "setPanelText"
+          "setPanelText",
+          "setSeedKind"
         ]
       },
       {
@@ -6024,11 +6301,12 @@
         "name": "NetPanelDeps",
         "extends": [],
         "methods": [
-          "dispatch(commandId: string): boolean",
+          "currentGame(): { readonly uuid: string; readonly headHash: string } | null",
+          "enter(code: string, proposal: Proposal): void",
           "popScope(): void",
           "pushScope(scope: NetPanelScope): void",
           "registerOpenNetwork(open: () => void): void",
-          "setPendingJoinCode(code: string): void"
+          "seedSources(): SeedSources"
         ],
         "properties": [
           "readonly doc: Document"
@@ -6038,9 +6316,11 @@
     "enums": [],
     "typeAliases": [],
     "functions": [
-      "act",
       "chooseCode",
+      "chooseGame",
       "close",
+      "enterRoom",
+      "gameRow",
       "netPanelScope",
       "netPanelWidget",
       "onKeyDown",
@@ -6049,19 +6329,32 @@
       "recentRow",
       "removeCode",
       "render",
+      "resolveProposal",
+      "selectSeed",
       "setDropdown"
     ]
   },
   "src/ui/widgets/netPanelModel.ts": {
     "exports": [
+      "DEFAULT_SEED_KIND",
       "NetPanelModel",
       "NetPanelRecentRow",
       "NetPanelState",
+      "SEED_LABEL",
+      "SEED_ORDER",
+      "SeedChoice",
+      "SeedGame",
+      "SeedGameRow",
+      "SeedKind",
+      "SeedOptionRow",
+      "SeedSources",
       "chooseRecent",
+      "chooseResume",
       "deriveNetPanel",
       "initialNetPanel",
       "removeRecent",
-      "setPanelText"
+      "setPanelText",
+      "setSeedKind"
     ],
     "imports": [
       {
@@ -6077,13 +6370,37 @@
     "classes": [],
     "interfaces": [
       {
+        "name": "SeedGame",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly headHash: string",
+          "readonly id: string",
+          "readonly label: string",
+          "readonly uuid: string"
+        ]
+      },
+      {
         "name": "NetPanelState",
         "extends": [],
         "methods": [],
         "properties": [
+          "readonly games: readonly SeedGame[]",
+          "readonly hasCurrent: boolean",
           "readonly placeholder: string",
           "readonly recent: readonly string[]",
+          "readonly resumeId: string | null",
+          "readonly seedKind: SeedKind",
           "readonly text: string"
+        ]
+      },
+      {
+        "name": "SeedSources",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly games: readonly SeedGame[]",
+          "readonly hasCurrent: boolean"
         ]
       },
       {
@@ -6095,29 +6412,74 @@
         ]
       },
       {
+        "name": "SeedOptionRow",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly available: boolean",
+          "readonly kind: SeedKind",
+          "readonly label: string",
+          "readonly selected: boolean"
+        ]
+      },
+      {
+        "name": "SeedGameRow",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly id: string",
+          "readonly label: string",
+          "readonly selected: boolean"
+        ]
+      },
+      {
+        "name": "SeedChoice",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly kind: SeedKind",
+          "readonly resumeId: string | null"
+        ]
+      },
+      {
         "name": "NetPanelModel",
         "extends": [],
         "methods": [],
         "properties": [
+          "readonly canEnter: boolean",
           "readonly canonicalCode: string | null",
           "readonly codeError: string | null",
           "readonly codeValid: boolean",
           "readonly effectiveCode: string",
           "readonly placeholder: string",
           "readonly recentRows: readonly NetPanelRecentRow[]",
+          "readonly seedActionable: boolean",
+          "readonly seedChoice: SeedChoice | null",
+          "readonly seedGameRows: readonly SeedGameRow[]",
+          "readonly seedKind: SeedKind",
+          "readonly seedOptions: readonly SeedOptionRow[]",
           "readonly text: string"
         ]
       }
     ],
     "enums": [],
-    "typeAliases": [],
+    "typeAliases": [
+      {
+        "name": "SeedKind",
+        "type": "'new' | 'resume' | 'current' | 'defer'"
+      }
+    ],
     "functions": [
       "chooseRecent",
+      "chooseResume",
       "codeErrorText",
       "deriveNetPanel",
       "initialNetPanel",
+      "isSeedActionable",
       "removeRecent",
-      "setPanelText"
+      "seedAvailable",
+      "setPanelText",
+      "setSeedKind"
     ]
   },
   "src/ui/widgets/recentCodes.ts": {
@@ -6368,9 +6730,13 @@
   },
   "src/ui/widgets/sliderModel.ts": {
     "exports": [
+      "HISTORY_COMMANDS",
+      "HistoryButton",
+      "HistoryControls",
       "HistoryFacts",
       "ScrubResolution",
       "SliderModel",
+      "deriveHistoryControls",
       "deriveSlider",
       "resolveScrub"
     ],
@@ -6407,11 +6773,32 @@
           "readonly atLive: boolean",
           "readonly viewedPly: number"
         ]
+      },
+      {
+        "name": "HistoryControls",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly canRedo: boolean",
+          "readonly canReset: boolean",
+          "readonly canUndo: boolean"
+        ]
+      },
+      {
+        "name": "HistoryButton",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly commandId: string",
+          "readonly enabled: boolean",
+          "readonly label: string"
+        ]
       }
     ],
     "enums": [],
     "typeAliases": [],
     "functions": [
+      "deriveHistoryControls",
       "deriveSlider",
       "resolveScrub"
     ]

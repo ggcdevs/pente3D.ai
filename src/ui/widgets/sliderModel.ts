@@ -24,6 +24,12 @@
  * raw value is pulled back into `0..max`, and a non-finite value is treated as live), so an
  * out-of-range drag can never render a nonexistent snapshot (agent-principles: genuine tests,
  * negative cases; #3 observable behavior).
+ *
+ * HISTORY CONTROLS (issue #44): the Undo / Redo / Reset controls MOVED here from `bannerModel.ts`.
+ * They belong under the slider — the slider IS the history widget — so their reachability→button
+ * derivation (`deriveHistoryControls`) lives beside `deriveSlider`, sharing the same strict unit +
+ * mutation gate. The buttons dispatch the SAME command ids a keybinding fires (design Principle 3,
+ * "one action layer"); the widget renders them under the range and forwards clicks to `dispatch`.
  */
 
 /**
@@ -121,4 +127,57 @@ export function deriveSlider(facts: HistoryFacts): SliderModel {
     enabled: max > 0,
     label: atLive ? 'Live' : `Move ${viewed} / ${max}`,
   };
+}
+
+/**
+ * The three history controls, in display order. Each maps to a command id (design Principle 3, one
+ * action layer): a button and a hotkey fire the identical command. MOVED here from `bannerModel.ts`
+ * (issue #44) — the controls now render under the history slider, their conceptual home.
+ */
+export const HISTORY_COMMANDS = {
+  undo: 'undo',
+  redo: 'redo',
+  reset: 'reset',
+} as const;
+
+/**
+ * History-reachability flags supplied by the scene (owner of the `Game`), not read from state.
+ * Drive whether each of Undo / Redo / Reset is currently enabled. This is a *history* fact — a
+ * single immutable `GameState` snapshot cannot know its own ply or redo tail — so the scene computes
+ * it and the model turns it into per-button `enabled` flags (never inferred from the piece map).
+ */
+export interface HistoryControls {
+  /** Whether an undo is possible right now (a committed placement exists to undo). */
+  readonly canUndo: boolean;
+  /** Whether a redo is possible right now (a previously-undone placement remains). */
+  readonly canRedo: boolean;
+  /** Whether a reset is possible right now (any move has been made / game is not pristine). */
+  readonly canReset: boolean;
+}
+
+/** A single rendered history control: its command id, label, and whether it is enabled. */
+export interface HistoryButton {
+  /** The stable command id dispatched on click — identical to the keybinding's command. */
+  readonly commandId: string;
+  /** The human label shown on the button (e.g. `'Undo'`). */
+  readonly label: string;
+  /** Whether the button is enabled; a disabled button dispatches nothing. */
+  readonly enabled: boolean;
+}
+
+/**
+ * Derive the ordered Undo / Redo / Reset controls from the scene-supplied reachability flags. Pure
+ * and deterministic: each button's `enabled` follows its MATCHING flag (never another's bit), the
+ * order is fixed (Undo, Redo, Reset), and each carries the stable command id the widget dispatches.
+ *
+ * @param history The history-reachability flags (`canUndo` / `canRedo` / `canReset`) the scene
+ *   computes from its `Game` — never inferred from the piece map here.
+ * @returns The ordered button set with each button's `enabled` flag.
+ */
+export function deriveHistoryControls(history: HistoryControls): readonly HistoryButton[] {
+  return [
+    { commandId: HISTORY_COMMANDS.undo, label: 'Undo', enabled: history.canUndo },
+    { commandId: HISTORY_COMMANDS.redo, label: 'Redo', enabled: history.canRedo },
+    { commandId: HISTORY_COMMANDS.reset, label: 'Reset', enabled: history.canReset },
+  ];
 }

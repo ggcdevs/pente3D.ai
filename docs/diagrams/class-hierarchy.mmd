@@ -1,4 +1,12 @@
 classDiagram
+    class AdmitMessage {
+        <<interface>>
+        +readonly game: Object & SyncMessage
+        +readonly id: string
+        +readonly kind: 'admit'
+        +readonly seats: SeatMap
+    }
+    note for AdmitMessage "src/net/sync.ts"
     class AppliedPresetTag {
         <<interface>>
         +name: string
@@ -27,12 +35,16 @@ classDiagram
         <<interface>>
         +readonly players: Readonly~Record~string, string~~
         +readonly result: string
+        +readonly seats: Object
         +readonly startedAt: number
     }
     note for ArchivedMeta "src/persist/archive.ts"
     class ArchiveInspect {
         <<interface>>
         +getEndState(): EndState
+        +getNetGameUuid(): string | null
+        +getNetLastReject(): AdmissionReject | null
+        +getNetSeatOwners(): SeatMap | null
         +getNotify(): NotifyReadout
         +listArchive(): Promise~readonly ArchiveListing[]~
     }
@@ -82,16 +94,9 @@ classDiagram
         +readonly vec: Coord
     }
     note for Axis "src/core/axes.ts"
-    class BannerButton {
-        <<interface>>
-        +readonly commandId: string
-        +readonly enabled: boolean
-        +readonly label: string
-    }
-    note for BannerButton "src/ui/widgets/bannerModel.ts"
     class BannerContext {
         <<interface>>
-        +readonly history: BannerHistory
+        +readonly history: HistoryControls
         +readonly offTurnBlocks: number
         +readonly undoRedoPrompt: UndoRedoPrompt
     }
@@ -99,22 +104,15 @@ classDiagram
     class BannerDeps {
         <<interface>>
         +readonly doc: Document
-        +dispatch(commandId: string): boolean
+        +copyToClipboard(text: string): Promise~void~
+        +getNet(): NetSessionState
         +respondUndoRedo(accepted: boolean): boolean
     }
     note for BannerDeps "src/ui/widgets/banner.ts"
-    class BannerHistory {
-        <<interface>>
-        +readonly canRedo: boolean
-        +readonly canReset: boolean
-        +readonly canUndo: boolean
-    }
-    note for BannerHistory "src/ui/widgets/bannerModel.ts"
     class BannerModel {
         <<interface>>
         +readonly blackCaptures: number
         +readonly blackCapturesLabel: string
-        +readonly buttons: readonly BannerButton[]
         +readonly capturesSeparator: string
         +readonly player: Player
         +readonly status: 'turn' | 'winner'
@@ -212,6 +210,7 @@ classDiagram
     note for ConflictedGame "src/persist/archive.ts"
     class ConflictedRecord {
         <<interface>>
+        +readonly forkUuids: Object
         +readonly forks: Object
         +readonly size: number
     }
@@ -300,6 +299,7 @@ classDiagram
     class EventLog {
         <<interface>>
         +readonly entries: readonly LogEntry[]
+        +readonly uuid: string
     }
     note for EventLog "src/core/eventLog.ts"
     class GameExport {
@@ -307,6 +307,7 @@ classDiagram
         +readonly log: readonly Event[]
         +readonly settings: GameSettings
         +readonly size: number
+        +readonly uuid: string
     }
     note for GameExport "src/core/serialize.ts"
     class GameMeta {
@@ -314,7 +315,9 @@ classDiagram
         +readonly headHash: string
         +readonly players: Readonly~Record~string, string~~
         +readonly result: string
+        +readonly seats: Object
         +readonly startedAt: number
+        +readonly uuid: string
     }
     note for GameMeta "src/persist/db.ts"
     class GameRecord {
@@ -347,6 +350,15 @@ classDiagram
         +readonly resolution: Resolution | null
     }
     note for HandshakeState "src/net/handshake.ts"
+    class HelloMessage {
+        <<interface>>
+        +readonly arrivalTag: number
+        +readonly id: string
+        +readonly kind: 'hello'
+        +readonly playerId: string
+        +readonly proposal: Proposal
+    }
+    note for HelloMessage "src/net/sync.ts"
     class HelpDeps {
         <<interface>>
         +readonly doc: Document
@@ -382,6 +394,25 @@ classDiagram
         +readonly labels: Readonly~Record~string, string~~
     }
     note for HelpSources "src/ui/widgets/helpModel.ts"
+    class HistoryButton {
+        <<interface>>
+        +readonly commandId: string
+        +readonly enabled: boolean
+        +readonly label: string
+    }
+    note for HistoryButton "src/ui/widgets/sliderModel.ts"
+    class HistoryControls {
+        <<interface>>
+        +readonly canRedo: boolean
+        +readonly canReset: boolean
+        +readonly canUndo: boolean
+    }
+    note for HistoryControls "src/ui/widgets/sliderModel.ts"
+    class HistoryControlsContext {
+        <<interface>>
+        +readonly history: HistoryControls
+    }
+    note for HistoryControlsContext "src/ui/widgets/historySlider.ts"
     class HistoryFacts {
         <<interface>>
         +readonly maxPly: number
@@ -398,6 +429,7 @@ classDiagram
     class HistorySliderDeps {
         <<interface>>
         +readonly doc: Document
+        +dispatch(commandId: string): boolean
         +getHistory(): HistoryFacts
         +scrubTo(k: number): void
     }
@@ -755,13 +787,6 @@ classDiagram
         +readonly topic: string
     }
     note for MqttWill "src/net/mqttTransport.ts"
-    class NetDeps {
-        <<interface>>
-        +readonly doc: Document
-        +copyToClipboard(text: string): Promise~void~
-        +getNet(): NetSessionState
-    }
-    note for NetDeps "src/ui/widgets/net.ts"
     class NetHooks {
         <<interface>>
         +canPlace(): boolean
@@ -795,21 +820,28 @@ classDiagram
     class NetPanelDeps {
         <<interface>>
         +readonly doc: Document
-        +dispatch(commandId: string): boolean
+        +currentGame(): Object | null
+        +enter(code: string, proposal: Proposal): void
         +popScope(): void
         +pushScope(scope: NetPanelScope): void
         +registerOpenNetwork(open: () =~ void): void
-        +setPendingJoinCode(code: string): void
+        +seedSources(): SeedSources
     }
     note for NetPanelDeps "src/ui/widgets/netPanel.ts"
     class NetPanelModel {
         <<interface>>
+        +readonly canEnter: boolean
         +readonly canonicalCode: string | null
         +readonly codeError: string | null
         +readonly codeValid: boolean
         +readonly effectiveCode: string
         +readonly placeholder: string
         +readonly recentRows: readonly NetPanelRecentRow[]
+        +readonly seedActionable: boolean
+        +readonly seedChoice: SeedChoice | null
+        +readonly seedGameRows: readonly SeedGameRow[]
+        +readonly seedKind: SeedKind
+        +readonly seedOptions: readonly SeedOptionRow[]
         +readonly text: string
     }
     note for NetPanelModel "src/ui/widgets/netPanelModel.ts"
@@ -827,18 +859,24 @@ classDiagram
     note for NetPanelScope "src/ui/widgets/netPanel.ts"
     class NetPanelState {
         <<interface>>
+        +readonly games: readonly SeedGame[]
+        +readonly hasCurrent: boolean
         +readonly placeholder: string
         +readonly recent: readonly string[]
+        +readonly resumeId: string | null
+        +readonly seedKind: SeedKind
         +readonly text: string
     }
     note for NetPanelState "src/ui/widgets/netPanelModel.ts"
     class NetSessionDeps {
         <<interface>>
+        +newMessageId: () =~ string
         +now: () =~ number
         +rand: () =~ number
         +readonly db: IDBDatabase
         +readonly playerId: string
         +readonly size: number
+        +settleMs: number
         +createTransport(): Transport
     }
     note for NetSessionDeps "src/net/session.ts"
@@ -901,6 +939,12 @@ classDiagram
         +modifier: ModifierToken
     }
     note for ParsedGesture "src/render/cameraControls.ts"
+    class Peer {
+        <<interface>>
+        +readonly arrivalOrder: number
+        +readonly playerId: string
+    }
+    note for Peer "src/net/admission.ts"
     class PendingProposal {
         <<interface>>
         +readonly action: string
@@ -931,6 +975,9 @@ classDiagram
         +getLighting(): LightingReadout | null
         +getMarkers(query: readonly string[]): MarkersReadout | null
         +getNet(): NetSessionState | null
+        +getNetGameUuid(): string | null
+        +getNetLastReject(): AdmissionReject | null
+        +getNetSeatOwners(): SeatMap | null
         +getNotify(): NotifyReadout
         +getPieces(): PieceReadout[] | null
         +getState(): GameState | null
@@ -956,6 +1003,12 @@ classDiagram
         +setPendingJoinCode(code: string): void
     }
     note for PenteInspect "src/debug/window.ts"
+    class PersistedSeats {
+        <<interface>>
+        +readonly black: string | null
+        +readonly white: string | null
+    }
+    note for PersistedSeats "src/persist/archive.ts"
     class PickableLineMesh {
         <<interface>>
         +readonly category: LineCategory
@@ -1039,6 +1092,7 @@ classDiagram
         +owner: Player
         +position: Object
         +roughness: number
+        +transparent: boolean
     }
     note for PieceReadout "src/render/pieces.ts"
     class PieceRecolor {
@@ -1099,6 +1153,19 @@ classDiagram
         +readonly type: 'redo'
     }
     note for RedoEvent "src/core/eventLog.ts"
+    class Reject {
+        <<interface>>
+        +readonly ok: false
+        +readonly reason: ReconcileReject
+    }
+    note for Reject "src/net/admission.ts"
+    class RejectMessage {
+        <<interface>>
+        +readonly id: string
+        +readonly kind: 'reject'
+        +readonly reason: AdmissionReject
+    }
+    note for RejectMessage "src/net/sync.ts"
     class RelayConfig {
         <<interface>>
         +readonly password: string
@@ -1241,6 +1308,41 @@ classDiagram
         +readonly white: string | null
     }
     note for SeatMap "src/net/seats.ts"
+    class SeedChoice {
+        <<interface>>
+        +readonly kind: SeedKind
+        +readonly resumeId: string | null
+    }
+    note for SeedChoice "src/ui/widgets/netPanelModel.ts"
+    class SeedGame {
+        <<interface>>
+        +readonly headHash: string
+        +readonly id: string
+        +readonly label: string
+        +readonly uuid: string
+    }
+    note for SeedGame "src/ui/widgets/netPanelModel.ts"
+    class SeedGameRow {
+        <<interface>>
+        +readonly id: string
+        +readonly label: string
+        +readonly selected: boolean
+    }
+    note for SeedGameRow "src/ui/widgets/netPanelModel.ts"
+    class SeedOptionRow {
+        <<interface>>
+        +readonly available: boolean
+        +readonly kind: SeedKind
+        +readonly label: string
+        +readonly selected: boolean
+    }
+    note for SeedOptionRow "src/ui/widgets/netPanelModel.ts"
+    class SeedSources {
+        <<interface>>
+        +readonly games: readonly SeedGame[]
+        +readonly hasCurrent: boolean
+    }
+    note for SeedSources "src/ui/widgets/netPanelModel.ts"
     class SelectOption {
         <<interface>>
         +readonly selected: boolean
@@ -1294,6 +1396,7 @@ classDiagram
         +readonly epoch: number
         +readonly headHash: string
         +readonly log: readonly Event[]
+        +readonly uuid: string
         +readonly version: number
     }
     note for SyncMessage "src/net/sync.ts"
@@ -1335,7 +1438,9 @@ classDiagram
     class UiDeps {
         <<interface>>
         +copyToClipboard(text: string): Promise~void~
+        +currentGame(): Object | null
         +dispatch(commandId: string): boolean
+        +enter(code: string, proposal: Proposal): void
         +getEndState(): EndState
         +getHelpSources(): HelpSources
         +getHistory(): HistoryFacts
@@ -1353,6 +1458,7 @@ classDiagram
         +resumeArchived(id: string): Promise~void~
         +reviewArchived(id: string): Promise~void~
         +scrubTo(k: number): void
+        +seedSources(): SeedSources
         +setPendingJoinCode(code: string): void
     }
     note for UiDeps "src/ui/setup.ts"
@@ -1484,6 +1590,11 @@ classDiagram
         +readonly b: Coord
     }
     note for WinSegment "src/render/winLineLayout.ts"
+    class AdmissionDeduper {
+        +fresh(id: string): boolean
+        +hasSeen(id: string): boolean
+    }
+    note for AdmissionDeduper "src/net/sync.ts"
     class ArchiveError {
     }
     note for ArchiveError "src/persist/archive.ts"
@@ -1494,6 +1605,7 @@ classDiagram
         +canRedo(): boolean
         +canUndo(): boolean
         +get log(): EventLog
+        +get uuid(): string
         +place(coords: Coord): void
         +ply(): number
         +redo(): void
@@ -1537,10 +1649,13 @@ classDiagram
         +applyAcceptedUndoRedo(): boolean
         +canPlace(): boolean
         +disconnect(): void
+        +enter(rawCode: string, proposal: Proposal): Promise~void~
         +gameState(): GameState | null
+        +gameUuid(): string | null
         +getHandshake(): HandshakeState
         +host(rawCode: string): Promise~void~
         +join(rawCode: string): Promise~boolean~
+        +lastRejectReason(): AdmissionReject | null
         +onChange(listener: NetChangeListener): () =~ void
         +onHandshakeChange(listener: HandshakeChangeListener): () =~ void
         +place(coords: Coord): void
@@ -1550,11 +1665,13 @@ classDiagram
         +redo(): void
         +resetForRematch(): boolean
         +respond(accepted: boolean): boolean
+        +seatOwners(): SeatMap | null
         +state(): NetSessionState
         +syncEngine(): SyncEngine | null
         +undo(): void
         +undoRedoAvail(): Object
         +undoRedoPrompt(): UndoRedoPrompt
+        +whenPersisted(): Promise~void~
     }
     note for NetSession "src/net/session.ts"
     class NotifyGlue {
@@ -1572,10 +1689,12 @@ classDiagram
     note for PresenceTracker "src/net/presence.ts"
     class SyncEngine {
         +applyAgreedUndo(): void
+        +attach(): void
         +conflictForks(): Object | null
         +connect(roomCode: string): Promise~void~
         +epoch(): number
         +game(): Game
+        +onAdmission(listener: (msg: AdmissionMessage) =~ void): () =~ void
         +onChange(listener: () =~ void): () =~ void
         +onMessage(listener: (msg: ProposalMessage | ResponseMessage) =~ void): () =~ void
         +place(coords: Coord): void

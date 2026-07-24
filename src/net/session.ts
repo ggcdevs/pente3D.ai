@@ -1,7 +1,8 @@
 /**
  * Networking session (Task 5.5) — the app-level IO orchestration that wires the Stage 3
  * {@link SyncEngine} + the seat manager ({@link claimSeat}) behind a single, plain, subscribable
- * {@link NetSessionState} the networking widget (`src/ui/widgets/net.ts`) renders.
+ * {@link NetSessionState} the merged net-status sub-panel in the banner (`src/ui/widgets/banner.ts`,
+ * issue #44) renders.
  *
  * ## What this is (and is not)
  *
