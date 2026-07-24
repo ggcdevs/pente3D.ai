@@ -13,27 +13,30 @@ import {
  * Task 5.5 / C.2 / issue #44 e2e — the PERSISTENT connection/seat/turn/conflict STATUS display is now
  * MERGED INTO the score banner (issue #44 folded the former standalone `connectionStatus` widget into
  * `statusBanner`; Host/Join INITIATION still lives in the drawer's Network-Game panel,
- * `netPanel.spec.ts`). The merged net-status sub-panel keeps the same `net-*` testids/classes and a
- * `data-widget-id="connectionStatus"` marker so these selectors still resolve — now NESTED inside the
- * banner in `top-center`. Verified by driving the REAL app and asserting on `window.__pente` real
- * state (getNet) + the rendered DOM (agent-principles #3: observable behavior, never a log line):
- *   - the merged net-status marker sits INSIDE the banner in its `top-center` zone and starts idle
- *     (hidden sub-panel — NO inline Host button / Join input; those moved to the panel);
- *   - dispatching the SAME `hostGame` command the panel fires CONNECTS the session, CLAIMS the white
- *     seat, and the status shows a valid game code + Copy (design Principle 3, one action layer);
- *   - a peer joining flips `peerPresent` and the status line to "Opponent connected" (presence over
- *     the injected relay — observable, not a log line);
- *   - a JOIN via the command path + pending-code seam claims the BLACK seat and reaches the transport;
- *   - the Copy button copies the shown code.
+ * `netPanel.spec.ts`).
+ *
+ * Issue #44 (live iteration) restructured the merged HUD into a COMPACT PRESENCE HUD:
+ *   - the game CODE lives in a tap-to-copy `net-copy` ROW (the whole row is the copy button) holding
+ *     `net-code`; on a successful copy the row gets `data-copied="true"` and its icon flips to `✓`
+ *     (no "Copy"/"Copied" text button any more);
+ *   - the connection/seat text lines are GONE — presence is shown by a per-color `.pente-hud-dot`
+ *     with `data-present`, and the local seat by `.pente-hud-you` / `banner-you-{color}`;
+ *   - the conflict / join-error ALERTS keep their `data-widget-id="connectionStatus"` marker.
+ * The code row + presence dots are direct children of the banner, so they scope to `statusBanner`, not
+ * the `connectionStatus` alerts marker.
+ *
+ * Verified by driving the REAL app and asserting on `window.__pente` real state (getNet) + the
+ * rendered DOM (agent-principles #3: observable behavior, never a log line). The widget id / zone /
+ * command ids / alphabet all derive from config + model, so nothing is hardcoded (agent-principles #8).
  *
  * A deterministic in-page MOCK transport is injected via `window.__penteNetTransportFactory` BEFORE
  * boot (the `appSession.ts` seam), so host/join connect instantly and presence is controllable — the
  * UI e2e stays hermetic (no external relay), while the REAL two-client convergence over MQTT is proven
- * separately by `sync.realrelay.test.ts`. The widget id / zone / command ids / alphabet all derive
- * from the config + model, so nothing is hardcoded (agent-principles #8).
+ * separately by `sync.realrelay.test.ts`.
  */
 
 const NET_ID = 'connectionStatus';
+const BANNER_ID = 'statusBanner';
 
 interface NetState {
   phase: 'offline' | 'connecting' | 'connected' | 'conflict';
@@ -50,12 +53,6 @@ interface NetState {
 }
 type Pente = { getNet(): NetState | null };
 
-/**
- * Install the deterministic mock transport factory + clean localStorage BEFORE the app boots. The
- * mock connects immediately, records the room code on `window.__mockRoom`, and exposes
- * `window.__mockSetPeer(present)` to drive a presence change into the session (so a test can flip
- * "opponent connected" without a second real client). It carries opaque JSON like the real relay.
- */
 async function installMock(page: import('@playwright/test').Page) {
   await page.addInitScript(() => {
     window.localStorage.clear();
@@ -133,36 +130,53 @@ const setPendingJoinCode = (page: import('@playwright/test').Page, code: string)
     ).__pente.setPendingJoinCode(c);
   }, code);
 
-const widget = (page: import('@playwright/test').Page) =>
+/** The merged conflict/join-error ALERTS marker (still carries `data-widget-id="connectionStatus"`). */
+const alerts = (page: import('@playwright/test').Page) =>
   page.locator(`[data-widget-id="${NET_ID}"]`);
+/** The whole banner — the code row + presence dots + seat markers live directly under it (issue #44). */
+const banner = (page: import('@playwright/test').Page) =>
+  page.locator(`[data-widget-id="${BANNER_ID}"]`);
 const testid = (page: import('@playwright/test').Page, id: string) =>
-  widget(page).locator(`[data-testid="${id}"]`);
+  banner(page).locator(`[data-testid="${id}"]`);
+/** The per-color presence dot (`.pente-hud-dot`) inside its color's HUD row. */
+const dot = (page: import('@playwright/test').Page, color: 'white' | 'black') =>
+  banner(page).locator(`.pente-hud-row--${color} .pente-hud-dot`);
 
-test('the merged net-status sits INSIDE the banner (top-center) and starts offline hidden (no inline Host/Join)', async ({
+test('the merged net-status sits INSIDE the banner and starts offline hidden (no inline Host/Join, no presence dots)', async ({
   page,
 }) => {
   await ready(page);
 
-  // Issue #44: the net status is merged into the banner. Its marker is NESTED inside the banner
-  // widget, which sits in the `top-center` zone the tracked layout gives the banner.
-  expect(layoutDefault.widgets.statusBanner.zone).toBe('top-center');
+  // Issue #44: the net status is merged into the banner. The conflict/join-error alerts marker is
+  // NESTED inside the banner, which sits in the zone the tracked layout gives the banner (#8).
+  const zone = layoutDefault.widgets.statusBanner.zone;
   const inBanner = page.locator(
-    `[data-zone="top-center"] [data-widget-id="statusBanner"] [data-widget-id="${NET_ID}"]`,
+    `[data-zone="${zone}"] [data-widget-id="${BANNER_ID}"] [data-widget-id="${NET_ID}"]`,
   );
   await expect(inBanner).toHaveCount(1);
 
-  // Offline: the net sub-panel has NOTHING to show — the controls are empty (#13 moved Host/Join to
-  // the drawer, #16 removed the board hint), so the sub-panel is HIDDEN and leaves no gap in the
-  // banner. Its data-panel stays 'controls' and the status/conflict lines stay hidden underneath.
-  await expect(widget(page)).toBeHidden();
-  await expect(widget(page)).toHaveAttribute('data-panel', 'controls');
-  await expect(testid(page, 'net-status-line')).toBeHidden();
+  // Offline: nothing to alert about → the alerts marker is HIDDEN (leaves no gap). Its data-panel
+  // stays 'controls' and the conflict line stays hidden underneath.
+  await expect(alerts(page)).toBeHidden();
+  await expect(alerts(page)).toHaveAttribute('data-panel', 'controls');
   await expect(testid(page, 'net-conflict')).toBeHidden();
+
+  // Offline: no code → the tap-to-copy code row is HIDDEN (nothing to copy).
+  await expect(testid(page, 'net-copy')).toBeHidden();
+
+  // Offline (no seat held): the presence dots + "(You)" are NOT rendered on either color row.
+  for (const color of ['white', 'black'] as const) {
+    await expect(dot(page, color)).toBeHidden();
+    await expect(testid(page, `banner-you-${color}`)).toBeHidden();
+  }
 
   // The inline Host button / Join input are GONE (moved to the drawer's Network-Game panel, #13).
   await expect(testid(page, 'net-host')).toHaveCount(0);
   await expect(testid(page, 'net-join')).toHaveCount(0);
   await expect(testid(page, 'net-join-input')).toHaveCount(0);
+  // And the old text status/seat lines are GONE (replaced by dots + "(You)", issue #44).
+  await expect(testid(page, 'net-status-line')).toHaveCount(0);
+  await expect(testid(page, 'net-seat')).toHaveCount(0);
 
   const state = await getNet(page);
   expect(state.phase).toBe('offline');
@@ -174,7 +188,7 @@ test('the merged net-status sits INSIDE the banner (top-center) and starts offli
   await page.screenshot({ path: shot });
 });
 
-test('hosting via the command path connects the session, claims white, and the status widget shows a valid code', async ({
+test('hosting via the command path connects the session, claims white, and shows a valid code + presence', async ({
   page,
 }) => {
   await ready(page);
@@ -193,18 +207,27 @@ test('hosting via the command path connects the session, claims white, and the s
   expect(state.code!).toHaveLength(CODE_LENGTH);
   for (const ch of state.code!) expect(CODE_ALPHABET).toContain(ch);
 
-  await expect(widget(page)).toHaveAttribute('data-panel', 'status');
-  await expect(testid(page, 'net-code')).toHaveText(state.code!);
-  await expect(testid(page, 'net-seat')).toHaveText('You are White');
+  // The tap-to-copy code row is now visible showing the real code.
   await expect(testid(page, 'net-copy')).toBeVisible();
-  await expect(testid(page, 'net-status-line')).toHaveText('Waiting for opponent…');
+  await expect(testid(page, 'net-code')).toHaveText(state.code!);
+
+  // Issue #44: the seat is shown by "(You)" on the held color's row (white here), NOT a text line.
+  await expect(testid(page, 'banner-you-white')).toBeVisible();
+  await expect(testid(page, 'banner-you-white')).toHaveText('(You)');
+  await expect(testid(page, 'banner-you-black')).toBeHidden();
+
+  // Presence: my own (white) row shows a PRESENT dot; the peer (black) is absent → not-present dot.
+  await expect(dot(page, 'white')).toBeVisible();
+  await expect(dot(page, 'white')).toHaveAttribute('data-present', 'true');
+  await expect(dot(page, 'black')).toBeVisible();
+  await expect(dot(page, 'black')).toHaveAttribute('data-present', 'false');
 
   const shot = resolve('e2e/artifacts/net-hosted.png');
   mkdirSync(dirname(shot), { recursive: true });
   await page.screenshot({ path: shot });
 });
 
-test('a peer joining the room flips peerPresent and the status line to "Opponent connected"', async ({
+test('a peer joining the room flips peerPresent and the opponent presence dot to present', async ({
   page,
 }) => {
   await ready(page);
@@ -214,7 +237,8 @@ test('a peer joining the room flips peerPresent and the status line to "Opponent
     return p.getNet()?.phase === 'connected';
   });
   expect((await getNet(page)).peerPresent).toBe(false);
-  await expect(testid(page, 'net-status-line')).toHaveText('Waiting for opponent…');
+  // Before the peer arrives: the opponent (black) dot is not-present (subtle hollow/pulse).
+  await expect(dot(page, 'black')).toHaveAttribute('data-present', 'false');
 
   await setPeer(page, true);
 
@@ -223,7 +247,10 @@ test('a peer joining the room flips peerPresent and the status line to "Opponent
     return p.getNet()?.peerPresent === true;
   });
   expect((await getNet(page)).peerPresent).toBe(true);
-  await expect(testid(page, 'net-status-line')).toHaveText('Opponent connected');
+  // The opponent dot flips to PRESENT (the presence change reached the rendered DOM — observable #3).
+  await expect(dot(page, 'black')).toHaveAttribute('data-present', 'true');
+  // My own (white) dot stays present throughout.
+  await expect(dot(page, 'white')).toHaveAttribute('data-present', 'true');
 });
 
 test('joining via the pending-code seam + command connects and ESTABLISHES the room (first owner → white)', async ({
@@ -248,8 +275,9 @@ test('joining via the pending-code seam + command connects and ESTABLISHES the r
   // second peer arriving later is admitted onto the free black seat (the two-context specs prove that).
   expect(state.seat).toBe('white');
   expect(state.code).toBe(code);
-  await expect(widget(page)).toHaveAttribute('data-panel', 'status');
-  await expect(testid(page, 'net-seat')).toHaveText('You are White');
+  // Issue #44: the held seat is shown by "(You)" on white's row (not a text line).
+  await expect(testid(page, 'banner-you-white')).toBeVisible();
+  await expect(dot(page, 'white')).toHaveAttribute('data-present', 'true');
 
   // The room the mock transport connected to is the code (the wiring reached the transport).
   const room = await page.evaluate(() =>
@@ -258,7 +286,7 @@ test('joining via the pending-code seam + command connects and ESTABLISHES the r
   expect(room).toBe(code);
 });
 
-test('the Copy button copies the game code to the clipboard and reports success', async ({
+test('the code row copies the game code to the clipboard and flips to the copied state (✓)', async ({
   page,
   context,
 }) => {
@@ -271,9 +299,15 @@ test('the Copy button copies the game code to the clipboard and reports success'
   });
   const code = (await getNet(page)).code!;
 
+  // The WHOLE row is the copy affordance (issue #44). Before the copy, it is not in the copied state.
+  await expect(testid(page, 'net-copy')).not.toHaveAttribute('data-copied', 'true');
+
   await testid(page, 'net-copy').click();
 
-  await expect(testid(page, 'net-copy')).toHaveText('Copied');
+  // Success is observable: the row flags `data-copied="true"` and its icon flips to ✓ (issue #44 —
+  // no "Copied" text button any more). And the code genuinely reached the clipboard.
+  await expect(testid(page, 'net-copy')).toHaveAttribute('data-copied', 'true');
+  await expect(banner(page).locator('.pente-hud-copy-icon')).toHaveText('✓');
   const clip = await page.evaluate(() => navigator.clipboard.readText());
   expect(clip).toBe(code);
 });

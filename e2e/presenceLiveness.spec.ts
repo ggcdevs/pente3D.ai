@@ -6,7 +6,10 @@ import { dirname, resolve } from 'node:path';
  * Task 6.5 e2e — the phantom-presence fix (issue #5): a bogus / nonexistent room must NOT show a
  * phantom "opponent connected"; a real two-peer room MUST. This drives the REAL app through
  * `window.__pente` + the net widget and asserts on observable state (`getNet().peerPresent` + the
- * rendered status line), never a log line (agent-principles #3).
+ * rendered OPPONENT presence dot), never a log line (agent-principles #3). Issue #44 replaced the
+ * "Waiting for opponent…"/"Opponent connected" TEXT line with a per-color `.pente-hud-dot[data-present]`
+ * on each seat's HUD row — so a phantom/absent opponent is the opponent row's dot reading
+ * `data-present="false"`, and a genuine one reads `data-present="true"`.
  *
  * The transport is a BroadcastChannel-backed mock (the stable pattern from `netWiring.spec.ts`) that
  * faithfully models a LIVE presence handshake: a peer, on connect, broadcasts a live `hello`; a live
@@ -93,6 +96,12 @@ async function ready(page: import('@playwright/test').Page) {
 const net = (page: import('@playwright/test').Page) =>
   page.evaluate(() => (window as unknown as { __pente: Pente }).__pente.getNet());
 
+/** The presence dot on a given seat's HUD row inside the banner (issue #44 replaced the text line). */
+const dot = (page: import('@playwright/test').Page, color: 'white' | 'black') =>
+  page.locator(
+    `[data-widget-id="statusBanner"] .pente-hud-row--${color} .pente-hud-dot`,
+  );
+
 async function waitConnected(page: import('@playwright/test').Page) {
   await page.waitForFunction(() => {
     const p = (window as unknown as { __pente: Pente }).__pente;
@@ -127,7 +136,13 @@ test('joining a BOGUS/nonexistent code shows NO opponent (issue #5: no phantom p
   const state = await net(page);
   expect(state?.phase).toBe('connected');
   expect(state?.peerPresent).toBe(false);
-  await expect(page.locator('[data-testid="net-status-line"]')).toHaveText('Waiting for opponent…');
+  // Issue #44: no phantom opponent → the OPPONENT's presence dot stays not-present. The lone joiner
+  // establishes as the first owner (white, §2.3/§4), so its opponent is BLACK.
+  expect(state?.seat).toBe('white');
+  await expect(dot(page, 'black')).toBeVisible();
+  await expect(dot(page, 'black')).toHaveAttribute('data-present', 'false');
+  // The local seat's own dot IS present (we are live in the room).
+  await expect(dot(page, 'white')).toHaveAttribute('data-present', 'true');
 
   const shot = resolve('e2e/artifacts/presence-dead-room.png');
   mkdirSync(dirname(shot), { recursive: true });
@@ -167,7 +182,11 @@ test('a REAL two-peer room DOES show the opponent (issue #5: genuine presence st
   });
   expect((await net(joiner))?.peerPresent).toBe(true);
   expect((await net(host))?.peerPresent).toBe(true);
-  await expect(host.locator('[data-testid="net-status-line"]')).toHaveText('Opponent connected');
+  // Issue #44: the host (white) now sees its OPPONENT (black) dot flip to present — the genuine
+  // presence reached the rendered DOM (observable #3, not a text line any more).
+  expect((await net(host))?.seat).toBe('white');
+  await expect(dot(host, 'black')).toBeVisible();
+  await expect(dot(host, 'black')).toHaveAttribute('data-present', 'true');
 
   const shot = resolve('e2e/artifacts/presence-two-peer.png');
   mkdirSync(dirname(shot), { recursive: true });

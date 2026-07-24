@@ -1,6 +1,6 @@
 {
   "widgets": {
-    "statusBanner": { "zone": "top-center", "order": 0, "visible": true },
+    "statusBanner": { "zone": "top-right", "order": 0, "visible": true },
     "menuButton": { "zone": "top-left", "order": 0, "visible": true },
     "settings": { "zone": "top-right", "order": 1, "visible": true },
     "networkGame": { "zone": "top-right", "order": 2, "visible": true },

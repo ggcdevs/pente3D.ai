@@ -17,7 +17,11 @@ import {
  * PURE networking view-model tests (Task 5.5) — strict unit + mutation gate. Genuine assertions on
  * the exact derived model and on each validity rule's accept/REJECT decision (agent-principles:
  * specific expected values, never "it ran"), with negative cases for every rule (empty / too-short
- * / bad-character code; each phase's panel + status text; the seat/conflict/join-error branches).
+ * / bad-character code; each phase's panel; the conflict/join-error branches).
+ *
+ * Issue #44 REMOVED the derived `statusText`/`seatText` sentences from the model (the compact presence
+ * HUD shows connection/seat structurally — dots + "(You)" — off the raw session state, not strings);
+ * a guard test below pins that the model no longer carries those keys so a re-introduction is caught.
  * The DOM/dispatch/session wiring is proven separately by Playwright.
  */
 
@@ -51,43 +55,18 @@ describe('deriveNet — panel selection', () => {
   });
 });
 
-describe('deriveNet — status text per phase', () => {
-  it('offline shows NO status text (issue #16 removed the board hint — no advertisement)', () => {
-    expect(deriveNet(state({ phase: 'offline' })).statusText).toBe('');
-  });
-
-  it('connecting shows a connecting message', () => {
-    expect(deriveNet(state({ phase: 'connecting' })).statusText).toBe('Connecting…');
-  });
-
-  it('connected with the peer present announces the opponent', () => {
-    expect(deriveNet(state({ phase: 'connected', peerPresent: true })).statusText).toBe(
-      'Opponent connected',
+describe('deriveNet — model shape (issue #44 trim)', () => {
+  it('does NOT carry the removed statusText/seatText sentence fields', () => {
+    // The compact presence HUD reflects connection/seat structurally off the raw session state, so
+    // the pure model no longer derives those strings. Assert they are absent — a re-introduction of a
+    // dead field is caught here (agent-principles: no genuinely-dead fields).
+    const m = deriveNet(state({ phase: 'connected', seat: 'white', peerPresent: true }));
+    expect(m).not.toHaveProperty('statusText');
+    expect(m).not.toHaveProperty('seatText');
+    // The kept fields are exactly these five.
+    expect(Object.keys(m).sort()).toEqual(
+      ['code', 'conflict', 'conflictText', 'joinErrorText', 'panel'].sort(),
     );
-  });
-
-  it('connected without the peer waits for the opponent', () => {
-    expect(deriveNet(state({ phase: 'connected', peerPresent: false })).statusText).toBe(
-      'Waiting for opponent…',
-    );
-  });
-
-  it('conflict shows a stopped-by-conflict message', () => {
-    expect(deriveNet(state({ phase: 'conflict' })).statusText).toBe('Game stopped by a conflict.');
-  });
-});
-
-describe('deriveNet — seat label', () => {
-  it('white seat → "You are White"', () => {
-    expect(deriveNet(state({ phase: 'connected', seat: 'white' })).seatText).toBe('You are White');
-  });
-
-  it('black seat → "You are Black"', () => {
-    expect(deriveNet(state({ phase: 'connected', seat: 'black' })).seatText).toBe('You are Black');
-  });
-
-  it('no seat → null (no label invented)', () => {
-    expect(deriveNet(state({ phase: 'connecting', seat: null })).seatText).toBeNull();
   });
 });
 

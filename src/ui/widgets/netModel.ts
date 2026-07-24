@@ -6,16 +6,17 @@
  *
  * The networking widget reflects a single plain {@link NetSessionState} readout (phase / game code
  * / seat / peer presence / conflict) into: which sub-panel shows (Host+Join controls while offline,
- * a connection/seat status line once connected, a conflict banner once the logs fork), the status
- * and seat LABELS, the game code to show + copy, and the inline join-code error. Turning that
- * state into the serializable model the DOM renders — and validating a typed join code / generating
- * a host code — is a DOM-free, deterministic derivation, so it earns the strict unit + mutation
- * gate exactly as {@link ./menuModel.ts} / {@link ./settingsModel.ts} do. The `net.ts` widget is the
- * DOM/dispatch IO glue (Playwright): it dispatches the SAME command ids a keybinding would
- * (design Principle 3 "one action layer").
+ * a status sub-panel once connected, a conflict banner once the logs fork), the game code to show +
+ * copy, and the inline join-code error. Connection/seat are shown STRUCTURALLY by the presence HUD
+ * (dots + "(You)") off the raw session state, not as derived sentences (issue #44 removed the former
+ * `statusText`/`seatText`). Turning that state into the serializable model the DOM renders — and
+ * validating a typed join code / generating a host code — is a DOM-free, deterministic derivation, so
+ * it earns the strict unit + mutation gate exactly as {@link ./menuModel.ts} /
+ * {@link ./settingsModel.ts} do. The banner widget is the DOM/dispatch IO glue (Playwright): it
+ * dispatches the SAME command ids a keybinding would (design Principle 3 "one action layer").
  *
- * What is PURE here (this file) vs IO glue (`net.ts` / `session.ts`):
- *   - PURE: `deriveNet` (state → the panel/labels/banner model), `validateGameCode` (accept/REJECT
+ * What is PURE here (this file) vs IO glue (`banner.ts` / `session.ts`):
+ *   - PURE: `deriveNet` (state → the panel/code/conflict/join-error model), `validateGameCode` (accept/REJECT
  *     a typed join code), `normalizeGameCode` (canonical form), `generateGameCode` (a code from an
  *     INJECTED rng — deterministic given the rng, so unit-testable without a real random source).
  *   - IO glue: dispatching `hostGame`/`joinGame`, reading `getNet()`, the clipboard copy, and the
@@ -134,12 +135,8 @@ export type NetPanel =
 export interface NetModel {
   /** Which sub-panel is shown (controls / status / conflict). */
   readonly panel: NetPanel;
-  /** The connection status line (e.g. `Waiting for opponent…`, `Opponent connected`). */
-  readonly statusText: string;
   /** The game code to display + copy, or `null` when there is none to show (offline). */
   readonly code: string | null;
-  /** The human seat label (`You are White` / `You are Black`), or `null` before a seat is held. */
-  readonly seatText: string | null;
   /** Whether the conflict banner is shown (the logs forked and the game is stopped). */
   readonly conflict: boolean;
   /** The conflict banner message when {@link conflict} is true, else `null`. */
@@ -173,12 +170,15 @@ export const CODE_ERROR_TEXT: Record<CodeError, string> = {
  * Derive the {@link NetModel} from the live {@link NetSessionState}. Pure and deterministic:
  *   - **panel** — `offline` → `controls`; `conflict` → `conflict`; otherwise (`connecting` /
  *     `connected`) → `status`.
- *   - **statusText** — offline: empty (the board shows nothing while offline, issue #16 — no board
- *     advertisement); connecting: `Connecting…`; connected: `Opponent connected` iff the peer is
- *     present, else `Waiting for opponent…`; conflict: a stopped-game message.
- *   - **seatText** — `You are White` / `You are Black` once a seat is held, else `null`.
+ *   - **code** — the game code to display + copy, passed through verbatim (or `null` when offline).
  *   - **conflict** — true iff the phase is `conflict`; `conflictText` carries the banner copy then.
  *   - **joinErrorText** — the human label for a post-dispatch `joinError`, else `null`.
+ *
+ * The former `statusText` ("Waiting for opponent…" etc.) and `seatText` ("You are White") fields were
+ * REMOVED in issue #44: the compact presence HUD (`banner.ts`) shows connection/seat structurally —
+ * per-color presence DOTS and a "(You)" marker — rather than as sentences, so the pure model no longer
+ * derives those strings (no consumer reads them; grep `statusText`/`seatText`). Presence/seat now ride
+ * on the raw {@link NetSessionState} (`peerPresent` / `seat`) the widget reflects directly.
  *
  * @param state The live session readout.
  * @returns The serializable model the DOM renders.
@@ -187,10 +187,6 @@ export function deriveNet(state: NetSessionState): NetModel {
   const panel: NetPanel =
     state.phase === 'offline' ? 'controls' : state.phase === 'conflict' ? 'conflict' : 'status';
 
-  const statusText = deriveStatusText(state);
-  const seatText =
-    state.seat === 'white' ? 'You are White' : state.seat === 'black' ? 'You are Black' : null;
-
   const conflict = state.phase === 'conflict';
   const conflictText = conflict
     ? 'Game stopped: the two histories diverged. The game has been saved for review.'
@@ -198,24 +194,7 @@ export function deriveNet(state: NetSessionState): NetModel {
 
   const joinErrorText = state.joinError === null ? null : JOIN_ERROR_TEXT[state.joinError];
 
-  return { panel, statusText, code: state.code, seatText, conflict, conflictText, joinErrorText };
-}
-
-/** Derive just the status line for a state (the branch-per-phase core of {@link deriveNet}). */
-function deriveStatusText(state: NetSessionState): string {
-  switch (state.phase) {
-    case 'offline':
-      // No board advertisement (issue #16): the board shows NOTHING while offline — no menu feature
-      // advertises itself on the board. The Network-Game panel (menu → Network Game) is where a game
-      // is hosted/joined; this widget only reflects a LIVE session's status once one exists.
-      return '';
-    case 'connecting':
-      return 'Connecting…';
-    case 'connected':
-      return state.peerPresent ? 'Opponent connected' : 'Waiting for opponent…';
-    case 'conflict':
-      return 'Game stopped by a conflict.';
-  }
+  return { panel, code: state.code, conflict, conflictText, joinErrorText };
 }
 
 /**

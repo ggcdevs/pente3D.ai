@@ -8,8 +8,8 @@ import { dirname, resolve } from 'node:path';
  * captures the board + HUD showing the three #44 changes together:
  *   1. the relocated Undo / Redo / Reset controls directly UNDER the history slider (bottom-center);
  *   2. the shared modern rounded input/button styling across the HUD + the open menu drawer;
- *   3. the merged net status (game code + "waiting for opponent") INSIDE the left-aligned, wrapping
- *      score banner (top-center).
+ *   3. the merged net status (game code + per-color presence dots) INSIDE the compact presence-style
+ *      HUD banner (the tap-to-copy code row + per-color score/presence grid, issue #44 live iteration).
  * A hermetic in-page mock transport is injected so hosting connects instantly (no live relay), and a
  * couple of pieces are placed so the score/captures + history controls are populated. The artifacts
  * land in `e2e/artifacts/issue44-*.png` for the human to eyeball and tweak from.
@@ -103,11 +103,16 @@ test('desktop: board + HUD (merged score/code/status bar + relocated history con
   await ready(page);
   await populateHud(page);
 
-  // The merged net status shows the code + waiting line inside the banner (top-center).
+  // The merged net status shows the code + presence dots inside the banner. Issue #44 (live): the
+  // "Waiting for opponent…" TEXT line is gone — the opponent (black) presence dot reads not-present
+  // while we wait, and my own (white) dot reads present (hosting → white seat held).
   await expect(page.locator('[data-widget-id="statusBanner"] [data-testid="net-code"]')).toBeVisible();
   await expect(
-    page.locator('[data-widget-id="statusBanner"] [data-testid="net-status-line"]'),
-  ).toHaveText('Waiting for opponent…');
+    page.locator('[data-widget-id="statusBanner"] .pente-hud-row--white .pente-hud-dot'),
+  ).toHaveAttribute('data-present', 'true');
+  await expect(
+    page.locator('[data-widget-id="statusBanner"] .pente-hud-row--black .pente-hud-dot'),
+  ).toHaveAttribute('data-present', 'false');
   // The relocated Undo/Redo/Reset controls are present under the slider and Undo is enabled.
   await expect(page.locator('[data-testid="history-button-undo"]')).toBeEnabled();
 
@@ -136,7 +141,7 @@ test('mobile (iPhone 13): board + HUD wraps/collapses reasonably at a narrow wid
   await ready(page);
   await populateHud(page);
 
-  // At the narrow viewport the merged banner still shows the score + code + status; it wraps rather
+  // At the narrow viewport the merged banner still shows the score + code + presence; it wraps rather
   // than overflowing (the banner box stays within the viewport width).
   await expect(page.locator('[data-widget-id="statusBanner"] [data-testid="net-code"]')).toBeVisible();
   const box = await page.locator('[data-widget-id="statusBanner"]').boundingBox();

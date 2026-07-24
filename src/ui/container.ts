@@ -64,6 +64,14 @@ const UI_STYLESHEET = `
   --pente-ui-radius: 8px;
   --pente-ui-focus-ring: 0 0 0 2px rgba(74, 144, 217, 0.55);
   --pente-ui-font: system-ui, sans-serif;
+  /* Issue #44 presence-HUD tunables (nudge freely): presence-dot colors/size, the active-vs-dim
+   * turn contrast, and the code-row look. Kept as vars so the live design can be retuned in one place. */
+  --pente-hud-dot-size: 9px;
+  --pente-hud-dot-present: rgba(90, 200, 120, 1);
+  --pente-hud-dot-absent-border: rgba(230, 230, 234, 0.4);
+  --pente-hud-dim-opacity: 0.42;
+  --pente-hud-code-size: 15px;
+  --pente-hud-copied: rgba(90, 200, 120, 1);
 }
 /* Shared modern base for EVERY control in the overlay: rounded corners, consistent padding, a
  * subtle surface, hover/active feedback, and a visible focus ring (a11y). Applied generally via the
@@ -106,35 +114,58 @@ const UI_STYLESHEET = `
 .pente-ui-zone--bottom-left { bottom: 0; left: 0; flex-direction: column; align-items: flex-start; }
 .pente-ui-zone--bottom-center { bottom: 0; left: 50%; transform: translateX(-50%); flex-direction: column; align-items: center; }
 .pente-ui-zone--bottom-right { bottom: 0; right: 0; flex-direction: column; align-items: flex-end; }
-/* Issue #44: the banner is the whole score+net HUD bar. LEFT-aligned flex that WRAPS on small /
-   mobile widths so its items (status, captures, net code, net status, seat) collapse to new rows
-   instead of overflowing. max-width keeps it from stretching edge-to-edge on desktop. */
-.pente-widget--banner { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: flex-start; max-width: min(92vw, 640px); padding: 6px 12px; border-radius: var(--pente-ui-radius); background: var(--pente-ui-surface); color: var(--pente-ui-text); font-family: var(--pente-ui-font); font-size: 14px; }
-.pente-banner-status { border-radius: 6px; padding: 0 4px; }
-/* Score row: the two "Name: N" labels sit either side of a visible middle-dot separator (issue #14 —
-   they used to render adjacent as "White: 0Black: 0"); the flex gap spaces the label/sep/label. */
-.pente-banner-captures { display: flex; gap: 6px; align-items: baseline; }
-.pente-banner-capture-sep { opacity: 0.6; }
-/* The subtle off-turn cue (Task 6.2, issue #4c): a brief single pulse of the "X to move" line when a
-   placement is rejected because it is not the local seat's turn. Deliberately understated — a short
-   background/opacity flash, no modal, no error copy. Re-triggered by the banner toggling the class. */
-.pente-banner-status--offturn { animation: pente-offturn-pulse 420ms ease-out 1; }
+/* Issue #44 (live iteration): the banner is a compact, LEFT-aligned presence-style HUD — a
+   tap-to-copy code row on top, a per-color presence/score grid below. Column stack; the inner rows
+   themselves flex-wrap so nothing overflows at narrow widths (flex-wrap only, no JS/media queries).
+   max-width keeps it from stretching edge-to-edge on desktop. */
+.pente-widget--banner { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; justify-content: flex-start; max-width: min(92vw, 340px); padding: 8px 12px; border-radius: var(--pente-ui-radius); background: var(--pente-ui-surface); color: var(--pente-ui-text); font-family: var(--pente-ui-font); font-size: 14px; }
+
+/* Code row: the WHOLE row is the copy button (game code + a copy icon). Reset button chrome so it
+   reads as a plain tappable row; the shared button base still gives it a focus ring. */
+.pente-widget--banner .pente-hud-code-row[hidden] { display: none; }
+.pente-widget--banner .pente-hud-code-row { display: inline-flex; align-items: center; gap: 8px; padding: 3px 8px; background: transparent; border: 1px solid var(--pente-ui-control-border); border-radius: 6px; cursor: pointer; }
+.pente-widget--banner .pente-hud-code-row:hover:not(:disabled) { background: var(--pente-ui-control-bg); }
+.pente-hud-code { font-family: ui-monospace, monospace; font-size: var(--pente-hud-code-size); letter-spacing: 2px; }
+.pente-hud-copy-icon { font-size: 13px; opacity: 0.7; }
+.pente-hud-code-row[data-copied="true"] .pente-hud-copy-icon { color: var(--pente-hud-copied); opacity: 1; }
+
+/* Presence/score grid: one row per color, [dot] Color (You) …spacer… count. flex-wrap lets a row
+   collapse cleanly at narrow widths. The active player's row is bold, the other dimmed (the turn cue
+   that replaces "X to move"). */
+.pente-hud-score { display: flex; flex-direction: column; gap: 3px; align-self: stretch; }
+.pente-hud-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 2px 6px; border-radius: 6px; }
+.pente-hud-row--dim { opacity: var(--pente-hud-dim-opacity); }
+.pente-hud-row--active .pente-hud-name, .pente-hud-row--active .pente-hud-count { font-weight: 700; }
+.pente-hud-name { min-width: 3.2em; }
+.pente-hud-you { font-size: 11px; opacity: 0.7; }
+.pente-hud-you[hidden] { display: none; }
+.pente-hud-wins { padding: 1px 7px; border-radius: 10px; background: var(--pente-ui-accent-soft); color: var(--pente-ui-text); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+.pente-hud-wins[hidden] { display: none; }
+/* Push the count to the row's trailing edge. */
+.pente-hud-count { margin-left: auto; font-variant-numeric: tabular-nums; }
+/* Presence dot: FILLED green when present, HOLLOW grey (subtle pulse) when absent. Only rendered
+   when networked (the widget unhides it). */
+.pente-hud-dot { width: var(--pente-hud-dot-size); height: var(--pente-hud-dot-size); border-radius: 50%; flex: none; box-sizing: border-box; }
+.pente-hud-dot[hidden] { display: none; }
+.pente-hud-dot[data-present="true"] { background: var(--pente-hud-dot-present); border: 1px solid var(--pente-hud-dot-present); }
+.pente-hud-dot[data-present="false"] { background: transparent; border: 1px solid var(--pente-hud-dot-absent-border); animation: pente-presence-pulse 1.6s ease-in-out infinite; }
+@keyframes pente-presence-pulse { 0%,100% { opacity: 0.45; } 50% { opacity: 1; } }
+
+/* The subtle off-turn cue (Task 6.2, issue #4c): a brief single pulse of the ACTIVE player's row
+   (repointed from the removed "X to move" line, issue #44) when a placement is rejected off-turn.
+   Deliberately understated — a short background/opacity flash, no modal, no error copy. */
+.pente-hud-row--offturn { animation: pente-offturn-pulse 420ms ease-out 1; }
 @keyframes pente-offturn-pulse {
   0% { background: rgba(74,144,217,0); opacity: 1; }
-  30% { background: rgba(74,144,217,0.45); opacity: 0.75; }
+  30% { background: rgba(74,144,217,0.45); opacity: 0.9; }
   100% { background: rgba(74,144,217,0); opacity: 1; }
 }
-/* Issue #44: the merged NET STATUS sub-panel inside the banner. Inline-flex so its items (status
-   line, code + Copy, seat, conflict, join error) sit on the banner row and wrap with everything
-   else; each net-* child can hide itself via [hidden]. Hidden entirely when the session is idle. */
-.pente-banner-net { display: inline-flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; font-size: 13px; }
-.pente-banner-net[hidden], .pente-banner-net .pente-net-status-line[hidden], .pente-banner-net .pente-net-code-row[hidden], .pente-banner-net .pente-net-seat[hidden], .pente-banner-net .pente-net-conflict[hidden], .pente-banner-net .pente-net-join-error[hidden] { display: none; }
-.pente-banner-net .pente-net-code-row { display: inline-flex; gap: 6px; align-items: center; }
-.pente-banner-net .pente-net-code { font-family: ui-monospace, monospace; font-size: 15px; letter-spacing: 2px; }
-.pente-banner-net .pente-net-copy { padding: 3px 10px; font-size: 12px; }
-.pente-banner-net .pente-net-seat { opacity: 0.85; }
-.pente-banner-net .pente-net-conflict { padding: 2px 8px; border-radius: 6px; background: var(--pente-ui-danger-bg); color: var(--pente-ui-danger-text); font-size: 12px; }
-.pente-banner-net .pente-net-join-error { padding: 2px 8px; border-radius: 6px; background: rgba(240,180,80,0.18); color: #ffd9a0; font-size: 12px; }
+
+/* Conflict / join-error alerts (unchanged behavior, issue #44): stacked alert lines below the HUD. */
+.pente-hud-alerts { display: flex; flex-direction: column; gap: 6px; align-self: stretch; font-size: 13px; }
+.pente-hud-alerts[hidden], .pente-hud-alerts .pente-net-conflict[hidden], .pente-hud-alerts .pente-net-join-error[hidden] { display: none; }
+.pente-hud-alerts .pente-net-conflict { padding: 2px 8px; border-radius: 6px; background: var(--pente-ui-danger-bg); color: var(--pente-ui-danger-text); font-size: 12px; }
+.pente-hud-alerts .pente-net-join-error { padding: 2px 8px; border-radius: 6px; background: rgba(240,180,80,0.18); color: #ffd9a0; font-size: 12px; }
 .pente-menu-button { display: inline-flex; align-items: center; justify-content: center; padding: 8px; background: rgb(18,18,22); opacity: 0.55; transition: opacity 150ms ease, box-shadow 130ms ease; }
 .pente-menu-button:hover { opacity: 1; }
 .pente-menu-button .pente-hamburger { display: block; }

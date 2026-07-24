@@ -31,7 +31,6 @@ import { SEED_LABEL } from '../src/ui/widgets/netPanelModel.ts';
  */
 
 const MENU_ID = 'menuButton';
-const NET_ID = 'connectionStatus';
 
 interface NetState {
   phase: 'offline' | 'connecting' | 'connected' | 'conflict';
@@ -249,10 +248,13 @@ test('Enter with an EMPTY input + New seed uses the PLACEHOLDER code (connects, 
   );
   expect(uuid, 'a New seed mints a real game UUID').toBeTruthy();
 
-  // The status widget (persistent, on the board) now shows the placeholder code + seat.
-  const net = page.locator(`[data-widget-id="${NET_ID}"]`);
-  await expect(net.locator('[data-testid="net-code"]')).toHaveText(ph);
-  await expect(net.locator('[data-testid="net-seat"]')).toHaveText('You are White');
+  // The persistent HUD (the banner, on the board) now shows the placeholder code + seat. Issue #44:
+  // the code + "(You)" seat marker live directly under the banner (not the connectionStatus alerts
+  // marker), and the seat is shown by "(You)" on white's row (no "You are White" text line).
+  const hud = page.locator('[data-widget-id="statusBanner"]');
+  await expect(hud.locator('[data-testid="net-code"]')).toHaveText(ph);
+  await expect(hud.locator('[data-testid="banner-you-white"]')).toBeVisible();
+  await expect(hud.locator('[data-testid="banner-you-white"]')).toHaveText('(You)');
 
   // Entering recorded the placeholder code into the C.1 store — the dropdown now lists it.
   await openNetPanel(page);

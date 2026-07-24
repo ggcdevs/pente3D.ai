@@ -129,15 +129,100 @@ export function bannerWidget(): WidgetFactory {
       const element = doc.createElement('div');
       element.className = 'pente-widget pente-widget--banner';
 
-      // Status line: whose turn / who won (data-* mirror the model for Playwright readback).
-      const status = doc.createElement('div');
-      status.className = 'pente-banner-status';
-      status.setAttribute('data-testid', 'banner-status');
-      // The off-turn cue counter (Task 6.2): mirrors how many times the "X to move" line has pulsed
-      // because an off-turn placement was rejected. Starts at 0; Playwright reads it to prove the
-      // subtle cue fired without depending on animation timing (observable behavior, not a log — #3).
-      status.setAttribute('data-offturn-flashes', '0');
-      element.appendChild(status);
+      // ============================================================================================
+      // PRESENCE-STYLE HUD (issue #44, live iteration) — a compact stacked HUD:
+      //   1. a tap-to-copy CODE ROW (game code + a copy icon), hidden when there is no code;
+      //   2. a per-color PRESENCE/SCORE grid (one row per color): [dot] Color (You) …… captureCount.
+      // The turn is shown by BOLDING the active row + DIMMING the other (no "X to move" text). Presence
+      // dots + "(You)" only render when networked (a seat is held). The old text lines — status ("X to
+      // move"), net status ("Waiting for opponent…"), and seat ("You are White") — are REPLACED by this
+      // and no longer rendered. Conflict / join-error / undo-redo prompt are UNCHANGED below.
+      // ============================================================================================
+
+      // --- Code row (tap-to-copy) -------------------------------------------------------------------
+      // The WHOLE row is the copy affordance (click copies getNet().code). A small copy icon (⧉) sits
+      // beside the code; on success it flips to a transient "Copied ✓" state (data-copied="true"),
+      // reverting on the next render. Kept net-code / net-copy testids so page-wide net selectors resolve.
+      const codeRow = doc.createElement('button');
+      codeRow.className = 'pente-hud-code-row';
+      codeRow.setAttribute('data-testid', 'net-copy');
+      codeRow.setAttribute('aria-label', 'Copy game code');
+      codeRow.type = 'button';
+      const codeLabel = doc.createElement('span');
+      codeLabel.className = 'pente-hud-code';
+      codeLabel.setAttribute('data-testid', 'net-code');
+      const copyIcon = doc.createElement('span');
+      copyIcon.className = 'pente-hud-copy-icon';
+      copyIcon.setAttribute('aria-hidden', 'true');
+      copyIcon.textContent = '⧉';
+      codeRow.append(codeLabel, copyIcon);
+      // `copied` is a transient success flag cleared on the next render (or the timer, whichever first).
+      let copied = false;
+      let copyTimer: ReturnType<typeof setTimeout> | undefined;
+      codeRow.addEventListener('click', () => {
+        const code = deps.getNet().code;
+        if (code === null) return;
+        // Copy is best-effort: reflect success in the transient icon state (observable), never throw.
+        void deps.copyToClipboard(code).then(
+          () => {
+            copied = true;
+            copyIcon.textContent = '✓';
+            codeRow.setAttribute('data-copied', 'true');
+            if (copyTimer) clearTimeout(copyTimer);
+            copyTimer = setTimeout(() => {
+              copied = false;
+              copyIcon.textContent = '⧉';
+              codeRow.removeAttribute('data-copied');
+            }, 1400);
+          },
+          () => {
+            copyIcon.textContent = '⧉';
+            codeRow.setAttribute('data-copied', 'false');
+          },
+        );
+      });
+      element.appendChild(codeRow);
+
+      // --- Presence/score grid (one row per color) --------------------------------------------------
+      // Grid: [dot] [Color label] [(You)] …spacer… [capture count]. `render` sets the bold/dim state
+      // from the turn, and `renderPresence` sets the dots + "(You)" from the live net readout. Kept
+      // data-offturn-flashes on the grid so the off-turn cue (Task 6.2) still has an observable counter.
+      const scoreGrid = doc.createElement('div');
+      scoreGrid.className = 'pente-hud-score';
+      scoreGrid.setAttribute('data-testid', 'banner-status');
+      scoreGrid.setAttribute('data-offturn-flashes', '0');
+
+      /** Build one color row; returns the pieces `render`/`renderPresence` repaint. */
+      function makeRow(color: 'white' | 'black') {
+        const row = doc.createElement('div');
+        row.className = `pente-hud-row pente-hud-row--${color}`;
+        row.setAttribute('data-color', color);
+        const dot = doc.createElement('span');
+        dot.className = 'pente-hud-dot';
+        dot.setAttribute('aria-hidden', 'true');
+        dot.hidden = true;
+        const name = doc.createElement('span');
+        name.className = 'pente-hud-name';
+        name.textContent = cap(color);
+        const you = doc.createElement('span');
+        you.className = 'pente-hud-you';
+        you.setAttribute('data-testid', `banner-you-${color}`);
+        you.textContent = '(You)';
+        you.hidden = true;
+        const wins = doc.createElement('span');
+        wins.className = 'pente-hud-wins';
+        wins.textContent = 'wins';
+        wins.hidden = true;
+        const count = doc.createElement('span');
+        count.className = 'pente-hud-count';
+        count.setAttribute('data-testid', `banner-captures-${color}`);
+        row.append(dot, name, you, wins, count);
+        return { row, dot, you, wins, count };
+      }
+      const whiteRow = makeRow('white');
+      const blackRow = makeRow('black');
+      scoreGrid.append(whiteRow.row, blackRow.row);
+      element.appendChild(scoreGrid);
 
       // The last off-turn block count this banner has rendered, so `update` can detect an INCREMENT
       // (a fresh rejected off-turn attempt) and pulse exactly once per new block — not on every repaint.
@@ -145,93 +230,36 @@ export function bannerWidget(): WidgetFactory {
       let flashes = 0;
 
       /**
-       * Fire the subtle off-turn cue: bump the flash counter (mirrored to `data-offturn-flashes`) and
-       * re-trigger the CSS pulse on the status line by toggling the `--offturn` class off then on (so a
-       * second block within the animation window still visibly re-pulses). Kept deliberately subtle — a
-       * brief pulse on the existing "X to move" line, no modal / no error text (the task's requirement).
+       * Fire the subtle off-turn cue (Task 6.2): bump the flash counter (mirrored to the score grid's
+       * `data-offturn-flashes`) and re-trigger the CSS pulse on the ACTIVE player's row by toggling the
+       * `--offturn` class off then on (repointed off the removed "X to move" line, issue #44). Kept
+       * deliberately subtle — a brief pulse on the active row, no modal / no error text.
        */
       function flashOffTurn(): void {
         flashes += 1;
-        status.setAttribute('data-offturn-flashes', String(flashes));
-        status.classList.remove('pente-banner-status--offturn');
+        scoreGrid.setAttribute('data-offturn-flashes', String(flashes));
+        const active = lastActivePlayer === 'black' ? blackRow.row : whiteRow.row;
+        active.classList.remove('pente-hud-row--offturn');
         // Force a reflow so removing then re-adding the class restarts the animation (standard idiom).
-        void status.offsetWidth;
-        status.classList.add('pente-banner-status--offturn');
+        void active.offsetWidth;
+        active.classList.add('pente-hud-row--offturn');
       }
+      // The player whose row is currently active (bold), so the off-turn pulse targets the right row.
+      let lastActivePlayer: 'white' | 'black' = 'white';
 
-      // Capture counts, one per player.
-      const captures = doc.createElement('div');
-      captures.className = 'pente-banner-captures';
-      const whiteCap = doc.createElement('span');
-      whiteCap.className = 'pente-banner-capture pente-banner-capture--white';
-      whiteCap.setAttribute('data-testid', 'banner-captures-white');
-      const blackCap = doc.createElement('span');
-      blackCap.className = 'pente-banner-capture pente-banner-capture--black';
-      blackCap.setAttribute('data-testid', 'banner-captures-black');
-      // Visible divider BETWEEN the two score labels (issue #14: they used to render adjacent as
-      // "White: 0Black: 0"). Its text is the model's `capturesSeparator`, painted in `render`.
-      const capSep = doc.createElement('span');
-      capSep.className = 'pente-banner-capture-sep';
-      capSep.setAttribute('data-testid', 'banner-captures-sep');
-      capSep.setAttribute('aria-hidden', 'true');
-      captures.append(whiteCap, capSep, blackCap);
-      element.appendChild(captures);
-
-      // --- Merged NET STATUS sub-panel (issue #44) --------------------------------------------------
-      // Moved INTO the banner from the former standalone `connectionStatus` widget so the whole HUD
-      // reads as one left-aligned, wrapping bar (score + captures + code + status). Same `net-*`
-      // testids/classes as before (page-wide selectors keep resolving); wrapped in a marker carrying
-      // `data-widget-id="connectionStatus"` so the few net specs that scoped by that id still resolve,
-      // and so `getNet`-driven status reads back off the live DOM (#3). `netModel.deriveNet` stays the
-      // pure data source; this only paints it. The panel HIDES itself when idle (offline, no error).
+      // --- Conflict / join-error (UNCHANGED behavior, issue #44) ------------------------------------
+      // Kept as their own alert lines below the HUD, wrapped in the `connectionStatus` marker so the
+      // few net specs that scoped by that id still resolve. `netModel.deriveNet` stays the data source.
       const net = doc.createElement('div');
-      net.className = 'pente-banner-net';
+      net.className = 'pente-hud-alerts';
       net.setAttribute('data-widget-id', NET_MARKER_ID);
       net.setAttribute('data-testid', 'net-widget');
-
-      const netStatusLine = doc.createElement('span');
-      netStatusLine.className = 'pente-net-status-line';
-      netStatusLine.setAttribute('data-testid', 'net-status-line');
-      net.appendChild(netStatusLine);
-
-      const codeRow = doc.createElement('span');
-      codeRow.className = 'pente-net-code-row';
-      const codeLabel = doc.createElement('span');
-      codeLabel.className = 'pente-net-code';
-      codeLabel.setAttribute('data-testid', 'net-code');
-      codeRow.appendChild(codeLabel);
-      const copyButton = doc.createElement('button');
-      copyButton.className = 'pente-net-copy';
-      copyButton.setAttribute('data-testid', 'net-copy');
-      copyButton.setAttribute('aria-label', 'Copy game code');
-      copyButton.textContent = 'Copy';
-      copyButton.addEventListener('click', () => {
-        const code = deps.getNet().code;
-        if (code === null) return;
-        // Copy is best-effort: reflect success/failure in the button label (observable), never throw.
-        void deps.copyToClipboard(code).then(
-          () => {
-            copyButton.textContent = 'Copied';
-            copyButton.setAttribute('data-copied', 'true');
-          },
-          () => {
-            copyButton.textContent = 'Copy failed';
-            copyButton.setAttribute('data-copied', 'false');
-          },
-        );
-      });
-      codeRow.appendChild(copyButton);
-      net.appendChild(codeRow);
-
-      const seatLine = doc.createElement('span');
-      seatLine.className = 'pente-net-seat';
-      seatLine.setAttribute('data-testid', 'net-seat');
-      net.appendChild(seatLine);
 
       const conflict = doc.createElement('span');
       conflict.className = 'pente-net-conflict';
       conflict.setAttribute('data-testid', 'net-conflict');
       conflict.setAttribute('role', 'alert');
+      conflict.hidden = true;
       net.appendChild(conflict);
 
       const joinError = doc.createElement('span');
@@ -243,7 +271,7 @@ export function bannerWidget(): WidgetFactory {
 
       element.appendChild(net);
 
-      /** Paint a derived net model onto the merged status sub-panel (issue #44). */
+      /** Paint the code row + conflict/join-error from a derived net model (issue #44). */
       function renderNet(model: NetModel): void {
         net.setAttribute('data-panel', model.panel);
 
@@ -251,27 +279,45 @@ export function bannerWidget(): WidgetFactory {
         joinError.textContent = model.joinErrorText ?? '';
         joinError.hidden = !hasJoinError;
 
-        // Hide the whole net sub-panel while idle (offline, empty controls panel, no join error) so
-        // it leaves no gap in the banner — matching the former standalone widget's hide behavior.
-        net.hidden = model.panel === 'controls' && !hasJoinError;
+        conflict.textContent = model.conflictText ?? '';
+        conflict.hidden = model.conflictText === null;
 
-        // Status line: connecting/connected copy (offline yields empty text).
-        netStatusLine.textContent = model.statusText;
-        netStatusLine.hidden = model.statusText === '';
+        // Hide the alerts wrapper while there is nothing to alert about, so it leaves no gap.
+        net.hidden = model.conflictText === null && !hasJoinError;
 
+        // Code row: shown only when there is a code; reset the transient copied state when it vanishes.
         const hasCode = model.code !== null;
         codeRow.hidden = !hasCode;
         codeLabel.textContent = model.code ?? '';
-        if (!hasCode) {
-          copyButton.textContent = 'Copy';
-          copyButton.removeAttribute('data-copied');
+        if (!hasCode || !copied) {
+          copyIcon.textContent = '⧉';
+          codeRow.removeAttribute('data-copied');
         }
+      }
 
-        seatLine.textContent = model.seatText ?? '';
-        seatLine.hidden = model.seatText === null;
-
-        conflict.textContent = model.conflictText ?? '';
-        conflict.hidden = model.conflictText === null;
+      /**
+       * Paint the presence dots + "(You)" onto the per-color rows from the LIVE net readout (issue #44).
+       * Dots + "(You)" render ONLY when networked (a seat is held). My own row → green FILLED dot; the
+       * opponent row → green FILLED if the peer is present, else grey HOLLOW (a subtle pulse). Offline /
+       * local hotseat (seat === null) → no dots, no "(You)".
+       */
+      function renderPresence(ns: NetSessionState): void {
+        const networked = ns.phase !== 'offline' && ns.seat !== null;
+        for (const [color, parts] of [
+          ['white', whiteRow],
+          ['black', blackRow],
+        ] as const) {
+          const isMe = networked && ns.seat === color;
+          parts.you.hidden = !isMe;
+          if (!networked) {
+            parts.dot.hidden = true;
+            parts.dot.removeAttribute('data-present');
+            continue;
+          }
+          const present = isMe || ns.peerPresent;
+          parts.dot.hidden = false;
+          parts.dot.setAttribute('data-present', String(present));
+        }
       }
 
       // Networked undo/redo accept/decline PROMPT (Task N.3.2, issue #18). Surfaced HERE in the banner
@@ -315,25 +361,37 @@ export function bannerWidget(): WidgetFactory {
         promptText.textContent = show && p ? p.promptText : '';
       }
 
-      /** Paint a derived model onto the DOM (status text + captures). */
+      /**
+       * Paint a derived model onto the per-color HUD rows (issue #44). The TURN is shown structurally:
+       * the active player's row is bold (`--active`) and the other dimmed (`--dim`) — no "X to move"
+       * text. On a WIN the winner's row is bold + shows a "wins" badge. Capture counts are the raw
+       * numbers (the row's color label supplies the name). `data-status`/`data-player` mirror the model.
+       */
       function render(model: BannerModel): void {
-        status.textContent =
-          model.status === 'winner'
-            ? `${cap(model.player)} wins`
-            : `${cap(model.player)} to move`;
-        status.setAttribute('data-status', model.status);
-        status.setAttribute('data-player', model.player);
+        scoreGrid.setAttribute('data-status', model.status);
+        scoreGrid.setAttribute('data-player', model.player);
+        lastActivePlayer = model.player;
 
-        // Score text + divider all come from the pure model (single source of truth, issue #14):
-        // "White: N", a visible separator, then "Black: N" — never rendered run-together.
-        whiteCap.textContent = model.whiteCapturesLabel;
-        capSep.textContent = model.capturesSeparator;
-        blackCap.textContent = model.blackCapturesLabel;
+        const won = model.status === 'winner';
+        for (const [color, parts] of [
+          ['white', whiteRow],
+          ['black', blackRow],
+        ] as const) {
+          const isActive = model.player === color;
+          parts.row.classList.toggle('pente-hud-row--active', isActive);
+          parts.row.classList.toggle('pente-hud-row--dim', !isActive);
+          parts.wins.hidden = !(won && isActive);
+        }
+        // Raw counts — the color label is the row's own name (issue #44 replaces "White: N" labels).
+        whiteRow.count.textContent = String(model.whiteCaptures);
+        blackRow.count.textContent = String(model.blackCaptures);
       }
 
-      /** Re-read the live session readout and repaint the merged net-status sub-panel. */
+      /** Re-read the live session readout and repaint the code row + alerts + presence dots. */
       function refreshNet(): void {
-        renderNet(deriveNet(deps.getNet?.() ?? OFFLINE_NET));
+        const ns = deps.getNet?.() ?? OFFLINE_NET;
+        renderNet(deriveNet(ns));
+        renderPresence(ns);
       }
 
       render(deriveBanner(emptyStateFallback()));
