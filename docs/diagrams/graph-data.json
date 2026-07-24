@@ -5746,9 +5746,11 @@
       "cap",
       "emptyStateFallback",
       "flashOffTurn",
+      "makeRow",
       "refreshNet",
       "render",
       "renderNet",
+      "renderPresence",
       "renderUndoRedoPrompt"
     ]
   },
@@ -6185,9 +6187,7 @@
           "readonly conflict: boolean",
           "readonly conflictText: string | null",
           "readonly joinErrorText: string | null",
-          "readonly panel: NetPanel",
-          "readonly seatText: string | null",
-          "readonly statusText: string"
+          "readonly panel: NetPanel"
         ]
       }
     ],
@@ -6220,7 +6220,6 @@
     ],
     "functions": [
       "deriveNet",
-      "deriveStatusText",
       "generateGameCode",
       "normalizeGameCode",
       "validateGameCode"
