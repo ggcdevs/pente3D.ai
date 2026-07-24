@@ -67,3 +67,6 @@ launch.sh
 
 # Personal notes
 notes.txt
+
+# pente CLI runtime state (sockets, playerid, fake-indexeddb)
+.pente-cli/
