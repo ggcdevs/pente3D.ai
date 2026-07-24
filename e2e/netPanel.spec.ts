@@ -179,7 +179,7 @@ test('the Network-Game entry mounts and, when chosen, opens the non-blocking uni
   await page.screenshot({ path: shot });
 });
 
-test('opening shows a FRESH random PLACEHOLDER (unambiguous alphabet, right length), empty value, New seed', async ({
+test('opening shows a FRESH random PLACEHOLDER (A-Z0-9 alphabet, right length), empty value, New seed', async ({
   page,
 }) => {
   await ready(page);
@@ -275,8 +275,9 @@ test('typing a custom code OVERRIDES the placeholder; a malformed one disables E
   await expect(pt(page, 'netpanel-error')).toHaveText(CODE_ERROR_TEXT['too-short']);
   await expect(pt(page, 'netpanel-enter')).toBeDisabled();
 
-  // A bad-chars typed code also bites, with its own message.
-  await pt(page, 'netpanel-code-input').fill(`${CODE_ALPHABET.slice(0, CODE_LENGTH - 1)}0`); // '0' excluded
+  // A bad-chars typed code also bites, with its own message. A digit is now VALID (#30), so use a
+  // punctuation char ('-') that is genuinely outside the A-Z0-9 alphabet.
+  await pt(page, 'netpanel-code-input').fill(`${CODE_ALPHABET.slice(0, CODE_LENGTH - 1)}-`); // '-' excluded
   await expect(panel(page)).toHaveAttribute('data-code-valid', 'false');
   await expect(pt(page, 'netpanel-error')).toHaveText(CODE_ERROR_TEXT['bad-chars']);
 

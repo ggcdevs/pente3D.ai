@@ -216,7 +216,8 @@ describe('deriveNetPanel — code validation drives canonical code', () => {
   });
 
   it('a bad-chars typed code is invalid with the bad-chars message', () => {
-    const m = deriveNetPanel(setPanelText(initialNetPanel(PLACEHOLDER, [], NO_SOURCES), 'ABC230'));
+    // 'ABC-23' has a non-alphanumeric char; a digit-bearing code like 'ABC230' is now VALID (#30).
+    const m = deriveNetPanel(setPanelText(initialNetPanel(PLACEHOLDER, [], NO_SOURCES), 'ABC-23'));
     expect(m.codeValid).toBe(false);
     expect(m.canonicalCode).toBeNull();
     expect(m.codeError).toBe(CODE_ERROR_TEXT['bad-chars']);

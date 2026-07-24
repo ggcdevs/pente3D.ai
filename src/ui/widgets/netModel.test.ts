@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import * as fc from 'fast-check';
 import {
   deriveNet,
   validateGameCode,
@@ -172,6 +173,24 @@ describe('validateGameCode — accepts', () => {
   it('accepts a padded, lower-cased paste (canonicalized, not rejected)', () => {
     expect(validateGameCode('  abc234  ')).toEqual({ ok: true, code: 'ABC234' });
   });
+
+  // issue #30: the full A-Z0-9 alphabet is legal for a CUSTOM code — the earlier ambiguity
+  // exclusions (0/1/I/L/O) no longer reject a user-chosen code. Digits and every letter accepted.
+  it('accepts a code containing digits (regression: TEST12 was rejected on the "1"/"2")', () => {
+    expect(validateGameCode('TEST12')).toEqual({ ok: true, code: 'TEST12' });
+  });
+
+  it('accepts a code containing the formerly-excluded letters O and L', () => {
+    expect(validateGameCode('TESTOL')).toEqual({ ok: true, code: 'TESTOL' });
+  });
+
+  it('accepts the formerly-ambiguous glyphs 0/1/I/L/O all in one code', () => {
+    expect(validateGameCode('O0IL1O')).toEqual({ ok: true, code: 'O0IL1O' });
+  });
+
+  it('uppercase-normalizes a lower-case custom code (test12 → TEST12)', () => {
+    expect(validateGameCode('test12')).toEqual({ ok: true, code: 'TEST12' });
+  });
 });
 
 describe('validateGameCode — rejects (negative cases, in precedence order)', () => {
@@ -187,19 +206,63 @@ describe('validateGameCode — rejects (negative cases, in precedence order)', (
     expect(validateGameCode('ABC')).toEqual({ ok: false, reason: 'too-short' });
   });
 
-  it('rejects a full-length code containing an ambiguous/excluded glyph as bad-chars', () => {
-    // `0` and `O` are excluded from CODE_ALPHABET; a 6-char code with `0` is length-valid but
-    // charset-invalid, so it must reach the bad-chars rule (not too-short).
-    expect(validateGameCode('ABC230')).toEqual({ ok: false, reason: 'bad-chars' });
+  it('rejects a full-length code containing a space as bad-chars', () => {
+    // A space is not alphanumeric; a 6-char code with an interior space is length-valid but
+    // charset-invalid, so it must reach the bad-chars rule (not too-short). (issue #30)
+    expect(validateGameCode('TEST 1')).toEqual({ ok: false, reason: 'bad-chars' });
   });
 
   it('rejects a full-length code with punctuation as bad-chars', () => {
-    expect(validateGameCode('ABC-23')).toEqual({ ok: false, reason: 'bad-chars' });
+    expect(validateGameCode('TEST-1')).toEqual({ ok: false, reason: 'bad-chars' });
+    expect(validateGameCode('TEST_1')).toEqual({ ok: false, reason: 'bad-chars' });
+    expect(validateGameCode('TES#12')).toEqual({ ok: false, reason: 'bad-chars' });
   });
 
   it('a code one short of the length is too-short even if every char is legal', () => {
     expect(validateGameCode('ABCDE')).toEqual({ ok: false, reason: 'too-short' });
     expect('ABCDE'.length).toBe(CODE_LENGTH - 1);
+  });
+});
+
+describe('validateGameCode — properties (fast-check)', () => {
+  // Any CODE_LENGTH-long string drawn from the full A-Z0-9 alphabet (in either case, with padding)
+  // is ACCEPTED and round-trips to its upper-cased, trimmed form. This pins the #30 policy across
+  // the whole alphabet, not just the hand-picked literals above — including every digit and the
+  // formerly-excluded 0/1/I/L/O.
+  const alnumChar = fc.constantFrom(...'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'.split(''));
+  it('accepts every full-length alphanumeric code and canonicalizes it (upper + trim)', () => {
+    fc.assert(
+      fc.property(
+        fc.array(alnumChar, { minLength: CODE_LENGTH, maxLength: CODE_LENGTH }),
+        fc.constantFrom('', ' ', '  '),
+        fc.constantFrom('', ' ', '  '),
+        (chars, padL, padR) => {
+          const raw = padL + chars.join('') + padR;
+          const canonical = chars.join('').toUpperCase();
+          expect(validateGameCode(raw)).toEqual({ ok: true, code: canonical });
+        },
+      ),
+    );
+  });
+
+  // Any full-length code with an INTERIOR non-alphanumeric char is REJECTED as bad-chars. The bad
+  // char is placed strictly between two good chars so it survives the leading/trailing trim (a
+  // leading/trailing space is trimmed away and correctly reported as too-short, not bad-chars —
+  // covered by its own case below).
+  it('rejects a full-length code with an interior non-alphanumeric character as bad-chars', () => {
+    const badChar = fc.constantFrom(...' -_!@#$%.,/*+?'.split(''));
+    fc.assert(
+      fc.property(
+        fc.array(alnumChar, { minLength: CODE_LENGTH - 1, maxLength: CODE_LENGTH - 1 }),
+        badChar,
+        fc.integer({ min: 1, max: CODE_LENGTH - 2 }), // interior only (never index 0 or the last)
+        (goodChars, bad, pos) => {
+          const arr = goodChars.slice();
+          arr.splice(pos, 0, bad);
+          expect(validateGameCode(arr.join(''))).toEqual({ ok: false, reason: 'bad-chars' });
+        },
+      ),
+    );
   });
 });
 
@@ -247,10 +310,14 @@ describe('constants', () => {
     expect(JOIN_GAME_COMMAND).toBe('joinGame');
   });
 
-  it('the code alphabet excludes the ambiguous glyphs 0/O/1/I/L', () => {
+  it('the code alphabet is the full A-Z0-9 set — INCLUDES the formerly-excluded 0/O/1/I/L (issue #30)', () => {
     for (const ch of ['0', 'O', '1', 'I', 'L']) {
-      expect(CODE_ALPHABET).not.toContain(ch);
+      expect(CODE_ALPHABET).toContain(ch);
     }
+    // Every uppercase letter and every digit is present, and nothing else is.
+    const expected = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    expect([...CODE_ALPHABET].sort().join('')).toBe([...expected].sort().join(''));
+    expect(CODE_ALPHABET.length).toBe(36);
   });
 
   it('every CodeError reason has a human label', () => {

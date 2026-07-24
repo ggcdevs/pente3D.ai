@@ -41,13 +41,14 @@ export const HOST_GAME_COMMAND = 'hostGame';
 export const JOIN_GAME_COMMAND = 'joinGame';
 
 /**
- * The set of characters a game code may contain, and its fixed length. A code is an
- * unambiguous-alphabet slug: uppercase letters + digits with the visually-ambiguous glyphs removed
- * (`0/O`, `1/I`, and `L` — a lower-case `l` reads as `1`) so a code dictated over voice or read off a
- * screen is unambiguous. This constant is the SSOT for BOTH generation (the alphabet drawn from) and
- * validation (the allowed set), so the two can never disagree on what a legal code is.
+ * The set of characters a game code may contain, and its fixed length: the full alphanumeric set
+ * `A-Z` + `0-9` (issue #30). A user who types a CUSTOM code chose it and reasonably expects any
+ * alphanumeric to work, so no glyphs are excluded — the earlier ambiguity exclusion (dropping
+ * `0/O`, `1/I`, `L`) was over-restrictive here and is removed. This constant is the SSOT for BOTH
+ * generation (the alphabet the random host code is drawn from) and validation (the allowed set for a
+ * typed code), so the two can never disagree on what a legal code is; both use the same broad set.
  */
-export const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+export const CODE_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
 
 /** The fixed game-code length. Short enough to type, long enough to avoid room collisions. */
 export const CODE_LENGTH = 6;
@@ -165,7 +166,7 @@ const JOIN_ERROR_TEXT: Record<JoinErrorReason, string> = {
 export const CODE_ERROR_TEXT: Record<CodeError, string> = {
   empty: 'Enter a game code.',
   'too-short': `A game code is ${CODE_LENGTH} characters.`,
-  'bad-chars': 'A game code uses letters and numbers only.',
+  'bad-chars': 'Codes use letters A-Z and digits 0-9.',
 };
 
 /**

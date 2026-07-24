@@ -25,9 +25,9 @@ import type { Proposal } from './admission';
 import type { NetSeat } from '../ui/widgets/netModel';
 
 const SIZE = 9;
-// A code from the unambiguous CODE_ALPHABET (no O/0/1/I/L) so `validateGameCode` accepts it and BOTH
-// peers rendezvous on the SAME room — a code with an excluded glyph would degrade to a fresh RANDOM
-// code per peer and they would never meet (the honest invalid-code degrade, covered separately below).
+// A well-formed alphanumeric code (A-Z0-9, issue #30) so `validateGameCode` accepts it and BOTH
+// peers rendezvous on the SAME room — an INVALID code (non-alphanumeric / too short) would degrade
+// to a fresh RANDOM code per peer and they would never meet (the honest invalid-code degrade).
 const ROOM = 'RMBBCC';
 
 let db: IDBDatabase;

@@ -84,9 +84,10 @@ describe('listRecentCodes — empty / degrade paths (never throws)', () => {
 
   it('drops malformed string entries (too short / bad chars) and canonicalizes the rest', () => {
     const good = code(3);
-    // 'abc' too short, 'ABC230' has an excluded glyph '0' → both dropped; a lower-case valid code
-    // is canonicalized and kept.
-    storage.setItem(RECENT_CODES_KEY, JSON.stringify(['abc', 'ABC230', good.toLowerCase()]));
+    // 'abc' too short, 'ABC-23' has a non-alphanumeric char → both dropped; a lower-case valid code
+    // is canonicalized and kept. (issue #30: digits like '0' are now VALID, so the bad entry uses a
+    // punctuation char that is genuinely outside the A-Z0-9 alphabet.)
+    storage.setItem(RECENT_CODES_KEY, JSON.stringify(['abc', 'ABC-23', good.toLowerCase()]));
     expect(listRecentCodes(storage)).toEqual([good]);
   });
 });
@@ -150,8 +151,8 @@ describe('recordRecentCode — rejects malformed codes (never poisons the list)'
     expect(listRecentCodes(storage)).toEqual([]);
   });
 
-  it('ignores a code with an excluded/ambiguous glyph', () => {
-    recordRecentCode('ABC230', storage); // '0' is excluded from the alphabet
+  it('ignores a code with a non-alphanumeric character', () => {
+    recordRecentCode('ABC-23', storage); // '-' is outside the A-Z0-9 alphabet (issue #30)
     expect(listRecentCodes(storage)).toEqual([]);
   });
 
@@ -306,7 +307,7 @@ describe('property: every GENERATED code round-trips through the store (fast-che
           const rng = () => rands[i++ % rands.length] ?? 0;
           const generated = generateGameCode(rng);
 
-          // Generator invariant: every char is in the unambiguous alphabet, exact length.
+          // Generator invariant: every char is in the CODE_ALPHABET (A-Z0-9), exact length.
           expect(generated.length).toBe(CODE_LENGTH);
           for (const ch of generated) expect(CODE_ALPHABET).toContain(ch);
 
@@ -322,13 +323,15 @@ describe('property: every GENERATED code round-trips through the store (fast-che
     );
   });
 
-  it('the generator never emits an excluded/ambiguous glyph across many rng draws', () => {
+  it('the generator emits only A-Z0-9 chars across many rng draws (issue #30: no glyphs excluded)', () => {
+    // Random generation now draws from the SAME full A-Z0-9 alphabet as validation — the earlier
+    // ambiguity exclusion (0/O/1/I/L) is gone. Assert every generated char is alphanumeric and that
+    // the code always re-validates (it is legal by construction).
     fc.assert(
       fc.property(fc.double({ min: 0, max: 0.9999999, noNaN: true }), (r) => {
         const generated = generateGameCode(() => r);
-        for (const excluded of ['0', 'O', '1', 'I', 'L']) {
-          expect(generated).not.toContain(excluded);
-        }
+        expect(generated).toMatch(/^[A-Z0-9]+$/);
+        expect(validateGameCode(generated)).toEqual({ ok: true, code: generated });
       }),
     );
   });
