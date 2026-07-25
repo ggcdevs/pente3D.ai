@@ -1,20 +1,24 @@
-# Multi-env GitHub Pages deploy (issue #22).
+# Any-branch GitHub Pages deploy (issue #22, generalized in v3.1).
 #
-# Builds the app for the pushed branch and publishes it to the `gh-pages` branch at a
-# per-branch subpath so the three environments coexist without clobbering each other:
-#   main → root   (base /pente3D.ai/)
-#   dev  → /dev/   (base /pente3D.ai/dev/)
-#   test → /test/  (base /pente3D.ai/test/)
+# Builds the pushed branch and publishes it to `gh-pages` at a per-branch subpath, so
+# EVERY branch is playable online without the environments clobbering each other:
+#   main            → root       (base /pente3D.ai/)
+#   <any other ref> → /<ref>/    (base /pente3D.ai/<ref>/ — e.g. /dev/, /test/, /feat/net-model-v3.1/)
 #
-# The relay endpoint/creds are NOT in the repo (portability). They live in the
-# `RELAY_CONFIG` repo variable and are written into src/config/defaults/relay.json
-# before the build. `keep_files: true` + a per-branch `destination_dir` mean a deploy
-# of one branch never deletes another branch's subtree on gh-pages.
+# So `refs/heads/feat/foo` is playable at ggcdevs.github.io/pente3D.ai/feat/foo/ . Branch names
+# with slashes become nested gh-pages dirs, which is fine. `keep_files: true` + a per-branch
+# `destination_dir` mean deploying one branch never deletes another branch's subtree.
+#
+# Cleanup of a DELETED branch's subpath is handled separately (see cleanup-branch-pages.yml —
+# an `on: delete` workflow, which GitHub only fires from the DEFAULT branch).
+#
+# The relay endpoint/creds are NOT in the repo (portability). They live in the `RELAY_CONFIG`
+# repo variable and are written into src/config/defaults/relay.json before the build.
 name: deploy
 
 on:
   push:
-    branches: [main, dev, test]
+    branches: ['**']
 
 permissions:
   contents: write
@@ -36,30 +40,18 @@ jobs:
         run: npm ci
 
       # Derive the per-branch base + gh-pages destination from the branch name.
-      #   main → base /pente3D.ai/      dest '' (root)
-      #   dev  → base /pente3D.ai/dev/  dest 'dev'
-      #   test → base /pente3D.ai/test/ dest 'test'
+      #   main → base /pente3D.ai/ , dest '' (root)
+      #   else → base /pente3D.ai/<ref>/ , dest '<ref>'  (dev, test, feat/foo, …)
       - name: Resolve per-branch base and destination
         id: env
         run: |
-          case "${GITHUB_REF_NAME}" in
-            main)
-              echo "base=/pente3D.ai/" >> "$GITHUB_OUTPUT"
-              echo "dest=" >> "$GITHUB_OUTPUT"
-              ;;
-            dev)
-              echo "base=/pente3D.ai/dev/" >> "$GITHUB_OUTPUT"
-              echo "dest=dev" >> "$GITHUB_OUTPUT"
-              ;;
-            test)
-              echo "base=/pente3D.ai/test/" >> "$GITHUB_OUTPUT"
-              echo "dest=test" >> "$GITHUB_OUTPUT"
-              ;;
-            *)
-              echo "Unsupported branch: ${GITHUB_REF_NAME}" >&2
-              exit 1
-              ;;
-          esac
+          if [ "${GITHUB_REF_NAME}" = "main" ]; then
+            echo "base=/pente3D.ai/" >> "$GITHUB_OUTPUT"
+            echo "dest=" >> "$GITHUB_OUTPUT"
+          else
+            echo "base=/pente3D.ai/${GITHUB_REF_NAME}/" >> "$GITHUB_OUTPUT"
+            echo "dest=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
 
       # Inject the real relay from the RELAY_CONFIG repo variable (the repo ships blank).
       - name: Write relay config from RELAY_CONFIG
@@ -71,7 +63,7 @@ jobs:
             exit 1
           fi
           printf '%s' "${RELAY_CONFIG}" > src/config/defaults/relay.json
-          echo "Wrote relay.json (wssUrl host only, no creds printed):"
+          echo "Wrote relay.json (host only, no creds printed):"
           node -e "const r=require('./src/config/defaults/relay.json'); console.log('wssUrl set:', Boolean(r.wssUrl), 'topicRoot:', r.topicRoot)"
 
       - name: Build
