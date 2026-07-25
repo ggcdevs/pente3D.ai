@@ -27,8 +27,18 @@ jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
     steps:
+      # FULL history + tags are REQUIRED, not a nicety (issue #22 versioning).
+      # actions/checkout@v4 defaults to `fetch-depth: 1` AND `fetch-tags: false`, so the
+      # default checkout contains ZERO tags. `git describe --tags` then fails outright and
+      # `tools/version.mjs` degrades to `0.0.0-unknown` — every deployed build would report
+      # an unknown version and `dist/version.json` would be useless as a deploy fingerprint.
+      # `fetch-depth: 0` fetches all history and all tags; `fetch-tags: true` is redundant
+      # with it but stated explicitly so a future depth change cannot silently drop tags.
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -70,6 +80,12 @@ jobs:
         env:
           DEPLOY_BASE: ${{ steps.env.outputs.base }}
         run: npm run build
+
+      # Echo the fingerprint the build actually produced (issue #22). If the checkout ever
+      # loses its tags again, this prints `0.0.0-unknown` and the regression is visible in
+      # the deploy log instead of silently shipping.
+      - name: Show the built version fingerprint
+        run: cat dist/version.json
 
       - name: Deploy to gh-pages
         uses: peaceiris/actions-gh-pages@v4
