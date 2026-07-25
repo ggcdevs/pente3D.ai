@@ -10,6 +10,7 @@
  */
 import type { GameState, Player } from '../src/core/gameState';
 import type { SeatMap } from '../src/net/seats';
+import type { LinkStatus } from './netlink';
 
 /** The plain, JSON-safe game readout the daemon sends and the views render. */
 export interface Snapshot {
@@ -23,6 +24,12 @@ export interface Snapshot {
   readonly lastMove: string | null; // NodeKey "x,y,z"
   readonly seatOwners: SeatMap | null;
   readonly game: GameState | null;
+  /**
+   * The TRANSPORT link, distinct from the session `phase`: a dropped socket
+   * (`drop`, or a real outage) leaves the session `connected` while the link is
+   * `down` — the exact split issue #45 lives in.
+   */
+  readonly link: LinkStatus;
 }
 
 export type View = (s: Snapshot) => string;
@@ -37,7 +44,10 @@ function header(s: Snapshot): string {
   const seat = s.seat ? s.seat.toUpperCase() : '—';
   const opp = s.peerPresent ? 'present' : 'waiting…';
   const lines: string[] = [];
-  lines.push(`Room ${s.code} · you are ${seat} · phase ${s.phase} · opponent ${opp}`);
+  // A dropped link is called out loudly: the session still says `connected`, so without
+  // this the board looks authoritative while it is quietly frozen in the past (#45).
+  const link = s.link === 'down' ? ' · LINK DOWN (offline)' : '';
+  lines.push(`Room ${s.code} · you are ${seat} · phase ${s.phase} · opponent ${opp}${link}`);
   const g = s.game;
   if (g) {
     if (g.winner) {

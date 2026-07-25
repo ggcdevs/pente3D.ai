@@ -10,8 +10,13 @@
  *   pente undo  <CODE>                          request an undo of your last move
  *   pente redo  <CODE>
  *   pente status <CODE>                         connection/seat/turn readout
+ *   pente drop  <CODE>                          simulate a network outage (kill the socket)
+ *   pente restore <CODE>                        end the outage (let mqtt.js reconnect)
  *   pente quit  <CODE>                          stop the daemon
  *   pente views                                 list available board views
+ *
+ * `--json` makes any state-returning verb print the raw {@link Snapshot} JSON instead of a
+ * rendered board — the machine-readable form scenario scripts assert on.
  */
 import { runDaemon } from './daemon';
 import { request } from './client';
@@ -59,6 +64,17 @@ function printSnapshot(data: unknown, viewName: string): void {
   console.log(render(data as Snapshot, viewName));
 }
 
+/** True when `--json` was passed: emit machine-readable state, no rendered board. */
+function jsonMode(flags: Args['flags']): boolean {
+  return flags.json === true;
+}
+
+/** Emit a state reply either as raw JSON (`--json`, for scripts) or as a rendered board. */
+function output(data: unknown, args: Args): void {
+  if (jsonMode(args.flags)) return console.log(JSON.stringify(data));
+  printSnapshot(data, view(args.flags));
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
@@ -74,16 +90,28 @@ async function main(): Promise<void> {
     case 'show': {
       const r = await request(requireCode(args), { cmd: 'show' }, 10_000);
       if (!r.ok) return fail(r.data);
-      return printSnapshot(r.data, view(args.flags));
+      return output(r.data, args);
     }
 
     case 'status': {
       const r = await request(requireCode(args), { cmd: 'status' }, 10_000);
       if (!r.ok) return fail(r.data);
+      if (jsonMode(args.flags)) return console.log(JSON.stringify(r.data));
       const s = r.data as Snapshot;
       console.log(
-        `room ${s.code} · phase ${s.phase} · seat ${s.seat ?? '—'} · opponent ${s.peerPresent ? 'present' : 'waiting'} · ${s.canPlace ? 'YOUR MOVE' : 'their move'}${s.game?.winner ? ` · winner ${s.game.winner}` : ''}`,
+        `room ${s.code} · phase ${s.phase} · link ${s.link} · seat ${s.seat ?? '—'} · opponent ${s.peerPresent ? 'present' : 'waiting'} · ply ${s.ply} · ${s.canPlace ? 'YOUR MOVE' : 'their move'}${s.game?.winner ? ` · winner ${s.game.winner}` : ''}`,
       );
+      return;
+    }
+
+    // Outage control for scenario scripts (issue #45): `drop` kills the socket under a
+    // session that stays `connected`; `restore` lets mqtt.js reconnect.
+    case 'drop':
+    case 'restore': {
+      const r = await request(requireCode(args), { cmd: args.verb }, 10_000);
+      if (!r.ok) return fail(r.data);
+      if (jsonMode(args.flags)) return console.log(JSON.stringify(r.data));
+      console.log(args.verb === 'drop' ? 'link dropped (offline).' : 'link restoring…');
       return;
     }
 
@@ -96,15 +124,15 @@ async function main(): Promise<void> {
       }
       const r = await request(code, { cmd: 'move', arg: coord }, 15_000);
       if (!r.ok) return fail(r.data);
-      console.log(`placed ${coord}.`);
-      return printSnapshot(r.data, view(args.flags));
+      if (!jsonMode(args.flags)) console.log(`placed ${coord}.`);
+      return output(r.data, args);
     }
 
     case 'undo':
     case 'redo': {
       const r = await request(requireCode(args), { cmd: args.verb }, 10_000);
       if (!r.ok) return fail(r.data || `${args.verb} refused`);
-      return printSnapshot(r.data, view(args.flags));
+      return output(r.data, args);
     }
 
     case 'wait': {
@@ -113,6 +141,7 @@ async function main(): Promise<void> {
       const r = await request(code, { cmd: 'wait', timeoutMs: timeoutS * 1000 }, timeoutS * 1000 + 10_000);
       if (!r.ok) return fail(r.data);
       const s = r.data as Snapshot & { timedOut: boolean };
+      if (jsonMode(args.flags)) return console.log(JSON.stringify(s));
       if (s.timedOut) console.log(`(still ${s.canPlace ? 'your' : "opponent's"} turn after ${timeoutS}s — run wait again)`);
       return printSnapshot(s, view(args.flags));
     }
@@ -136,9 +165,12 @@ async function main(): Promise<void> {
   pente move  <CODE> <x,y,z> [--view NAME]         place a stone (must be your turn)
   pente undo  <CODE> | pente redo <CODE>
   pente status <CODE>                              one-line readout
+  pente drop  <CODE>                               simulate a network outage (kill the socket)
+  pente restore <CODE>                             end the outage (reconnect)
   pente quit  <CODE>                               stop the daemon
   pente views                                      list board views
 
+any state-returning verb accepts --json (raw snapshot, for scripts)
 views: ${Object.keys(VIEWS).join(', ')}`);
       return;
   }

@@ -12,6 +12,7 @@ import net from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createSession } from './session';
+import { dropLink, restoreLink, linkStatus } from './netlink';
 import { render, type Snapshot } from './views';
 import { generateGameCode, validateGameCode } from '../src/ui/widgets/netModel';
 import type { Coord } from '../src/core/coords';
@@ -20,8 +21,26 @@ import type { NetSession } from '../src/net/session';
 /** Runtime state dir (sockets + playerid). Overridable so two CLIs can co-exist. */
 const STATE_DIR = path.resolve(process.env.PENTE_STATE_DIR ?? path.join(process.cwd(), '.pente-cli'));
 
+/**
+ * The OS limit on a Unix-socket path (`sockaddr_un.sun_path`) — 108 bytes on Linux, 104 on
+ * macOS; the smaller value is used so the check is portable. Exceeding it does NOT error:
+ * the kernel silently TRUNCATES the path, so `bind` creates a differently-named socket and
+ * every verb then reports "no daemon socket" while the daemon looks perfectly healthy.
+ * {@link socketPath} refuses that outcome loudly instead (it cost a real debugging session).
+ */
+const SUN_PATH_MAX = 104;
+
 export function socketPath(code: string): string {
-  return path.join(STATE_DIR, `${code}.sock`);
+  const p = path.join(STATE_DIR, `${code}.sock`);
+  if (Buffer.byteLength(p) >= SUN_PATH_MAX) {
+    console.error(
+      `[pente] socket path is too long for this OS (${Buffer.byteLength(p)} ≥ ${SUN_PATH_MAX} bytes):\n` +
+        `  ${p}\n` +
+        `Set PENTE_STATE_DIR to somewhere shorter, e.g. PENTE_STATE_DIR=/tmp/pente-${code.toLowerCase()}`,
+    );
+    process.exit(2);
+  }
+  return p;
 }
 
 /** Stable per-machine playerId (mirrors the browser's localStorage playerId). */
@@ -85,6 +104,7 @@ export async function runDaemon(opts: PlayOptions): Promise<void> {
       lastMove,
       seatOwners: session.seatOwners(),
       game,
+      link: linkStatus(),
     };
   }
 
@@ -157,6 +177,19 @@ export async function runDaemon(opts: PlayOptions): Promise<void> {
         const err = tryMove(session, coord);
         return reply(conn, !err, err ?? snapshot());
       }
+      // ── Outage control (issue #45 scenarios) ────────────────────────────────
+      // `drop` kills the SOCKET while the session keeps its engine/seat/game and stays
+      // `connected` — a screen-lock, not a leave. `restore` lets mqtt.js reconnect. What
+      // the session does (or fails to do) about the moves it missed in between is the
+      // behaviour under test.
+      case 'drop':
+        if (!dropLink()) return reply(conn, false, 'no live link to drop');
+        console.log('[pente] link DROPPED (socket killed; session still thinks it is connected)');
+        return reply(conn, true, snapshot());
+      case 'restore':
+        if (!restoreLink()) return reply(conn, false, 'no link to restore');
+        console.log('[pente] link RESTORING…');
+        return reply(conn, true, snapshot());
       case 'undo':
         return reply(conn, doSafe(() => session.undo()), snapshot());
       case 'redo':

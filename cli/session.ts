@@ -3,16 +3,17 @@
  * browser app does — the MQTT transport over mqtt.js, an IndexedDB via
  * `fake-indexeddb`, and a stable playerId — so the CLI reuses src/ verbatim and
  * cannot drift from the browser's protocol.
+ *
+ * The mqtt.js connect seam comes from {@link connect} in `netlink.ts` rather than
+ * `mqtt.connect` directly, so the socket stays controllable (`drop`/`restore`) for
+ * outage scenarios like the issue #45 repro.
  */
 import 'fake-indexeddb/auto';
-import mqtt from 'mqtt';
 import { NetSession } from '../src/net/session';
-import { MqttTransport, type MqttClientLike } from '../src/net/mqttTransport';
+import { MqttTransport } from '../src/net/mqttTransport';
 import { openDatabase } from '../src/persist/db';
 import { relayConfig, BOARD_SIZE } from './relay';
-
-const connect = (url: string, opts: unknown): MqttClientLike =>
-  mqtt.connect(url, opts as mqtt.IClientOptions) as unknown as MqttClientLike;
+import { connect } from './netlink';
 
 export interface CliSession {
   readonly session: NetSession;
