@@ -257,8 +257,8 @@ export interface PenteInspect {
   getHeadHash(): string | null;
   /**
    * Re-broadcast the networked session's current authoritative log to the room (Task 6.7). A no-op
-   * offline. Idempotent by design — adopting an already-received log is a receiver no-op
-   * (`decideSync` IGNOREs a prefix) — so it never moves a peer backward; it only fills the LIVE
+   * offline. Idempotent by design — a log the receiver already holds is a no-op there (`reconcile`
+   * reports `in-sync` on an equal head) — so it never moves a peer backward; it only fills the LIVE
    * relay's non-retained subscription gap. Lets the two-context live-relay e2e converge
    * DETERMINISTICALLY (the mover re-broadcasts until the peer actually receives the move over the
    * real relay — proof-by-behavior, agent-principles #3), without a re-publish loop in the app.

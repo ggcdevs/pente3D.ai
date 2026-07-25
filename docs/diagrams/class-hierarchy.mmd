@@ -262,6 +262,14 @@ classDiagram
         +readonly presets: Readonly~Record~string, unknown~~
     }
     note for ControlsConfig "src/ui/widgets/settingsModel.ts"
+    class DivergentMove {
+        <<interface>>
+        +readonly event: Event
+        +readonly player: Player | null
+        +readonly ply: number
+        +readonly text: string
+    }
+    note for DivergentMove "src/net/logDiff.ts"
     class DragGuardConfig {
         <<interface>>
         +readonly enabled: boolean
@@ -507,6 +515,12 @@ classDiagram
         +readonly scopeId: string | null
     }
     note for KeyResolution "src/input/scopes.ts"
+    class LastCommonAncestor {
+        <<interface>>
+        +readonly hash: string | null
+        +readonly ply: number
+    }
+    note for LastCommonAncestor "src/net/reconcile.ts"
     class LayoutConfig {
         <<interface>>
         +readonly widgets: Readonly~Record~string, WidgetPlacement~~
@@ -621,6 +635,13 @@ classDiagram
         +setVisible(category: LineCategory, visible: boolean): void
     }
     note for LinesHandle "src/render/lines.ts"
+    class LogDiff {
+        <<interface>>
+        +readonly mine: readonly DivergentMove[]
+        +readonly sharedPly: number
+        +readonly theirs: readonly DivergentMove[]
+    }
+    note for LogDiff "src/net/logDiff.ts"
     class LogEntry {
         <<interface>>
         +readonly event: Event
@@ -1637,6 +1658,7 @@ classDiagram
     }
     note for ExportError "src/core/serialize.ts"
     class Game {
+        +apply(event: Event): void
         +canRedo(): boolean
         +canUndo(): boolean
         +get log(): EventLog
@@ -1739,6 +1761,7 @@ classDiagram
         +connect(roomCode: string): Promise~void~
         +epoch(): number
         +game(): Game
+        +needsResolution(): Object | null
         +onAdmission(listener: (msg: AdmissionMessage) =~ void): () =~ void
         +onChange(listener: () =~ void): () =~ void
         +onMessage(listener: (msg: ProposalMessage | ResponseMessage) =~ void): () =~ void
@@ -1749,6 +1772,7 @@ classDiagram
         +receive(msg: SyncMessage): void
         +redo(): void
         +refusedGame(): Object | null
+        +rejectedLog(): Object | null
         +reseat(color: Player): void
         +resetGame(newGame: Game, newMyColor: Player): void
         +status(): SyncStatus

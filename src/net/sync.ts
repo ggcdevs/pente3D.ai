@@ -6,28 +6,35 @@
  *
  * The canonical state of a game is its **append-only event log**. Peers do not
  * overwrite a shared blob — each publishes its *entire* log and every receiver runs
- * a deterministic prefix/hash decision to converge:
+ * a deterministic hash-chain decision to converge. That decision is the v3.1
+ * reconciliation policy in `reconcile.ts` (design §5), which — unlike v3's blanket
+ * "adopt any strict extension" — auto-adopts EXACTLY one case:
  *
- *   - **ADOPT** iff the local log is a **strict** prefix of the remote log — the
- *     remote is a genuine forward extension of my history, so I replace mine with
- *     it (I now hold the longer, still-valid log).
- *   - **IGNORE** iff the remote log is a prefix of mine (including an *equal* log) —
- *     the remote is stale or a pure replay; adopting it would move me backward.
- *   - **CONFLICT** iff neither is a prefix of the other — the two histories
- *     **fork**. v1 response: stop the game, archive *both* forks flagged
- *     `conflicted`, and surface an error state (no silent auto-merge).
+ *   - **IN-SYNC** iff the two `headHash`es are equal: play on, say nothing.
+ *   - **FAST-FORWARD** iff the remote is exactly ONE entry longer, mine is its prefix,
+ *     and my own log says that entry was the OPPONENT's to make — the turn gate caps
+ *     legitimate drift at one move, so this is the whole of the automatic path (plus a
+ *     newer rematch GENERATION, which supersedes outright).
+ *   - **REPUBLISH** iff I am exactly one entry ahead (my move never got out): keep mine
+ *     and answer, so they fast-forward. Answering an equal log would ping-pong; this
+ *     terminates by construction.
+ *   - **NEEDS-RESOLUTION** for everything else — a longer prefix either way, or a genuine
+ *     fork. Nothing is adopted: the last common ancestor + a readable diff are recorded
+ *     ({@link SyncEngine.needsResolution}) for the players to resolve. A genuine fork
+ *     additionally stops the game and archives *both* histories flagged `conflicted`
+ *     (no silent auto-merge).
  *
- * Because ADOPT only ever accepts strict extensions and IGNORE drops everything
- * shorter-or-equal, delivery order does not matter: any permutation of a set of
- * messages **converges to the longest valid (non-forking) log**, and re-delivering
- * an old message is a no-op (replay-idempotent). This is exactly why the append-only
- * log + hash chain was chosen over a mutable shared state.
+ * Delivery order still does not matter: re-delivering an old message is a no-op or draws
+ * our own log back out, never a backward step, and every adopted log is REPLAY-VALIDATED
+ * through the rules engine before it lands. This is exactly why the append-only log +
+ * hash chain was chosen over a mutable shared state.
  *
  * ## Layering & purity
  *
- * {@link decideSync} and the {@link SyncMessage} codec are **pure** — no transport,
- * DOM, or clock — so they are unit-tested to 100% in isolation (agent-principles:
- * the IO adapter stays thin, the decision logic is separable). {@link SyncEngine}
+ * The reconciliation policy (`reconcile.ts`, `logDiff.ts`) and the {@link SyncMessage}
+ * codec are **pure** — no transport, DOM, or clock — so they are unit-tested to 100% in
+ * isolation (agent-principles: the IO adapter stays thin, the decision logic is
+ * separable). {@link SyncEngine}
  * wraps a core {@link Game}, a {@link Transport}, and the {@link flagConflicted}
  * archive call, wiring the pure decision to real message exchange. It carries no
  * rules of Pente (that is `src/core`) and imports nothing from three/render/ui.
@@ -57,13 +64,11 @@ import {
   emptyLog,
   append,
   headHash,
-  isPrefix,
-  firstDivergence,
   type Event,
   type EventLog,
 } from '../core/eventLog';
 import type { Coord } from '../core/coords';
-import { opponent, type GameState, type Player } from '../core/gameState';
+import { lastMover, type GameState, type Player } from '../core/gameState';
 import { flagConflicted, type ArchivedMeta } from '../persist/archive';
 import { createEmitter, type Emitter } from '../util/emitter';
 import type { Transport, TransportMessage } from './transport';
@@ -75,6 +80,14 @@ import {
   type ReconcileReject,
 } from './admission';
 import { rematchGameUuid } from './rematch';
+import {
+  isFork,
+  reconcileEpoched,
+  validateAdoptable,
+  type LastCommonAncestor,
+  type LogRejection,
+} from './reconcile';
+import type { LogDiff } from './logDiff';
 import type { SeatMap } from './seats';
 
 /** The sync wire-format version. Bumped only on a breaking message-shape change. */
@@ -624,67 +637,6 @@ export function normalizeEpoch(raw: unknown): number {
   return Math.max(0, Math.floor(raw as number));
 }
 
-/** The three possible outcomes of comparing a local log against a remote one. */
-export type SyncDecision =
-  | { readonly action: 'adopt' }
-  | { readonly action: 'ignore' }
-  | { readonly action: 'conflict'; readonly divergePly: number };
-
-/**
- * Decide how a `remote` log relates to the `local` one (pure — no side effects).
- *
- *   - `adopt`    — `local` is a **strict** prefix of `remote` (remote is longer and
- *                  agrees on every ply of `local`): take the remote.
- *   - `ignore`   — `remote` is a prefix of `local` (equal or shorter): stale/replay.
- *   - `conflict` — neither is a prefix of the other: the logs fork at `divergePly`.
- *
- * The order of the two prefix checks matters: an equal log satisfies *both*
- * `isPrefix(local, remote)` and `isPrefix(remote, local)`; testing "remote is a
- * prefix of local" first makes equal logs `ignore` (a replay), never a spurious
- * adopt of an identical log.
- */
-export function decideSync(local: EventLog, remote: EventLog): SyncDecision {
-  // Remote is a prefix of local (equal or older) → nothing new; drop it.
-  if (isPrefix(remote, local)) return { action: 'ignore' };
-  // Local is a strict prefix of remote (remote is longer, since equal was handled
-  // above) → the remote is a valid forward extension; adopt it.
-  if (isPrefix(local, remote)) return { action: 'adopt' };
-  // Neither is a prefix → the histories fork.
-  return { action: 'conflict', divergePly: firstDivergence(local, remote) };
-}
-
-/**
- * Epoch-aware sync decision (pure — no side effects): decide how a `remote` log at
- * `remoteEpoch` relates to the `local` log at `localEpoch`, where the epoch is the
- * in-place fresh-game GENERATION (N.2 rematch; see {@link SyncMessage.epoch}).
- *
- *   - remote epoch **higher** → the peer already reset to a newer game (it did the
- *     in-place rematch first): `adopt` its fresh log outright, whatever the logs say.
- *     The prefix comparison does not apply ACROSS generations — a new game's empty
- *     log is deliberately NOT a continuation of the old one.
- *   - remote epoch **lower** → the message is from a superseded generation (a late,
- *     in-flight publish from the just-finished game): `ignore` it. This is exactly
- *     what stops a stale won-game message from re-adopting the old board after a
- *     reset — the trap the seamless in-place reset would otherwise spring.
- *   - **same** epoch → defer to the ordinary same-generation {@link decideSync}
- *     (adopt strict extension / ignore prefix / conflict on a genuine fork).
- *
- * Because a reset only ever INCREMENTS the epoch and both peers reset deterministically
- * on the same accepted rematch, the epochs converge and delivery order still does not
- * matter: any permutation settles on the highest epoch, then the longest valid log
- * within it.
- */
-export function decideSyncEpoched(
-  localEpoch: number,
-  local: EventLog,
-  remoteEpoch: number,
-  remote: EventLog,
-): SyncDecision {
-  if (remoteEpoch > localEpoch) return { action: 'adopt' };
-  if (remoteEpoch < localEpoch) return { action: 'ignore' };
-  return decideSync(local, remote);
-}
-
 /**
  * The result of asking whether a player may emit an `undo`: permitted, or refused
  * with a machine-readable reason.
@@ -707,11 +659,9 @@ export type UndoRejection = 'nothing-to-undo' | 'not-your-move';
  *                         client may not undo it.
  *   - `ok`              — there is a move and its mover is `myColor`.
  *
- * The last mover's color is derived from `state.turn`: a normal `place` flips the
- * turn, so the just-moved player is `opponent(state.turn)`. On a **winning** move
- * the turn does *not* flip, and `state.turn` stays the winner — who is exactly the
- * last mover — so the rule still correctly attributes a winning move to its player
- * (a player may undo its own winning move; the opponent may not).
+ * The last mover's colour comes from the shared core {@link lastMover} derivation (which handles
+ * the winning move, where the turn does NOT flip), so the rule correctly attributes a winning move
+ * to its player: a player may undo its own winning move; the opponent may not.
  */
 export function decideUndo(
   state: GameState,
@@ -719,8 +669,7 @@ export function decideUndo(
   myColor: Player,
 ): UndoDecision {
   if (ply === 0) return { ok: false, reason: 'nothing-to-undo' };
-  const lastMover = state.winner === null ? opponent(state.turn) : state.turn;
-  if (lastMover !== myColor) return { ok: false, reason: 'not-your-move' };
+  if (lastMover(state) !== myColor) return { ok: false, reason: 'not-your-move' };
   return { ok: true };
 }
 
@@ -867,11 +816,13 @@ export type MetaProvider = () => Omit<ArchivedMeta, 'result'>;
  * sync decision on every inbound message and stopping the game on a fork.
  *
  * On a local move the engine appends to its `Game` and publishes the full log. On
- * receipt it runs the epoch-aware {@link decideSyncEpoched}; `adopt` replaces the
- * local game with the remote log (and advances the generation on a higher remote
- * epoch), `ignore` is a no-op (including a superseded prior-generation message), and
- * `conflict` archives both forks via {@link flagConflicted}, flips {@link status} to
- * `conflict`, and refuses all further local moves (the game is stopped).
+ * receipt it runs the epoch-aware {@link reconcileEpoched}; `fast-forward` replay-validates
+ * the remote log and replaces the local game with it (advancing the generation on a higher
+ * remote epoch), `in-sync` is a no-op, `republish` answers a peer that is behind (including
+ * one on a superseded generation), and `needs-resolution` adopts NOTHING — it records the
+ * ancestor + diff on {@link needsResolution} and, for a genuine fork, archives both
+ * histories via {@link flagConflicted}, flips {@link status} to `conflict`, and refuses all
+ * further local moves (the game is stopped).
  *
  * A rematch resets to a fresh game IN PLACE over the same transport via
  * {@link resetGame} — bumping the fresh-game {@link SyncMessage.epoch} rather than
@@ -954,6 +905,33 @@ export class SyncEngine {
   private _refusedGame: { readonly uuid: string; readonly reason: ReconcileReject } | null = null;
 
   /**
+   * The last divergence this engine could NOT settle automatically (V.4a, design §5): the peer's
+   * log, where the two histories last agreed, and the readable diff between them. `null` until one
+   * happens. This is the record the V.4b resolution handshake + divergence panel act on; here it is
+   * the observable proof that a divergence beyond the turn gate's one-move cap was refused rather
+   * than silently adopted (a refusal deliberately leaves the game untouched, so there is nothing
+   * else to observe).
+   */
+  private _resolution: {
+    readonly theirs: EventLog;
+    readonly lca: LastCommonAncestor;
+    readonly diff: LogDiff;
+  } | null = null;
+
+  /**
+   * The last log this engine refused to ADOPT because it did not replay through the rules engine
+   * (design §5 "Integrity"), with the failing entry and the reason. `null` until one happens. The
+   * observable record of the replay validator biting — a rejected log leaves the game untouched and
+   * fires no change listener, so nothing else would show it.
+   */
+  private _rejectedLog: {
+    readonly uuid: string;
+    readonly ply: number;
+    readonly reason: LogRejection;
+    readonly detail: string;
+  } | null = null;
+
+  /**
    * @param game The initial local game (usually fresh; may already hold moves).
    * @param transport The room transport (already-constructed; `connect` is called
    *   by {@link connect}).
@@ -989,6 +967,33 @@ export class SyncEngine {
    */
   refusedGame(): { readonly uuid: string; readonly reason: ReconcileReject } | null {
     return this._refusedGame;
+  }
+
+  /**
+   * The last divergence that needs the players to choose (peer log + last common ancestor +
+   * readable diff), or `null` if none has happened. See {@link _resolution}; the resolution
+   * PROTOCOL is Task V.4b.
+   */
+  needsResolution(): {
+    readonly theirs: EventLog;
+    readonly lca: LastCommonAncestor;
+    readonly diff: LogDiff;
+  } | null {
+    return this._resolution;
+  }
+
+  /**
+   * The last log refused because it does not replay through the rules engine (uuid + failing entry
+   * + typed reason + the engine's own message), or `null` if none has been. See
+   * {@link _rejectedLog}.
+   */
+  rejectedLog(): {
+    readonly uuid: string;
+    readonly ply: number;
+    readonly reason: LogRejection;
+    readonly detail: string;
+  } | null {
+    return this._rejectedLog;
   }
 
   /**
@@ -1046,6 +1051,14 @@ export class SyncEngine {
 
   /** Notify every change subscriber (after a local or remote game mutation). */
   private emitChange(): void {
+    // A recorded divergence describes a disagreement that is LIVE. Any mutation of our game may have
+    // ended it — the routine case being the #18 mutual undo, where the peer publishes its copy of
+    // the agreed step-back (not an entry we may fast-forward onto) and we then apply our own,
+    // landing on the identical history. Re-checked here rather than left to go stale, so
+    // {@link needsResolution} never reports a divergence that is already over.
+    if (this._resolution !== null && headHash(this._game.log) === headHash(this._resolution.theirs)) {
+      this._resolution = null;
+    }
     for (const listener of this.changeListeners) listener();
   }
 
@@ -1296,48 +1309,76 @@ export class SyncEngine {
       this.receiveOtherGame(remote, remoteEpoch);
       return;
     }
-    const decision = decideSyncEpoched(this._epoch, this._game.log, remoteEpoch, remote);
+    const decision = reconcileEpoched(this._epoch, this._game, remoteEpoch, remote, this.myColor);
     switch (decision.action) {
-      case 'ignore':
-        // Stale / replay — INCLUDING a message from a SUPERSEDED epoch (a late in-flight publish
-        // from the just-finished game after an in-place rematch reset): the game did not change, so
-        // no listener fires (a spurious re-render on an ignored replay would be a lie about state
-        // changing — keep the notification truthful). This is what stops the finished board from
-        // resurrecting over the fresh rematch game.
-        //
-        // But ANSWER a peer that is BEHIND (design §5: "I am ahead → republish, do not adopt").
-        // `ignore` covers two different situations: an exact replay of what we already hold — there
-        // is nothing to say, and answering it would ping-pong forever — and a log STRICTLY SHORTER
-        // than ours, i.e. a peer that missed moves. Only the second is answered, and one answer is
-        // enough: it adopts our longer log, and its next publish is an equal one, which is silent.
-        // Terminating by construction, because "behind" is a prefix relation — two peers cannot each
-        // be behind the other (a genuine fork is `conflict`, not `ignore`).
-        //
-        // Without this, convergence in the MIRROR direction of an outage (OUR move never got out)
-        // rested on a single unacknowledged QoS-0 publish triggered by the returner's own re-announce:
-        // if that one message was lost, nothing retried and the pair stayed bricked — issue #45 again
-        // with the roles swapped. Measured at ~10% of real-relay runs before this arm existed.
-        if (this.isBehind(remote, remoteEpoch)) this.publishState();
+      case 'in-sync':
+        // Identical histories: the game did not change, so no listener fires (a spurious re-render
+        // on an unchanged board would be a lie about state changing — keep the notification
+        // truthful), and nothing goes back on the wire (answering an equal log would ping-pong
+        // forever). Agreeing again ENDS any divergence we were holding open, so the record is
+        // cleared: `needsResolution` reports a live divergence, never a historical one.
+        this._resolution = null;
         return;
-      case 'adopt':
-        // Adopt the peer's longer log for the game we are BOTH on, then notify so the scene re-renders
-        // (the issue #4 resync link). A higher remote epoch on the same identity (a peer that reset
-        // in place without re-deriving the uuid) advances our generation to match, so both sides
-        // settle on the same epoch. Our pair's own rematch mints a DERIVED uuid, so it is not this
-        // branch — it crosses identity, and {@link receiveOtherGame} decides it.
-        this._epoch = Math.max(this._epoch, remoteEpoch);
-        this._game = Game.fromLog(this.size, remote);
-        this.emitChange();
+      case 'republish':
+        // We hold what they lack — one entry of THIS generation, or a whole live generation they
+        // are behind. Answering (rather than staying silent) is what turns a lost QoS-0 publish
+        // into a converging exchange: their next publish carries our log back as an equal one,
+        // which is silent, so it terminates. Without it, convergence in the MIRROR direction of an
+        // outage rested on a single unacknowledged publish — issue #45 with the roles swapped.
+        this.publishState();
         return;
-      case 'conflict':
-        // The logs forked WITHIN the same epoch and the game is stopped: archive both forks and
-        // notify so the UI reflects the stopped/conflicted state (the phase flips synchronously
-        // inside onConflict). A cross-epoch difference is never a conflict — it is a generation
-        // change, handled by adopt/ignore above.
-        this._archiving = this.onConflict(remote, decision.divergePly);
+      case 'fast-forward':
+        // The ONE automatic case (design §5): they are exactly one entry ahead on our own history
+        // and that entry was theirs to make — or they already reset to a newer generation. Adopt
+        // through the replay-validating {@link adopt}; nothing here trusts their derived state.
+        this.adopt(remote, remoteEpoch);
+        return;
+      case 'needs-resolution':
+        // Beyond the turn gate's one-move cap, or a genuine fork: NOTHING is adopted automatically.
+        // The ancestor + diff are recorded so the players can be shown where the two histories part
+        // company and choose a resolution — the V.4b handshake (take-mine / take-theirs /
+        // rewind-to-LCA) is what will act on this record.
+        this._resolution = { theirs: remote, lca: decision.lca, diff: decision.diff };
+        if (isFork(decision.diff)) {
+          // A genuine fork additionally STOPS the game and archives both histories, exactly as
+          // before: two real histories exist, and until the players pick one, playing on either
+          // would deepen the split. A one-sided divergence is not archived — there is only one
+          // history there, and it is still whole.
+          this._archiving = this.onConflict(remote, decision.lca.ply);
+        }
         this.emitChange();
         return;
     }
+  }
+
+  /**
+   * Replace our game with `remote` — the ONE mutation that takes a peer's history — after REPLAYING
+   * it through the pure rules engine (design §5 "Integrity"). A dumb relay cannot referee, so the
+   * opponent's client is the validator: an adopted log is folded move by move and refused at the
+   * first entry that does not replay or whose chain hash does not re-derive. A sender's derived
+   * state is never trusted.
+   *
+   * A refusal leaves the game EXACTLY as it was and is recorded on {@link rejectedLog} — the only
+   * observable of the check biting, since refusing changes nothing and fires no listener. It is
+   * never an exception: a peer publishing a bad log must not be able to throw out of our transport
+   * pump.
+   */
+  private adopt(remote: EventLog, remoteEpoch: number): void {
+    const validation = validateAdoptable(this.size, remote);
+    if (!validation.ok) {
+      this._rejectedLog = {
+        uuid: remote.uuid,
+        ply: validation.ply,
+        reason: validation.reason,
+        detail: validation.detail,
+      };
+      return;
+    }
+    // Our generation never moves backward; a peer that reset in place without re-deriving the uuid
+    // carries us forward to its epoch so both sides settle on the same generation.
+    this._epoch = Math.max(this._epoch, remoteEpoch);
+    this._game = Game.fromLog(this.size, remote);
+    this.emitChange();
   }
 
   /**
@@ -1380,11 +1421,11 @@ export class SyncEngine {
         return;
       }
     }
-    // Cross onto the other game: its log becomes ours wholesale (its hash chain was re-verified by
-    // `parseSyncMessage` before we got here), and our generation never moves backward.
-    this._epoch = Math.max(this._epoch, remoteEpoch);
-    this._game = Game.fromLog(this.size, remote);
-    this.emitChange();
+    // Cross onto the other game: its log becomes ours wholesale — through the same replay-validating
+    // {@link adopt} the same-game path uses, because "admission agreed on it" says which GAME may
+    // cross, never that its HISTORY is playable. A game we adopt sight-unseen is exactly where an
+    // unplayable log would otherwise land.
+    this.adopt(remote, remoteEpoch);
   }
 
   /**
@@ -1496,21 +1537,6 @@ export class SyncEngine {
    */
   async whenSettled(): Promise<void> {
     await this._archiving;
-  }
-
-  /**
-   * Whether the peer that sent `remote` is BEHIND us — the `ignore` case that deserves an answer
-   * rather than silence (see {@link receive}). True when the message is from a superseded generation,
-   * or when it is from OUR generation and strictly shorter than our log. Within `ignore` at the same
-   * epoch the remote is already known to be a PREFIX of ours (that is what `decideSync` decided), so
-   * a shorter length is exactly "missing moves we hold" and never a fork.
-   */
-  private isBehind(remote: EventLog, remoteEpoch: number): boolean {
-    // A SUPERSEDED generation is behind whatever its log holds — it may even be longer (an old game
-    // that ran on) but it is not this game any more, so the answer carries our generation to it.
-    // A HIGHER remote epoch never reaches here: that is `adopt`, decided before this is consulted.
-    if (remoteEpoch < this._epoch) return true;
-    return remote.entries.length < this._game.log.entries.length;
   }
 
   /** Throw if the game has been stopped by a conflict. */

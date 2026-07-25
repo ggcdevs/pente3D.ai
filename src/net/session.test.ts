@@ -2149,7 +2149,7 @@ describe('NetSession — the MOVE-SYNC channel gates which GAME may cross (#46, 
   });
 
   it('a high EPOCH is not a licence either — an empty stranger game never replaces a live board', async () => {
-    // `decideSyncEpoched` adopts a higher generation outright (that is how a rematch converges), and
+    // `reconcileEpoched` adopts a higher generation outright (that is how a rematch converges), and
     // the epoch is a bare number the publisher chooses. Only the pair's OWN next generation may use
     // that road — a stranger stamping 99 is still a stranger.
     const hub = new MockRelayHub();

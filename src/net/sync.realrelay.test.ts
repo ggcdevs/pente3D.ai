@@ -101,7 +101,7 @@ async function waitFor(
  * around this exact race manually (each side re-publishes its fork once both are
  * subscribed); this helper generalises the same handshake for the convergence and
  * replay tests. Re-publishing an already-delivered log is a proven no-op on the
- * receiver (replay-idempotent by design — decideSync IGNOREs a prefix), so the
+ * receiver (replay-idempotent by design — `reconcile` reports `in-sync` on an equal head), so the
  * assertion stays genuine: it still requires the *other* client to actually receive
  * the move over the real relay (agent-principles #3), it just stops a dropped-in-the-
  * subscription-gap first publish from producing a false red.

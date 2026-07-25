@@ -12,7 +12,7 @@
  * {@link NetSessionState}. It touches the transport, an `IDBDatabase`, and a clock, so — exactly
  * like `scene.ts` / the DOM widgets — it is the **Playwright-verified IO boundary**, NOT mutation-
  * gated. The PURE parts it stands on are unit+mutation-gated in their own units: {@link SyncEngine}
- * / {@link decideSync} (`sync.ts`), {@link claimSeat} (`seats.ts`), and the view derivation +
+ * / the reconciliation policy (`sync.ts`, `reconcile.ts`), {@link claimSeat} (`seats.ts`), and the view derivation +
  * code validation (`src/ui/widgets/netModel.ts`).
  *
  * The transport is injected (a `() => Transport` factory) so the app supplies the real

@@ -49,6 +49,23 @@ export function opponent(player: Player): Player {
   return player === 'white' ? 'black' : 'white';
 }
 
+/**
+ * Who made the move that produced `state` — derived, never stored.
+ *
+ * A normal placement flips the turn, so the player who just moved is `opponent(state.turn)`. A
+ * **winning** placement does not flip it: `state.turn` stays the winner, who is exactly the last
+ * mover. (At ply 0 nothing has been moved; the caller must establish that a move exists — this
+ * function answers "whose was it", not "is there one".)
+ *
+ * The single source of this fact: the restricted-undo permission (`net/sync.ts` `decideUndo`) and
+ * the reconciliation rule that asks whether the one entry a peer holds was theirs to add
+ * (`net/reconcile.ts`) both need it, and two copies of the winning-move exception would be one
+ * copy too many.
+ */
+export function lastMover(state: GameState): Player {
+  return state.winner === null ? opponent(state.turn) : state.turn;
+}
+
 /** A fresh game on an `N×N×N` board: empty, white to move, no captures, no winner. */
 export function initialState(size: number): GameState {
   return {

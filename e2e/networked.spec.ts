@@ -47,8 +47,8 @@ import { NET_PANEL_SCOPE_ID } from '../src/ui/widgets/netPanel.ts';
  * broker-side subscription is active is silently dropped. The app has no re-publish loop, so the mover
  * drives `window.__pente.resync()` (a genuine app capability — re-broadcast the authoritative log, the
  * seam a reconnect button would use) on each poll tick until the peer OBSERVES the move. Re-broadcasting
- * an already-delivered log is a proven receiver no-op (`decideSync` IGNOREs a prefix — it never moves a
- * peer backward), so the assertion stays genuine: the peer must still actually receive the move over the
+ * an already-delivered log is a proven receiver no-op (`reconcile` reports `in-sync` on an equal head —
+ * it never moves a peer backward), so the assertion stays genuine: the peer must still actually receive the move over the
  * real relay. This mirrors the `waitForWithRepublish` handshake in `sync.realrelay.test.ts`.
  */
 

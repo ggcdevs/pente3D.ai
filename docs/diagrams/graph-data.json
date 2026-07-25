@@ -381,6 +381,7 @@
         "extends": null,
         "implements": [],
         "methods": [
+          "apply(event: Event): void",
           "canRedo(): boolean",
           "canUndo(): boolean",
           "get log(): EventLog",
@@ -408,6 +409,7 @@
       "IllegalMove",
       "Player",
       "initialState",
+      "lastMover",
       "opponent"
     ],
     "imports": [
@@ -453,6 +455,7 @@
     ],
     "functions": [
       "initialState",
+      "lastMover",
       "opponent"
     ]
   },
@@ -2010,6 +2013,72 @@
       "respond"
     ]
   },
+  "src/net/logDiff.ts": {
+    "exports": [
+      "DivergentMove",
+      "LogDiff",
+      "describeDivergence",
+      "formatLogDiff"
+    ],
+    "imports": [
+      {
+        "source": "../core/eventLog",
+        "target": "src/core/eventLog.ts",
+        "specifiers": [
+          "Event",
+          "EventLog",
+          "firstDivergence"
+        ]
+      },
+      {
+        "source": "../core/game",
+        "target": "src/core/game.ts",
+        "specifiers": [
+          "Game"
+        ]
+      },
+      {
+        "source": "../core/gameState",
+        "target": "src/core/gameState.ts",
+        "specifiers": [
+          "Player"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "DivergentMove",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly event: Event",
+          "readonly player: Player | null",
+          "readonly ply: number",
+          "readonly text: string"
+        ]
+      },
+      {
+        "name": "LogDiff",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly mine: readonly DivergentMove[]",
+          "readonly sharedPly: number",
+          "readonly theirs: readonly DivergentMove[]"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "describeDivergence",
+      "describeMove",
+      "describeTail",
+      "formatLogDiff",
+      "sideLines"
+    ]
+  },
   "src/net/mqttTransport.ts": {
     "exports": [
       "MqttClientLike",
@@ -2383,6 +2452,103 @@
       }
     ],
     "functions": []
+  },
+  "src/net/reconcile.ts": {
+    "exports": [
+      "FastForwardReason",
+      "LastCommonAncestor",
+      "LogRejection",
+      "LogValidation",
+      "ReconcileDecision",
+      "RepublishReason",
+      "isFork",
+      "lastCommonAncestor",
+      "reconcile",
+      "reconcileEpoched",
+      "validateAdoptable"
+    ],
+    "imports": [
+      {
+        "source": "../core/eventLog",
+        "target": "src/core/eventLog.ts",
+        "specifiers": [
+          "Event",
+          "EventLog",
+          "firstDivergence",
+          "genesisHash",
+          "headHash",
+          "isPrefix"
+        ]
+      },
+      {
+        "source": "../core/game",
+        "target": "src/core/game.ts",
+        "specifiers": [
+          "Game"
+        ]
+      },
+      {
+        "source": "../core/gameState",
+        "target": "src/core/gameState.ts",
+        "specifiers": [
+          "GameState",
+          "IllegalMove",
+          "Player",
+          "lastMover"
+        ]
+      },
+      {
+        "source": "./logDiff",
+        "target": "src/net/logDiff.ts",
+        "specifiers": [
+          "LogDiff",
+          "describeDivergence"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "LastCommonAncestor",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly hash: string | null",
+          "readonly ply: number"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [
+      {
+        "name": "FastForwardReason",
+        "type": "| 'one-move'\n  /** They already reset to a newer GENERATION (an N.2 in-place rematch); it supersedes ours. */\n  | 'newer-generation'"
+      },
+      {
+        "name": "RepublishReason",
+        "type": "| 'one-ahead'\n  /** Their message is from a superseded generation; our answer carries the live one. */\n  | 'superseded-generation'"
+      },
+      {
+        "name": "ReconcileDecision",
+        "type": "| { readonly action: 'in-sync' }\n  /** Adopt their log (after {@link validateAdoptable}). */\n  | { readonly action: 'fast-forward'; readonly reason: FastForwardReason }\n  /** Keep mine and put it back on the wire so they converge onto it. */\n  | { readonly action: 'republish'; readonly reason: RepublishReason }\n  /**\n   * Neither side may move automatically: the players choose, informed by `lca` (where the two\n   * histories last agreed) and `diff` (what each side did after that, in a player's terms).\n   */\n  | {\n      readonly action: 'needs-resolution';\n      readonly lca: LastCommonAncestor;\n      readonly diff: LogDiff;\n    }"
+      },
+      {
+        "name": "LogRejection",
+        "type": "| 'illegal-move'\n  /** An entry whose stored hash is not the one its own event produces — corruption or tampering. */\n  | 'broken-chain'"
+      },
+      {
+        "name": "LogValidation",
+        "type": "| { readonly ok: true }\n  | {\n      readonly ok: false;\n      /** The 0-based position of the FIRST entry that failed; everything before it replayed. */\n      readonly ply: number;\n      readonly reason: LogRejection;\n      /** The rules engine's own message, or the two hashes that disagree — never a summary. */\n      readonly detail: string;\n    }"
+      }
+    ],
+    "functions": [
+      "isFork",
+      "lastCommonAncestor",
+      "reconcile",
+      "reconcileEpoched",
+      "theirsToAdd",
+      "validateAdoptable"
+    ]
   },
   "src/net/rematch.ts": {
     "exports": [
@@ -2800,15 +2966,12 @@
       "RejectMessage",
       "ResponseMessage",
       "SYNC_VERSION",
-      "SyncDecision",
       "SyncEngine",
       "SyncError",
       "SyncMessage",
       "SyncStatus",
       "UndoDecision",
       "UndoRejection",
-      "decideSync",
-      "decideSyncEpoched",
       "decideUndo",
       "normalizeEpoch",
       "parseGameMessage",
@@ -2835,9 +2998,7 @@
           "EventLog",
           "append",
           "emptyLog",
-          "firstDivergence",
-          "headHash",
-          "isPrefix"
+          "headHash"
         ]
       },
       {
@@ -2853,7 +3014,7 @@
         "specifiers": [
           "GameState",
           "Player",
-          "opponent"
+          "lastMover"
         ]
       },
       {
@@ -2881,6 +3042,24 @@
           "Proposal",
           "ReconcileReject",
           "acceptsCrossing"
+        ]
+      },
+      {
+        "source": "./logDiff",
+        "target": "src/net/logDiff.ts",
+        "specifiers": [
+          "LogDiff"
+        ]
+      },
+      {
+        "source": "./reconcile",
+        "target": "src/net/reconcile.ts",
+        "specifiers": [
+          "LastCommonAncestor",
+          "LogRejection",
+          "isFork",
+          "reconcileEpoched",
+          "validateAdoptable"
         ]
       },
       {
@@ -2938,6 +3117,7 @@
           "connect(roomCode: string): Promise<void>",
           "epoch(): number",
           "game(): Game",
+          "needsResolution(): {\n    readonly theirs: EventLog;\n    readonly lca: LastCommonAncestor;\n    readonly diff: LogDiff;\n  } | null",
           "onAdmission(listener: (msg: AdmissionMessage) => void): () => void",
           "onChange(listener: () => void): () => void",
           "onMessage(listener: (msg: ProposalMessage | ResponseMessage) => void): () => void",
@@ -2948,6 +3128,7 @@
           "receive(msg: SyncMessage): void",
           "redo(): void",
           "refusedGame(): { readonly uuid: string; readonly reason: ReconcileReject } | null",
+          "rejectedLog(): {\n    readonly uuid: string;\n    readonly ply: number;\n    readonly reason: LogRejection;\n    readonly detail: string;\n  } | null",
           "reseat(color: Player): void",
           "resetGame(newGame: Game, newMyColor: Player): void",
           "status(): SyncStatus",
@@ -3048,10 +3229,6 @@
         "type": "HelloMessage | AdmitMessage | RejectMessage"
       },
       {
-        "name": "SyncDecision",
-        "type": "| { readonly action: 'adopt' }\n  | { readonly action: 'ignore' }\n  | { readonly action: 'conflict'; readonly divergePly: number }"
-      },
-      {
         "name": "UndoDecision",
         "type": "| { readonly ok: true }\n  | { readonly ok: false; readonly reason: UndoRejection }"
       },
@@ -3069,8 +3246,6 @@
       }
     ],
     "functions": [
-      "decideSync",
-      "decideSyncEpoched",
       "decideUndo",
       "epochOf",
       "isAdmissionReject",

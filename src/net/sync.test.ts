@@ -7,8 +7,6 @@ import { openDatabase } from '../persist/db';
 import { loadConflicted } from '../persist/archive';
 import { MockRelayHub, MockTransport, type TransportMessage } from './transport';
 import {
-  decideSync,
-  decideSyncEpoched,
   normalizeEpoch,
   decideUndo,
   toSyncMessage,
@@ -35,7 +33,9 @@ import {
 } from './sync';
 import { emptySeatMap, type SeatMap } from './seats';
 import { rematchGameUuid } from './rematch';
+import { reconcile } from './reconcile';
 import type { Proposal } from './admission';
+import type { Player } from '../core/gameState';
 
 /**
  * The shared game uuid for logs built by {@link logOf}. Sync decisions (prefix /
@@ -83,116 +83,6 @@ const PAIR_UUID = GAME_UUID;
  * suite at the bottom of this file).
  */
 const RESET_UUID = rematchGameUuid(PAIR_UUID, 1);
-
-describe('decideSync — pure prefix/hash decision', () => {
-  it('ADOPTs when local is a STRICT prefix of remote', () => {
-    const local = logOf('0,0,0');
-    const remote = logOf('0,0,0', '1,1,1');
-    expect(decideSync(local, remote)).toEqual({ action: 'adopt' });
-  });
-
-  it('IGNOREs when remote is a prefix of local (stale/replay of an older state)', () => {
-    const local = logOf('0,0,0', '1,1,1');
-    const remote = logOf('0,0,0');
-    expect(decideSync(local, remote)).toEqual({ action: 'ignore' });
-  });
-
-  it('IGNOREs an identical remote (a pure replay — no change, no conflict)', () => {
-    const local = logOf('0,0,0', '1,1,1');
-    const remote = logOf('0,0,0', '1,1,1');
-    // Equal logs: remote is a (non-strict) prefix of local → ignore, never adopt/conflict.
-    expect(decideSync(local, remote)).toEqual({ action: 'ignore' });
-  });
-
-  it('IGNOREs when both are the empty log (same game)', () => {
-    expect(decideSync(emptyGameLog(), emptyGameLog())).toEqual({ action: 'ignore' });
-  });
-
-  it('ADOPTs any non-empty remote when local is the same game empty', () => {
-    expect(decideSync(emptyGameLog(), logOf('4,4,4'))).toEqual({ action: 'adopt' });
-  });
-
-  it('CONFLICTs when the logs fork at the same ply (neither a prefix)', () => {
-    const local = logOf('0,0,0', '1,1,1');
-    const remote = logOf('0,0,0', '2,2,2');
-    expect(decideSync(local, remote)).toEqual({
-      action: 'conflict',
-      divergePly: 1,
-    });
-  });
-
-  it('CONFLICTs at ply 0 when the same moves belong to DIFFERENT games (S.1 uuid)', () => {
-    // A remote log that would be an extension under the same uuid must NOT be adopted
-    // when it is a *different game* — the uuid-seeded genesis makes it diverge at ply
-    // 0. This is what stops one game's history bleeding into another that merely
-    // shares an opening. Without the uuid guard in isPrefix, this would spuriously
-    // ADOPT (empty-local case) or agree on the shared prefix.
-    let local = emptyLog('game-A');
-    let remote = emptyLog('game-B');
-    local = append(local, { type: 'place', node: '0,0,0' });
-    remote = append(remote, { type: 'place', node: '0,0,0' });
-    remote = append(remote, { type: 'place', node: '1,1,1' });
-    expect(decideSync(local, remote)).toEqual({ action: 'conflict', divergePly: 0 });
-  });
-
-  it('CONFLICTs when logs fork at ply 0 (first move differs)', () => {
-    const local = logOf('1,1,1');
-    const remote = logOf('2,2,2');
-    expect(decideSync(local, remote)).toEqual({
-      action: 'conflict',
-      divergePly: 0,
-    });
-  });
-
-  it('CONFLICTs even when remote is longer but forks earlier (fork wins over length)', () => {
-    const local = logOf('0,0,0', '1,1,1');
-    const remote = logOf('0,0,0', '2,2,2', '3,3,3', '4,4,4');
-    expect(decideSync(local, remote)).toEqual({
-      action: 'conflict',
-      divergePly: 1,
-    });
-  });
-});
-
-describe('decideSyncEpoched — epoch-aware fresh-game (N.2 in-place rematch) decision', () => {
-  it('ADOPTs a HIGHER remote epoch outright — the peer reset first (even from a fresh empty log)', () => {
-    // The peer did the in-place rematch: it is on epoch 1 with a FRESH empty log, we are still on
-    // epoch 0 with the finished game. We must adopt its fresh generation despite the empty log NOT
-    // being an extension of ours — the whole point of the epoch (design N.2 seamless reset).
-    const finished = logOf('0,0,0', '1,1,1', '2,2,2');
-    // The next generation is a fresh game with its own uuid; the epoch (not the uuid)
-    // drives the adopt, so the distinct uuid is irrelevant to the outcome here.
-    expect(decideSyncEpoched(0, finished, 1, emptyLog('gen-1'))).toEqual({ action: 'adopt' });
-  });
-
-  it('ADOPTs a higher remote epoch even when its log would otherwise CONFLICT within an epoch', () => {
-    // Across generations there is no such thing as a fork — a higher epoch is simply the newer game.
-    const local = logOf('0,0,0', '1,1,1');
-    const remote = logOf('9,9,9'); // forks at ply 0 within an epoch, but it is a NEWER epoch
-    expect(decideSyncEpoched(0, local, 1, remote)).toEqual({ action: 'adopt' });
-  });
-
-  it('IGNOREs a LOWER remote epoch — a late in-flight message from the just-finished game', () => {
-    // We reset to epoch 1 (fresh empty log); a straggler full log from the finished epoch-0 game
-    // arrives. If epoch were ignored, empty-is-a-prefix-of-full would ADOPT it and RESURRECT the old
-    // board. The epoch guard IGNOREs it — the exact resurrection the seamless reset must prevent.
-    const fresh = emptyLog('gen-1');
-    const staleFinished = logOf('0,0,0', '1,1,1', '2,2,2');
-    expect(decideSyncEpoched(1, fresh, 0, staleFinished)).toEqual({ action: 'ignore' });
-  });
-
-  it('defers to the same-epoch prefix/hash decision WITHIN one epoch (adopt / ignore / conflict)', () => {
-    const one = logOf('0,0,0');
-    const two = logOf('0,0,0', '1,1,1');
-    const fork = logOf('0,0,0', '2,2,2');
-    // adopt a strict extension at the same epoch
-    expect(decideSyncEpoched(2, one, 2, two)).toEqual({ action: 'adopt' });
-    // ignore a stale prefix at the same epoch
-    expect(decideSyncEpoched(2, two, 2, one)).toEqual({ action: 'ignore' });
-    // a genuine fork at the SAME epoch is still a conflict (not masked by the epoch layer)
-    expect(decideSyncEpoched(2, two, 2, fork)).toEqual({ action: 'conflict', divergePly: 1 });
-  });
-});
 
 describe('normalizeEpoch — the single wire epoch read (codec + receive seam)', () => {
   it('passes a whole non-negative number through unchanged', () => {
@@ -1087,17 +977,20 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
     const hub = new MockRelayHub();
     const ta = new MockTransport(hub, 'peer-a-x');
     const tb = new MockTransport(hub, 'peer-b-x');
-    const a = new SyncEngine(new Game(9, PAIR_UUID), ta, db, () => meta, 'white', ANY_SEED);
-    const bProvisional = new SyncEngine(new Game(9, 'b-prov-x'), tb, db, () => meta, 'black', ANY_SEED);
+    // A is BLACK here: the resumed board's single move is WHITE's, so it is a move A could not have
+    // made — which is exactly what the v3.1 fast-forward requires (design §5). Were A white, the
+    // entry would be one A itself was entitled to add, and refusing it is the point of the rule.
+    const a = new SyncEngine(new Game(9, PAIR_UUID), ta, db, () => meta, 'black', ANY_SEED);
+    const bProvisional = new SyncEngine(new Game(9, 'b-prov-x'), tb, db, () => meta, 'white', ANY_SEED);
     await a.connect('adopt-room-x');
     await bProvisional.connect('adopt-room-x');
 
     // B adopts a game that ALREADY has one white move (the resumed board), then attaches.
     const resumed = Game.fromLog(9, logOf('4,4,4'));
-    const bAdopted = new SyncEngine(resumed, tb, db, () => meta, 'black', ANY_SEED);
+    const bAdopted = new SyncEngine(resumed, tb, db, () => meta, 'white', ANY_SEED);
     bAdopted.attach();
 
-    // attach()'s publish carried B's one-move log to A, which adopts the strict extension → renders.
+    // attach()'s publish carried B's one-move log to A, which fast-forwards onto it → renders.
     expect(a.game().state().pieces['4,4,4']).toBe('white');
     expect(headHash(a.game().log)).toBe(headHash(bAdopted.game().log));
   });
@@ -1130,12 +1023,12 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
     expect(b.game().ply()).toBe(plyBefore);
   });
 
-  it('ANSWERS a peer that is BEHIND with our longer log, and stays silent on an equal one', async () => {
+  it('ANSWERS a peer that is ONE behind with our log, and stays silent on an equal one', async () => {
     // Design §5: "I am ahead → republish, do not adopt". Convergence must not rest on the single
     // unacknowledged QoS-0 publish a returning peer makes: if that one message is lost, nothing
     // retries and both peers sit waiting on each other — issue #45 with the roles swapped (it was
-    // measured failing ~10% of real-relay runs). A peer that is behind publishes its shorter log; we
-    // answer with ours, and it converges on the reply.
+    // measured failing ~10% of real-relay runs). A peer that is one behind publishes its shorter
+    // log; we answer with ours, and it fast-forwards on the reply.
     const hub = new MockRelayHub();
     const mine = new MockTransport(hub, 'ahead');
     const theirs = new MockTransport(hub, 'behind');
@@ -1145,11 +1038,12 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
     theirs.onMessage((m) => heard.push(m));
 
     const eng = new SyncEngine(new Game(9, PAIR_UUID), mine, db, () => meta, 'white', ANY_SEED);
-    eng.receive(toSyncMessage(logOf('0,0,0', '1,1,1', '2,2,2')));
-    expect(eng.game().ply()).toBe(3);
+    eng.place([0, 0, 0]);
+    eng.receive(toSyncMessage(logOf('0,0,0', '1,1,1')));
+    expect(eng.game().ply()).toBe(2);
     heard.length = 0;
 
-    // A log we already contain (they missed two moves) → we answer, and the answer is OUR log.
+    // A log one entry short of ours (our reply is the move they are missing) → we answer with OUR log.
     eng.receive(toSyncMessage(logOf('0,0,0')));
     expect(heard).toHaveLength(1);
     expect(parseSyncMessage(heard[0] as SyncMessage)).toEqual(eng.game().log);
@@ -1170,26 +1064,116 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
     expect(parseSyncMessage(heard[0] as SyncMessage)).toEqual(eng.game().log);
   });
 
-  it('tolerates OUT-OF-ORDER delivery: converges to the longest valid log', async () => {
-    // Deliver a 3-move log, then a stale 1-move log, then the 2-move middle —
-    // in a deliberately scrambled order. Result must be the longest (3 moves).
+  it('does NOT answer — or adopt — a peer TWO behind: it records the divergence instead', async () => {
+    // The turn gate cannot produce a two-move gap between peers playing the same game, so this is
+    // already anomalous: v3 would have quietly served it (or, the other way round, quietly adopted).
+    // v3.1 keeps the game exactly as it is and files the ancestor + diff for the players (V.4b).
+    const hub = new MockRelayHub();
+    const mine = new MockTransport(hub, 'ahead2');
+    const theirs = new MockTransport(hub, 'behind2');
+    await mine.connect('ROOM02');
+    await theirs.connect('ROOM02');
+    const heard: TransportMessage[] = [];
+    theirs.onMessage((m) => heard.push(m));
+
+    const eng = new SyncEngine(new Game(9, PAIR_UUID), mine, db, () => meta, 'white', ANY_SEED);
+    eng.place([0, 0, 0]);
+    eng.receive(toSyncMessage(logOf('0,0,0', '1,1,1')));
+    eng.place([2, 2, 2]);
+    const headBefore = headHash(eng.game().log);
+    heard.length = 0;
+
+    eng.receive(toSyncMessage(logOf('0,0,0')));
+    expect(heard).toEqual([]);
+    expect(headHash(eng.game().log)).toBe(headBefore);
+    expect(eng.status().kind).toBe('ok'); // one-sided: a real history, not a fork — nothing stops
+    const pending = eng.needsResolution();
+    expect(pending?.lca).toEqual({ ply: 1, hash: headHash(logOf('0,0,0')) });
+    expect(pending?.diff.mine.map((m) => m.text)).toEqual([
+      'black plays 1,1,1',
+      'white plays 2,2,2',
+    ]);
+    expect(pending?.diff.theirs).toEqual([]);
+
+    // …and once they catch up, the divergence is over: the record does not linger as a false alarm.
+    eng.receive(toSyncMessage(eng.game().log));
+    expect(eng.needsResolution()).toBeNull();
+  });
+
+  it('REFUSES to adopt a peer TWO ahead, however clean its prefix looks', async () => {
+    const hub = new MockRelayHub();
+    const t = new MockTransport(hub, 'behind3');
+    await t.connect('ROOM03');
+    const eng = new SyncEngine(new Game(9, PAIR_UUID), t, db, () => meta, 'black', ANY_SEED);
+    eng.receive(toSyncMessage(logOf('0,0,0')));
+    expect(eng.game().ply()).toBe(1); // one move: the fast-forward that IS allowed
+
+    eng.receive(toSyncMessage(logOf('0,0,0', '1,1,1', '2,2,2')));
+    expect(eng.game().ply()).toBe(1); // two more: refused, the board does not move
+    expect(eng.game().state().pieces['2,2,2']).toBeUndefined();
+    expect(eng.needsResolution()?.diff.theirs.map((m) => m.text)).toEqual([
+      'black plays 1,1,1',
+      'white plays 2,2,2',
+    ]);
+  });
+
+  it('REJECTS a log that does not replay through the rules engine, leaving the game untouched', async () => {
+    // The relay is publicly writable and a peer's derived state is never trusted (design §5,
+    // Integrity): a one-entry log is fast-forward-SHAPED, but it must still be playable.
+    const hub = new MockRelayHub();
+    const t = new MockTransport(hub, 'bad-log');
+    await t.connect('ROOM04');
+    const eng = new SyncEngine(new Game(9, PAIR_UUID), t, db, () => meta, 'black', ANY_SEED);
+    // Off the 9³ board: legal-looking, unplayable.
+    eng.receive(toSyncMessage(logOf('99,99,99')));
+    expect(eng.game().ply()).toBe(0);
+    expect(eng.game().log.entries).toEqual([]);
+    expect(eng.rejectedLog()).toEqual({
+      uuid: PAIR_UUID,
+      ply: 0,
+      reason: 'illegal-move',
+      detail: 'coordinates out of bounds: 99,99,99',
+    });
+  });
+
+  it('replay-validates a CROSS-GAME adopt too — an unplayable foreign game is refused', async () => {
+    const hub = new MockRelayHub();
+    const t = new MockTransport(hub, 'bad-foreign');
+    await t.connect('ROOM05');
+    const eng = new SyncEngine(new Game(9, PAIR_UUID), t, db, () => meta, 'black', {
+      kind: 'defer',
+    });
+    // Dealer's choice adopts a peer's game wholesale — but only one that actually replays.
+    let foreign = emptyLog('foreign-game');
+    foreign = append(foreign, { type: 'place', node: '0,0,0' });
+    foreign = append(foreign, { type: 'place', node: '0,0,0' });
+    eng.receive(toSyncMessage(foreign));
+    expect(eng.game().log.uuid).toBe(PAIR_UUID);
+    expect(eng.rejectedLog()).toEqual({
+      uuid: 'foreign-game',
+      ply: 1,
+      reason: 'illegal-move',
+      detail: 'node already occupied: 0,0,0',
+    });
+  });
+
+  it('a REPLAY never moves us backward, whatever order messages arrive in', async () => {
+    // Full-state sync is idempotent by construction: re-delivering a log we have already folded in
+    // changes nothing, and a log we are ahead of only draws our own state back out.
     const hub = new MockRelayHub();
     const t = new MockTransport(hub, 'solo');
-    // Connected, because a stale log now draws an ANSWER (we publish our longer log at a peer that
-    // is behind — see `receive`'s `ignore` arm), and in production `receive` is only ever reached
-    // through the connected transport pump. Left unconnected this asserted on a state the engine
-    // cannot actually be in.
     await t.connect('ROOM01');
-    const eng = new SyncEngine(new Game(9, PAIR_UUID),t, db, () => meta, 'white', ANY_SEED);
-    const full = logOf('0,0,0', '1,1,1', '2,2,2');
-    const mid = logOf('0,0,0', '1,1,1');
+    const eng = new SyncEngine(new Game(9, PAIR_UUID),t, db, () => meta, 'black', ANY_SEED);
     const one = logOf('0,0,0');
-    eng.receive(toSyncMessage(mid)); // adopt → 2
-    eng.receive(toSyncMessage(one)); // stale → ignore
-    eng.receive(toSyncMessage(full)); // adopt → 3
-    eng.receive(toSyncMessage(mid)); // stale → ignore
-    expect(eng.game().ply()).toBe(3);
-    expect(headHash(eng.game().log)).toBe(headHash(full));
+    const two = logOf('0,0,0', '1,1,1');
+    eng.receive(toSyncMessage(one)); // fast-forward → 1
+    eng.receive(toSyncMessage(one)); // exact replay → no change
+    expect(eng.game().ply()).toBe(1);
+    eng.place([1, 1, 1]); // our own move → 2
+    eng.receive(toSyncMessage(one)); // one behind → answered, never adopted
+    eng.receive(toSyncMessage(two)); // the same log we already hold → no change
+    expect(eng.game().ply()).toBe(2);
+    expect(headHash(eng.game().log)).toBe(headHash(two));
   });
 
   it('detects a CONFLICT, stops, archives both forks, and surfaces an error state', async () => {
@@ -1263,9 +1247,10 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
     const tb = new MockTransport(hub, 'pb3');
     const ea = new SyncEngine(new Game(9, PAIR_UUID),ta, db, () => meta, 'white', ANY_SEED);
     const eb = new SyncEngine(new Game(9, PAIR_UUID),tb, db, () => meta, 'black', ANY_SEED);
-    // Fork B onto history [3,3,3]; A forks onto [0,0,0] → conflict stops B.
+    // Fork B onto history [3,3,3, 2,2,2]; A forks onto [0,0,0] → conflict stops B.
     ea.placeLocalOnly([0, 0, 0]);
     eb.placeLocalOnly([3, 3, 3]);
+    eb.placeLocalOnly([2, 2, 2]);
     await ea.connect('freeze-room');
     await eb.connect('freeze-room');
     ea.publishState();
@@ -1273,16 +1258,20 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
 
     const frozenHead = headHash(eb.game().log);
     const frozenPly = eb.game().ply();
-    expect(frozenPly).toBe(1); // B is stopped on its own 1-move fork.
+    expect(frozenPly).toBe(2); // B is stopped on its own 2-move fork.
 
-    // Craft a STRICT EXTENSION of B's frozen log ([3,3,3] followed by another move).
-    // If receive() were NOT guarded, decideSync would return `adopt` and REPLACE B's
-    // game with this longer log — mutating the supposedly-frozen game. Deliver it
-    // straight through the PUBLIC receive() seam (the transport pump routes here too).
-    const strictExtension = logOf('3,3,3', '4,4,4');
-    // Sanity: this really is an adopt-shaped message for B's current log (proves the
-    // negative test would fail the guard — not a message decideSync would ignore).
-    expect(decideSync(eb.game().log, strictExtension)).toEqual({ action: 'adopt' });
+    // Craft a message shaped EXACTLY like the one case that auto-adopts: one entry longer
+    // than B's frozen log, with that log as its prefix, and (B being black at an even ply)
+    // white's move to make. If receive() were NOT guarded, this would REPLACE B's game —
+    // mutating the supposedly-frozen game. Deliver it straight through the PUBLIC receive()
+    // seam (the transport pump routes here too).
+    const strictExtension = logOf('3,3,3', '2,2,2', '4,4,4');
+    // Sanity: this really is a fast-forward-shaped message for B's current log (proves the
+    // negative test would fail the guard — not a message the policy would ignore anyway).
+    expect(reconcile(eb.game(), strictExtension, 'black')).toEqual({
+      action: 'fast-forward',
+      reason: 'one-move',
+    });
     eb.receive(toSyncMessage(strictExtension));
 
     // The stopped game did NOT move forward: head and ply are unchanged.
@@ -1459,14 +1448,21 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
     const { a, b } = await pair();
     a.place([0, 0, 0]); // white ply1 (crosses to B)
     expect(b.game().ply()).toBe(1);
-    // B (black — NOT the last mover) applies the AGREED undo of white's move: it must still step back
-    // AND publish, so A adopts the strict extension and both converge to the empty board.
+    // BOTH clients apply the agreed action — that is the #18 flow (`NetSession.applyAcceptedUndoRedo`
+    // runs on each side), and it is what makes the two logs converge: the same event appended to the
+    // same history yields the same hash. B (black — NOT the last mover) steps back unconditionally
+    // and publishes; A does the same.
     b.applyAgreedUndo();
     expect(b.game().ply()).toBe(0);
-    // PROOF-BY-BEHAVIOR (#3): A actually stepped back over the relay — the piece is gone on A too.
+    a.applyAgreedUndo();
+    // PROOF-BY-BEHAVIOR (#3): both boards really stepped back, onto the SAME history.
     expect(a.game().ply()).toBe(0);
     expect(a.game().state().pieces['0,0,0']).toBeUndefined();
     expect(headHash(a.game().log)).toBe(headHash(b.game().log));
+    // A did not auto-adopt the undo B published: an undo belongs to the player whose move it takes
+    // back (white, here A), so B's copy of it is not an entry A may fast-forward onto. Converging on
+    // the identical result clears the record, so no false divergence is left behind.
+    expect(a.needsResolution()).toBeNull();
   });
 
   it('applyAgreedUndo THROWS the core IllegalMove verbatim at ply 0 (nothing to undo; not masked)', async () => {
@@ -1515,11 +1511,12 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
   it('receive() NORMALIZES a directly-injected message with a MISSING epoch to generation 0 (adopts at epoch 0)', async () => {
     const hub = new MockRelayHub();
     const t = new MockTransport(hub, 'no-epoch');
-    const eng = new SyncEngine(new Game(9, PAIR_UUID),t, db, () => meta, 'white', ANY_SEED);
+    const eng = new SyncEngine(new Game(9, PAIR_UUID),t, db, () => meta, 'black', ANY_SEED);
     await eng.connect('no-epoch-room');
     // A legacy-shaped message with NO epoch field (a pre-epoch peer) injected straight into the
     // public receive seam. It must be read as epoch 0 and — since the engine is also at epoch 0 —
-    // adopt normally by the ordinary prefix rule (proves the seam does not trust an unset epoch).
+    // fast-forward by the ordinary same-generation rule (proves the seam does not trust an unset
+    // epoch). The engine is BLACK, so white's single move is the opponent's to make.
     const legacy = { version: SYNC_VERSION, uuid: GAME_UUID, headHash: headHash(logOf('0,0,0')), log: [{ type: 'place', node: '0,0,0' }] } as unknown as SyncMessage;
     eng.receive(legacy);
     expect(eng.game().state().pieces['0,0,0']).toBe('white');
@@ -1539,10 +1536,10 @@ describe('SyncEngine.onChange — the resync notification (Task 6.1, issue #4)',
    * A solo engine (no peer) connected to a mock room, so place()/undo() can publish. receive() is
    * still driven directly to simulate inbound peer messages.
    */
-  async function solo(size = 9): Promise<SyncEngine> {
+  async function solo(size = 9, myColor: Player = 'white'): Promise<SyncEngine> {
     const hub = new MockRelayHub();
     const t = new MockTransport(hub, 'chg');
-    const eng = new SyncEngine(new Game(size, PAIR_UUID),t, db, () => meta, 'white', ANY_SEED);
+    const eng = new SyncEngine(new Game(size, PAIR_UUID),t, db, () => meta, myColor, ANY_SEED);
     await eng.connect('change-room');
     return eng;
   }
@@ -1559,29 +1556,29 @@ describe('SyncEngine.onChange — the resync notification (Task 6.1, issue #4)',
     // This is the core issue #4 gap: the transport pump mutates the game silently. onChange must
     // fire on adopt so the app re-renders the peer's move (observable: the listener saw the change
     // AND the adopted piece is really on the board).
-    const eng = await solo();
+    const eng = await solo(9, 'black');
     let fires = 0;
     let seenPly = -1;
     eng.onChange(() => {
       fires += 1;
       seenPly = eng.game().ply();
     });
-    eng.receive(toSyncMessage(logOf('0,0,0', '1,1,1')));
+    eng.receive(toSyncMessage(logOf('0,0,0')));
     expect(fires).toBe(1);
-    expect(seenPly).toBe(2);
+    expect(seenPly).toBe(1);
     expect(eng.game().state().pieces['0,0,0']).toBe('white');
   });
 
   it('does NOT fire when IGNORING a stale/equal replay (no change happened)', async () => {
     // A replay is a genuine no-op: firing here would falsely tell the scene state changed.
-    const eng = await solo();
-    eng.receive(toSyncMessage(logOf('0,0,0', '1,1,1'))); // adopt → 2
+    const eng = await solo(9, 'black');
+    eng.receive(toSyncMessage(logOf('0,0,0'))); // fast-forward → 1
     let fires = 0;
     eng.onChange(() => (fires += 1));
-    eng.receive(toSyncMessage(logOf('0,0,0'))); // stale prefix → ignore
-    eng.receive(toSyncMessage(eng.game().log)); // equal → ignore
+    eng.receive(toSyncMessage(emptyGameLog())); // one behind → we answer, our game is untouched
+    eng.receive(toSyncMessage(eng.game().log)); // equal → in-sync
     expect(fires).toBe(0);
-    expect(eng.game().ply()).toBe(2);
+    expect(eng.game().ply()).toBe(1);
   });
 
   it('fires on a CONFLICT (so the UI reflects the stopped game)', async () => {
@@ -1704,13 +1701,13 @@ describe('SyncEngine.onMessage — the pump validates + routes the tagged union'
     const seen: (ProposalMessage | ResponseMessage)[] = [];
     b.onMessage((m) => seen.push(m));
     // Simulate a PRE-tagged-union peer: publish an un-kinded {version,headHash,log}.
-    const legacy = toSyncMessage(logOf('0,0,0', '1,1,1')) as unknown as Record<string, unknown>;
+    const legacy = toSyncMessage(logOf('0,0,0')) as unknown as Record<string, unknown>;
     const { kind: _dropped, ...unKinded } = legacy;
     void _dropped;
     ta.publish(unKinded as unknown as Parameters<typeof ta.publish>[0]);
-    // B adopted the legacy sync payload — its board reflects the two moves…
+    // B (black) fast-forwarded onto the legacy sync payload — its board reflects white's move…
     expect(b.game().state().pieces['0,0,0']).toBe('white');
-    expect(b.game().ply()).toBe(2);
+    expect(b.game().ply()).toBe(1);
     // …and it was NOT misrouted to the handshake seam.
     expect(seen).toEqual([]);
   });
@@ -2175,7 +2172,7 @@ describe('SyncEngine.receive — the seed gate on a FOREIGN game (design §3, #4
   });
 
   it('the gate applies ACROSS generations too — a higher epoch is not a licence to push a game', () => {
-    // `decideSyncEpoched` adopts a higher-epoch log outright, so without the gate stamping any epoch on
+    // `reconcileEpoched` adopts a higher-epoch log outright, so without the gate stamping any epoch on
     // a payload would bypass every rule. Both shapes are covered, because an EMPTY foreign log at a
     // high epoch is the one that slips past a seed check (`new` and `defer` both accept empty games):
     // it silently replaced a live board until the rule stopped asking only about the seed.

@@ -83,7 +83,7 @@ export class Game {
   static fromLog(size: number, log: EventLog): Game {
     const game = new Game(size, log.uuid);
     for (const entry of log.entries) {
-      game.applyEvent(entry.event);
+      game.apply(entry.event);
     }
     return game;
   }
@@ -143,7 +143,7 @@ export class Game {
    *   log is left untouched so the hash chain only records committed events.
    */
   place(coords: Coord): void {
-    this.applyEvent({ type: 'place', node: keyOf(coords) });
+    this.apply({ type: 'place', node: keyOf(coords) });
   }
 
   /**
@@ -152,7 +152,7 @@ export class Game {
    * @throws {IllegalMove} if there is nothing to undo (already at ply 0).
    */
   undo(): void {
-    this.applyEvent({ type: 'undo' });
+    this.apply({ type: 'undo' });
   }
 
   /**
@@ -161,15 +161,27 @@ export class Game {
    * @throws {IllegalMove} if there is nothing to redo (no undone tail remains).
    */
   redo(): void {
-    this.applyEvent({ type: 'redo' });
+    this.apply({ type: 'redo' });
   }
 
   /**
-   * Fold a single event into the game, mutating the cache and cursor and — only
+   * Fold a single log EVENT into the game, mutating the cache and cursor and — only
    * on success — extending the log. This is the one place the fold logic lives,
-   * shared by the live methods and by `fromLog` replay so both stay identical.
+   * shared by the live methods ({@link place}/{@link undo}/{@link redo}) and by
+   * {@link fromLog} replay so both stay identical.
+   *
+   * Public because replaying an event log ENTRY-BY-ENTRY is a real caller need outside
+   * this class: `net/reconcile.ts` validates a peer's log by folding it through these
+   * very rules and must know WHICH entry first fails (`fromLog` throws without saying
+   * where), and `net/logDiff.ts` needs the pre-move `turn` at each entry to name the
+   * mover. Both would otherwise re-implement this dispatch — a second copy of the fold
+   * is exactly the divergence risk this method exists to prevent.
+   *
+   * @throws {IllegalMove} if the event is illegal in the current state (occupied /
+   *   off-board / already-won `place`, `undo` at ply 0, `redo` with no tail). The log
+   *   is left untouched, so the hash chain only ever records committed events.
    */
-  private applyEvent(event: Event): void {
+  apply(event: Event): void {
     switch (event.type) {
       case 'place': {
         const coords = coordsOf(event.node);

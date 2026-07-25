@@ -229,8 +229,8 @@ export interface NetHooks {
   getNetHeadHash(): string | null;
   /**
    * Re-broadcast the session's current authoritative log to the room (Task 6.7). Idempotent and safe
-   * anytime: adopting an already-delivered log is a proven no-op on the receiver (`decideSync` IGNOREs
-   * a prefix), so this never moves a peer backward — it only fills the LIVE relay's non-retained
+   * anytime: a log the receiver already holds is a proven no-op there (`reconcile` reports `in-sync`
+   * on an equal head, and answers with its own log when it is ahead), so this never moves a peer backward — it only fills the LIVE relay's non-retained
    * subscription gap (a move published before the peer's subscription was active is otherwise dropped).
    * A no-op with no live engine. This is the real "resync" capability a reconnect button would use; the
    * two-context live-relay e2e drives it to defeat that gap deterministically without weakening the proof.
@@ -461,8 +461,8 @@ export interface SceneHandle {
   getHeadHash(): string;
   /**
    * Re-broadcast the networked session's current authoritative log to the room (Task 6.7). A no-op
-   * offline (no live session). Idempotent by design (adopting an already-received log is a receiver
-   * no-op via `decideSync`), so it never moves a peer backward — it only fills the LIVE relay's
+   * offline (no live session). Idempotent by design (a log the receiver already holds is a no-op there
+   * — `reconcile` reports `in-sync`), so it never moves a peer backward — it only fills the LIVE relay's
    * non-retained subscription gap, letting a two-context live-relay e2e converge deterministically.
    */
   resync(): void;

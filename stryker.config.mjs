@@ -42,8 +42,10 @@
  *   - config: the two `readOverride` early-returns whose fall-through yields the same
  *     `undefined`;
  *   - sync.ts: error-MESSAGE string literals (the `SyncError` TYPE and its occurrence
- *     ARE asserted; only the human-readable message text is not) and the `case 'ignore'`
- *     no-op arm;
+ *     ARE asserted; only the human-readable message text is not). Other survivors in this file
+ *     live in the wire codec and the conflict-archival path; they are NOT characterised here
+ *     (nobody has analysed them), and the current set is whatever `npm run mutate` reports —
+ *     never a frozen list in this comment;
  *   - winLineLayout.ts: the empty `drawn` array passed to `generatePartialLine` (`[]` →
  *     `["Stryker was here"]`). The win line is never pre-registered, so any `drawn` list
  *     lacking the segment's canonical id yields identical behavior — an equivalent mutant
@@ -207,6 +209,14 @@ export default {
     // supplies the signal and performs the publish, so it is mutation-gated like the other pure net
     // logic; that glue is proven by the mock-transport tests + `npm run scenario:issue45`.
     'src/net/republish.ts',
+    // Pure v3.1 RECONCILIATION policy + its divergence renderer (Task V.4a, epic #47 — absorbs #38):
+    // the narrow one-move fast-forward and its entitlement rule, the republish mirror, the
+    // last-common-ancestor walk, the replay+hash-chain validation of any log offered for adoption,
+    // and the player-readable diff the resolution handshake (V.4b) will show. No transport, DOM or
+    // clock — the SyncEngine glue that consumes the decision is excluded exactly like the rest of
+    // the IO boundary, and is covered by the mock-transport tests + `npm run scenario:issue45`.
+    'src/net/reconcile.ts',
+    'src/net/logDiff.ts',
     '!src/net/**/*.test.ts',
     // Pure render resolvers only (THREE-free). (the net test-exclusion above covers notify.test.ts) The Three.js scene GLUE (`scene.ts`,
     // `lines.ts`) is NOT mutated — it is an IO boundary verified by Playwright (build
