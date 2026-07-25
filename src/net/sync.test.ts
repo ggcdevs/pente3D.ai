@@ -1100,6 +1100,75 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
     expect(eng.needsResolution()).toBeNull();
   });
 
+  it('a RESET drops the divergence with the game it was about — never a prompt for a game we left', async () => {
+    // The head-equality clear can never see this one: the heads of two different games never meet,
+    // so a record kept only until "the histories agree" would outlive the game forever. The V.4b
+    // panel renders exactly this record, and it must not offer take-mine / take-theirs / rewind for
+    // a game this client is no longer on.
+    const hub = new MockRelayHub();
+    const t = new MockTransport(hub, 'reset-clears');
+    await t.connect('ROOM-RESET-CLEARS');
+    const eng = new SyncEngine(new Game(9, PAIR_UUID), t, db, () => meta, 'white', ANY_SEED);
+    eng.place([0, 0, 0]);
+    eng.receive(toSyncMessage(logOf('0,0,0', '1,1,1', '2,2,2'))); // two ahead → a divergence
+    expect(eng.needsResolution()?.theirs.uuid).toBe(PAIR_UUID);
+
+    eng.resetGame(new Game(9, RESET_UUID), 'black');
+
+    expect(eng.game().uuid).toBe(RESET_UUID);
+    expect(eng.needsResolution()).toBeNull();
+  });
+
+  it('CROSSING onto another game drops the divergence too (adopt, not just reset)', async () => {
+    // The same staleness by the other route: the pair's next generation arrives on the wire and we
+    // adopt it. `adopt` replaces the game wholesale, so a record keyed to the old one would survive
+    // every subsequent mutation of the new one.
+    const hub = new MockRelayHub();
+    const t = new MockTransport(hub, 'cross-clears');
+    await t.connect('ROOM-CROSS-CLEARS');
+    const eng = new SyncEngine(new Game(9, PAIR_UUID), t, db, () => meta, 'white', ANY_SEED);
+    eng.place([0, 0, 0]);
+    eng.receive(toSyncMessage(logOf('0,0,0', '1,1,1', '2,2,2')));
+    expect(eng.needsResolution()?.theirs.uuid).toBe(PAIR_UUID);
+
+    eng.receive(toSyncMessage(emptyLog(RESET_UUID), 1)); // our own next generation, off the wire
+
+    expect(eng.game().uuid).toBe(RESET_UUID);
+    expect(eng.needsResolution()).toBeNull();
+  });
+
+  it('a local move during an OPEN divergence is still legal — and ESCALATES it to a stopped fork', async () => {
+    // CHARACTERIZATION of the window the `TODO(V.4b)` in `receive` names: a one-sided divergence
+    // neither adopts nor stops the game, and nothing gates local play while it is open. Playing on
+    // is therefore accepted, and it converts a recoverable one-sided divergence into a genuine fork
+    // — which DOES stop the game and archive both histories. Under v3 this log was auto-adopted, so
+    // this outcome did not exist; pinned here so V.4b changes it deliberately rather than by
+    // accident.
+    const hub = new MockRelayHub();
+    const t = new MockTransport(hub, 'open-divergence');
+    await t.connect('ROOM-OPEN-DIVERGENCE');
+    const eng = new SyncEngine(new Game(9, PAIR_UUID), t, db, () => meta, 'black', ANY_SEED);
+    eng.receive(toSyncMessage(logOf('0,0,0'))); // white's move: the one fast-forward that IS allowed
+    const twoAhead = logOf('0,0,0', '1,1,1', '2,2,2');
+    eng.receive(toSyncMessage(twoAhead)); // two ahead → recorded, nothing adopted, nothing stopped
+    expect(eng.needsResolution()?.diff.theirs.map((m) => m.text)).toEqual([
+      'black plays 1,1,1',
+      'white plays 2,2,2',
+    ]);
+    expect(eng.status().kind).toBe('ok');
+
+    // The window: the move is ACCEPTED while the divergence is open (no gate, no throw).
+    eng.place([5, 5, 5]);
+    expect(eng.game().ply()).toBe(2);
+    expect(eng.status().kind).toBe('ok');
+
+    // …and now the peer's very same log is a FORK — both sides played on past the ancestor.
+    eng.receive(toSyncMessage(twoAhead));
+    expect(eng.status().kind).toBe('conflict');
+    await eng.whenSettled();
+    expect(eng.conflictForks()?.theirs).toEqual(twoAhead);
+  });
+
   it('REFUSES to adopt a peer TWO ahead, however clean its prefix looks', async () => {
     const hub = new MockRelayHub();
     const t = new MockTransport(hub, 'behind3');
@@ -1175,6 +1244,49 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
     eng.receive({ ...toSyncMessage(logOf('0,0,0', '1,1,1', '2,2,2', '3,3,3')), epoch: 4 });
     expect(eng.game().ply()).toBe(3);
     expect(eng.epoch()).toBe(5);
+  });
+
+  it('a FORGED epoch pins the counter — and the pair’s own next generation still crosses it', async () => {
+    // The cost of converging on a sender-supplied number, stated honestly: ONE well-formed message
+    // that adopts nothing (`{...ourOwnLog, epoch: 999}`, exactly what any peer on the publicly
+    // writable relay can send) permanently raises our counter. What must NOT follow is deafness —
+    // the pair's genuine rematch arrives at a LOW generation, and a crossing gated on out-ranking
+    // our counter would drop it as stale, leaving the two peers on two games forever.
+    const hub = new MockRelayHub();
+    const t = new MockTransport(hub, 'epoch-pin');
+    await t.connect('ROOM-EPOCH-PIN');
+    const eng = new SyncEngine(new Game(9, PAIR_UUID), t, db, () => meta, 'black', ANY_SEED);
+    eng.receive(toSyncMessage(logOf('0,0,0')));
+
+    eng.receive({ ...toSyncMessage(eng.game().log), epoch: 999 });
+    expect(eng.epoch()).toBe(999); // the number is taken…
+    expect(eng.game().ply()).toBe(1); // …and buys no history
+
+    eng.receive(toSyncMessage(emptyLog(RESET_UUID), 1)); // the pair's real rematch, generation 1
+    expect(eng.game().uuid).toBe(RESET_UUID);
+    expect(eng.game().ply()).toBe(0);
+    expect(eng.refusedGame()).toBeNull();
+  });
+
+  it('…and a pinned peer RE-CONVERGES with its pair over the relay: same board, same generation', async () => {
+    // The end-to-end half, on two real engines over the mock relay: A is pinned at 999, B rematches
+    // at generation 1, and the pair must end up on ONE board at ONE generation — not split by the
+    // integer. Proof is B's move appearing on A's board, not a log line.
+    const { a, b } = await pair();
+    a.place([0, 0, 0]);
+    a.receive({ ...toSyncMessage(a.game().log), epoch: 999 });
+    expect(a.epoch()).toBe(999);
+    expect(b.epoch()).toBe(0);
+
+    // B rematches (colours alternate: B was black, so it takes white in the fresh generation).
+    b.resetGame(new Game(9, RESET_UUID), 'white');
+    expect(a.game().uuid).toBe(RESET_UUID); // A crossed onto it off the wire
+    a.reseat('black'); // the seat swap the session performs on a rematch
+
+    b.place([2, 2, 2]);
+    expect(a.game().state().pieces['2,2,2']).toBe('white');
+    expect(headHash(a.game().log)).toBe(headHash(b.game().log));
+    expect(a.epoch()).toBe(b.epoch());
   });
 
   it('REJECTS a log that does not replay through the rules engine, leaving the game untouched', async () => {
@@ -2349,9 +2461,10 @@ describe('SyncEngine.receive — the AGREED game and our own next generation (de
     expect(eng.refusedGame()).toBeNull();
   });
 
-  it('a game claiming our derivation at our CURRENT generation is NOT a next generation — refused', () => {
-    // A reset only ever INCREMENTS the generation, so "derived, at the epoch we are already in" is not
-    // our next game. Without the higher-generation requirement it would be a free board wipe.
+  it('a game claiming our derivation at generation ZERO is not a generation at all — refused', () => {
+    // A generation IS a reset, and a reset only ever increments from 0, so nothing is ever derived at
+    // generation 0. Without that floor, `rematchGameUuid(ours, 0)` — which any peer can compute from
+    // the uuid we publish — would be a free board wipe on a session that has never rematched.
     const eng = engineWith({ kind: 'resume', uuid: MINE, headHash: 'hh' }, logFor(MINE, '4,4,4'));
     eng.agreeOn(MINE);
     const forged = rematchGameUuid(MINE, 0);
@@ -2359,6 +2472,30 @@ describe('SyncEngine.receive — the AGREED game and our own next generation (de
     expect(eng.game().uuid).toBe(MINE);
     expect(eng.game().ply()).toBe(1);
     expect(eng.refusedGame()).toEqual({ uuid: forged, reason: 'game-mismatch' });
+  });
+
+  it('our own next generation crosses at ANY generation above 0 — identity decides, not a race of counters', async () => {
+    // The counter is sender-supplied (see the forged-epoch tests above), so making the crossing wait
+    // for a peer to OUT-RANK it made one forged message enough to strand us: the pair's real rematch
+    // arrives at a low generation and would be dropped as stale. The derivation is the gate — it is
+    // computed from the game WE are on — so a generation at or below our counter still crosses…
+    // Connected, because a message from below the (forged) generation draws a republish.
+    const eng = await connectedEngineWith({ kind: 'resume', uuid: MINE, headHash: 'hh' }, logFor(MINE, '4,4,4'));
+    eng.agreeOn(MINE);
+    eng.receive(toSyncMessage(eng.game().log, 500)); // our own log back at a forged generation
+    expect(eng.epoch()).toBe(500);
+    eng.receive(toSyncMessage(emptyLog(rematchGameUuid(MINE, 1)), 1));
+    expect(eng.game().uuid).toBe(rematchGameUuid(MINE, 1));
+    expect(eng.refusedGame()).toBeNull();
+
+    // …while a SIBLING of the game we left does not follow us: now that we are on generation 1, the
+    // derivation is taken from ITS uuid, so `rematchGameUuid(MINE, 2)` — derived from the game we
+    // left — is just another stranger, however high the generation it wears.
+    const sibling = rematchGameUuid(MINE, 2);
+    eng.receive(toSyncMessage(logFor(sibling, '0,0,0'), 501));
+    expect(eng.game().uuid).toBe(rematchGameUuid(MINE, 1));
+    expect(eng.game().ply()).toBe(0);
+    expect(eng.refusedGame()).toEqual({ uuid: sibling, reason: 'game-mismatch' });
   });
 
   it('an UNRELATED empty game at a higher generation is refused — only OUR derivation may use that road', () => {

@@ -10,6 +10,7 @@ import {
 } from '../core/eventLog';
 import { Game } from '../core/game';
 import { coordsOf } from '../core/coords';
+import type { Player } from '../core/gameState';
 import {
   isFork,
   lastCommonAncestor,
@@ -429,38 +430,142 @@ describe('property: nothing but the one narrow case ever auto-adopts', () => {
   const POOL = ['0,0,0', '1,1,1', '2,2,2', '3,3,3', '4,4,4', '0,4,2', '4,0,3', '2,0,4'];
 
   /**
-   * A random reconciliation input: my own (legal) game, a peer log built from a prefix of mine plus
-   * an arbitrary tail, and my seat. The tail is raw-appended, so it may be illegal — which is
-   * exactly what a divergent peer may send.
+   * EVERY entry kind a peer may hold beyond my history — not just placements. An `undo` / `redo` is
+   * an appended event that reaches a peer exactly like a move does (#18), and its entitlement rule is
+   * the OPPOSITE turn from a placement's, so a placements-only domain leaves the subtlest half of the
+   * policy untested — and makes any "…and it is their turn" oracle simply false.
+   */
+  const tailEvent = fc.oneof(
+    fc.constantFrom(...POOL).map((node): Event => ({ type: 'place', node })),
+    fc.constant<Event>({ type: 'undo' }),
+    fc.constant<Event>({ type: 'redo' }),
+  );
+
+  /**
+   * A random reconciliation input: my own (legal) game — optionally with its last move undone, so my
+   * committed-move count and my ENTRY count part company — a peer log built from a prefix of mine plus
+   * an arbitrary tail, and my seat. The tail is raw-appended, so it may be illegal, out of turn, or
+   * both: exactly what a divergent peer may send.
    */
   const scenario = fc
     .tuple(
       fc.integer({ min: 0, max: 5 }),
-      fc.integer({ min: 0, max: 5 }),
-      fc.array(fc.constantFrom(...POOL), { minLength: 0, maxLength: 3 }),
-      fc.constantFrom<'white' | 'black'>('white', 'black'),
+      fc.boolean(),
+      fc.integer({ min: 0, max: 6 }),
+      fc.array(tailEvent, { minLength: 0, maxLength: 3 }),
+      fc.constantFrom<Player>('white', 'black'),
     )
-    .map(([mineLen, sharedRaw, tail, myColor]) => {
+    .map(([mineLen, undoLast, sharedRaw, tail, myColor]) => {
       const mine = gameOf(...POOL.slice(0, mineLen));
-      const shared = Math.min(sharedRaw, mineLen);
+      if (undoLast && mine.ply() > 0) mine.undo();
+      const shared = Math.min(sharedRaw, mine.log.entries.length);
       const base: EventLog = { uuid: UUID, entries: mine.log.entries.slice(0, shared) };
-      const theirs = eventsOnto(
-        base,
-        tail.map((node): Event => ({ type: 'place', node })),
-      );
+      const theirs = eventsOnto(base, tail);
       return { mine, theirs, myColor };
     });
 
-  it('fast-forwards EXACTLY when they are one entry longer, mine is their prefix, and it is their turn', () => {
+  /**
+   * Which SEAT owns committed move number `moveIndex`, derived from the RULES of the game rather than
+   * re-stated from the implementation: white opens and the seats alternate, so move `n` is white's iff
+   * `n` is even.
+   */
+  function moverOfMove(moveIndex: number): Player {
+    return moveIndex % 2 === 0 ? 'white' : 'black';
+  }
+
+  /**
+   * Whose entry a peer's extra `event` was, judged against MY OWN log's committed-move count `ply` —
+   * `null` when it is nobody's. Each kind touches a different move:
+   *
+   *  - `place` appends move number `ply`;
+   *  - `redo` re-applies move number `ply` (the one an `undo` stepped off);
+   *  - `undo` takes back move number `ply - 1` — and takes back NOTHING when `ply` is 0.
+   */
+  function ownerOfEntry(ply: number, event: Event): Player | null {
+    if (event.type === 'undo') return ply === 0 ? null : moverOfMove(ply - 1);
+    return moverOfMove(ply);
+  }
+
+  it('fast-forwards EXACTLY when they hold ONE entry beyond my history and it was the OPPONENT’s', () => {
     fc.assert(
       fc.property(scenario, ({ mine, theirs, myColor }) => {
-        // The rule re-derived from primitives, independently of the implementation: entry-hash
-        // equality across my whole log, a lead of exactly one, and a local turn that is not mine.
+        // The shape, re-derived from the chain primitives: entry-hash equality across my whole log,
+        // and a lead of exactly one.
         const oneLonger = theirs.entries.length === mine.log.entries.length + 1;
         const minePrefix = mine.log.entries.every((e, i) => theirs.entries[i]?.hash === e.hash);
-        const theirTurn = mine.state().turn !== myColor;
-        const expected = oneLonger && minePrefix && theirTurn;
-        expect(reconcile(mine, theirs, myColor).action === 'fast-forward').toBe(expected);
+        const fastForwarded = reconcile(mine, theirs, myColor).action === 'fast-forward';
+        if (!oneLonger || !minePrefix) {
+          expect(fastForwarded).toBe(false);
+          return;
+        }
+        const owner = ownerOfEntry(mine.ply(), theirs.entries[mine.log.entries.length]!.event);
+        if (owner === null) {
+          // An `undo` with no move to take back is nobody's, so "was it theirs?" has no answer and
+          // this input is outside the claim. What must still hold is the SAFETY half: whatever the
+          // policy decides, such a log can never actually land, because it does not replay.
+          expect(validateAdoptable(SIZE, theirs).ok).toBe(false);
+          return;
+        }
+        expect(fastForwarded).toBe(owner !== myColor);
+      }),
+      { numRuns: 500 },
+    );
+  });
+
+  it('reaches all four decisions — and fast-forwards all THREE entry kinds — over its own domain', () => {
+    // A property is only as strong as the inputs it actually meets: a domain that never reaches the
+    // automatic path would pass the claim above vacuously, and a placements-only domain would leave
+    // the undo/redo entitlement rule untested while looking thorough. Fixed seed, so this is a
+    // statement about the generator rather than a coin flip.
+    const samples = fc.sample(scenario, { numRuns: 500, seed: 20260725 });
+    const actions = new Set(samples.map(({ mine, theirs, myColor }) => reconcile(mine, theirs, myColor).action));
+    expect([...actions].sort()).toEqual([
+      'fast-forward',
+      'in-sync',
+      'needs-resolution',
+      'republish',
+    ]);
+    const adoptedKinds = new Set(
+      samples
+        .filter(({ mine, theirs, myColor }) => reconcile(mine, theirs, myColor).action === 'fast-forward')
+        .map(({ mine, theirs }) => theirs.entries[mine.log.entries.length]!.event.type),
+    );
+    expect([...adoptedKinds].sort()).toEqual(['place', 'redo', 'undo']);
+  });
+
+  it('never adopts — and never answers — a log of ANOTHER game, whatever shape it arrives in', () => {
+    // The same shapes, re-chained onto a different game's genesis: every one of them must land in
+    // resolution with NO ancestor, including the shapes that fast-forward or republish within one
+    // game. This is the whole cross-identity domain the shape-based properties cannot reach.
+    fc.assert(
+      fc.property(scenario, ({ mine, theirs, myColor }) => {
+        const foreign = eventsOnto(
+          emptyLog(OTHER_UUID),
+          theirs.entries.map((entry) => entry.event),
+        );
+        const decision = reconcile(mine, foreign, myColor);
+        expect(decision.action).toBe('needs-resolution');
+        if (decision.action !== 'needs-resolution') throw new Error('expected needs-resolution');
+        expect(decision.lca).toEqual({ ply: 0, hash: null });
+      }),
+      { numRuns: 500 },
+    );
+  });
+
+  it('an epoch only ever REFUSES: it never turns a decision into an adopt, at any pair of generations', () => {
+    // The other domain a same-generation property cannot see. `epoch` is sender-supplied, so the
+    // claim that matters is one-sided: below our generation it refuses outright, and at or above it
+    // it changes NOTHING — in particular it can never manufacture a `fast-forward`.
+    fc.assert(
+      fc.property(scenario, fc.nat(20), fc.nat(20), ({ mine, theirs, myColor }, mineEpoch, theirEpoch) => {
+        const epoched = reconcileEpoched(mineEpoch, mine, theirEpoch, theirs, myColor);
+        const plain = reconcile(mine, theirs, myColor);
+        if (theirEpoch < mineEpoch) {
+          expect(epoched).toEqual({ action: 'republish', reason: 'superseded-generation' });
+        } else {
+          expect(epoched).toEqual(plain);
+        }
+        if (epoched.action === 'fast-forward') expect(plain.action).toBe('fast-forward');
       }),
       { numRuns: 500 },
     );

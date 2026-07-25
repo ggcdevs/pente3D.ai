@@ -912,6 +912,9 @@ export class SyncEngine {
    * the observable proof that a divergence beyond the turn gate's one-move cap was refused rather
    * than silently adopted (a refusal deliberately leaves the game untouched, so there is nothing
    * else to observe).
+   *
+   * It describes a LIVE disagreement about the game we are ON: it is dropped as soon as the two
+   * histories agree again OR we leave that game altogether ({@link divergenceIsOver}).
    */
   private _resolution: {
     readonly theirs: EventLog;
@@ -974,6 +977,9 @@ export class SyncEngine {
    * The last divergence that needs the players to choose (peer log + last common ancestor +
    * readable diff), or `null` if none has happened. See {@link _resolution}; the resolution
    * PROTOCOL is Task V.4b.
+   *
+   * An open record does NOT stop the game: local play stays legal while it is open, and a local move
+   * escalates a one-sided divergence into a stopped fork — see the `TODO(V.4b)` in {@link receive}.
    */
   needsResolution(): {
     readonly theirs: EventLog;
@@ -1052,15 +1058,30 @@ export class SyncEngine {
 
   /** Notify every change subscriber (after a local or remote game mutation). */
   private emitChange(): void {
-    // A recorded divergence describes a disagreement that is LIVE. Any mutation of our game may have
-    // ended it — the routine case being the #18 mutual undo, where the peer publishes its copy of
-    // the agreed step-back (not an entry we may fast-forward onto) and we then apply our own,
-    // landing on the identical history. Re-checked here rather than left to go stale, so
-    // {@link needsResolution} never reports a divergence that is already over.
-    if (this._resolution !== null && headHash(this._game.log) === headHash(this._resolution.theirs)) {
+    if (this._resolution !== null && this.divergenceIsOver(this._resolution.theirs)) {
       this._resolution = null;
     }
     for (const listener of this.changeListeners) listener();
+  }
+
+  /**
+   * Whether the divergence recorded against `theirs` has ENDED — checked on every mutation of our
+   * game (see {@link emitChange}) rather than left to go stale, because a divergence outlives its
+   * own record in two different ways:
+   *
+   *  - **we agreed again** on the game it was about: the routine case is the #18 mutual undo, where
+   *    the peer publishes its copy of the agreed step-back (not an entry we may fast-forward onto)
+   *    and we then apply our own, landing on the identical history;
+   *  - **we LEFT the game it was about** — a rematch ({@link resetGame}) or a crossing onto another
+   *    game ({@link adopt}). A head comparison can never see this one: the heads of two different
+   *    games never meet, so a record keyed only on "the histories agree" would report a divergence
+   *    about a game this client is no longer on, forever. That record is what the V.4b divergence
+   *    panel renders, so it would prompt for a resolution to a game that is gone.
+   */
+  private divergenceIsOver(theirs: EventLog): boolean {
+    return (
+      theirs.uuid !== this._game.log.uuid || headHash(this._game.log) === headHash(theirs)
+    );
   }
 
   /** The engine status — `ok`, or `conflict` once a fork stops the game. */
@@ -1313,12 +1334,26 @@ export class SyncEngine {
     const decision = reconcileEpoched(this._epoch, this._game, remoteEpoch, remote, this.myColor);
     // Converge the GENERATION COUNTER on a message about the game we are on — never backward, and
     // never as an authority over history (the decision above is already made, from our own epoch).
-    // One game is one generation: a reset re-derives the uuid, so two peers on the SAME uuid holding
-    // different epochs are not in different generations, they are one peer whose counter ran ahead
-    // through an adoption (`adopt` carries a crossed-onto game's epoch with it). Left unconverged,
+    // Two peers on the SAME uuid holding different counters are not in different generations: they
+    // are one peer whose counter ran ahead through an adoption (`adopt` carries a crossed-onto
+    // game's epoch with it) or through a reset into a game the other already held. Left unconverged,
     // the lower peer's every publish comes back as `superseded-generation` and its moves are never
-    // adopted — the same brick the epoch rule exists to prevent, in the mirror direction. Converging
-    // the NUMBER costs nothing precisely because the number no longer authorizes an adopt.
+    // adopted — the same brick the epoch rule exists to prevent, in the mirror direction.
+    //
+    // This DOES take a sender-supplied number into our own state, and on a publicly-writable relay
+    // one message can therefore pin the counter arbitrarily high (`{...ourOwnLog, epoch: 999}`). Two
+    // things bound what that number can then do, and both are asserted in the tests:
+    //
+    //  - it authorizes NOTHING. Every adopt is gated on identity — the one-move rule within this
+    //    game ({@link reconcileEpoched}), the derived uuid across generations
+    //    ({@link isOwnNextGeneration}) — and neither consults this counter to say yes.
+    //  - what it REFUSES is self-healing. An inflated counter makes an honest peer's same-game
+    //    messages read as `superseded-generation`, and the answer to that is a republish carrying
+    //    OUR number back, which the peer converges onto by this same line; the pair meets on the max
+    //    rather than deadlocking. (It is precisely to keep it self-healing that
+    //    {@link isOwnNextGeneration} no longer requires a peer to OUT-RANK this counter: a crossing
+    //    is not self-healing, so a pinned counter must not be able to make us deaf to the pair's own
+    //    next generation.)
     this._epoch = Math.max(this._epoch, remoteEpoch);
     switch (decision.action) {
       case 'in-sync':
@@ -1350,6 +1385,16 @@ export class SyncEngine {
         // The ancestor + diff are recorded so the players can be shown where the two histories part
         // company and choose a resolution — the V.4b handshake (take-mine / take-theirs /
         // rewind-to-LCA) is what will act on this record.
+        //
+        // TODO(V.4b): a ONE-SIDED divergence recorded here neither adopts nor stops the game, and
+        // nothing gates local play while it is open — {@link place} still succeeds and {@link status}
+        // still reads `ok`. The next local move therefore turns a recoverable one-sided divergence
+        // into a genuine FORK, which does stop the game and archive both histories (pinned by the
+        // characterization test "a local move during an OPEN divergence is still legal — and
+        // ESCALATES it to a stopped fork"). That window is a real behaviour change from v3, where
+        // this log was auto-adopted and the outcome did not exist; it is left open deliberately
+        // because the resolution PROTOCOL that should close it (blocking play, or resolving before
+        // the next move) is V.4b's, and inventing a gate here would pre-empt that design.
         this._resolution = { theirs: remote, lca: decision.lca, diff: decision.diff };
         if (isFork(decision.diff)) {
           // A genuine fork additionally STOPS the game and archives both histories, exactly as
@@ -1410,12 +1455,19 @@ export class SyncEngine {
    *  3. **Whatever the {@link GameGate} allows** — the AGREED game only once entry has resolved, else
    *     the player's own seed, and then only while we hold no history of our own (`acceptsCrossing`).
    *
-   * Anything else is REFUSED honestly: the game is left EXACTLY as it was (no adopt, no conflict-stop
-   * — a foreign game is not a fork of ours, and letting it stop our game would hand any publisher a
-   * kill switch) and the typed reason is recorded on {@link refusedGame} so the refusal is observable
-   * rather than a silent drop. A message that could not teach us anything anyway — an empty foreign log
-   * at or below our generation — is neither adopted nor recorded as a refusal: ordinary entry traffic
-   * is not a refusal, and reporting it as one would bury a real one in noise.
+   * Anything else that reaches a DECISION is refused honestly: the game is left EXACTLY as it was (no
+   * adopt, no conflict-stop — a foreign game is not a fork of ours, and letting it stop our game would
+   * hand any publisher a kill switch) and the typed reason is recorded on {@link refusedGame} so the
+   * refusal is observable rather than a silent drop.
+   *
+   * Two shapes are dropped BEFORE any decision, and deliberately leave no record, because neither is
+   * one: a message from a SUPERSEDED generation, and an EMPTY foreign log from our own generation.
+   * Both are ordinary traffic that could teach us nothing whichever way we answered — a lagging peer
+   * republishing, or a newcomer's provisional empty game — and recording them would bury a real
+   * refusal in noise. What made the first of those dangerous was never the missing record but the
+   * counter it compared against: with {@link isOwnNextGeneration} no longer requiring a peer to
+   * out-rank `_epoch`, the pair's own next generation is recognized before this line is reached,
+   * whatever number our counter has drifted to.
    */
   private receiveOtherGame(remote: EventLog, remoteEpoch: number): void {
     const offered: OfferedGame = { uuid: remote.uuid, empty: remote.entries.length === 0 };
@@ -1446,17 +1498,24 @@ export class SyncEngine {
    * rematch, {@link rematchGameUuid}-derived from the game we are on right now (N.2: both peers derive
    * the fresh game from the two facts they share, the prior uuid and the generation being entered).
    *
-   * A HIGHER generation is required, not merely a derived name: a reset only ever increments, so a
-   * "next generation" stamped with the generation we are already in is not one — accepting it would let
-   * a publisher swap a live board for an empty one at the current epoch.
+   * The DERIVATION is the whole gate. It is what makes a staggered rematch converge under EVERY seed
+   * (the peer that reset first is adopted onto the generation the other one derived), and it is the
+   * ONLY route a new generation takes: only a game derived from the one we hold can cross, never an
+   * unrelated game — nor a bigger number on the game we are already playing
+   * ({@link reconcileEpoched}) — wearing a high epoch. A replay of a superseded rematch cannot pass
+   * it either: once we are ON that generation, derivations are taken from ITS uuid, so the older
+   * sibling no longer derives.
    *
-   * This is what makes a staggered rematch converge under EVERY seed (the peer that reset first is
-   * adopted onto the generation the other one derived), and it is the ONLY route a new generation
-   * takes: only a game derived from the one we hold can cross, never an unrelated game — nor a bigger
-   * number on the game we are already playing ({@link reconcileEpoched}) — wearing a high epoch.
+   * `remoteEpoch` is an INPUT to the derivation, deliberately not compared against our own counter.
+   * It once had to out-rank `_epoch`, which looked like a guard and was not one: a peer that can
+   * offer a derived empty game at generation `n` can equally offer it at `n + 1`, so the comparison
+   * blocked nothing hostile — while a counter pinned high by a forged `epoch` (see {@link receive})
+   * made us permanently DEAF to the pair's genuine next generation, which then arrives at a number
+   * below ours and is dropped as stale. Generation 0 is still refused: a generation IS a reset, and a
+   * reset only ever increments, so no rematch is ever derived at 0.
    */
   private isOwnNextGeneration(uuid: string, remoteEpoch: number): boolean {
-    return remoteEpoch > this._epoch && uuid === rematchGameUuid(this._game.log.uuid, remoteEpoch);
+    return remoteEpoch > 0 && uuid === rematchGameUuid(this._game.log.uuid, remoteEpoch);
   }
 
   /**
