@@ -42,10 +42,16 @@
  * history — so it agrees with anything else that has no history, and refuses anything that has.
  *
  * {@link reconcile} judges PROPOSALS; {@link acceptsGame} judges the BYTES a peer is about to be
- * served (its uuid + whether it carries any history at all). Both sides of the wire apply the
- * same {@link acceptsGame} rule — the arbiter before it publishes an `admit`, the newcomer again
- * on receipt — so a peer that does not enforce it cannot silently push a game onto one that does
- * (design §5: "the opponent's client is the validator").
+ * served (its uuid + whether it carries any history at all). {@link decideAdmission} composes the two
+ * into the single verdict an arbiter acts on, so the matrix has ONE implementation rather than a pure
+ * rule plus a hand-rolled copy in the glue.
+ *
+ * {@link acceptsGame} is applied at every point a game can cross into a peer — the arbiter before it
+ * publishes an `admit`, the newcomer again on receipt, AND the move-sync channel before it adopts a log
+ * belonging to a DIFFERENT game (`SyncEngine.receive`) — so a peer that does not enforce it cannot
+ * silently push a game onto one that does, by any channel (design §5: "the opponent's client is the
+ * validator"). Same-game convergence (an extension of the log we are already on) is NOT a seed question
+ * and is left to the sync policy; the seed only ever governs adopting a game you are not already on.
  *
  * It also decides **initiator election** (design §4 Case 2): when two peers arrive together,
  * a deterministic order — **earlier live-presence `arrivalOrder`, then lower `playerId`** —
@@ -57,9 +63,11 @@
  *   the same typed reject — a peer must not care who published first. (Proven by fast-check.)
  * - **A `new` seed never yields a non-empty agreed game**, and only a `defer` ever adopts one:
  *   the two halves of the design §3 enforcement, property-tested against both entry points.
- * - **`reconcile` and `acceptsGame` agree.** Whenever `reconcile` refuses a pair, the same peer
- *   refuses the other's concrete game with the SAME typed reason — the proposal-level and
- *   byte-level gates can never disagree about who may play what (proven by fast-check).
+ * - **{@link decideAdmission} never puts a peer on a game its own seed refuses.** Whatever the
+ *   arbiter's seed and held game, the newcomer either ends up on a game {@link acceptsGame} accepts for
+ *   its seed, or gets a typed reject — property-tested over EVERY (seed, held game, seed) triple,
+ *   including the `defer`-arbiter row, against the arbiter's real serving behaviour (it serves the game
+ *   its ENGINE holds, not the one its proposal named).
  * - **Total + honest.** Every proposal pair yields a valid {@link AgreedGame} or a TYPED
  *   {@link Reject} — never a throw, never `undefined`, never a masked/mislabeled failure
  *   (agent-principles: reject honestly with a machine reason surfaced to the UI).
@@ -306,6 +314,68 @@ export function acceptsGame(mine: Proposal, offered: OfferedGame): SeedAcceptanc
       if (offered.uuid === mine.uuid) return ACCEPTED;
       return offered.empty ? reject('seed-refused') : reject('game-mismatch');
   }
+}
+
+/**
+ * What an arbiter does with ONE newcomer's seed proposal — the WHOLE game-level admission verdict
+ * ({@link decideAdmission}), so the wire has exactly one rule and no second copy to drift:
+ *
+ *   - `serve: 'mine'` — publish an `admit` carrying the game OUR engine holds; the newcomer adopts it.
+ *   - `serve: 'theirs'` — WE hold nothing worth keeping and the agreed game is the NEWCOMER's: admit it
+ *     naming that `uuid` and let it keep its own game, which we then adopt off the sync channel. This
+ *     is design §3's *"dealer's choice is the ONLY kind that adopts a peer's non-empty game"* row in the
+ *     direction where the DEFERRER is the arbiter — the row that is unreachable if an arbiter may only
+ *     ever serve its own engine.
+ *   - a {@link Reject} — a typed refusal, from either gate.
+ */
+export type AdmissionDecision =
+  | { readonly ok: true; readonly serve: 'mine' }
+  | { readonly ok: true; readonly serve: 'theirs'; readonly uuid: string }
+  | Reject;
+
+/**
+ * Decide, PURELY, what an arbiter holding the seed `mine` and the concrete game `myGame` does with a
+ * newcomer's seed `theirs` — the design §3 seed matrix as the wire actually applies it, in ONE place.
+ *
+ * `session.ts` used to compose this inline from {@link reconcile} + an "we can only serve our own
+ * engine" guard + {@link acceptsGame}, which is how the matrix's `defer`-adopts row came to be
+ * unreachable whenever the deferrer was the arbiter: the guard refused the agreed game (a
+ * `game-mismatch` the deferrer never proposed) before the seed gate was ever consulted. The rule lives
+ * here now so it is unit + mutation + property gated against the SAME entry points the wire uses.
+ *
+ * The three steps, in order:
+ *
+ *  1. **Reconcile the proposals** ({@link reconcile}). A typed reject settles it.
+ *  2. **Do WE hold the agreed game?** If reconciliation agreed on a concrete game that is not
+ *     `myGame`, we cannot serve it — but if OUR seed is `defer` we do not want to: dealer's choice
+ *     brings nothing, so the agreed game is the newcomer's own and we ADOPT it (`serve: 'theirs'`).
+ *  3. **Otherwise serve our own engine**, judged by the NEWCOMER's seed against the bytes it would
+ *     actually receive ({@link acceptsGame}) — the byte-level half. This is where a `new` newcomer is
+ *     refused a game in progress (#46/#43), and where an arbiter whose proposal named a game its
+ *     engine no longer holds (it rematched into a fresh one) is refused for what it *actually* offers
+ *     — `game-mismatch` when we hold a different real game, `seed-refused` when we hold an empty one —
+ *     rather than mislabelled by a guard that only looked at proposals.
+ *
+ * Total and pure: every (seed, game, seed) triple yields a decision or a TYPED reject; never throws.
+ */
+export function decideAdmission(
+  mine: Proposal,
+  myGame: OfferedGame,
+  theirs: Proposal,
+): AdmissionDecision {
+  const agreed = reconcile(mine, theirs);
+  if (!agreed.ok) return agreed;
+  // Dealer's choice adopts (design §3). We brought nothing, and reconciliation put the pair on a
+  // concrete game our engine does not hold — which, with a `defer` on our side, is by construction the
+  // NEWCOMER's own game (reconcile only ever chooses one of the two proposals, and ours named none).
+  if (mine.kind === 'defer' && agreed.game.kind === 'existing' && agreed.game.uuid !== myGame.uuid) {
+    return { ok: true, serve: 'theirs', uuid: agreed.game.uuid };
+  }
+  // We can only ever serve the game our engine actually holds, so that is what the newcomer's seed is
+  // judged against — never the agreed proposal, which may name a game neither of us is on any more.
+  const acceptance = acceptsGame(theirs, myGame);
+  if (!acceptance.ok) return acceptance;
+  return { ok: true, serve: 'mine' };
 }
 
 /**

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { shouldArchiveBeforeNetStart, shouldPromptRematch } from './rematch';
+import { rematchGameUuid, shouldArchiveBeforeNetStart, shouldPromptRematch } from './rematch';
 import { initialState, type GameState, type Player } from '../core/gameState';
 
 /**
@@ -59,5 +59,49 @@ describe('shouldPromptRematch', () => {
   it('is exactly "winner !== null" (kills an inverted / hardcoded winner check)', () => {
     expect(shouldPromptRematch({ ...initialState(3), winner: null })).toBe(false);
     expect(shouldPromptRematch(wonState('white'))).toBe(true);
+  });
+});
+
+/**
+ * `rematchGameUuid` — the rematch game's IDENTITY. Both peers reset into the same rematch
+ * independently, from state they already share (the prior game's uuid + the generation being
+ * entered), so the fresh game must come out IDENTICAL on both sides without a coordination
+ * round-trip. Randomly-minted ids left each peer on its own game — two archive records for one
+ * rematch, converging only by the accident that an empty log is a prefix of anything.
+ */
+describe('rematchGameUuid — one derived id both peers arrive at independently', () => {
+  it('is DETERMINISTIC: the same prior game + generation yields the same uuid (the simultaneous reset)', () => {
+    // This IS the simultaneous-rematch case: two peers, both on `g-prior` at generation 0, both
+    // resetting into generation 1 — no message crosses, and they land on one game anyway.
+    expect(rematchGameUuid('g-prior', 1)).toBe(rematchGameUuid('g-prior', 1));
+    expect(rematchGameUuid('g-prior', 7)).toBe(rematchGameUuid('g-prior', 7));
+  });
+
+  it('DIFFERS per generation — a second rematch of the same game is a different game', () => {
+    const first = rematchGameUuid('g-prior', 1);
+    const second = rematchGameUuid('g-prior', 2);
+    expect(second).not.toBe(first);
+    expect(rematchGameUuid('g-prior', 3)).not.toBe(second);
+  });
+
+  it('DIFFERS per prior game — two rooms rematching at the same generation never collide', () => {
+    expect(rematchGameUuid('g-one', 1)).not.toBe(rematchGameUuid('g-two', 1));
+  });
+
+  it('never returns the prior uuid, and never an empty string', () => {
+    // Returning the prior uuid would make the "fresh" game indistinguishable from the finished one
+    // (the sync channel would treat the reset as same-game traffic and the old board could resurrect).
+    for (const prior of ['g-prior', '', 'a'.repeat(64)]) {
+      const derived = rematchGameUuid(prior, 1);
+      expect(derived).not.toBe(prior);
+      expect(derived.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('mixes the two inputs at a FIXED boundary — no shift of prior/generation can collide', () => {
+    // Guards against a concatenation with no delimiter, where ("g1", 11) and ("g11", 1) would hash the
+    // same string and two different rematches would claim one uuid.
+    expect(rematchGameUuid('g1', 11)).not.toBe(rematchGameUuid('g11', 1));
+    expect(rematchGameUuid('g', 111)).not.toBe(rematchGameUuid('g1', 11));
   });
 });

@@ -10,6 +10,7 @@ import {
   CODE_ALPHABET,
   CODE_LENGTH,
   CODE_ERROR_TEXT,
+  JOIN_ERROR_REASONS,
   type JoinErrorReason,
   type NetSessionState,
 } from './netModel.ts';
@@ -143,18 +144,25 @@ describe('deriveNet — code + join error passthrough', () => {
     expect(text).not.toBe(deriveNet(state({ joinError: 'connect-failed' })).joinErrorText);
   });
 
+  it('maps a seed-unavailable join error to its OWN label (the game is not on this device)', () => {
+    // V.2 round 2: a `resume`/`current` seed for a game this browser does not hold used to degrade to a
+    // fresh game while still announcing the named one — and the refusal that caused downstream read
+    // "You and the other player brought different games", which was false. Its own reason, its own copy.
+    const text = deriveNet(state({ joinError: 'seed-unavailable' })).joinErrorText;
+    expect(text).toBe('That game is not saved on this device. Pick another, or choose Dealer’s choice.');
+    expect(text).not.toBe(deriveNet(state({ joinError: 'game-mismatch' })).joinErrorText);
+    expect(text).not.toBe(deriveNet(state({ joinError: 'seed-unreadable' })).joinErrorText);
+  });
+
   it('gives EVERY join-error reason a distinct, non-empty human message', () => {
     // design §7: no reason may reach the panel with no message (the Record type makes that a compile
     // error) — and none may silently share another's copy, which would mislabel the failure.
-    const reasons: JoinErrorReason[] = [
-      'room-full',
-      'seat-reserved',
-      'game-mismatch',
-      'game-divergent',
-      'seed-refused',
-      'connect-failed',
-      'seed-unreadable',
-    ];
+    //
+    // Enumerated from the model's OWN exported reason set, NOT a hand-copied list: a reason added to the
+    // union is covered here the moment it exists, instead of quietly falling outside a list that has
+    // stopped matching (agent-principles #8 — no second copy of a fact that can go stale).
+    const reasons: readonly JoinErrorReason[] = JOIN_ERROR_REASONS;
+    expect(reasons.length).toBeGreaterThan(0);
     const texts = reasons.map((r) => deriveNet(state({ joinError: r })).joinErrorText);
     for (const t of texts) expect(t).toMatch(/\S/);
     expect(new Set(texts).size).toBe(reasons.length);

@@ -22,10 +22,15 @@
  * no case silently falls through to the wrong behavior (an empty board wastefully archived, or a
  * played board silently kept under the session).
  *
- * This module imports only the plain `GameState` type — no transport, engine, three, or DOM — so it
- * is unit+mutation-gated to the hard 100% floor the whole `src/net/**` scope carries.
+ * It also owns the rematch game's IDENTITY ({@link rematchGameUuid}): both peers reset into the SAME
+ * fresh game, derived from state they already share rather than independently randomized.
+ *
+ * This module imports only the plain `GameState` type and the pure `hashStep` primitive — no transport,
+ * engine, three, or DOM — so it is unit+mutation-gated to the hard 100% floor the whole `src/net/**`
+ * scope carries.
  */
 
+import { hashStep } from '../core/hash';
 import type { GameState } from '../core/gameState';
 
 /**
@@ -54,4 +59,36 @@ export function shouldArchiveBeforeNetStart(localPly: number): boolean {
  */
 export function shouldPromptRematch(state: GameState): boolean {
   return state.winner !== null;
+}
+
+/**
+ * The UUID of the fresh game a rematch resets into, DERIVED from the game being left behind and the
+ * generation being entered (pure — no randomness, no clock).
+ *
+ * A rematch is *one* new game, and both peers reset into it independently over the same live
+ * connection (N.2 decision 2 — no disconnect/re-host, no coordination round-trip). If each minted a
+ * RANDOM uuid they would each be sitting on a *different* game with the same (bumped) epoch: two
+ * archive records for one rematch, and convergence left to the accident that an empty log is a prefix
+ * of anything — so whichever peer moved first would have its game adopted, and that accident is exactly
+ * what the design §3 seed gate on the sync channel (`SyncEngine`) must be free to refuse. Deriving the
+ * id from state BOTH peers already share — the prior game's uuid and the generation number, both equal
+ * on both sides at the moment they reset — makes the rematch a genuinely shared game at genesis, the
+ * same property initiator election gives a first game (#42).
+ *
+ * A staggered rematch (one peer resets, the other adopts that generation before resetting) still
+ * converges: the second reset derives from the game it has by then adopted, at a HIGHER epoch, and the
+ * cross-generation adopt rule carries the first peer onto it.
+ *
+ * @param priorUuid The uuid of the game the rematch is leaving (both peers are on it).
+ * @param epoch The fresh-game generation being entered (the incremented epoch).
+ * @returns The derived uuid — identical on both peers for identical inputs, and distinct for a
+ *   different prior game or a different generation.
+ */
+export function rematchGameUuid(priorUuid: string, epoch: number): string {
+  // The generation rides in the DATA half, tagged: `hashStep` joins its two halves with a fixed
+  // delimiter, so no shift of the boundary between the prior uuid and the generation can collide
+  // (`("g1", 11)` and `("g11", 1)` are distinct), and the `rematch:` tag separates this derivation from
+  // the log's own chain steps (whose data half is only ever `place:…`/`undo`/`redo`). Every part of the
+  // input is load-bearing — there is no decorative constant here whose loss would go unnoticed.
+  return hashStep(priorUuid, `rematch:${epoch}`);
 }

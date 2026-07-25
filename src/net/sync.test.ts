@@ -14,6 +14,7 @@ import {
   toSyncMessage,
   toHelloMessage,
   toAdmitMessage,
+  toAdoptAdmitMessage,
   toRejectMessage,
   parseSyncMessage,
   parseGameMessage,
@@ -42,6 +43,15 @@ import type { Proposal } from './admission';
  * diverge at ply 0. A single fixed uuid models "the same game across peers".
  */
 const GAME_UUID = 'game-under-test';
+
+/**
+ * The seed for engines whose test is about CONVERGENCE, not about the design §3 seed gate: dealer's
+ * choice is the one seed that imposes no game-identity constraint ("adopt whatever you bring"), so an
+ * engine holding it behaves exactly as the pre-gate engine did. The gate itself is exercised with real
+ * `new`/`resume`/`current` seeds in its own describe block below — deliberately NOT smuggled into every
+ * other test, where it would only obscure what is being asserted.
+ */
+const ANY_SEED: Proposal = { kind: 'defer' };
 
 /** Build a log (carrying {@link GAME_UUID}) from a sequence of node keys (each a `place`). */
 function logOf(...nodes: string[]): EventLog {
@@ -673,14 +683,31 @@ describe('parseGameMessage — admission messages (Task S.4: hello / admit / rej
   });
 
   describe('kind: admit', () => {
-    const admit: AdmitMessage = { kind: 'admit', id: 'a-1', game: gamePayload, seats };
+    const served = { source: 'arbiter', game: gamePayload } as const;
+    const admit: AdmitMessage = { kind: 'admit', id: 'a-1', agreed: served, seats };
 
-    it('parses a well-formed admit, preserving the game payload and seats', () => {
+    it('parses a well-formed ARBITER-served admit, preserving the game payload and seats', () => {
       const parsed: GameMessage = parseGameMessage(JSON.parse(JSON.stringify(admit)));
       expect(parsed).toEqual(admit);
       // The carried game is a real, hash-chain-verifiable sync payload.
       if (parsed.kind !== 'admit') throw new Error('expected admit');
-      expect(headHash(parseSyncMessage(parsed.game))).toBe(gamePayload.headHash);
+      if (parsed.agreed.source !== 'arbiter') throw new Error('expected an arbiter-served game');
+      expect(headHash(parseSyncMessage(parsed.agreed.game))).toBe(gamePayload.headHash);
+    });
+
+    it('parses a NEWCOMER-sourced admit (a deferring arbiter naming the newcomer’s own game)', () => {
+      // The dealer's-choice arbiter has no payload to give: the grant names the game by uuid and the
+      // newcomer keeps what it brought (design §3 — the only row that adopts a peer's non-empty game).
+      const adopt: AdmitMessage = {
+        kind: 'admit',
+        id: 'a-2',
+        agreed: { source: 'newcomer', uuid: 'their-game-uuid' },
+        seats,
+      };
+      const parsed = parseGameMessage(JSON.parse(JSON.stringify(adopt)));
+      expect(parsed).toEqual(adopt);
+      if (parsed.kind !== 'admit') throw new Error('expected admit');
+      expect(parsed.agreed).toEqual({ source: 'newcomer', uuid: 'their-game-uuid' });
     });
 
     it('accepts a seat map with a null (unowned) seat', () => {
@@ -695,45 +722,68 @@ describe('parseGameMessage — admission messages (Task S.4: hello / admit / rej
     });
 
     it('rejects an admit missing its id (non-string)', () => {
-      const bad = { kind: 'admit', game: gamePayload, seats };
+      const bad = { kind: 'admit', agreed: served, seats };
       expect(() => parseGameMessage(bad)).toThrow(/admit message requires a string id/);
     });
 
-    it('rejects an admit whose game is not a sync payload (a proposal masquerading)', () => {
-      const bad = { kind: 'admit', id: 'a', game: { kind: 'proposal', id: 'x', action: 'undo', proposedBy: 'white' }, seats };
+    it('rejects an admit whose agreed field is not an object (string or null)', () => {
+      // A string AND an explicit null both fail the guard (null is typeof 'object' but must be
+      // rejected — pins the `raw === null` half).
+      for (const agreed of ['nope', null]) {
+        const bad = { kind: 'admit', id: 'a', agreed, seats };
+        expect(() => parseGameMessage(bad)).toThrow(/requires an agreed object/);
+      }
+    });
+
+    it('rejects an admit whose agreed source is unknown (never defaulted to a shape that parses)', () => {
+      // A malformed grant must NOT be read as whichever of the two shapes happens to fit — that is how
+      // a peer ends up on a game nobody agreed on.
+      const bad = { kind: 'admit', id: 'a', agreed: { source: 'somebody-else', game: gamePayload }, seats };
+      expect(() => parseGameMessage(bad)).toThrow(/unknown admit agreed source: somebody-else/);
+      const missing = { kind: 'admit', id: 'a', agreed: { game: gamePayload }, seats };
+      expect(() => parseGameMessage(missing)).toThrow(/unknown admit agreed source: undefined/);
+    });
+
+    it('rejects a NEWCOMER-sourced admit with no (or an empty) uuid — it names nothing', () => {
+      for (const uuid of [undefined, '', 42]) {
+        const bad = { kind: 'admit', id: 'a', agreed: { source: 'newcomer', uuid }, seats };
+        expect(() => parseGameMessage(bad)).toThrow(/newcomer-sourced game requires a non-empty string uuid/);
+      }
+    });
+
+    it('rejects an ARBITER-served admit whose game is not a sync payload (a proposal masquerading)', () => {
+      const bad = { kind: 'admit', id: 'a', agreed: { source: 'arbiter', game: { kind: 'proposal', id: 'x', action: 'undo', proposedBy: 'white' } }, seats };
       expect(() => parseGameMessage(bad)).toThrow(/admit message game must be a sync payload/);
     });
 
-    it('rejects an admit whose game is malformed (propagates the inner sync error)', () => {
-      const bad = { kind: 'admit', id: 'a', game: { kind: 'sync', version: 1, headHash: 'x', log: 'nope' }, seats };
+    it('rejects an ARBITER-served admit whose game is malformed (propagates the inner sync error)', () => {
+      const bad = { kind: 'admit', id: 'a', agreed: { source: 'arbiter', game: { kind: 'sync', version: 1, headHash: 'x', log: 'nope' } }, seats };
       expect(() => parseGameMessage(bad)).toThrow(SyncError);
       expect(() => parseGameMessage(bad)).toThrow(/array log/);
     });
 
     it('rejects an admit whose seats is not an object (string or null)', () => {
-      // A string AND an explicit null both fail the seats-object guard (null is typeof 'object'
-      // but must be rejected — pins the `raw === null` half of the guard).
       for (const seatsVal of ['nope', null]) {
-        const bad = { kind: 'admit', id: 'a', game: gamePayload, seats: seatsVal };
+        const bad = { kind: 'admit', id: 'a', agreed: served, seats: seatsVal };
         expect(() => parseGameMessage(bad)).toThrow(/requires a seats object/);
       }
     });
 
     it('rejects an admit whose seats is missing entirely', () => {
-      const bad = { kind: 'admit', id: 'a', game: gamePayload };
+      const bad = { kind: 'admit', id: 'a', agreed: served };
       expect(() => parseGameMessage(bad)).toThrow(/requires a seats object/);
     });
 
     it('rejects a seat that is neither a string nor null (numeric owner)', () => {
-      const badWhite = { kind: 'admit', id: 'a', game: gamePayload, seats: { white: 42, black: null } };
+      const badWhite = { kind: 'admit', id: 'a', agreed: served, seats: { white: 42, black: null } };
       expect(() => parseGameMessage(badWhite)).toThrow(/white seat must be a string playerId or null/);
-      const badBlack = { kind: 'admit', id: 'a', game: gamePayload, seats: { white: null, black: {} } };
+      const badBlack = { kind: 'admit', id: 'a', agreed: served, seats: { white: null, black: {} } };
       expect(() => parseGameMessage(badBlack)).toThrow(/black seat must be a string playerId or null/);
     });
 
     it('reads a missing seat field as an invalid (undefined) seat, not null', () => {
       // An absent seat is NOT the same as an explicit null owner; it is a malformed map.
-      const bad = { kind: 'admit', id: 'a', game: gamePayload, seats: { white: 'w' } };
+      const bad = { kind: 'admit', id: 'a', agreed: served, seats: { white: 'w' } };
       expect(() => parseGameMessage(bad)).toThrow(/black seat must be a string playerId or null/);
     });
   });
@@ -804,11 +854,28 @@ describe('parseGameMessage — admission messages (Task S.4: hello / admit / rej
 
     it('toAdmitMessage builds an admit that round-trips (game re-verifies through the hash chain)', () => {
       const msg = toAdmitMessage('a-42', gamePayload, seats);
-      expect(msg).toEqual({ kind: 'admit', id: 'a-42', game: gamePayload, seats });
+      expect(msg).toEqual({
+        kind: 'admit',
+        id: 'a-42',
+        agreed: { source: 'arbiter', game: gamePayload },
+        seats,
+      });
       const parsed = parseGameMessage(JSON.parse(JSON.stringify(msg)));
       expect(parsed).toEqual(msg);
       if (parsed.kind !== 'admit') throw new Error('expected admit');
-      expect(headHash(parseSyncMessage(parsed.game))).toBe(gamePayload.headHash);
+      if (parsed.agreed.source !== 'arbiter') throw new Error('expected an arbiter-served game');
+      expect(headHash(parseSyncMessage(parsed.agreed.game))).toBe(gamePayload.headHash);
+    });
+
+    it('toAdoptAdmitMessage builds a NEWCOMER-sourced admit that round-trips, carrying no payload', () => {
+      const msg = toAdoptAdmitMessage('a-43', 'g-theirs', seats);
+      expect(msg).toEqual({
+        kind: 'admit',
+        id: 'a-43',
+        agreed: { source: 'newcomer', uuid: 'g-theirs' },
+        seats,
+      });
+      expect(parseGameMessage(JSON.parse(JSON.stringify(msg)))).toEqual(msg);
     });
 
     it('toRejectMessage builds a reject that round-trips, carrying the typed reason', () => {
@@ -934,8 +1001,8 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
     // it is injected directly. Without a shared uuid the uuid-seeded genesis makes the
     // two logs diverge at ply 0 and they could never converge — which is the whole
     // point: sync only unifies histories OF THE SAME GAME.
-    const a = new SyncEngine(new Game(size, PAIR_UUID), ta, db, () => meta, 'white');
-    const b = new SyncEngine(new Game(size, PAIR_UUID), tb, db, () => meta, 'black');
+    const a = new SyncEngine(new Game(size, PAIR_UUID), ta, db, () => meta, 'white', ANY_SEED);
+    const b = new SyncEngine(new Game(size, PAIR_UUID), tb, db, () => meta, 'black', ANY_SEED);
     await a.connect('room-1');
     await b.connect('room-1');
     return { a, b, ta, tb };
@@ -962,14 +1029,14 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
     const hub = new MockRelayHub();
     const ta = new MockTransport(hub, 'peer-a');
     const tb = new MockTransport(hub, 'peer-b');
-    const a = new SyncEngine(new Game(9, PAIR_UUID), ta, db, () => meta, 'white');
+    const a = new SyncEngine(new Game(9, PAIR_UUID), ta, db, () => meta, 'white', ANY_SEED);
     // B's PROVISIONAL engine carries a DIFFERENT genesis uuid (its own fresh game before admission).
-    const bProvisional = new SyncEngine(new Game(9, 'b-provisional-uuid'), tb, db, () => meta, 'black');
+    const bProvisional = new SyncEngine(new Game(9, 'b-provisional-uuid'), tb, db, () => meta, 'black', ANY_SEED);
     await a.connect('adopt-room');
     await bProvisional.connect('adopt-room');
 
     // B ADOPTS A's authoritative game: a fresh engine on the SAME game identity as A, over tb.
-    const bAdopted = new SyncEngine(new Game(9, PAIR_UUID), tb, db, () => meta, 'black');
+    const bAdopted = new SyncEngine(new Game(9, PAIR_UUID), tb, db, () => meta, 'black', ANY_SEED);
     bAdopted.attach();
 
     // A plays a move; it must reach the ADOPTED engine (the new one), not the provisional.
@@ -986,14 +1053,14 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
     const hub = new MockRelayHub();
     const ta = new MockTransport(hub, 'peer-a-x');
     const tb = new MockTransport(hub, 'peer-b-x');
-    const a = new SyncEngine(new Game(9, PAIR_UUID), ta, db, () => meta, 'white');
-    const bProvisional = new SyncEngine(new Game(9, 'b-prov-x'), tb, db, () => meta, 'black');
+    const a = new SyncEngine(new Game(9, PAIR_UUID), ta, db, () => meta, 'white', ANY_SEED);
+    const bProvisional = new SyncEngine(new Game(9, 'b-prov-x'), tb, db, () => meta, 'black', ANY_SEED);
     await a.connect('adopt-room-x');
     await bProvisional.connect('adopt-room-x');
 
     // B adopts a game that ALREADY has one white move (the resumed board), then attaches.
     const resumed = Game.fromLog(9, logOf('4,4,4'));
-    const bAdopted = new SyncEngine(resumed, tb, db, () => meta, 'black');
+    const bAdopted = new SyncEngine(resumed, tb, db, () => meta, 'black', ANY_SEED);
     bAdopted.attach();
 
     // attach()'s publish carried B's one-move log to A, which adopts the strict extension → renders.
@@ -1034,7 +1101,7 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
     // in a deliberately scrambled order. Result must be the longest (3 moves).
     const hub = new MockRelayHub();
     const t = new MockTransport(hub, 'solo');
-    const eng = new SyncEngine(new Game(9, PAIR_UUID),t, db, () => meta, 'white');
+    const eng = new SyncEngine(new Game(9, PAIR_UUID),t, db, () => meta, 'white', ANY_SEED);
     const full = logOf('0,0,0', '1,1,1', '2,2,2');
     const mid = logOf('0,0,0', '1,1,1');
     const one = logOf('0,0,0');
@@ -1053,8 +1120,8 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
     const hub = new MockRelayHub();
     const ta = new MockTransport(hub, 'peer-a2');
     const tb = new MockTransport(hub, 'peer-b2');
-    const ea = new SyncEngine(new Game(9, PAIR_UUID),ta, db, () => meta, 'white');
-    const eb = new SyncEngine(new Game(9, PAIR_UUID),tb, db, () => meta, 'black');
+    const ea = new SyncEngine(new Game(9, PAIR_UUID),ta, db, () => meta, 'white', ANY_SEED);
+    const eb = new SyncEngine(new Game(9, PAIR_UUID),tb, db, () => meta, 'black', ANY_SEED);
     // Both make a move BEFORE connecting (so no cross-talk yet).
     ea.placeLocalOnly([0, 0, 0]);
     eb.placeLocalOnly([1, 1, 1]);
@@ -1092,8 +1159,8 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
     const hub = new MockRelayHub();
     const ta = new MockTransport(hub, 'pa');
     const tb = new MockTransport(hub, 'pb');
-    const ea = new SyncEngine(new Game(9, PAIR_UUID),ta, db, () => meta, 'white');
-    const eb = new SyncEngine(new Game(9, PAIR_UUID),tb, db, () => meta, 'black');
+    const ea = new SyncEngine(new Game(9, PAIR_UUID),ta, db, () => meta, 'white', ANY_SEED);
+    const eb = new SyncEngine(new Game(9, PAIR_UUID),tb, db, () => meta, 'black', ANY_SEED);
     ea.placeLocalOnly([0, 0, 0]);
     eb.placeLocalOnly([3, 3, 3]);
     await ea.connect('r2');
@@ -1115,8 +1182,8 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
     const hub = new MockRelayHub();
     const ta = new MockTransport(hub, 'pa3');
     const tb = new MockTransport(hub, 'pb3');
-    const ea = new SyncEngine(new Game(9, PAIR_UUID),ta, db, () => meta, 'white');
-    const eb = new SyncEngine(new Game(9, PAIR_UUID),tb, db, () => meta, 'black');
+    const ea = new SyncEngine(new Game(9, PAIR_UUID),ta, db, () => meta, 'white', ANY_SEED);
+    const eb = new SyncEngine(new Game(9, PAIR_UUID),tb, db, () => meta, 'black', ANY_SEED);
     // Fork B onto history [3,3,3]; A forks onto [0,0,0] → conflict stops B.
     ea.placeLocalOnly([0, 0, 0]);
     eb.placeLocalOnly([3, 3, 3]);
@@ -1173,7 +1240,7 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
   it('resetGame IGNOREs a late in-flight message from the just-finished (lower-epoch) game — the board never resurrects', async () => {
     const hub = new MockRelayHub();
     const t = new MockTransport(hub, 'reset-solo');
-    const eng = new SyncEngine(new Game(9, PAIR_UUID),t, db, () => meta, 'white');
+    const eng = new SyncEngine(new Game(9, PAIR_UUID),t, db, () => meta, 'white', ANY_SEED);
     await eng.connect('reset-room');
     eng.place([0, 0, 0]);
     eng.place([1, 1, 1]);
@@ -1221,7 +1288,7 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
     const hub = new MockRelayHub();
     const t = new MockTransport(hub, 'undo-swap');
     // Start as white; play white then black so black is the last mover.
-    const eng = new SyncEngine(new Game(9, PAIR_UUID),t, db, () => meta, 'white');
+    const eng = new SyncEngine(new Game(9, PAIR_UUID),t, db, () => meta, 'white', ANY_SEED);
     await eng.connect('undo-swap-room');
     // After the rematch this client is BLACK. Fresh game, black to... white opens. Make black the
     // last mover in the fresh game, then black (us) may undo its own move; white's move it may not.
@@ -1260,7 +1327,7 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
   it('redo THROWS the core IllegalMove verbatim when there is no redo tail (the error is not masked)', async () => {
     const hub = new MockRelayHub();
     const t = new MockTransport(hub, 'redo-empty');
-    const eng = new SyncEngine(new Game(9, PAIR_UUID),t, db, () => meta, 'white');
+    const eng = new SyncEngine(new Game(9, PAIR_UUID),t, db, () => meta, 'white', ANY_SEED);
     await eng.connect('redo-empty-room');
     eng.place([0, 0, 0]); // a committed move, but nothing undone → no redo tail
     // The core Game.redo throws IllegalMove('nothing to redo'); the engine propagates it verbatim
@@ -1274,8 +1341,8 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
     const hub = new MockRelayHub();
     const ta = new MockTransport(hub, 'rd-a');
     const tb = new MockTransport(hub, 'rd-b');
-    const ea = new SyncEngine(new Game(9, PAIR_UUID),ta, db, () => meta, 'white');
-    const eb = new SyncEngine(new Game(9, PAIR_UUID),tb, db, () => meta, 'black');
+    const ea = new SyncEngine(new Game(9, PAIR_UUID),ta, db, () => meta, 'white', ANY_SEED);
+    const eb = new SyncEngine(new Game(9, PAIR_UUID),tb, db, () => meta, 'black', ANY_SEED);
     ea.placeLocalOnly([0, 0, 0]);
     eb.placeLocalOnly([2, 2, 2]);
     await ea.connect('rd-room');
@@ -1296,7 +1363,7 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
     const hub = new MockRelayHub();
     const t = new MockTransport(hub, 'agreed-undo');
     // This client is BLACK (the responder). White (the opponent) made the last move.
-    const eng = new SyncEngine(new Game(9, PAIR_UUID),t, db, () => meta, 'black');
+    const eng = new SyncEngine(new Game(9, PAIR_UUID),t, db, () => meta, 'black', ANY_SEED);
     await eng.connect('agreed-undo-room');
     eng.receive(toSyncMessage(logOf('2,2,2'))); // adopt white's opening move (white is last mover)
     expect(eng.game().state().pieces['2,2,2']).toBe('white');
@@ -1326,7 +1393,7 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
   it('applyAgreedUndo THROWS the core IllegalMove verbatim at ply 0 (nothing to undo; not masked)', async () => {
     const hub = new MockRelayHub();
     const t = new MockTransport(hub, 'agreed-empty');
-    const eng = new SyncEngine(new Game(9, PAIR_UUID),t, db, () => meta, 'white');
+    const eng = new SyncEngine(new Game(9, PAIR_UUID),t, db, () => meta, 'white', ANY_SEED);
     await eng.connect('agreed-empty-room');
     // Nothing committed → the core Game.undo throws IllegalMove; the agreed apply propagates it verbatim
     // (an honest error, never a swallowed no-op that would silently diverge the peers).
@@ -1338,8 +1405,8 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
     const hub = new MockRelayHub();
     const ta = new MockTransport(hub, 'au-a');
     const tb = new MockTransport(hub, 'au-b');
-    const ea = new SyncEngine(new Game(9, PAIR_UUID),ta, db, () => meta, 'white');
-    const eb = new SyncEngine(new Game(9, PAIR_UUID),tb, db, () => meta, 'black');
+    const ea = new SyncEngine(new Game(9, PAIR_UUID),ta, db, () => meta, 'white', ANY_SEED);
+    const eb = new SyncEngine(new Game(9, PAIR_UUID),tb, db, () => meta, 'black', ANY_SEED);
     ea.placeLocalOnly([0, 0, 0]);
     eb.placeLocalOnly([2, 2, 2]);
     await ea.connect('au-room');
@@ -1353,8 +1420,8 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
     const hub = new MockRelayHub();
     const ta = new MockTransport(hub, 'rc-a');
     const tb = new MockTransport(hub, 'rc-b');
-    const ea = new SyncEngine(new Game(9, PAIR_UUID),ta, db, () => meta, 'white');
-    const eb = new SyncEngine(new Game(9, PAIR_UUID),tb, db, () => meta, 'black');
+    const ea = new SyncEngine(new Game(9, PAIR_UUID),ta, db, () => meta, 'white', ANY_SEED);
+    const eb = new SyncEngine(new Game(9, PAIR_UUID),tb, db, () => meta, 'black', ANY_SEED);
     ea.placeLocalOnly([0, 0, 0]);
     eb.placeLocalOnly([2, 2, 2]);
     await ea.connect('rc-room');
@@ -1369,7 +1436,7 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
   it('receive() NORMALIZES a directly-injected message with a MISSING epoch to generation 0 (adopts at epoch 0)', async () => {
     const hub = new MockRelayHub();
     const t = new MockTransport(hub, 'no-epoch');
-    const eng = new SyncEngine(new Game(9, PAIR_UUID),t, db, () => meta, 'white');
+    const eng = new SyncEngine(new Game(9, PAIR_UUID),t, db, () => meta, 'white', ANY_SEED);
     await eng.connect('no-epoch-room');
     // A legacy-shaped message with NO epoch field (a pre-epoch peer) injected straight into the
     // public receive seam. It must be read as epoch 0 and — since the engine is also at epoch 0 —
@@ -1396,7 +1463,7 @@ describe('SyncEngine.onChange — the resync notification (Task 6.1, issue #4)',
   async function solo(size = 9): Promise<SyncEngine> {
     const hub = new MockRelayHub();
     const t = new MockTransport(hub, 'chg');
-    const eng = new SyncEngine(new Game(size, PAIR_UUID),t, db, () => meta, 'white');
+    const eng = new SyncEngine(new Game(size, PAIR_UUID),t, db, () => meta, 'white', ANY_SEED);
     await eng.connect('change-room');
     return eng;
   }
@@ -1504,8 +1571,8 @@ describe('SyncEngine.onMessage — the pump validates + routes the tagged union'
     const hub = new MockRelayHub();
     const ta = new MockTransport(hub, 'route-a');
     const tb = new MockTransport(hub, 'route-b');
-    const a = new SyncEngine(new Game(size, PAIR_UUID),ta, db, () => meta, 'white');
-    const b = new SyncEngine(new Game(size, PAIR_UUID),tb, db, () => meta, 'black');
+    const a = new SyncEngine(new Game(size, PAIR_UUID),ta, db, () => meta, 'white', ANY_SEED);
+    const b = new SyncEngine(new Game(size, PAIR_UUID),tb, db, () => meta, 'black', ANY_SEED);
     await a.connect('route-room');
     await b.connect('route-room');
     return { a, b, ta, tb };
@@ -1795,8 +1862,8 @@ describe('SyncEngine — restricted networked undo (Task 3.4)', () => {
     const hub = new MockRelayHub();
     const ta = new MockTransport(hub, 'undo-a');
     const tb = new MockTransport(hub, 'undo-b');
-    const a = new SyncEngine(new Game(size, PAIR_UUID),ta, db, () => meta, 'white');
-    const b = new SyncEngine(new Game(size, PAIR_UUID),tb, db, () => meta, 'black');
+    const a = new SyncEngine(new Game(size, PAIR_UUID),ta, db, () => meta, 'white', ANY_SEED);
+    const b = new SyncEngine(new Game(size, PAIR_UUID),tb, db, () => meta, 'black', ANY_SEED);
     await a.connect('undo-room');
     await b.connect('undo-room');
     return { a, b };
@@ -1867,8 +1934,8 @@ describe('SyncEngine — restricted networked undo (Task 3.4)', () => {
     const hub = new MockRelayHub();
     const ta = new MockTransport(hub, 'uc-a');
     const tb = new MockTransport(hub, 'uc-b');
-    const ea = new SyncEngine(new Game(9, PAIR_UUID),ta, db, () => meta, 'white');
-    const eb = new SyncEngine(new Game(9, PAIR_UUID),tb, db, () => meta, 'black');
+    const ea = new SyncEngine(new Game(9, PAIR_UUID),ta, db, () => meta, 'white', ANY_SEED);
+    const eb = new SyncEngine(new Game(9, PAIR_UUID),tb, db, () => meta, 'black', ANY_SEED);
     ea.placeLocalOnly([0, 0, 0]);
     eb.placeLocalOnly([2, 2, 2]);
     await ea.connect('undo-conflict');
@@ -1878,5 +1945,151 @@ describe('SyncEngine — restricted networked undo (Task 3.4)', () => {
     // Even though eb's own last move (black? no — its fork's last mover) might
     // otherwise be undoable, a stopped game refuses undo outright.
     expect(() => eb.undo()).toThrow(/conflict|stopped/i);
+  });
+});
+
+/**
+ * The design §3 SEED GATE on the move-sync channel (#46). `isPrefix` deliberately treats an empty log
+ * as a prefix of ANY log — the rule that makes ordinary catch-up work — so on its own it lets any peer
+ * whose log is momentarily empty adopt a stranger's game wholesale, whatever seed its player chose.
+ * That is the user's rule broken on the one channel the admission protocol never sees:
+ *
+ *   *"when selecting 'New Game' … i would expect my phone to reject any non-empty gamestate data. only
+ *   'Dealer's Choice' should allow a device to accept non-empty gamestate data from the other device."*
+ *
+ * So a log belonging to a DIFFERENT game is judged by the peer's own seed before it may change
+ * anything. Same-game traffic is untouched (being ahead of or behind the game you are on is
+ * convergence, not a seed question) — asserted below, because a gate that also blocked ordinary
+ * catch-up would "pass" these tests while breaking every game.
+ */
+describe('SyncEngine.receive — the seed gate on a FOREIGN game (design §3, #46)', () => {
+  let db: IDBDatabase;
+  const meta = { players: { white: 'w', black: 'b' }, startedAt: 1000 };
+  const MINE = 'my-game';
+  const THEIRS = 'their-game';
+
+  beforeEach(async () => {
+    db = await openDatabase(`seedgate-${Math.random().toString(36).slice(2)}`);
+  });
+
+  /** A log for an arbitrary game uuid, with `nodes.length` placements. */
+  function logFor(uuid: string, ...nodes: string[]): EventLog {
+    let log = emptyLog(uuid);
+    for (const node of nodes) log = append(log, { type: 'place', node });
+    return log;
+  }
+
+  /** An engine on an EMPTY game `MINE`, holding `seed` — the state the hole was reachable from. */
+  function engineWith(seed: Proposal, mine: EventLog = emptyLog(MINE)): SyncEngine {
+    const hub = new MockRelayHub();
+    const t = new MockTransport(hub, 'peer-self');
+    return new SyncEngine(Game.fromLog(9, mine), t, db, () => meta, 'white', seed);
+  }
+
+  it('a `new` seed REFUSES a foreign non-empty log — the game is untouched and the refusal is typed', () => {
+    const eng = engineWith({ kind: 'new' });
+    const foreign = logFor(THEIRS, '0,0,0', '1,1,1');
+    let changes = 0;
+    eng.onChange(() => changes++);
+
+    eng.receive(toSyncMessage(foreign, 0));
+
+    expect(eng.game().uuid).toBe(MINE);
+    expect(eng.game().ply()).toBe(0);
+    expect(eng.status().kind).toBe('ok');
+    expect(eng.refusedGame()).toEqual({ uuid: THEIRS, reason: 'seed-refused' });
+    // No listener fired: nothing changed, so claiming a change would be a lie about state.
+    expect(changes).toBe(0);
+  });
+
+  it('a `resume`/`current` seed REFUSES a DIFFERENT non-empty game as `game-mismatch`', () => {
+    for (const kind of ['resume', 'current'] as const) {
+      const eng = engineWith({ kind, uuid: MINE, headHash: 'hh' }, logFor(MINE, '4,4,4'));
+      eng.receive(toSyncMessage(logFor(THEIRS, '0,0,0', '1,1,1'), 0));
+      expect(eng.game().uuid).toBe(MINE);
+      expect(eng.game().ply()).toBe(1);
+      expect(eng.refusedGame()).toEqual({ uuid: THEIRS, reason: 'game-mismatch' });
+    }
+  });
+
+  it('a `defer` seed ADOPTS a foreign non-empty game — the ONE seed the matrix allows it for', () => {
+    // The contrast that proves the two tests above are the SEED biting, not "foreign traffic is always
+    // dropped": dealer's choice is exactly the row that adopts a peer's real game.
+    const eng = engineWith({ kind: 'defer' });
+    const foreign = logFor(THEIRS, '0,0,0', '1,1,1');
+    let changes = 0;
+    eng.onChange(() => changes++);
+
+    eng.receive(toSyncMessage(foreign, 0));
+
+    expect(eng.game().uuid).toBe(THEIRS);
+    expect(eng.game().ply()).toBe(2);
+    expect(eng.refusedGame()).toBeNull();
+    expect(changes).toBe(1);
+  });
+
+  it('a `new` seed still adopts a foreign EMPTY game — what it refuses is HISTORY, not identity', () => {
+    // "New Game" is about never being handed a game in progress; two empty games are interchangeable
+    // (the #42 both-`new` convergence, and a rematch's fresh generation, both depend on this).
+    const eng = engineWith({ kind: 'new' });
+    eng.receive(toSyncMessage(logFor(THEIRS), 1));
+    expect(eng.game().uuid).toBe(THEIRS);
+    expect(eng.game().ply()).toBe(0);
+    expect(eng.refusedGame()).toBeNull();
+  });
+
+  it('a foreign game NEVER stops our game as a "conflict" — it is not a fork of our history', () => {
+    // Without the gate a foreign non-empty log lands as a CONFLICT against our own non-empty log,
+    // archiving both and stopping the game: any publisher would hold a kill switch over any peer.
+    const eng = engineWith({ kind: 'new' }, logFor(MINE, '4,4,4', '5,5,5'));
+    eng.receive(toSyncMessage(logFor(THEIRS, '0,0,0', '1,1,1'), 0));
+    expect(eng.status().kind).toBe('ok');
+    expect(eng.conflictForks()).toBeNull();
+    expect(eng.game().uuid).toBe(MINE);
+    expect(eng.refusedGame()).toEqual({ uuid: THEIRS, reason: 'seed-refused' });
+  });
+
+  it('SAME-game traffic is untouched by the gate: a strict extension is adopted under ANY seed', () => {
+    // The gate must not touch convergence. A `new` seed whose own board has moved on still adopts the
+    // peer's longer log for the SAME game — otherwise the gate would break every game it "protected".
+    const eng = engineWith({ kind: 'new' }, logFor(MINE, '0,0,0'));
+    eng.receive(toSyncMessage(logFor(MINE, '0,0,0', '1,1,1'), 0));
+    expect(eng.game().ply()).toBe(2);
+    expect(eng.refusedGame()).toBeNull();
+  });
+
+  it('SAME-game divergence still CONFLICTS (the gate never swallows a real fork)', () => {
+    const eng = engineWith({ kind: 'new' }, logFor(MINE, '0,0,0'));
+    eng.receive(toSyncMessage(logFor(MINE, '8,8,8'), 0));
+    expect(eng.status().kind).toBe('conflict');
+    expect(eng.refusedGame()).toBeNull();
+  });
+
+  it('a foreign log that would be IGNORED anyway needs no gate — no spurious refusal is recorded', () => {
+    // A newcomer's provisional EMPTY log reaching a resident is an ordinary `ignore` (nothing to adopt).
+    // Recording that as a "refusal" would turn normal entry traffic into noise on the diagnostic.
+    const eng = engineWith({ kind: 'resume', uuid: MINE, headHash: 'hh' }, logFor(MINE, '4,4,4'));
+    eng.receive(toSyncMessage(emptyLog(THEIRS), 0));
+    expect(eng.refusedGame()).toBeNull();
+    expect(eng.game().uuid).toBe(MINE);
+    expect(eng.game().ply()).toBe(1);
+  });
+
+  it('the gate applies ACROSS generations too — a higher epoch is not a licence to push a game', () => {
+    // `decideSyncEpoched` adopts a higher-epoch log outright, so without the gate stamping any epoch on
+    // a payload would bypass the seed entirely.
+    const eng = engineWith({ kind: 'new' });
+    eng.receive(toSyncMessage(logFor(THEIRS, '0,0,0', '1,1,1'), 99));
+    expect(eng.game().uuid).toBe(MINE);
+    expect(eng.refusedGame()).toEqual({ uuid: THEIRS, reason: 'seed-refused' });
+  });
+
+  it('refusedGame reports the LATEST refusal and starts as null', () => {
+    const eng = engineWith({ kind: 'new' });
+    expect(eng.refusedGame()).toBeNull();
+    eng.receive(toSyncMessage(logFor('game-x', '0,0,0'), 0));
+    expect(eng.refusedGame()).toEqual({ uuid: 'game-x', reason: 'seed-refused' });
+    eng.receive(toSyncMessage(logFor('game-y', '1,1,1'), 0));
+    expect(eng.refusedGame()).toEqual({ uuid: 'game-y', reason: 'seed-refused' });
   });
 });

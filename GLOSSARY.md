@@ -113,7 +113,10 @@ the tie-breaker.
 - **Seed matrix** (design §3, enforced on the wire) — what each seed **sends** and **accepts**:
   **new** sends/accepts an **empty** game only; **resume**/**current** send their own concrete game
   and accept the **same UUID** only; **dealer's choice** sends nothing and is the **only** kind that
-  **adopts a peer's non-empty game**. A mismatch is an honest typed reject, never a silent adoption.
+  **adopts a peer's non-empty game** — in **either** direction, whether the deferrer is the newcomer
+  (it adopts the arbiter's game) or the **arbiter** (its `admit` names the newcomer's game and it adopts
+  that off the move-sync channel). A mismatch is an honest typed reject, never a silent adoption.
+  Enforced at **all three** points a game can cross into a peer — see **Seed refusal**.
 - **Reconciliation** — the pure decision that turns a **pair of seed proposals** into a single
   agreed game or a **typed reject** (`seed-refused` / `game-mismatch` / `game-divergent`) surfaced
   to the UI: both empty (defer/new, any mix) → one fresh game; a concrete game beside a **defer** →
@@ -121,14 +124,28 @@ the tie-breaker.
   → resume together; two concrete same-UUID divergent → `game-divergent`; two concrete different-UUID
   → `game-mismatch`.
 - **Seed refusal** (`seed-refused`) — the reject for **incompatible seeds**: one peer chose New game
-  (empty only) while the other brought a real game, so neither may give way. Raised at **both**
-  enforcement points — on the **proposal** pair (`reconcile`) and on the **concrete game** about to
-  cross the wire (`acceptsGame`, applied by the arbiter before it serves and by the newcomer on
-  receipt). It is what stops a stale game being pushed to a peer that asked to start over (#46) and a
-  reused code from keeping the old board (#43).
+  (empty only) while the other brought a real game, so neither may give way. Raised at **every**
+  enforcement point — on the **proposal** pair (`reconcile`), on the **concrete game** about to cross
+  the wire (`acceptsGame`, applied by the arbiter before it serves and by the newcomer on receipt), and
+  on the **move-sync channel** before a peer adopts a log belonging to a *different* game
+  (`SyncEngine`'s seed gate — without it the log-prefix rule, under which an empty log is a prefix of
+  anything, let any peer whose board was momentarily empty adopt a stranger's game wholesale). It is
+  what stops a stale game being pushed to a peer that asked to start over (#46) and a reused code from
+  keeping the old board (#43).
+- **Seed unavailable** (`seed-unavailable`) — a **local** refusal, not a peer's: the seed named a game
+  this browser does not hold, so there is nothing to resume. Refused before the transport is touched.
+  Its own reason because the alternative — entering on a fresh game while announcing the named one —
+  made every downstream refusal a lie (a peer proposing the *same* game was told the two of you
+  "brought different games").
 - **Initiator election** — the deterministic pick (earlier live-presence **arrival**, then
   lower **playerId**) of which of two **simultaneously-arriving** peers computes reconciliation
   and publishes the agreed game — killing the initial double-white race.
+- **Rematch game identity** (`rematchGameUuid`) — a rematch is **one** new game, so its UUID is
+  **derived** from state both peers already share (the prior game's UUID + the generation being
+  entered), not independently randomized. Both sides reset over the same live connection with no
+  coordination round-trip and land on the same game at genesis — the same property initiator election
+  gives a *first* game. Randomly-minted ids left each peer on its own game (two archive records for one
+  rematch) converging only by the log-prefix accident the seed matrix must be free to refuse.
 - **playerId** — a per-browser stable id (localStorage) that **owns a seat** and enables
   reconnect / reclaim-by-identity.
 - **Active-game breadcrumb** (`activeNetworkedGame`) — the single record *"I am **currently

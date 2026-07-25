@@ -729,10 +729,12 @@ test.describe('two-context session model over the injected MockTransport (S.7, e
     // enters X asking for a NEW game and gets handed the laptop's board. Same shape as #43 (re-using a
     // code keeps the old game). Here the entry is refused with a typed reason and NOTHING crosses over.
     //
-    // NOTE for V.3 (resident-peer republish): this scenario is a tripwire for it. Today a resident does
-    // not push its log to an arriving peer, so the seed gate is the only thing deciding what B adopts.
-    // A republish-on-presence that fires before/around admission must NOT let B's provisional engine
-    // adopt a game its seed just refused — if that regresses, this test is what says so.
+    // NOTE for V.3 (resident-peer republish): this scenario is a tripwire for it. A republish-on-presence
+    // that fires before/around admission must NOT let B's provisional engine adopt a game its seed just
+    // refused — if that regresses, this test is what says so. The move-sync channel now applies the SAME
+    // `acceptsGame` rule to a log belonging to a different game (`SyncEngine`'s seed gate, unit-tested in
+    // `sync.test.ts` + `session.test.ts`), so a republish arriving mid-entry is refused rather than
+    // adopted — but the end-to-end statement lives here.
     const hub = new NodeRelayHub();
     const a = await bootPeer(browser, hub, 'player-a');
     const b = await bootPeer(browser, hub, 'player-b');

@@ -45,6 +45,7 @@ import { getConfig } from '../config/config';
 import { loadConflicted } from '../persist/archive';
 import { MqttTransport, type MqttConnectFn } from './mqttTransport';
 import { SyncEngine, toSyncMessage } from './sync';
+import type { Proposal } from './admission';
 import type { RelayConfig } from '../config/config';
 
 /** The SSOT relay config — the SAME record the client transport uses. */
@@ -55,6 +56,14 @@ const realConnect: MqttConnectFn = (url, opts) =>
   mqtt.connect(url, opts) as unknown as ReturnType<MqttConnectFn>;
 
 /** How long to wait for the relay to accept a connection before declaring it down. */
+/**
+ * These real-relay tests are about MESSAGES CROSSING A LIVE BROKER, not about the design §3 seed gate:
+ * dealer's choice is the one seed that imposes no game-identity constraint, so it leaves the engine's
+ * adoption behaviour exactly as it is. The gate is unit-tested against real `new`/`resume` seeds in
+ * `sync.test.ts`.
+ */
+const ANY_SEED: Proposal = { kind: 'defer' };
+
 const CONNECT_PROBE_MS = 10_000;
 /** How long to wait for a message to propagate across the live relay. */
 const PROPAGATE_MS = 6_000;
@@ -158,7 +167,7 @@ describe.skipIf(!reachable)('real relay: two SyncEngines over the LIVE MQTT brok
     size = 9,
   ): SyncEngine {
     const transport = new MqttTransport(relay, { connect: realConnect, peerId });
-    const engine = new SyncEngine(new Game(size), transport, db, () => meta, myColor);
+    const engine = new SyncEngine(new Game(size), transport, db, () => meta, myColor, ANY_SEED);
     engines.push(engine);
     return engine;
   }

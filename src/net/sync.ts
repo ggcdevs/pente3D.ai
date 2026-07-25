@@ -31,6 +31,17 @@
  * wraps a core {@link Game}, a {@link Transport}, and the {@link flagConflicted}
  * archive call, wiring the pure decision to real message exchange. It carries no
  * rules of Pente (that is `src/core`) and imports nothing from three/render/ui.
+ *
+ * ## The seed gate on this channel (design §3, #46)
+ *
+ * The prefix/hash decision above answers *"is this a valid continuation of a history"*, and
+ * `isPrefix` deliberately treats an EMPTY log as a prefix of any log — so on its own it would let any
+ * peer whose log is currently empty adopt a stranger's game wholesale, whatever seed its player chose.
+ * That is the #46 rule broken on a channel the admission protocol never sees. So a message about a
+ * DIFFERENT game (`uuid` ≠ ours) is judged by the peer's own seed first, with the same pure
+ * {@link acceptsGame} the admission gates use ({@link SyncEngine.refusedGame} records a refusal); only
+ * then does the prefix/epoch policy run. Same-game traffic is untouched — being ahead of or behind the
+ * game you are already on is convergence, not a seed question.
  */
 
 import { Game } from '../core/game';
@@ -48,7 +59,7 @@ import { opponent, type GameState, type Player } from '../core/gameState';
 import { flagConflicted, type ArchivedMeta } from '../persist/archive';
 import { createEmitter, type Emitter } from '../util/emitter';
 import type { Transport, TransportMessage } from './transport';
-import type { Proposal } from './admission';
+import { acceptsGame, type Proposal, type ReconcileReject } from './admission';
 import type { SeatMap } from './seats';
 
 /** The sync wire-format version. Bumped only on a breaking message-shape change. */
@@ -165,18 +176,36 @@ export interface HelloMessage {
 }
 
 /**
- * An **admit**: the arbiter's grant. It carries the AUTHORITATIVE game the pair agreed on (as a
- * full {@link SyncMessage} sync payload, so the admitted peer adopts it through the ordinary
- * hash-chain-verified {@link parseSyncMessage} path — same-identity is provable), plus the
- * durable identity-owned {@link SeatMap} that assigns each seat to its owning playerId. The
- * admitted peer validates the game (headHash re-verify) and takes the seat the map gives it.
+ * Which game an {@link AdmitMessage} puts the pair on — the two directions of design §3's serving
+ * rule, tagged so neither can be mistaken for the other:
+ *
+ *   - `'arbiter'` — the arbiter SERVES the agreed game as a full {@link SyncMessage} payload, so the
+ *     admitted peer adopts it through the ordinary hash-chain-verified {@link parseSyncMessage} path
+ *     (same-identity is provable).
+ *   - `'newcomer'` — the arbiter entered with **dealer's choice** and holds nothing worth keeping, so
+ *     the agreed game is the NEWCOMER's own, named by `uuid`. The newcomer KEEPS its game (nothing to
+ *     adopt) and the arbiter adopts it off the move-sync channel, which its `defer` seed permits. This
+ *     is the only way design §3's *"dealer's choice is the ONLY kind that adopts a peer's non-empty
+ *     game"* row is reachable when the DEFERRER is the arbiter — an arbiter can only ever serve the
+ *     game its own engine holds, so without this shape it had to refuse the pair.
+ */
+export type AdmittedGame =
+  | { readonly source: 'arbiter'; readonly game: { readonly kind: 'sync' } & SyncMessage }
+  | { readonly source: 'newcomer'; readonly uuid: string };
+
+/**
+ * An **admit**: the arbiter's grant. It names the game the pair agreed on ({@link AdmittedGame} —
+ * either the arbiter's own authoritative payload, or the newcomer's own game when the arbiter
+ * deferred), plus the durable identity-owned {@link SeatMap} that assigns each seat to its owning
+ * playerId. The admitted peer validates the game (headHash re-verify, or a uuid match when the game
+ * is its own) and takes the seat the map gives it.
  */
 export interface AdmitMessage {
   readonly kind: 'admit';
   /** Unique message id (dedup on receive). */
   readonly id: string;
-  /** The authoritative game to adopt — a full sync payload, hash-chain re-verifiable. */
-  readonly game: { readonly kind: 'sync' } & SyncMessage;
+  /** WHICH game the pair agreed on, and whose bytes they are (see {@link AdmittedGame}). */
+  readonly agreed: AdmittedGame;
   /** The identity-owned seat map (real playerIds; no `'host'` sentinel). */
   readonly seats: SeatMap;
 }
@@ -337,9 +366,9 @@ export function parseGameMessage(msg: unknown): GameMessage {
       if (typeof rec.id !== 'string') {
         throw new SyncError('admit message requires a string id');
       }
-      const game = parseAdmitGame(rec.game);
+      const agreed = parseAdmittedGame(rec.agreed);
       const seats = parseSeatMap(rec.seats);
-      return { kind: 'admit', id: rec.id, game, seats };
+      return { kind: 'admit', id: rec.id, agreed, seats };
     }
     case 'reject': {
       if (typeof rec.id !== 'string') {
@@ -405,17 +434,37 @@ function parseProposal(raw: unknown): Proposal {
 }
 
 /**
- * Validate the `game` field of an {@link AdmitMessage}: it must be a full `kind:'sync'` sync
- * ENVELOPE (so the admitted peer can adopt it through the hash-chain-verified sync path). This
- * validates the envelope only (via {@link parseGameMessage} recursion); the deeper chain
+ * Validate the `agreed` field of an {@link AdmitMessage} into an {@link AdmittedGame}. An
+ * `'arbiter'`-sourced grant must carry a full `kind:'sync'` sync ENVELOPE (so the admitted peer can
+ * adopt it through the hash-chain-verified sync path); a `'newcomer'`-sourced one must carry a
+ * non-empty `uuid` and NO payload (the arbiter deferred and has no game to serve). An unknown
+ * `source` is rejected rather than defaulted — defaulting it would let a malformed grant be read as
+ * whichever shape happens to parse, which is exactly how a peer gets handed a game nobody agreed on.
+ * The envelope is validated here (via {@link parseGameMessage} recursion); the deeper chain
  * re-verification is done by {@link parseSyncMessage} when the game is actually applied.
  */
-function parseAdmitGame(raw: unknown): { readonly kind: 'sync' } & SyncMessage {
-  const inner = parseGameMessage(raw);
-  if (inner.kind !== 'sync') {
-    throw new SyncError(`admit message game must be a sync payload, got kind ${inner.kind}`);
+function parseAdmittedGame(raw: unknown): AdmittedGame {
+  if (typeof raw !== 'object' || raw === null) {
+    throw new SyncError('admit message requires an agreed object');
   }
-  return inner;
+  const rec = raw as Record<string, unknown>;
+  switch (rec.source) {
+    case 'arbiter': {
+      const inner = parseGameMessage(rec.game);
+      if (inner.kind !== 'sync') {
+        throw new SyncError(`admit message game must be a sync payload, got kind ${inner.kind}`);
+      }
+      return { source: 'arbiter', game: inner };
+    }
+    case 'newcomer': {
+      if (typeof rec.uuid !== 'string' || rec.uuid.length === 0) {
+        throw new SyncError('admit message newcomer-sourced game requires a non-empty string uuid');
+      }
+      return { source: 'newcomer', uuid: rec.uuid };
+    }
+    default:
+      throw new SyncError(`unknown admit agreed source: ${String(rec.source)}`);
+  }
 }
 
 /**
@@ -651,16 +700,27 @@ export function toHelloMessage(
 }
 
 /**
- * Build a `kind:'admit'` admission message (Task S.4) carrying the authoritative `game` (a full
- * sync payload the admitted peer adopts through the hash-chain-verified path) and the durable
- * identity-owned `seats` map. `id` is the UNIQUE dedup id.
+ * Build a `kind:'admit'` admission message (Task S.4) SERVING the arbiter's authoritative `game` (a
+ * full sync payload the admitted peer adopts through the hash-chain-verified path) plus the durable
+ * identity-owned `seats` map. `id` is the UNIQUE dedup id. The other direction — a deferring arbiter
+ * admitting the newcomer onto its OWN game — is {@link toAdoptAdmitMessage}.
  */
 export function toAdmitMessage(
   id: string,
   game: { readonly kind: 'sync' } & SyncMessage,
   seats: SeatMap,
 ): AdmitMessage {
-  return { kind: 'admit', id, game, seats };
+  return { kind: 'admit', id, agreed: { source: 'arbiter', game }, seats };
+}
+
+/**
+ * Build a `kind:'admit'` admission message in which the agreed game is the NEWCOMER's own, named by
+ * `uuid` — the grant a **dealer's-choice** arbiter publishes (design §3: defer is the only kind that
+ * adopts a peer's non-empty game). It carries no payload because the arbiter has none to give: the
+ * newcomer keeps the game it brought, and the arbiter adopts that game off the move-sync channel.
+ */
+export function toAdoptAdmitMessage(id: string, uuid: string, seats: SeatMap): AdmitMessage {
+  return { kind: 'admit', id, agreed: { source: 'newcomer', uuid }, seats };
 }
 
 /**
@@ -791,6 +851,24 @@ export class SyncEngine {
   private readonly admissionDedup = new AdmissionDeduper();
 
   /**
+   * The player's own SEED proposal for this session (design §3) — what game they chose to bring. It
+   * gates adopting a log belonging to a DIFFERENT game off this channel (see the module docstring):
+   * `defer` takes anything, `new` takes an empty game only, `resume`/`current` take their own uuid
+   * only. REQUIRED, deliberately: a default would make "no seed supplied" mean "adopt anything", which
+   * is the hole this gate exists to close, and it would close silently.
+   */
+  private readonly seed: Proposal;
+
+  /**
+   * The last cross-identity log this engine REFUSED to adopt, and the typed seed reason — the
+   * observable record of the gate biting (there is nothing else to observe: a refusal deliberately
+   * leaves the game untouched and fires no change listener, because nothing changed). `null` until a
+   * refusal happens. Read by tests and by the session's diagnostics; never a log line standing in for
+   * behaviour (agent-principles #3).
+   */
+  private _refusedGame: { readonly uuid: string; readonly reason: ReconcileReject } | null = null;
+
+  /**
    * @param game The initial local game (usually fresh; may already hold moves).
    * @param transport The room transport (already-constructed; `connect` is called
    *   by {@link connect}).
@@ -799,6 +877,8 @@ export class SyncEngine {
    * @param myColor This client's own seat color (from the seat manager). It gates
    *   the restricted networked undo: only the player who made the last move may
    *   undo it.
+   * @param seed This player's own seed proposal — the design §3 gate on adopting a
+   *   DIFFERENT game off the move-sync channel (see {@link SyncEngine.seed}).
    */
   constructor(
     game: Game,
@@ -806,6 +886,7 @@ export class SyncEngine {
     db: IDBDatabase,
     meta: MetaProvider,
     myColor: Player,
+    seed: Proposal,
   ) {
     this._game = game;
     this.transport = transport;
@@ -813,6 +894,16 @@ export class SyncEngine {
     this.meta = meta;
     this.size = game.state().size;
     this.myColor = myColor;
+    this.seed = seed;
+  }
+
+  /**
+   * The last log this engine refused to adopt because it belonged to a DIFFERENT game than the one
+   * this player's seed permits, with the typed reason — or `null` if the gate has never bitten. The
+   * observable proof that a foreign game was turned away rather than silently adopted (design §3, #46).
+   */
+  refusedGame(): { readonly uuid: string; readonly reason: ReconcileReject } | null {
+    return this._refusedGame;
   }
 
   /** The live game (its log is the canonical, syncable source of truth). */
@@ -1057,6 +1148,11 @@ export class SyncEngine {
    * on the single state-mutating entry point, rather than only at the transport pump,
    * so the invariant holds for every caller (agent-principles: keep the tripwire;
    * errors/invariants must not be bypassed via a public seam).
+   *
+   * A message about a DIFFERENT game than the one we are on additionally passes the design §3 SEED
+   * GATE before it may change anything (see the module docstring): refused, it leaves the game
+   * untouched and is recorded on {@link refusedGame}. Because this guard lives here rather than only at
+   * the pump, it holds for a directly-injected message too.
    */
   receive(msg: SyncMessage): void {
     if (this._status.kind === 'conflict') return;
@@ -1066,6 +1162,26 @@ export class SyncEngine {
     // peer's first game still converges and the two epoch reads can never disagree.
     const remoteEpoch = normalizeEpoch(msg.epoch);
     const decision = decideSyncEpoched(this._epoch, this._game.log, remoteEpoch, remote);
+    // SEED GATE (design §3, the user's rule in #46) — this channel's half. A message about a DIFFERENT
+    // game than the one we are on would CHANGE which game we are playing, so it is a seed question, not
+    // a convergence one: only `defer` may take a peer's non-empty game, `new` may take an empty one, and
+    // `resume`/`current` may take their own uuid only. Without this, `isPrefix`'s "an empty log is a
+    // prefix of any log" rule (the same rule that makes ordinary catch-up work) lets ANY peer whose log
+    // is momentarily empty adopt a stranger's game wholesale — the #46 hole, on the one channel
+    // admission never inspects. An `ignore` needs no gate: it changes nothing either way.
+    if (decision.action !== 'ignore' && remote.uuid !== this._game.log.uuid) {
+      const acceptance = acceptsGame(this.seed, {
+        uuid: remote.uuid,
+        empty: remote.entries.length === 0,
+      });
+      if (!acceptance.ok) {
+        // Refuse honestly: leave the game EXACTLY as it was (no adopt, no conflict-stop — a foreign
+        // game is not a fork of ours, and letting it stop our game would hand any publisher a kill
+        // switch) and record the refusal so it is observable rather than a silent drop.
+        this._refusedGame = { uuid: remote.uuid, reason: acceptance.reason };
+        return;
+      }
+    }
     switch (decision.action) {
       case 'ignore':
         // Stale / replay — INCLUDING a message from a SUPERSEDED epoch (a late in-flight publish

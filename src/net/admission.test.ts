@@ -3,6 +3,7 @@ import fc from 'fast-check';
 import {
   reconcile,
   acceptsGame,
+  decideAdmission,
   electInitiator,
   deferProposal,
   newProposal,
@@ -455,53 +456,185 @@ describe('reconcile — properties (fast-check)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// The two gates must AGREE: whatever `reconcile` refuses at the proposal level, the peer
-// itself refuses when handed the other's concrete game (and vice-versa). One rule, two
-// enforcement points (the arbiter before it serves, the newcomer on receipt).
+// decideAdmission — the WHOLE arbiter verdict, the rule the wire actually applies.
+//
+// `session.ts` used to compose this inline (reconcile → "can I serve the agreed game?" →
+// acceptsGame), and the composition contradicted the matrix: an arbiter can only ever serve
+// its OWN engine, so a DEFERRING arbiter — the one seed that is supposed to adopt a peer's
+// real game — refused the newcomer's game as `game-mismatch` before the seed gate ran. These
+// tests are stated against the arbiter's real serving behaviour: the game its ENGINE HOLDS,
+// which is not always the game its proposal named.
 // ---------------------------------------------------------------------------
 
-describe('reconcile ↔ acceptsGame agreement (fast-check)', () => {
+describe('decideAdmission — the deferring ARBITER adopts the newcomer’s game (design §3)', () => {
+  it('defer arbiter (holding a fresh empty game) + resume newcomer → serve THEIRS, by that uuid', () => {
+    // The row V.2 exists to preserve, in the direction where the DEFERRER is the arbiter: it brought
+    // nothing, so the pair plays the newcomer's real game and the arbiter is the one that adopts.
+    const d = decideAdmission(deferProposal(), emptyGame('fresh-mine'), resumeProposal('g1', 'h1'));
+    expect(d).toEqual({ ok: true, serve: 'theirs', uuid: 'g1' });
+  });
+
+  it('a `current` newcomer is adopted identically — provenance never changes the verdict', () => {
+    expect(
+      decideAdmission(deferProposal(), emptyGame('fresh-mine'), currentProposal('g7', 'h7')),
+    ).toEqual({ ok: true, serve: 'theirs', uuid: 'g7' });
+  });
+
+  it('…but a defer arbiter that ALREADY HOLDS the agreed game serves it itself (it has the bytes)', () => {
+    // A returning deferrer re-seeded from its breadcrumb onto the very game the newcomer is resuming:
+    // nothing to adopt, and it can serve the history it holds.
+    const d = decideAdmission(deferProposal(), playedGame('g1'), resumeProposal('g1', 'h1'));
+    expect(d).toEqual({ ok: true, serve: 'mine' });
+  });
+
+  it('two defers agree on a fresh game, which the arbiter serves (no adoption either way)', () => {
+    expect(decideAdmission(deferProposal(), emptyGame('fresh-mine'), deferProposal())).toEqual({
+      ok: true,
+      serve: 'mine',
+    });
+  });
+
+  it('a defer arbiter is NOT a licence to adopt: a `new` newcomer still gets the arbiter’s game', () => {
+    // `reconcile(defer, new)` agrees on a FRESH game, not an existing one, so there is nothing of the
+    // newcomer's to adopt — the arbiter serves its own empty game and the newcomer's seed accepts it.
+    expect(decideAdmission(deferProposal(), emptyGame('fresh-mine'), newProposal())).toEqual({
+      ok: true,
+      serve: 'mine',
+    });
+  });
+});
+
+describe('decideAdmission — refusals are judged on what we HOLD, never on what we proposed', () => {
+  it('a `new` arbiter refuses a resume newcomer (seed-refused) — the #46/#43 rule, serving side', () => {
+    expect(decideAdmission(newProposal(), emptyGame('fresh'), resumeProposal('g1', 'h1'))).toEqual({
+      ok: false,
+      reason: 'seed-refused',
+    });
+  });
+
+  it('a `new` arbiter whose board has MOVED ON refuses a `new` newcomer (the bytes, not the proposals)', () => {
+    // `reconcile(new, new)` agrees on "a fresh game" — but a resident can play while alone, so the game
+    // it would actually serve has history, and "New Game" must never be handed a game in progress.
+    expect(decideAdmission(newProposal(), playedGame('g-played'), newProposal())).toEqual({
+      ok: false,
+      reason: 'seed-refused',
+    });
+  });
+
+  it('an arbiter on a DIFFERENT real game than its proposal named → game-mismatch (accurately)', () => {
+    // Proposals agree on `g1`; our engine actually holds `g2`. The newcomer really would be handed a
+    // different game than it asked for, so `game-mismatch` ("different games") is the honest word.
+    expect(decideAdmission(resumeProposal('g1', 'h1'), playedGame('g2'), resumeProposal('g1', 'h1'))).toEqual({
+      ok: false,
+      reason: 'game-mismatch',
+    });
+  });
+
+  it('an arbiter that RE-MATCHED into a fresh empty game → seed-refused, not a mislabelled mismatch', () => {
+    // Reachable without any tampering: the arbiter resumed `g1`, then a rematch reset it onto a fresh
+    // EMPTY game while its proposal still says `resume(g1)`. What it now offers is an empty game — which
+    // is exactly the "one of you brought New Game" situation `seed-refused` describes.
+    expect(
+      decideAdmission(resumeProposal('g1', 'h1'), emptyGame('fresh-rematch'), resumeProposal('g1', 'h1')),
+    ).toEqual({ ok: false, reason: 'seed-refused' });
+  });
+
+  it('a reconcile-level reject passes through VERBATIM (divergent heads, different games)', () => {
+    expect(
+      decideAdmission(resumeProposal('g1', 'h1'), playedGame('g1'), resumeProposal('g1', 'OTHER')),
+    ).toEqual({ ok: false, reason: 'game-divergent' });
+    expect(
+      decideAdmission(resumeProposal('g1', 'h1'), playedGame('g1'), resumeProposal('g2', 'h2')),
+    ).toEqual({ ok: false, reason: 'game-mismatch' });
+  });
+
+  it('a resume arbiter holding its game serves a deferring newcomer', () => {
+    expect(decideAdmission(resumeProposal('g1', 'h1'), playedGame('g1'), deferProposal())).toEqual({
+      ok: true,
+      serve: 'mine',
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The gates must AGREE with the wire: nobody is ever put on a game their OWN seed refuses.
+// Stated over EVERY (arbiter seed, game the arbiter HOLDS, newcomer seed) triple — including
+// the `defer` arbiter and including an arbiter whose held game is not the one it proposed,
+// which is precisely what the earlier `reconcile ↔ acceptsGame` property excluded and is
+// where the matrix was broken.
+// ---------------------------------------------------------------------------
+
+describe('decideAdmission — no peer is ever put on a game its own seed refuses (fast-check)', () => {
   const uuidArb = fc.stringMatching(/^g[0-9]{1,4}$/);
   const hashArb = fc.stringMatching(/^[a-z0-9]{1,8}$/);
-  /** Proposals that DECLARE a game (a `new` declares a fresh empty one); a defer declares nothing. */
-  const declaringArb: fc.Arbitrary<Proposal> = fc.oneof(
+  /** Every seed a player can pick (netPanelModel `SEED_ORDER`) — the `defer` row included. */
+  const seedArb: fc.Arbitrary<Proposal> = fc.oneof(
+    fc.constant(deferProposal()),
     fc.constant(newProposal()),
     fc.tuple(uuidArb, hashArb).map(([u, h]) => resumeProposal(u, h)),
     fc.tuple(uuidArb, hashArb).map(([u, h]) => currentProposal(u, h)),
   );
-
   /**
-   * The game a declaring proposal would SERVE: a `new` serves the fresh empty game it minted (a uuid
-   * nothing else can collide with — the `fresh-` prefix is outside the `g\d+` uuid arbitrary), a
-   * `resume`/`current` serves the real game it named.
+   * Any game the arbiter's ENGINE might actually hold when a hello arrives — deliberately NOT derived
+   * from its proposal: it may hold the game it named, a fresh empty one (a `new` entry, or a rematch
+   * reset), or some other real game. The `g\d+` uuids can collide with a proposal's uuid (that is a
+   * case worth generating), and `fresh-*` never can.
    */
-  function servedBy(p: Proposal, tag: string): OfferedGame {
-    return p.kind === 'new' ? emptyGame(`fresh-${tag}`) : playedGame((p as { uuid: string }).uuid);
-  }
+  const heldArb: fc.Arbitrary<OfferedGame> = fc.oneof(
+    uuidArb.map((u) => playedGame(u)),
+    uuidArb.map((u) => emptyGame(u)),
+    fc.constant(emptyGame('fresh-held')),
+    fc.constant(playedGame('other-real-game')),
+  );
 
-  it('a refusal at the proposal level is the SAME refusal at the byte level, from BOTH peers', () => {
+  it('serve MINE ⇒ the newcomer’s seed accepts the game we hold; serve THEIRS ⇒ ours accepts theirs', () => {
     fc.assert(
-      fc.property(declaringArb, declaringArb, (a, b) => {
-        const r = reconcile(a, b);
-        const aSeesB = acceptsGame(a, servedBy(b, 'b'));
-        const bSeesA = acceptsGame(b, servedBy(a, 'a'));
-        if (r.ok) {
-          // Agreed → each peer accepts what the other would serve.
-          expect(aSeesB.ok).toBe(true);
-          expect(bSeesA.ok).toBe(true);
+      fc.property(seedArb, heldArb, seedArb, (mine, held, theirs) => {
+        const d = decideAdmission(mine, held, theirs);
+        if (!d.ok) return; // a typed reject puts nobody on anything.
+        if (d.serve === 'mine') {
+          // The newcomer will be handed the bytes we hold — its own seed must permit them.
+          expect(acceptsGame(theirs, held)).toEqual({ ok: true });
           return;
         }
-        if (r.reason === 'game-divergent') {
-          // The ONE documented asymmetry: same game, forked heads. The seed gate accepts (same uuid) and
-          // hands the fork to the sync policy (design §5 / V.4); only the proposal gate names it.
-          expect(aSeesB.ok).toBe(true);
-          expect(bSeesA.ok).toBe(true);
-          return;
-        }
-        expect(expectReject(aSeesB).reason).toBe(r.reason);
-        expect(expectReject(bSeesA).reason).toBe(r.reason);
+        // We will adopt the newcomer's game off the sync channel — OUR seed must permit that, and the
+        // uuid must be one the newcomer actually named (never invented).
+        expect(acceptsGame(mine, playedGame(d.uuid))).toEqual({ ok: true });
+        expect(acceptsGame(mine, emptyGame(d.uuid))).toEqual({ ok: true });
+        expect((theirs as { uuid?: string }).uuid).toBe(d.uuid);
       }),
     );
+  });
+
+  it('total: every triple yields `serve: mine`, `serve: theirs` + uuid, or a TYPED reject', () => {
+    fc.assert(
+      fc.property(seedArb, heldArb, seedArb, (mine, held, theirs) => {
+        const d = decideAdmission(mine, held, theirs);
+        if (d.ok) {
+          expect(['mine', 'theirs']).toContain(d.serve);
+          if (d.serve === 'theirs') expect(typeof d.uuid).toBe('string');
+          return;
+        }
+        expect(['game-mismatch', 'game-divergent', 'seed-refused']).toContain(d.reason);
+      }),
+    );
+  });
+
+  it('`serve: theirs` happens for the DEFER arbiter and NO other seed (the matrix’s single row)', () => {
+    // A guard against the property above passing vacuously: prove the adopting branch is reached at all,
+    // and that it is reached ONLY by dealer's choice.
+    let adoptions = 0;
+    fc.assert(
+      fc.property(seedArb, heldArb, seedArb, (mine, held, theirs) => {
+        const d = decideAdmission(mine, held, theirs);
+        if (d.ok && d.serve === 'theirs') {
+          adoptions++;
+          expect(mine.kind).toBe('defer');
+        }
+      }),
+      { numRuns: 500 },
+    );
+    expect(adoptions).toBeGreaterThan(0);
   });
 });
 

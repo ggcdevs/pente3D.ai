@@ -25,8 +25,9 @@ import { Game } from '../core/game';
 import { headHash } from '../core/eventLog';
 import { coordsOf } from '../core/coords';
 import { MockRelayHub, MockTransport, type Transport } from './transport';
-import { toAdmitMessage, toSyncMessage } from './sync';
+import { toAdmitMessage, toAdoptAdmitMessage, toSyncMessage } from './sync';
 import { NetSession, type NetSessionDeps } from './session';
+import { rematchGameUuid } from './rematch';
 import type { Proposal } from './admission';
 import type { NetSeat } from '../ui/widgets/netModel';
 
@@ -1205,6 +1206,78 @@ describe('NetSession — a `new` entry is never served a game WITH HISTORY (#46/
     expect(b.gameState()).toBeNull();
   });
 
+  it('BACKSTOP: a NEWCOMER-sourced admit naming a game we did NOT bring is refused `game-mismatch`', async () => {
+    // The other half of the receiving-side backstop, for the shape a DEFERRING arbiter sends: the grant
+    // carries no payload, only the uuid of the game it agreed the pair plays. If that uuid is not the
+    // game we brought, the arbiter has agreed us onto a game neither of us is on — which is exactly what
+    // `game-mismatch` says, and precisely NOT a game we may keep playing under.
+    const hub = new MockRelayHub();
+    const own = await openDatabase(`net-adopt-backstop-${Math.random().toString(36).slice(2)}`);
+    const mineGame = new Game(SIZE);
+    mineGame.place(coordsOf('4,4,4'));
+    await saveGame(own, mineGame.uuid, mineGame, { players: {}, result: 'in-progress', startedAt: 9 });
+
+    const b = makeSession(hub, 'player-b', { db: own, settleMs: 200 });
+    const rogueTransport = new MockTransport(hub, 'player-rogue');
+    await rogueTransport.connect(ROOM);
+
+    const entering = b.enter(ROOM, {
+      kind: 'resume',
+      uuid: mineGame.uuid,
+      headHash: headHash(mineGame.log),
+    });
+    await flush();
+    expect(b.state().phase).toBe('connecting');
+    rogueTransport.publish(
+      toAdoptAdmitMessage('rogue-adopt-1', 'a-game-we-never-brought', {
+        white: 'player-rogue',
+        black: 'player-b',
+      }),
+    );
+    await entering;
+
+    expect(b.state().phase).toBe('offline');
+    expect(b.lastRejectReason()).toBe('game-mismatch');
+    expect(b.state().joinError).toBe('game-mismatch');
+    expect(b.state().seat).toBeNull();
+    expect(b.gameUuid()).toBeNull();
+  });
+
+  it('CONTRAST: a NEWCOMER-sourced admit naming OUR OWN game seats us and keeps that game', async () => {
+    // Proves the refusal above is about the NAMED uuid, not "payload-less admits are always refused" —
+    // the honest grant (the one a real deferring arbiter sends) is accepted and we keep our history.
+    const hub = new MockRelayHub();
+    const own = await openDatabase(`net-adopt-ok-${Math.random().toString(36).slice(2)}`);
+    const mineGame = new Game(SIZE);
+    mineGame.place(coordsOf('4,4,4'));
+    await saveGame(own, mineGame.uuid, mineGame, { players: {}, result: 'in-progress', startedAt: 9 });
+
+    const b = makeSession(hub, 'player-b', { db: own, settleMs: 200 });
+    const arbiterTransport = new MockTransport(hub, 'player-arb');
+    await arbiterTransport.connect(ROOM);
+
+    const entering = b.enter(ROOM, {
+      kind: 'resume',
+      uuid: mineGame.uuid,
+      headHash: headHash(mineGame.log),
+    });
+    await flush();
+    arbiterTransport.publish(
+      toAdoptAdmitMessage('arb-adopt-1', mineGame.uuid, {
+        white: 'player-arb',
+        black: 'player-b',
+      }),
+    );
+    await entering;
+
+    expect(b.state().phase).toBe('connected');
+    expect(b.lastRejectReason()).toBeNull();
+    expect(b.state().seat).toBe('black');
+    expect(b.gameUuid()).toBe(mineGame.uuid);
+    expect(b.ply()).toBe(1);
+    expect(headHash(b.syncEngine()!.game().log)).toBe(headHash(mineGame.log));
+  });
+
   it('CONTROL for the backstop: the SAME pushed admit carrying an EMPTY game IS adopted', async () => {
     // Proves the refusal above is the SEED rule biting on the game's HISTORY — not the session simply
     // refusing every hand-crafted admit (which would make the test above prove nothing).
@@ -1662,5 +1735,274 @@ describe('NetSession — the archived startedAt is the GAME’s date, not the wr
     // …and so does the arbiter's, via the resume/seed path.
     expect(await storedStartedAt(dbA, shared.uuid)).toBe(BEGAN_AT);
     expect(a.gameStartedAt()).toBe(BEGAN_AT);
+  });
+});
+
+/**
+ * The design §3 seed matrix ON THE WIRE, in the two places the V.2 round-1 wiring did not reach.
+ *
+ * The matrix has exactly one row that adopts a peer's real game — **dealer's choice** — and V.2 exists
+ * to preserve it. It was only reachable when the DEFERRER was the newcomer: an arbiter can serve nothing
+ * but its own engine, so a deferring ARBITER refused the newcomer's game as `game-mismatch` (a game the
+ * deferrer never proposed). And the matrix was not applied to the move-sync channel at all, so a peer
+ * whose log was momentarily empty adopted a foreign non-empty game wholesale — the user's rule in #46
+ * broken on the one channel admission never inspects.
+ *
+ * Both are first-class flows: `netPanelModel`'s SEED_ORDER offers all four seeds to BOTH peers, and V.6
+ * makes Resume a primary route back to a game.
+ */
+describe("NetSession — dealer's choice ADOPTS the newcomer's game when the DEFERRER is the arbiter", () => {
+  it('a defer arbiter + a resume newcomer both end up on the NEWCOMER’s real game', async () => {
+    const hub = new MockRelayHub();
+    const dbA = await openDatabase(`net-defer-arb-a-${Math.random().toString(36).slice(2)}`);
+    const dbB = await openDatabase(`net-defer-arb-b-${Math.random().toString(36).slice(2)}`);
+    const storeA = memoryStorage();
+
+    // Only B holds the game (its own prior sitting); A brings nothing at all.
+    const prior = new Game(SIZE);
+    prior.place(coordsOf('0,0,0'));
+    prior.place(coordsOf('1,1,1'));
+    await saveGame(dbB, prior.uuid, prior, { players: {}, result: 'in-progress', startedAt: 5 });
+
+    const a = makeSession(hub, 'player-a', { db: dbA, storage: storeA });
+    const b = makeSession(hub, 'player-b', { db: dbB });
+    // A establishes the room on dealer's choice (a fresh empty provisional game — no breadcrumb).
+    await a.enter(ROOM, DEFER);
+    await flush();
+    const aFresh = a.gameUuid();
+    expect(aFresh).not.toBe(prior.uuid);
+
+    // B enters resuming its real game. The resident deferred, so B keeps its game and A adopts it.
+    await b.enter(ROOM, { kind: 'resume', uuid: prior.uuid, headHash: headHash(prior.log) });
+    await flush();
+    await a.whenPersisted();
+    await b.whenPersisted();
+
+    // B is NOT refused (the round-1 behaviour was `offline` + `game-mismatch`)…
+    expect(b.state().phase).toBe('connected');
+    expect(b.lastRejectReason()).toBeNull();
+    expect(b.state().joinError).toBeNull();
+    // …and the pair is on B's REAL game, with its history intact on BOTH sides.
+    expect(b.gameUuid()).toBe(prior.uuid);
+    expect(a.gameUuid()).toBe(prior.uuid);
+    expect(a.ply()).toBe(2);
+    expect(b.ply()).toBe(2);
+    expect(headHash(a.syncEngine()!.game().log)).toBe(headHash(prior.log));
+    // Seats are distinct real owners, and the adopting arbiter kept the white it claimed provisionally.
+    expect(a.state().seat).toBe('white');
+    expect(b.state().seat).toBe('black');
+    expect(a.seatOwners()).toEqual({ white: 'player-a', black: 'player-b' });
+    // The adopting arbiter's DURABLE state followed the game it actually ended up on — not the fresh
+    // provisional one it abandoned (that is what makes its own later return reclaim the right game).
+    expect(readActiveGame(storeA)!.gameUuid).toBe(prior.uuid);
+    expect((await listArchivedGames(dbA)).map((l) => l.id)).toContain(prior.uuid);
+    // The adopted game is genuinely LIVE, not a snapshot: the next move lands on BOTH sides. Two plies
+    // are committed, so it is white's turn — the adopting arbiter's own seat.
+    expect(a.canPlace()).toBe(true);
+    expect(b.canPlace()).toBe(false);
+    a.place(coordsOf('2,2,2'));
+    await flush();
+    expect(b.ply()).toBe(3);
+    expect(b.gameState()!.pieces['2,2,2']).toBe('white');
+  });
+
+  it('the deferring arbiter still refuses a `new` newcomer nothing it holds fits (no blanket adopt)', async () => {
+    // Dealer's choice is not "anything goes in both directions": once the arbiter has adopted a real
+    // game, a later `new` entrant is refused — its seed accepts an empty game only.
+    const hub = new MockRelayHub();
+    const dbA = await openDatabase(`net-defer-arb2-a-${Math.random().toString(36).slice(2)}`);
+    const dbB = await openDatabase(`net-defer-arb2-b-${Math.random().toString(36).slice(2)}`);
+    const prior = new Game(SIZE);
+    prior.place(coordsOf('0,0,0'));
+    await saveGame(dbB, prior.uuid, prior, { players: {}, result: 'in-progress', startedAt: 5 });
+
+    const a = makeSession(hub, 'player-a', { db: dbA });
+    const b = makeSession(hub, 'player-b', { db: dbB });
+    await a.enter(ROOM, DEFER);
+    await flush();
+    await b.enter(ROOM, { kind: 'resume', uuid: prior.uuid, headHash: headHash(prior.log) });
+    await flush();
+    expect(a.gameUuid()).toBe(prior.uuid);
+
+    const c = makeSession(hub, 'player-c', { db: await openDatabase(`net-defer-arb2-c-${Math.random().toString(36).slice(2)}`) });
+    await c.enter(ROOM, NEW);
+    await flush();
+    expect(c.state().phase).toBe('offline');
+    expect(c.lastRejectReason()).toBe('seed-refused');
+    // The refusal never disturbed the live pair.
+    expect(a.gameUuid()).toBe(prior.uuid);
+    expect(a.seatOwners()).toEqual({ white: 'player-a', black: 'player-b' });
+  });
+});
+
+describe('NetSession — a resume seed for a game this browser does NOT hold refuses honestly', () => {
+  it('refuses `seed-unavailable` before touching the transport, never a fresh game in its name', async () => {
+    const hub = new MockRelayHub();
+    const dbA = await openDatabase(`net-unavail-a-${Math.random().toString(36).slice(2)}`);
+    const dbB = await openDatabase(`net-unavail-b-${Math.random().toString(36).slice(2)}`);
+    const storeA = memoryStorage();
+
+    // The game exists in B's archive only. A asks to resume it without holding it — the state the
+    // round-1 code degraded to a fresh game for, while still ANNOUNCING `resume(uuid)` in its hello.
+    const shared = new Game(SIZE);
+    shared.place(coordsOf('0,0,0'));
+    shared.place(coordsOf('1,1,1'));
+    await saveGame(dbB, shared.uuid, shared, { players: {}, result: 'in-progress', startedAt: 3 });
+    const seed: Proposal = { kind: 'resume', uuid: shared.uuid, headHash: headHash(shared.log) };
+
+    const a = makeSession(hub, 'player-a', { db: dbA, storage: storeA });
+    await a.enter(ROOM, seed);
+    await flush();
+
+    // Its own typed reason, with its own human label — NOT a borrowed `game-mismatch` ("you and the
+    // other player brought different games"), which was false: nobody else was even there.
+    expect(a.state().phase).toBe('offline');
+    expect(a.state().joinError).toBe('seed-unavailable');
+    expect(a.gameUuid()).toBeNull();
+    expect(a.seatOwners()).toBeNull();
+    // Nothing was published and nothing was left behind: no breadcrumb, no archived stand-in game.
+    expect(readActiveGame(storeA)).toBeNull();
+    expect(await listArchivedGames(dbA)).toEqual([]);
+
+    // …and the peer that DOES hold the game is unaffected — it establishes on its own game normally.
+    const b = makeSession(hub, 'player-b', { db: dbB });
+    await b.enter(ROOM, seed);
+    await flush();
+    expect(b.state().phase).toBe('connected');
+    expect(b.gameUuid()).toBe(shared.uuid);
+    expect(b.lastRejectReason()).toBeNull();
+  });
+});
+
+describe('NetSession — the MOVE-SYNC channel enforces the seed too (#46, design §3)', () => {
+  /**
+   * A second peer publishing an ordinary `kind:'sync'` payload for an unrelated game. No crafted
+   * `admit`, no timing race, nothing malformed — the plain move-sync channel, which the admission
+   * protocol never sees. Before the gate this was adopted wholesale (the log-prefix rule treats an
+   * empty log as a prefix of anything), planting a stranger's game in the session's engine, breadcrumb
+   * and archive.
+   */
+  async function pushForeignGame(hub: MockRelayHub): Promise<Game> {
+    const pushed = new Game(SIZE);
+    pushed.place(coordsOf('0,0,0'));
+    pushed.place(coordsOf('1,1,1'));
+    const other = new MockTransport(hub, 'player-other');
+    await other.connect(ROOM);
+    other.publish(toSyncMessage(pushed.log, 0) as never);
+    return pushed;
+  }
+
+  it('a `new` peer REFUSES a foreign non-empty game pushed at it, and keeps its own empty board', async () => {
+    const hub = new MockRelayHub();
+    const own = await openDatabase(`net-syncgate-${Math.random().toString(36).slice(2)}`);
+    const store = memoryStorage();
+    const a = makeSession(hub, 'player-a', { db: own, storage: store });
+    await a.enter(ROOM, NEW);
+    await flush();
+    const mine = a.gameUuid();
+
+    const pushed = await pushForeignGame(hub);
+    await flush();
+    await a.whenPersisted();
+
+    // The game did NOT change identity, gain history, or move the board.
+    expect(a.gameUuid()).toBe(mine);
+    expect(a.ply()).toBe(0);
+    expect(a.gameState()!.pieces).toEqual({});
+    // The refusal is observable and TYPED — not a silent drop.
+    expect(a.syncEngine()!.refusedGame()).toEqual({ uuid: pushed.uuid, reason: 'seed-refused' });
+    // Nothing durable was planted either: the breadcrumb still names OUR game and the foreign game was
+    // never archived (round 1 left it in both, so a later return resumed a stranger's board).
+    expect(readActiveGame(store)!.gameUuid).toBe(mine);
+    expect((await listArchivedGames(own)).map((l) => l.id)).toEqual([mine]);
+    // Refusing is not the same as breaking: the session is still live and still playable.
+    expect(a.state().phase).toBe('connected');
+    a.place(coordsOf('4,4,4'));
+    expect(a.ply()).toBe(1);
+  });
+
+  it('…and refuses it during the CONNECT window too, before any admit has settled', async () => {
+    // The provisional-engine variant: a resident publishing a move while a `new` newcomer is still
+    // `connecting` used to plant its game in the newcomer's engine before admission had any say.
+    const hub = new MockRelayHub();
+    const own = await openDatabase(`net-syncgate2-${Math.random().toString(36).slice(2)}`);
+    const store = memoryStorage();
+    const a = makeSession(hub, 'player-a', { db: own, storage: store, settleMs: 200 });
+    const entering = a.enter(ROOM, NEW);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(a.state().phase).toBe('connecting');
+
+    const pushed = await pushForeignGame(hub);
+    await new Promise((r) => setTimeout(r, 0));
+    // Refused mid-connect: the provisional engine is still on its own fresh game.
+    expect(a.gameUuid()).not.toBe(pushed.uuid);
+    expect(a.ply()).toBe(0);
+    expect(a.syncEngine()!.refusedGame()).toEqual({ uuid: pushed.uuid, reason: 'seed-refused' });
+
+    await entering;
+    await a.whenPersisted();
+    expect(a.state().phase).toBe('connected');
+    expect(a.gameUuid()).not.toBe(pushed.uuid);
+    expect((await listArchivedGames(own)).map((l) => l.id)).not.toContain(pushed.uuid);
+  });
+
+  it("CONTRAST: a dealer's-choice peer DOES adopt it — the gate is the seed, not a blanket block", async () => {
+    // Proves the two tests above are the SEED biting and not "cross-game traffic is always dropped":
+    // the one seed the matrix says may adopt a peer's non-empty game does adopt it.
+    const hub = new MockRelayHub();
+    const own = await openDatabase(`net-syncgate3-${Math.random().toString(36).slice(2)}`);
+    const a = makeSession(hub, 'player-a', { db: own });
+    await a.enter(ROOM, DEFER);
+    await flush();
+
+    const pushed = await pushForeignGame(hub);
+    await flush();
+    expect(a.gameUuid()).toBe(pushed.uuid);
+    expect(a.ply()).toBe(2);
+    expect(a.syncEngine()!.refusedGame()).toBeNull();
+  });
+});
+
+describe('NetSession — a mutual rematch puts BOTH peers on ONE fresh game (a derived uuid)', () => {
+  it('both resets land on the same new uuid, and the fresh game converges without a first move', async () => {
+    const hub = new MockRelayHub();
+    const dbA = await openDatabase(`net-rematch-uuid-a-${Math.random().toString(36).slice(2)}`);
+    const dbB = await openDatabase(`net-rematch-uuid-b-${Math.random().toString(36).slice(2)}`);
+    const a = makeSession(hub, 'player-a', { db: dbA });
+    const b = makeSession(hub, 'player-b', { db: dbB });
+    await a.enter(ROOM, NEW);
+    await b.enter(ROOM, DEFER);
+    await flush();
+    const first = a.gameUuid();
+    expect(b.gameUuid()).toBe(first);
+
+    a.syncEngine()!.place(coordsOf('0,0,0'));
+    await flush();
+
+    expect(a.resetForRematch()).toBe(true);
+    expect(b.resetForRematch()).toBe(true);
+    await flush();
+
+    // ONE game — not two empty games that would converge only when somebody moved (which the sync
+    // channel's seed gate is entitled to refuse, and which archived two records for one rematch).
+    expect(a.gameUuid()).toBe(b.gameUuid());
+    expect(a.gameUuid()).not.toBe(first);
+    // The uuid is DERIVED, not minted: spelled out here so this asserts a real derived value rather
+    // than merely "the two match". The mock hub delivers a publish SYNCHRONOUSLY, so these two resets
+    // are staggered — A resets into `derive(first, 1)`, B adopts that generation before its own reset
+    // derives `derive(·, 2)`, and A then adopts that. Truly simultaneous resets (both peers still on
+    // `first` at generation 0, the real-relay case) land on `derive(first, 1)` on both sides with no
+    // message needed at all: that is the property `rematchGameUuid` is unit-tested for.
+    expect(a.gameUuid()).toBe(rematchGameUuid(rematchGameUuid(first!, 1), 2));
+    expect(a.ply()).toBe(0);
+    expect(b.ply()).toBe(0);
+
+    // And the fresh shared game plays: white (the swapped seat) moves and the peer sees it.
+    const white = a.state().seat === 'white' ? a : b;
+    const black = white === a ? b : a;
+    white.place(coordsOf('3,3,3'));
+    await flush();
+    expect(black.ply()).toBe(1);
+    expect(black.gameState()!.pieces['3,3,3']).toBe('white');
   });
 });

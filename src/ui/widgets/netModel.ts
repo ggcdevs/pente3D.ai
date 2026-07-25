@@ -119,7 +119,15 @@ export type JoinErrorReason =
    * entry never joined the room. It is surfaced with its own label rather than left silent (the V.1
    * review finding: the session returned to offline with no reason and the player was told nothing).
    */
-  | 'seed-unreadable';
+  | 'seed-unreadable'
+  /**
+   * The seed named a game this browser does NOT hold, so there was nothing to resume. A LOCAL failure,
+   * not a peer's refusal: nothing was published and the entry never joined the room. It has its own
+   * label because the alternative — entering on a fresh game while announcing the named one — made every
+   * downstream refusal a lie (a peer proposing the SAME game was told the two of you "brought different
+   * games").
+   */
+  | 'seed-unavailable';
 
 /** Why a typed join code was rejected before dispatch (pure, pre-dispatch validation). */
 export type CodeError =
@@ -175,7 +183,19 @@ const JOIN_ERROR_TEXT: Record<JoinErrorReason, string> = {
     'One of you chose New game and the other brought an existing game. Pick the same game, or choose Dealer’s choice to take theirs.',
   'connect-failed': 'Could not connect. Check the code and try again.',
   'seed-unreadable': 'That saved game could not be read — it may be damaged. Try another game.',
+  'seed-unavailable': 'That game is not saved on this device. Pick another, or choose Dealer’s choice.',
 };
+
+/**
+ * Every {@link JoinErrorReason} that exists, DERIVED from the label record above rather than
+ * hand-listed — the single source of truth a test enumerates, so a reason added to the union is covered
+ * the moment it exists instead of quietly falling outside a copied list that has stopped matching
+ * (the same technique as the codec's `ADMISSION_REJECT_REASONS`, and agent-principles #8: never a second
+ * copy of a fact that can go stale).
+ */
+export const JOIN_ERROR_REASONS: readonly JoinErrorReason[] = Object.keys(
+  JOIN_ERROR_TEXT,
+) as JoinErrorReason[];
 
 /** Human labels for a pre-dispatch code-validation failure — the SSOT the widget renders. */
 export const CODE_ERROR_TEXT: Record<CodeError, string> = {

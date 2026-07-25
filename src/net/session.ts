@@ -99,8 +99,8 @@ import {
   type SeatMap,
 } from './seats';
 import {
-  reconcile,
   acceptsGame,
+  decideAdmission,
   electInitiator,
   type OfferedGame,
   type Proposal,
@@ -109,6 +109,7 @@ import {
 import {
   toHelloMessage,
   toAdmitMessage,
+  toAdoptAdmitMessage,
   toRejectMessage,
   toSyncMessage,
   parseSyncMessage,
@@ -130,6 +131,7 @@ import {
   type UndoRedoPrompt,
 } from './undoRedo';
 import { canPlaceForSeat } from './turnGate';
+import { rematchGameUuid } from './rematch';
 import {
   generateGameCode,
   validateGameCode,
@@ -428,12 +430,13 @@ export class NetSession {
       throw err;
     }
     if (provisional.kind === 'refused') {
-      // We hold the game the seed NAMES, but its identity-owned seat map owns no seat for us — both
-      // seats belong to other playerIds (design §2.3: absence never vacates ownership). There is no
-      // honest way to enter as a player of THAT game, so we refuse HERE, before touching the
-      // transport, and surface the seat manager's own typed reason as the user-facing `joinError`
-      // (design §7 — every refusal carries a human message). Reachable whenever this browser's
-      // `pente:playerId` is lost while its archive survives.
+      // The seed named a specific game we cannot honestly enter on. Either we HOLD it but its
+      // identity-owned seat map owns no seat for us — both seats belong to other playerIds (design §2.3:
+      // absence never vacates ownership), reachable whenever this browser's `pente:playerId` is lost
+      // while its archive survives — or we do NOT hold it at all (`seed-unavailable`). Both refuse HERE,
+      // before the transport is touched, surfacing the typed reason as the user-facing `joinError`
+      // (design §7 — every refusal carries a human message) rather than entering on a game we could not
+      // serve, which would put an unhonourable claim on the wire.
       this.resetToOffline(provisional.reason);
       this.emit();
       return;
@@ -510,10 +513,11 @@ export class NetSession {
    * is pure rendezvous and identifies no game — design §2):
    *
    *  - **`resume`/`current`** — load the game whose `uuid` the proposal names (design §3) from the
-   *    archive, so our engine holds the SAME identity we publish in our hello. Without this the
-   *    arbiter's honesty guard rejects its OWN resume as `game-mismatch` (the provisional fresh uuid
-   *    would differ from the reconciled `existing` uuid). We reclaim the seat that game's persisted
-   *    seat map owns for us (or take first-available white if it records no owner yet).
+   *    archive, so our engine holds the SAME identity we publish in our hello. We reclaim the seat that
+   *    game's persisted seat map owns for us (or take first-available white if it records no owner yet).
+   *    A uuid this browser does NOT hold REFUSES the entry (`seed-unavailable`) — never a fall-through
+   *    to a fresh game, which would announce a game we cannot serve and mislabel every refusal it
+   *    causes downstream.
    *  - **`defer` (dealer's choice / a reconnect) with a FRESH `activeNetworkedGame` breadcrumb for
    *    THIS room** — re-seed the game the BREADCRUMB names, by UUID, from the archive. This is what
    *    carries a returning peer back onto the game it was mid-way through: it re-seeds an empty room
@@ -531,17 +535,18 @@ export class NetSession {
    * it is REPLACED by the resident's/initiator's authoritative game if we are admitted, and kept (as
    * the established game) only if we turn out to be alone.
    *
-   * A `resume`/`current` seed can also come back REFUSED: we hold that exact game, but its persisted
-   * seat map owns both seats for OTHER playerIds, so there is no seat to enter it on (see
-   * {@link seedFromUuid}). That refusal is returned, not thrown — {@link enter} turns it into an
-   * honest `joinError` and stays offline.
+   * A `resume`/`current` seed comes back REFUSED for either of two honest reasons: we hold that exact
+   * game but its persisted seat map owns both seats for OTHER playerIds, so there is no seat to enter it
+   * on (see {@link seedFromUuid}); or this browser does not hold the named game at all
+   * (`seed-unavailable`). Both are returned, not thrown — {@link enter} turns them into an honest
+   * `joinError` and stays offline.
    */
   private async buildProvisionalSeat(
     code: string,
     proposal: Proposal,
   ): Promise<
     | { kind: 'seeded'; game: Game; color: SeatColor; seatMap: SeatMap }
-    | { kind: 'refused'; reason: ClaimRejection }
+    | { kind: 'refused'; reason: ClaimRejection | 'seed-unavailable' }
   > {
     // 1. A concrete resume/current: seed the actual game named by the proposal's uuid.
     if (proposal.kind === 'resume' || proposal.kind === 'current') {
@@ -551,8 +556,14 @@ export class NetSession {
       // rather than silently establishing some OTHER game under a `resume` proposal (which the
       // arbiter would then have to refuse as `game-mismatch` — a mislabeled version of this fact).
       if (seeded.kind === 'unclaimable') return { kind: 'refused', reason: seeded.reason };
-      // The named game is not in our archive — fall through to a fresh game (an honest degrade: we
-      // could not resume what we do not hold, so we bring an empty game rather than a wrong one).
+      // The named game is NOT in this browser's archive. We refuse the entry with its own typed reason
+      // rather than falling through to a fresh game: a `resume`/`current` announces THAT uuid in its
+      // hello, so bringing an empty game instead would put a claim on the wire we cannot honour — and
+      // every downstream consequence is then mislabelled (a peer proposing the SAME game gets
+      // `game-mismatch`, "you and the other player brought different games", when both brought the
+      // same one and this browser simply does not have it). There is nothing to degrade TO: the player
+      // asked for a specific game, so the honest answer is that it is not here.
+      return { kind: 'refused', reason: 'seed-unavailable' };
     }
     // 2. `defer` ("dealer's choice" / a reconnect) with a FRESH breadcrumb for THIS room: re-seed the
     //    game the breadcrumb NAMES BY UUID (design §2/§6.4, scenario 4) — the return path that keeps a
@@ -851,7 +862,17 @@ export class NetSession {
       players: { [color]: this.deps.playerId },
       startedAt: this.deps.now(),
     });
-    const engine = new SyncEngine(game, transport, this.deps.db, meta, color as Player);
+    // The engine carries THIS player's seed so the move-sync channel applies the design §3 rule to a log
+    // belonging to a DIFFERENT game (`SyncEngine`'s seed gate) — the third place a game can cross into
+    // this browser, and the one the admission protocol never sees.
+    const engine = new SyncEngine(
+      game,
+      transport,
+      this.deps.db,
+      meta,
+      color as Player,
+      this.myProposal ?? { kind: 'new' },
+    );
     this.engine = engine;
     // Reset the handshake for the new session — a fresh room has no pending proposal from a prior one.
     this.handshake = initialHandshake();
@@ -972,10 +993,10 @@ export class NetSession {
       throw new Error('initiator must already own a seat in its provisional map');
     }
 
-    // Reconcile every co-arriver's proposal against ours; a divergent/mismatched pair is a typed
-    // reject to THAT peer (design §5). We keep our own agreed game (the `new`/`current` we brought)
-    // and its reconciled uuid — `arbitrate`'s honesty guard already refuses to serve a game we do
-    // not hold (`game-mismatch`) rather than mis-seeding the initiator's own identity.
+    // Arbitrate every co-arriver against ours; a divergent/mismatched pair is a typed reject to THAT
+    // peer (design §5). We keep the game our engine holds — `arbitrate` judges the newcomer's seed
+    // against exactly that, and never against a proposal naming a game we do not have — EXCEPT when we
+    // deferred, where it admits the co-arriver onto ITS game and we adopt that instead (design §3).
     for (const hello of others) {
       seatMap = this.arbitrate(hello, seatMap);
     }
@@ -996,38 +1017,25 @@ export class NetSession {
    * rules — the single arbitration path, never two subtly-different copies.
    */
   private arbitrate(hello: HelloMessage, seatMap: SeatMap): SeatMap {
-    const result = reconcile(this.myProposal ?? { kind: 'new' }, hello.proposal);
-    if (!result.ok) {
-      this.publishAdmission(toRejectMessage(this.deps.newMessageId(), result.reason));
-      return seatMap;
-    }
-    // Honesty guard (agent-principles: never mask): reconciliation may agree on an `existing` game
-    // that is NOT the one we hold — a resume of a PARTNER's game we never persisted (the S.6/#37
-    // resume-a-shared-game seam). We can only serve the game our engine actually holds; if the agreed
-    // game's uuid differs from ours, reject `game-mismatch` rather than silently serving the wrong
-    // game. For this build's proposals (new/defer) the agreed game is always our own, so this never
-    // fires here — but it refuses to ship a happy-path that would mis-serve a future resume proposal.
-    const ourUuid = this.gameUuid();
-    if (result.game.kind === 'existing' && ourUuid !== null && result.game.uuid !== ourUuid) {
-      this.publishAdmission(toRejectMessage(this.deps.newMessageId(), 'game-mismatch'));
-      return seatMap;
-    }
-    // WIRE ENFORCEMENT (design §3; the user's rule in #46) — the SENDING half. Reconciliation agreed at
-    // the PROPOSAL level, but the newcomer's seed also constrains the BYTES we are about to push: a peer
-    // that entered with `new` accepts an EMPTY game only, and a `resume`/`current` accepts only its own
-    // uuid. Those two facts can disagree with the proposals: OUR proposal may have been `new` while our
-    // board has since moved on (a resident can play while alone), so `reconcile(new, new)` agrees on "a
-    // fresh game" that our engine no longer holds. So we ask the SAME pure rule the newcomer applies on
-    // receipt ({@link acceptsGame}) against the EXACT payload we would send, and publish the TYPED
-    // reject instead when it would refuse. That is the structural #46/#43 fix on the serving side: "New
-    // Game" can never be handed a game in progress, whoever is arbitrating.
+    // WIRE ENFORCEMENT (design §3; the user's rule in #46) — the SENDING half, decided by the ONE pure
+    // rule {@link decideAdmission} rather than re-composed here. It judges the newcomer's seed against
+    // the game our ENGINE ACTUALLY HOLDS, not the one our proposal named: OUR proposal may have been
+    // `new` while our board has since moved on (a resident can play while alone), so
+    // `reconcile(new, new)` agrees on "a fresh game" our engine no longer holds. That is the structural
+    // #46/#43 fix on the serving side — "New Game" can never be handed a game in progress, whoever is
+    // arbitrating — and it is where DEALER'S CHOICE ADOPTS in the direction where the deferrer is the
+    // arbiter: it holds nothing, so the agreed game is the newcomer's and we admit it to keep its own.
     //
-    // Checked BEFORE `claimSeat` so a refused newcomer never occupies a seat in our durable map for a
-    // game it is never going to adopt (the reject is about the GAME, and it settles the entry).
+    // Decided BEFORE `claimSeat` so a refused newcomer never occupies a seat in our durable map for a
+    // game it is never going to play (the reject is about the GAME, and it settles the entry).
     const payload = this.currentSyncPayload();
-    const acceptance = acceptsGame(hello.proposal, offeredGameOf(payload));
-    if (!acceptance.ok) {
-      this.publishAdmission(toRejectMessage(this.deps.newMessageId(), acceptance.reason));
+    const decision = decideAdmission(
+      this.myProposal ?? { kind: 'new' },
+      offeredGameOf(payload),
+      hello.proposal,
+    );
+    if (!decision.ok) {
+      this.publishAdmission(toRejectMessage(this.deps.newMessageId(), decision.reason));
       return seatMap;
     }
     // Reconciled + serveable → seat the newcomer (identity-reclaim or first-available on the map).
@@ -1040,6 +1048,19 @@ export class NetSession {
     if (!claim.ok) {
       this.publishAdmission(toRejectMessage(this.deps.newMessageId(), claim.reason));
       return seatMap;
+    }
+    if (decision.serve === 'theirs') {
+      // DEALER'S CHOICE ADOPTS (design §3), with US as the arbiter: we brought nothing, so the agreed
+      // game is the newcomer's own. Admit it naming that uuid and carrying NO payload — we have none to
+      // give — and it keeps the game it brought. We then adopt that game off the move-sync channel when
+      // it publishes (its `admit` triggers a publish, and our `defer` seed is exactly the one the
+      // channel's seed gate lets a peer's non-empty game through). Nothing is persisted or seeded here:
+      // the adoption goes through the SAME engine-change seam every other adopted move does, so the
+      // archive record + breadcrumb follow from the game we actually end up on, not from a guess.
+      this.publishAdmission(
+        toAdoptAdmitMessage(this.deps.newMessageId(), decision.uuid, claim.seatMap),
+      );
+      return claim.seatMap;
     }
     // Admit with the very payload the acceptance was judged against — so what we CHECKED and what we
     // SEND can never be two different games.
@@ -1088,21 +1109,34 @@ export class NetSession {
   }
 
   /**
-   * Handle the arbiter's `admit`: ENFORCE OUR OWN SEED against the offered game (design §3 — a `new`
-   * entry adopts an EMPTY game only; only dealer's choice adopts a peer's real game), then ADOPT the
-   * authoritative game wholesale and take the seat the map assigns us. A game our seed refuses ends the
-   * entry with that TYPED reason (never a silent adoption).
+   * Handle the arbiter's `admit`. The grant names WHICH game the pair agreed on ({@link AdmittedGame}),
+   * and the two directions are handled differently:
    *
-   * The admit game has a DIFFERENT genesis uuid than our provisional game, so it cannot go
-   * through the prefix-based sync `receive` (that is same-uuid convergence, and two empty logs with
-   * different uuids would falsely CONFLICT). Instead we re-verify the payload's hash chain
-   * ({@link parseSyncMessage} — a tampered/mismatched payload throws honestly, never a masked
-   * adoption) and swap the reconstructed game into a fresh engine over the SAME live transport
-   * ({@link wireEngine}), then publish once so the two peers converge. Only fires while `connecting`;
-   * a duplicate racing an establish is ignored.
+   *  - **the arbiter SERVES it** — ENFORCE OUR OWN SEED against the offered game (design §3 — a `new`
+   *    entry adopts an EMPTY game only; only dealer's choice adopts a peer's real game), then ADOPT it
+   *    wholesale. The admit game has a DIFFERENT genesis uuid than our provisional game, so it cannot go
+   *    through the prefix-based sync `receive` (that is same-uuid convergence, and two empty logs with
+   *    different uuids would falsely CONFLICT). Instead we re-verify the payload's hash chain
+   *    ({@link parseSyncMessage} — a tampered/mismatched payload throws honestly, never a masked
+   *    adoption) and swap the reconstructed game into a fresh engine over the SAME live transport.
+   *  - **the arbiter DEFERRED and the agreed game is OURS** — it holds nothing and named our game by
+   *    uuid, so there is nothing to adopt: we KEEP the game we brought (its history is already ours,
+   *    already hash-verified when we seeded it) and only take the seat. A named uuid that is not the
+   *    game we brought is refused `game-mismatch` — the arbiter agreed us onto a game neither of us is
+   *    on, which is exactly what that reason says.
+   *
+   * Either way we then take the seat the map assigns us and publish once so the two peers converge — for
+   * the deferring arbiter that publish IS how it receives the game it just adopted us onto. A game our
+   * seed refuses, or a seat map that does not seat us, ends the entry with a TYPED reason (never a silent
+   * adoption). Only fires while `connecting`; a duplicate racing an establish is ignored.
    */
   private onAdmit(admit: AdmitMessage): void {
     if (this.phase !== 'connecting') return; // already finalized (e.g. a duplicate racing an establish).
+    const engine = this.engine;
+    const transport = this.transport;
+    // Both are live for the whole of `connecting` (`enter` built them before publishing our hello and
+    // only a settle/admit/reject tears them down), so this is a tripwire, not a branch we expect.
+    if (engine === null || transport === null) return this.finishEnter();
     // WIRE ENFORCEMENT (design §3) — the RECEIVING half, and the honest answer to the user's rule in
     // #46: *"i would expect my phone to reject any non-empty gamestate data"* when it chose New Game.
     // The arbiter applied the SAME pure rule before admitting us, so reaching a refusal here means the
@@ -1115,10 +1149,19 @@ export class NetSession {
     // A `null` proposal is unreachable here (`onAdmit` only runs while `connecting`, which means `enter`
     // set one); `new` is the conservative stand-in — the one seed that accepts nothing but an empty
     // game — so an impossible null can never be the reason we adopt a game unchecked.
-    const acceptance = acceptsGame(this.myProposal ?? { kind: 'new' }, offeredGameOf(admit.game));
-    if (!acceptance.ok) {
-      this.lastReject = acceptance.reason;
-      this.tearDownToOffline(acceptance.reason);
+    //
+    // The `'newcomer'`-sourced grant needs no seed check: the game is the one WE brought, so our own seed
+    // accepts it by construction (a `resume`/`current` accepts its own uuid; that identity IS the check
+    // below). Re-running `acceptsGame` on our own game would be a branch that can never refuse.
+    const refusal =
+      admit.agreed.source === 'arbiter'
+        ? acceptsGame(this.myProposal ?? { kind: 'new' }, offeredGameOf(admit.agreed.game))
+        : admit.agreed.uuid === engine.game().uuid
+          ? { ok: true as const }
+          : { ok: false as const, reason: 'game-mismatch' as const };
+    if (!refusal.ok) {
+      this.lastReject = refusal.reason;
+      this.tearDownToOffline(refusal.reason);
       return this.finishEnter();
     }
     const mySeat = seatOf(admit.seats, this.deps.playerId);
@@ -1130,17 +1173,18 @@ export class NetSession {
       this.tearDownToOffline('room-full');
       return this.finishEnter();
     }
-    const transport = this.transport;
-    if (transport === null) return this.finishEnter();
-    // Re-verify the authoritative game's hash chain, then reconstruct it (identity + history intact).
-    const log = parseSyncMessage(admit.game);
-    const game = Game.fromLog(this.deps.size, log);
-    // Swap the admitted game + our admitted seat into a fresh engine over the SAME transport (no
+    // The game we run from here: the arbiter's payload (hash chain re-verified, identity + history
+    // intact), or — when it deferred onto OUR game — the very game our provisional engine already holds.
+    const game =
+      admit.agreed.source === 'arbiter'
+        ? Game.fromLog(this.deps.size, parseSyncMessage(admit.agreed.game))
+        : engine.game();
+    // Swap the agreed game + our admitted seat into a fresh engine over the SAME transport (no
     // reconnect / presence flicker). ATTACH re-registers the transport's message pump onto the NEW
     // engine (the old provisional engine registered it on connect; "latest registration wins"), so a
     // subsequent move is delivered to THIS engine and renders — then publishes our adopted state.
-    const engine = this.wireEngine(transport, game, mySeat, admit.seats);
-    engine.attach();
+    const admitted = this.wireEngine(transport, game, mySeat, admit.seats);
+    admitted.attach();
     this.reflectEngineStatus();
     if (this.phase === 'connecting') this.phase = 'connected';
     // Persist the ADOPTED game under ITS uuid + point the breadcrumb at it, so if the arbiter later
@@ -1321,7 +1365,18 @@ export class NetSession {
     this.seatMap = swapped;
     // Swap a fresh empty game into the live engine over the SAME transport, re-basing the undo rule
     // onto the swapped color and bumping the epoch so the peer adopts the fresh generation.
-    this.engine.resetGame(new Game(this.deps.size), nextColor as Player);
+    //
+    // The fresh game's uuid is DERIVED, not randomized ({@link rematchGameUuid}): both peers reset into
+    // the same rematch from the same prior game at the same generation, so deriving from those two shared
+    // facts puts them on ONE game at genesis. Independently-minted random ids left each peer on its own
+    // game — two archive records for one rematch, converging only by the accident that an empty log is a
+    // prefix of anything, which is precisely the adoption the design §3 seed gate must be free to refuse.
+    const priorUuid = this.engine.game().uuid;
+    const nextEpoch = this.engine.epoch() + 1;
+    this.engine.resetGame(
+      new Game(this.deps.size, rematchGameUuid(priorUuid, nextEpoch)),
+      nextColor as Player,
+    );
     // Persist the SWAPPED seat map + the fresh rematch game under the NEW game's uuid, and re-point the
     // breadcrumb at it (design §2/§6.4) — reusing the SAME durable seam `enter`/establish use, so a
     // subsequent return (empty-room reclaim OR resident re-admission) reclaims the CURRENT color and the
