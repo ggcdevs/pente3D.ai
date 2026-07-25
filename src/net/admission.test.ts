@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fc from 'fast-check';
 import {
   reconcile,
+  acceptsGame,
   electInitiator,
   deferProposal,
   newProposal,
@@ -10,10 +11,13 @@ import {
   isConcrete,
   type Proposal,
   type AgreedGame,
+  type OfferedGame,
   type Reject,
   type ReconcileResult,
+  type SeedAcceptance,
   type Peer,
 } from './admission';
+import { claimSeat, emptySeatMap, seatOf, type SeatMap } from './seats';
 
 // ---------------------------------------------------------------------------
 // Helpers — a Reject/AgreedResult narrower so a failing assertion throws a clear
@@ -27,11 +31,21 @@ function expectAgreed(r: ReconcileResult): AgreedGame {
   return r.game;
 }
 
-function expectReject(r: ReconcileResult): Reject {
+function expectReject(r: ReconcileResult | SeedAcceptance): Reject {
   if (r.ok !== false) {
-    throw new Error('expected a reject, got an agreed game');
+    throw new Error('expected a reject, got an accepted/agreed game');
   }
   return r;
+}
+
+/** An offered EMPTY game (a genesis-only log) with the given uuid — what a `new` seed may adopt. */
+function emptyGame(uuid: string): OfferedGame {
+  return { uuid, empty: true };
+}
+
+/** An offered game that CARRIES HISTORY — the thing only dealer's choice may adopt (design §3). */
+function playedGame(uuid: string): OfferedGame {
+  return { uuid, empty: false };
 }
 
 describe('proposal constructors + isConcrete', () => {
@@ -67,7 +81,7 @@ describe('reconcile — 0 concrete (both defer) → new game', () => {
   });
 });
 
-describe('reconcile — 1 concrete → play it, the deferrer adopts', () => {
+describe('reconcile — only DEALER\'S CHOICE adopts a peer\'s game; the deferrer adopts', () => {
   it('a resume vs a defer plays the resume (existing uuid+headHash)', () => {
     const game = expectAgreed(reconcile(resumeProposal('g1', 'h1'), deferProposal()));
     expect(game).toEqual({ kind: 'existing', uuid: 'g1', headHash: 'h1' });
@@ -131,21 +145,137 @@ describe('reconcile — 2 concrete, different uuids → reject game-mismatch', (
   });
 });
 
-describe('reconcile — two new/empty proposals are interchangeable, never block', () => {
+describe('reconcile — two EMPTY seeds are interchangeable (ONE game, settled at genesis)', () => {
   it('two news agree on a single fresh new game', () => {
     const game = expectAgreed(reconcile(newProposal(), newProposal()));
     expect(game).toEqual({ kind: 'new' });
   });
+});
 
-  it('a new vs a resume plays the resume (new is empty; the concrete history wins)', () => {
-    // The `new` side has no history to preserve, so the sole real game is the resume.
-    const game = expectAgreed(reconcile(newProposal(), resumeProposal('g1', 'h1')));
-    expect(game).toEqual({ kind: 'existing', uuid: 'g1', headHash: 'h1' });
+/**
+ * The design §3 seed rule, and the reason V.2 exists (issues #46 / #43). v3 reconciled a `new` beside
+ * a real game by PLAYING THE REAL GAME — so the peer that explicitly asked to start over was handed
+ * the other device's board (#46), and re-using a room code kept the old game alive (#43). The user's
+ * rule, verbatim: *"when selecting 'New Game', i would expect the laptop to never send non-empty
+ * gamestate data and i would expect my phone to reject any non-empty gamestate data. only 'Dealer's
+ * Choice' should allow a device to accept non-empty gamestate data from the other device."*
+ */
+describe('reconcile — a `new` seed beside a REAL game is REFUSED, never silently adopted (#46/#43)', () => {
+  it('new vs resume is a typed seed-refused, NOT the resume being played', () => {
+    const r = reconcile(newProposal(), resumeProposal('g1', 'h1'));
+    expect(expectReject(r).reason).toBe('seed-refused');
+    // The v3 behaviour, pinned as forbidden: the agreed game must NOT be the peer's game.
+    expect(r.ok).toBe(false);
   });
 
-  it('a resume vs a new plays the resume (order does not matter)', () => {
-    const game = expectAgreed(reconcile(resumeProposal('g1', 'h1'), newProposal()));
+  it('resume vs new is the SAME reject (order-insensitive — either side may be the New one)', () => {
+    expect(expectReject(reconcile(resumeProposal('g1', 'h1'), newProposal())).reason).toBe(
+      'seed-refused',
+    );
+  });
+
+  it('new vs current is refused too — provenance does not matter, only that a real game was brought', () => {
+    expect(expectReject(reconcile(newProposal(), currentProposal('g9', 'hh'))).reason).toBe(
+      'seed-refused',
+    );
+    expect(expectReject(reconcile(currentProposal('g9', 'hh'), newProposal())).reason).toBe(
+      'seed-refused',
+    );
+  });
+
+  it('the refusal is about the SEED, not the identity: a different uuid/head refuses identically', () => {
+    // No uuid/headHash pairing makes a `new` accept a real game, so the reason can never degrade
+    // into the identity-level `game-mismatch`/`game-divergent` reasons.
+    for (const [uuid, head] of [
+      ['a', 'a'],
+      ['zzzz', 'q1'],
+      ['g1', 'h1'],
+    ] as const) {
+      expect(expectReject(reconcile(newProposal(), resumeProposal(uuid, head))).reason).toBe(
+        'seed-refused',
+      );
+    }
+  });
+
+  it('CONTRAST: the same real game beside a DEFER is adopted — dealer\'s choice is the adopting kind', () => {
+    // Proves the reject above is specific to `new` and not "any non-defer pairing blocks".
+    const game = expectAgreed(reconcile(deferProposal(), resumeProposal('g1', 'h1')));
     expect(game).toEqual({ kind: 'existing', uuid: 'g1', headHash: 'h1' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// acceptsGame — the seed matrix at the BYTE level (design §3), the half `reconcile`
+// cannot enforce: what a peer may ADOPT off the wire, judged on the game it is actually
+// offered rather than on what the pair PROPOSED.
+// ---------------------------------------------------------------------------
+
+describe("acceptsGame — dealer's choice is the ONLY kind that adopts a peer's real game", () => {
+  it('a defer accepts a game WITH history (the whole point of dealer\'s choice)', () => {
+    expect(acceptsGame(deferProposal(), playedGame('g1'))).toEqual({ ok: true });
+  });
+
+  it('a defer accepts an EMPTY game too (it brought nothing to protect)', () => {
+    expect(acceptsGame(deferProposal(), emptyGame('g1'))).toEqual({ ok: true });
+  });
+});
+
+describe('acceptsGame — a `new` seed accepts EMPTY only (the user\'s rule in #46)', () => {
+  it('accepts an empty game (a fresh board is exactly what New asked for)', () => {
+    expect(acceptsGame(newProposal(), emptyGame('fresh-uuid'))).toEqual({ ok: true });
+  });
+
+  it('REFUSES a game carrying history, with the typed seed-refused reason', () => {
+    expect(expectReject(acceptsGame(newProposal(), playedGame('g1'))).reason).toBe('seed-refused');
+  });
+
+  it('refuses history REGARDLESS of the uuid — even a game we would otherwise hold', () => {
+    // Emptiness alone decides for `new`: no uuid makes a played game adoptable. This is what stops an
+    // arbiter (whose own proposal was `new` but whose board has since moved on) pushing its game.
+    expect(expectReject(acceptsGame(newProposal(), playedGame('same-as-mine'))).reason).toBe(
+      'seed-refused',
+    );
+  });
+});
+
+describe('acceptsGame — a `resume`/`current` seed accepts its OWN uuid only', () => {
+  it('accepts the game it named', () => {
+    expect(acceptsGame(resumeProposal('g1', 'h1'), playedGame('g1'))).toEqual({ ok: true });
+  });
+
+  it('accepts its own uuid even when the offered log is EMPTY (identity decides, not length)', () => {
+    // Being behind on the SAME game is convergence (the V.4 fast-forward/resolution decision), not a
+    // seed violation — so the seed gate must not turn a short log into a refusal.
+    expect(acceptsGame(resumeProposal('g1', 'h1'), emptyGame('g1'))).toEqual({ ok: true });
+  });
+
+  it('REFUSES a DIFFERENT game that carries history — game-mismatch (different games, both real)', () => {
+    expect(expectReject(acceptsGame(resumeProposal('g1', 'h1'), playedGame('g2'))).reason).toBe(
+      'game-mismatch',
+    );
+  });
+
+  it('REFUSES a different EMPTY game — seed-refused (the peer chose New / brought nothing)', () => {
+    // The mirror of `new` refusing a real game, reported with the SAME reason from either side.
+    expect(expectReject(acceptsGame(resumeProposal('g1', 'h1'), emptyGame('g2'))).reason).toBe(
+      'seed-refused',
+    );
+  });
+
+  it('a `current` seed behaves IDENTICALLY to a `resume` (provenance is immaterial)', () => {
+    expect(acceptsGame(currentProposal('g1', 'h1'), playedGame('g1'))).toEqual({ ok: true });
+    expect(expectReject(acceptsGame(currentProposal('g1', 'h1'), playedGame('g2'))).reason).toBe(
+      'game-mismatch',
+    );
+    expect(expectReject(acceptsGame(currentProposal('g1', 'h1'), emptyGame('g2'))).reason).toBe(
+      'seed-refused',
+    );
+  });
+
+  it('the headHash is NOT part of the seed gate — a divergent head on the SAME uuid is accepted', () => {
+    // Deliberate: head divergence is the sync policy's decision (design §5 / V.4), not the seed's, so
+    // the two rules cannot fork. `acceptsGame` sees only uuid + emptiness by construction.
+    expect(acceptsGame(resumeProposal('g1', 'my-head'), playedGame('g1'))).toEqual({ ok: true });
   });
 });
 
@@ -255,7 +385,7 @@ describe('reconcile — properties (fast-check)', () => {
             expect(typeof r.game.headHash).toBe('string');
           }
         } else {
-          expect(['game-mismatch', 'game-divergent']).toContain(r.reason);
+          expect(['game-mismatch', 'game-divergent', 'seed-refused']).toContain(r.reason);
         }
       }),
     );
@@ -280,17 +410,150 @@ describe('reconcile — properties (fast-check)', () => {
     );
   });
 
-  it('a reject fires ONLY when both proposals are concrete non-empty (resume/current) — a defer or a new never rejects', () => {
+  it('a reject fires ONLY when at least one side brought a REAL game — a defer NEVER rejects', () => {
+    // Dealer's choice is the universal adopter: whatever it is paired with, an entry is possible. So
+    // every reject requires a real game on at least one side, and the OTHER side to be either another
+    // real game (identity reasons) or a `new` (the seed reason).
     fc.assert(
       fc.property(proposalArb, proposalArb, (a, b) => {
         const r = reconcile(a, b);
         if (!r.ok) {
-          const bothConcreteWithHistory =
-            (a.kind === 'resume' || a.kind === 'current') &&
-            (b.kind === 'resume' || b.kind === 'current');
-          expect(bothConcreteWithHistory).toBe(true);
+          const hist = (p: Proposal): boolean => p.kind === 'resume' || p.kind === 'current';
+          expect(hist(a) || hist(b)).toBe(true);
+          expect(a.kind !== 'defer' && b.kind !== 'defer').toBe(true);
         }
       }),
+    );
+  });
+
+  it('a `new` seed NEVER yields a non-empty agreed game — it agrees on a fresh game or refuses', () => {
+    // The design §3 half `reconcile` owns: no pairing lets "New game" come back holding a peer's game.
+    fc.assert(
+      fc.property(proposalArb, proposalArb, (a, b) => {
+        if (a.kind !== 'new' && b.kind !== 'new') return;
+        const r = reconcile(a, b);
+        if (r.ok) expect(r.game).toEqual({ kind: 'new' });
+        else expect(r.reason).toBe('seed-refused');
+      }),
+    );
+  });
+
+  it('an agreed EXISTING game is named by EVERY non-deferring peer — nobody is handed a game it did not ask for', () => {
+    fc.assert(
+      fc.property(proposalArb, proposalArb, (a, b) => {
+        const r = reconcile(a, b);
+        if (!r.ok || r.game.kind !== 'existing') return;
+        const agreedUuid = r.game.uuid;
+        for (const p of [a, b]) {
+          if (p.kind === 'defer') continue; // the deferrer asked for nothing — it adopts by definition
+          expect(p.kind === 'resume' || p.kind === 'current').toBe(true);
+          expect((p as { uuid: string }).uuid).toBe(agreedUuid);
+        }
+      }),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The two gates must AGREE: whatever `reconcile` refuses at the proposal level, the peer
+// itself refuses when handed the other's concrete game (and vice-versa). One rule, two
+// enforcement points (the arbiter before it serves, the newcomer on receipt).
+// ---------------------------------------------------------------------------
+
+describe('reconcile ↔ acceptsGame agreement (fast-check)', () => {
+  const uuidArb = fc.stringMatching(/^g[0-9]{1,4}$/);
+  const hashArb = fc.stringMatching(/^[a-z0-9]{1,8}$/);
+  /** Proposals that DECLARE a game (a `new` declares a fresh empty one); a defer declares nothing. */
+  const declaringArb: fc.Arbitrary<Proposal> = fc.oneof(
+    fc.constant(newProposal()),
+    fc.tuple(uuidArb, hashArb).map(([u, h]) => resumeProposal(u, h)),
+    fc.tuple(uuidArb, hashArb).map(([u, h]) => currentProposal(u, h)),
+  );
+
+  /**
+   * The game a declaring proposal would SERVE: a `new` serves the fresh empty game it minted (a uuid
+   * nothing else can collide with — the `fresh-` prefix is outside the `g\d+` uuid arbitrary), a
+   * `resume`/`current` serves the real game it named.
+   */
+  function servedBy(p: Proposal, tag: string): OfferedGame {
+    return p.kind === 'new' ? emptyGame(`fresh-${tag}`) : playedGame((p as { uuid: string }).uuid);
+  }
+
+  it('a refusal at the proposal level is the SAME refusal at the byte level, from BOTH peers', () => {
+    fc.assert(
+      fc.property(declaringArb, declaringArb, (a, b) => {
+        const r = reconcile(a, b);
+        const aSeesB = acceptsGame(a, servedBy(b, 'b'));
+        const bSeesA = acceptsGame(b, servedBy(a, 'a'));
+        if (r.ok) {
+          // Agreed → each peer accepts what the other would serve.
+          expect(aSeesB.ok).toBe(true);
+          expect(bSeesA.ok).toBe(true);
+          return;
+        }
+        if (r.reason === 'game-divergent') {
+          // The ONE documented asymmetry: same game, forked heads. The seed gate accepts (same uuid) and
+          // hands the fork to the sync policy (design §5 / V.4); only the proposal gate names it.
+          expect(aSeesB.ok).toBe(true);
+          expect(bSeesA.ok).toBe(true);
+          return;
+        }
+        expect(expectReject(aSeesB).reason).toBe(r.reason);
+        expect(expectReject(bSeesA).reason).toBe(r.reason);
+      }),
+    );
+  });
+});
+
+/**
+ * The real #42 fix: BOTH peers picking New Game are interchangeable, so they must converge on ONE
+ * shared game uuid AT GENESIS — decided by the deterministic initiator election, not by "whoever moves
+ * first". This composes the pure pieces exactly as `NetSession` does (elect → reconcile → claimSeat) so
+ * the invariant is pinned in the pure gate, not only in the session wiring.
+ */
+describe('both peers pick `new` → ONE game at genesis + two DISTINCT seat owners (#42, fast-check)', () => {
+  const peerArb: fc.Arbitrary<Peer> = fc.record({
+    playerId: fc.stringMatching(/^[a-z]{1,6}$/),
+    arrivalOrder: fc.integer({ min: 0, max: 20 }),
+  });
+
+  it('the elected initiator’s fresh game is the ONE agreed game, and each peer gets its own seat', () => {
+    fc.assert(
+      fc.property(
+        fc.uniqueArray(peerArb, { minLength: 2, maxLength: 2, selector: (p) => p.playerId }),
+        (peers) => {
+          const [x, y] = peers as [Peer, Peer];
+          // 1. BOTH peers, seeing the same two arrival tags, elect the SAME initiator — in either
+          //    listing order (each peer builds the list starting with itself).
+          const initiator = electInitiator([x, y]);
+          expect(electInitiator([y, x])).toBe(initiator);
+
+          // 2. The initiator reconciles both `new` proposals: a fresh game, never the peer's.
+          const agreed = expectAgreed(reconcile(newProposal(), newProposal()));
+          expect(agreed).toEqual({ kind: 'new' });
+
+          // 3. The initiator mints/keeps ONE uuid; the other peer adopts THAT uuid (it does not mint a
+          //    second one). Modelled here as the session does: the game the initiator holds is served.
+          const genesisUuid = `game-of-${initiator}`;
+          const other = initiator === x.playerId ? y : x;
+          expect(acceptsGame(newProposal(), emptyGame(genesisUuid))).toEqual({ ok: true });
+
+          // 4. Seats: the initiator claims first on the empty map, the adopter claims on the result →
+          //    two DISTINCT owners, both real playerIds, no double-white.
+          const present = new Set([x.playerId, y.playerId]);
+          const first = claimSeat(emptySeatMap(), initiator, present);
+          if (!first.ok) throw new Error('a claim on an empty map must succeed');
+          const second = claimSeat(first.seatMap, other.playerId, present);
+          if (!second.ok) throw new Error('a claim on a one-seat map must succeed');
+          const finalMap: SeatMap = second.seatMap;
+          expect(first.color).not.toBe(second.color);
+          expect(seatOf(finalMap, initiator)).toBe(first.color);
+          expect(seatOf(finalMap, other.playerId)).toBe(second.color);
+          expect([finalMap.white, finalMap.black].sort()).toEqual(
+            [x.playerId, y.playerId].sort(),
+          );
+        },
+      ),
     );
   });
 });

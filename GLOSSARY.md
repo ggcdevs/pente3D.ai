@@ -110,10 +110,22 @@ the tie-breaker.
   **new** (mint a fresh game), **resume** (a specific persisted game by UUID + headHash),
   **current** (the currently-loaded local game), or **defer** ("dealer's choice" — bring
   nothing, adopt the opponent's). (**random** — a shared randomized board — is future #34.)
+- **Seed matrix** (design §3, enforced on the wire) — what each seed **sends** and **accepts**:
+  **new** sends/accepts an **empty** game only; **resume**/**current** send their own concrete game
+  and accept the **same UUID** only; **dealer's choice** sends nothing and is the **only** kind that
+  **adopts a peer's non-empty game**. A mismatch is an honest typed reject, never a silent adoption.
 - **Reconciliation** — the pure decision that turns a **pair of seed proposals** into a single
-  agreed game or a **typed reject** (`game-mismatch` / `game-divergent`) surfaced to the UI:
-  0 concrete → new; 1 → play it; 2 same-UUID+matching-headHash → resume together; 2 same-UUID
-  divergent → `game-divergent`; 2 different-UUID → `game-mismatch`.
+  agreed game or a **typed reject** (`seed-refused` / `game-mismatch` / `game-divergent`) surfaced
+  to the UI: both empty (defer/new, any mix) → one fresh game; a concrete game beside a **defer** →
+  play it; a concrete game beside a **new** → `seed-refused`; two concrete same-UUID+matching-headHash
+  → resume together; two concrete same-UUID divergent → `game-divergent`; two concrete different-UUID
+  → `game-mismatch`.
+- **Seed refusal** (`seed-refused`) — the reject for **incompatible seeds**: one peer chose New game
+  (empty only) while the other brought a real game, so neither may give way. Raised at **both**
+  enforcement points — on the **proposal** pair (`reconcile`) and on the **concrete game** about to
+  cross the wire (`acceptsGame`, applied by the arbiter before it serves and by the newcomer on
+  receipt). It is what stops a stale game being pushed to a peer that asked to start over (#46) and a
+  reused code from keeping the old board (#43).
 - **Initiator election** — the deterministic pick (earlier live-presence **arrival**, then
   lower **playerId**) of which of two **simultaneously-arriving** peers computes reconciliation
   and publishes the agreed game — killing the initial double-white race.

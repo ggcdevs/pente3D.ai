@@ -91,10 +91,11 @@ export interface NetSessionState {
 
 /**
  * Why a join attempt failed, as reported by the live session (post-dispatch). Every typed admission
- * reject (design §7 — `room-full` / `seat-reserved` / `game-mismatch` / `game-divergent`) surfaces
- * as one of these so the net panel shows a HUMAN message for EVERY reject, not just room-full — plus
- * `connect-failed` for a transport failure. Verbatim to the machine {@link AdmissionReject} reasons
- * (`src/net/sync.ts`) so a new reject reason is a compile error here until it has a human label.
+ * reject (design §7 — `room-full` / `seat-reserved` / `game-mismatch` / `game-divergent` /
+ * `seed-refused`) surfaces as one of these so the net panel shows a HUMAN message for EVERY reject,
+ * not just room-full — plus the two LOCAL failures that never reach the wire (`connect-failed`,
+ * `seed-unreadable`). Verbatim to the machine {@link AdmissionReject} reasons (`src/net/sync.ts`) so
+ * a new reject reason is a compile error here until it has a human label.
  */
 export type JoinErrorReason =
   /** The room already has two seated players and both owners are present (seat manager `room-full`). */
@@ -105,8 +106,20 @@ export type JoinErrorReason =
   | 'game-mismatch'
   /** The SAME game uuid but forked histories — divergent headHash (admission `game-divergent`). */
   | 'game-divergent'
+  /**
+   * The two SEEDS are incompatible: one side chose New Game (empty only) while the other brought a
+   * real game (admission `seed-refused`, design §3). Only Dealer's choice adopts a peer's game.
+   */
+  | 'seed-refused'
   /** The transport could not connect (relay unreachable / rejected). */
-  | 'connect-failed';
+  | 'connect-failed'
+  /**
+   * The seed's own archived game could NOT be read — the stored log is corrupt/illegal, so folding it
+   * threw (an `ArchiveError`). A LOCAL failure, not a peer's refusal: nothing was published and the
+   * entry never joined the room. It is surfaced with its own label rather than left silent (the V.1
+   * review finding: the session returned to offline with no reason and the player was told nothing).
+   */
+  | 'seed-unreadable';
 
 /** Why a typed join code was rejected before dispatch (pure, pre-dispatch validation). */
 export type CodeError =
@@ -149,14 +162,19 @@ export interface NetModel {
  * Human labels for a post-dispatch join failure — kept beside the model (SSOT for the widget). One
  * entry per {@link JoinErrorReason}; the `Record` type makes an unlabeled reason a compile error, so
  * a reject reason can never reach the panel with no message (the exact silent-failure design §7
- * forbids). `game-mismatch`/`game-divergent` name the #38 resolution seam in human terms.
+ * forbids). `game-mismatch`/`game-divergent` name the #38 resolution seam in human terms;
+ * `seed-refused` names the design §3 seed rule (and what to pick instead) rather than blaming the
+ * player, and `seed-unreadable` says the local game is damaged rather than implying the peer refused.
  */
 const JOIN_ERROR_TEXT: Record<JoinErrorReason, string> = {
   'room-full': 'That room already has two players.',
   'seat-reserved': 'A seat there is being held for a player who stepped away. Try again later.',
   'game-mismatch': 'You and the other player brought different games.',
   'game-divergent': 'That game has diverged from yours and can’t be joined yet.',
+  'seed-refused':
+    'One of you chose New game and the other brought an existing game. Pick the same game, or choose Dealer’s choice to take theirs.',
   'connect-failed': 'Could not connect. Check the code and try again.',
+  'seed-unreadable': 'That saved game could not be read — it may be damaged. Try another game.',
 };
 
 /** Human labels for a pre-dispatch code-validation failure — the SSOT the widget renders. */

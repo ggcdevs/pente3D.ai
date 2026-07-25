@@ -191,19 +191,29 @@ export interface AdmitMessage {
  *   - `seat-reserved`  — a seat is reserved for an absent owner and the newcomer is not that owner.
  *   - `game-mismatch`  — the peers proposed DIFFERENT games (different uuids).
  *   - `game-divergent` — the SAME game uuid but forked histories (divergent headHash) — the #38 seam.
+ *   - `seed-refused`   — the two SEEDS are incompatible: one side chose **New Game** (which sends and
+ *     accepts an EMPTY game only) while the other brought a real game. Raised by BOTH admission gates
+ *     — `reconcile` on the proposal pair, and `acceptsGame` on the concrete game about to cross the
+ *     wire — so a "New Game" entry can never be served a game in progress (design §3; #46/#43).
  */
 export type AdmissionReject =
   | 'room-full'
   | 'seat-reserved'
   | 'game-mismatch'
-  | 'game-divergent';
+  | 'game-divergent'
+  | 'seed-refused';
 
-/** The set of valid {@link AdmissionReject} reasons — the single source of truth for validation. */
-const ADMISSION_REJECT_REASONS: readonly AdmissionReject[] = [
+/**
+ * The set of valid {@link AdmissionReject} reasons — the single source of truth for validation, and
+ * exported so a test enumerates the reasons that ACTUALLY exist rather than a hand-copied list that
+ * silently stops covering a newly-added one.
+ */
+export const ADMISSION_REJECT_REASONS: readonly AdmissionReject[] = [
   'room-full',
   'seat-reserved',
   'game-mismatch',
   'game-divergent',
+  'seed-refused',
 ];
 
 /**
@@ -429,7 +439,7 @@ function parseSeat(raw: unknown, color: 'white' | 'black'): string | null {
 }
 
 /**
- * True iff `raw` is one of the four typed {@link AdmissionReject} reasons. Membership in the
+ * True iff `raw` is one of the typed {@link AdmissionReject} reasons. Membership in the
  * fixed reason set is the ONLY predicate: `includes` returns false for every non-string (a
  * number/null/object never equals a string reason under SameValueZero), so no separate
  * `typeof === 'string'` sub-clause is needed — one predicate, nothing for a mutant to render

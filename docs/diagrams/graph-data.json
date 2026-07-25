@@ -1624,11 +1624,14 @@
   "src/net/admission.ts": {
     "exports": [
       "AgreedGame",
+      "OfferedGame",
       "Peer",
       "Proposal",
       "ReconcileReject",
       "ReconcileResult",
       "Reject",
+      "SeedAcceptance",
+      "acceptsGame",
       "currentProposal",
       "deferProposal",
       "electInitiator",
@@ -1647,6 +1650,15 @@
         "properties": [
           "readonly ok: false",
           "readonly reason: ReconcileReject"
+        ]
+      },
+      {
+        "name": "OfferedGame",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly empty: boolean",
+          "readonly uuid: string"
         ]
       },
       {
@@ -1675,14 +1687,19 @@
       },
       {
         "name": "ReconcileReject",
-        "type": "'game-mismatch' | 'game-divergent'"
+        "type": "'game-mismatch' | 'game-divergent' | 'seed-refused'"
       },
       {
         "name": "ReconcileResult",
         "type": "{ readonly ok: true; readonly game: AgreedGame } | Reject"
+      },
+      {
+        "name": "SeedAcceptance",
+        "type": "{ readonly ok: true } | Reject"
       }
     ],
     "functions": [
+      "acceptsGame",
       "agree",
       "beats",
       "currentProposal",
@@ -2497,8 +2514,10 @@
         "source": "./admission",
         "target": "src/net/admission.ts",
         "specifiers": [
+          "OfferedGame",
           "Peer",
           "Proposal",
+          "acceptsGame",
           "electInitiator",
           "reconcile"
         ]
@@ -2554,6 +2573,7 @@
           "AdmitMessage",
           "HelloMessage",
           "RejectMessage",
+          "SyncMessage",
           "parseSyncMessage",
           "toAdmitMessage",
           "toHelloMessage",
@@ -2656,10 +2676,13 @@
         "type": "(state: HandshakeState) => void"
       }
     ],
-    "functions": []
+    "functions": [
+      "offeredGameOf"
+    ]
   },
   "src/net/sync.ts": {
     "exports": [
+      "ADMISSION_REJECT_REASONS",
       "AdmissionDeduper",
       "AdmissionMessage",
       "AdmissionReject",
@@ -2886,7 +2909,7 @@
     "typeAliases": [
       {
         "name": "AdmissionReject",
-        "type": "| 'room-full'\n  | 'seat-reserved'\n  | 'game-mismatch'\n  | 'game-divergent'"
+        "type": "| 'room-full'\n  | 'seat-reserved'\n  | 'game-mismatch'\n  | 'game-divergent'\n  | 'seed-refused'"
       },
       {
         "name": "GameMessage",
@@ -6290,7 +6313,7 @@
       },
       {
         "name": "JoinErrorReason",
-        "type": "| 'room-full'\n  /** A seat is held for an absent owner and this peer is not that owner (seat manager `seat-reserved`). */\n  | 'seat-reserved'\n  /** The two peers proposed DIFFERENT games — different game uuids (admission `game-mismatch`). */\n  | 'game-mismatch'\n  /** The SAME game uuid but forked histories — divergent headHash (admission `game-divergent`). */\n  | 'game-divergent'\n  /** The transport could not connect (relay unreachable / rejected). */\n  | 'connect-failed'"
+        "type": "| 'room-full'\n  /** A seat is held for an absent owner and this peer is not that owner (seat manager `seat-reserved`). */\n  | 'seat-reserved'\n  /** The two peers proposed DIFFERENT games — different game uuids (admission `game-mismatch`). */\n  | 'game-mismatch'\n  /** The SAME game uuid but forked histories — divergent headHash (admission `game-divergent`). */\n  | 'game-divergent'\n  /**\n   * The two SEEDS are incompatible: one side chose New Game (empty only) while the other brought a\n   * real game (admission `seed-refused`, design §3). Only Dealer's choice adopts a peer's game.\n   */\n  | 'seed-refused'\n  /** The transport could not connect (relay unreachable / rejected). */\n  | 'connect-failed'\n  /**\n   * The seed's own archived game could NOT be read — the stored log is corrupt/illegal, so folding it\n   * threw (an `ArchiveError`). A LOCAL failure, not a peer's refusal: nothing was published and the\n   * entry never joined the room. It is surfaced with its own label rather than left silent (the V.1\n   * review finding: the session returned to offline with no reason and the player was told nothing).\n   */\n  | 'seed-unreadable'"
       },
       {
         "name": "CodeError",

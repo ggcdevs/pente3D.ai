@@ -100,7 +100,9 @@ import {
 } from './seats';
 import {
   reconcile,
+  acceptsGame,
   electInitiator,
+  type OfferedGame,
   type Proposal,
   type Peer,
 } from './admission';
@@ -115,6 +117,7 @@ import {
   type RejectMessage,
   type AdmissionMessage,
   type AdmissionReject,
+  type SyncMessage,
 } from './sync';
 import { randomId } from '../util/randomId';
 import { alternateSeats } from './endState';
@@ -178,6 +181,20 @@ export interface NetSessionDeps {
    * admission id is never appended to the move-log.
    */
   newMessageId?: () => string;
+}
+
+/**
+ * Project a sync payload onto the two facts the pure seed rules judge ({@link OfferedGame}, design
+ * §3): WHICH game it is, and whether it carries ANY history. "Empty" is a log with NO events —
+ * genesis only — not merely an empty-looking board (a `place` + `undo` leaves the board bare and the
+ * history real, and adopting that is not starting a fresh game).
+ *
+ * Used on BOTH sides of the wire so the seed rule is applied to the SAME projection whether we are
+ * about to serve a game ({@link NetSession.arbitrate}) or have just been offered one
+ * ({@link NetSession.onAdmit}) — one reading of "what game is this", never two.
+ */
+function offeredGameOf(payload: SyncMessage): OfferedGame {
+  return { uuid: payload.uuid, empty: payload.log.length === 0 };
 }
 
 /** Notified after every session-state change, so the UI shell can repaint the widget. */
@@ -396,11 +413,17 @@ export class NetSession {
       provisional = await this.buildProvisionalSeat(code, proposal);
     } catch (err) {
       // A seed we cannot even LOAD — a corrupt/illegal archived log surfaces as an `ArchiveError` — is
-      // a genuine FAILURE, not a refusal, so it propagates VERBATIM (never masked, never relabelled as
-      // one of the seat/connect reasons it is not). What it must NOT do is leave this session reporting
-      // `connecting` with no transport: that readout would lie about what is happening. So we return to
-      // `offline` (with no invented joinError) and re-throw for the caller to surface.
-      this.resetToOffline(null);
+      // a genuine FAILURE, not a refusal, so the error itself propagates VERBATIM (never masked, never
+      // relabelled as one of the seat/reject reasons it is not). It must ALSO not leave this session
+      // reporting `connecting` with no transport (a readout that lies), so we return to `offline`.
+      //
+      // And offline is not enough: with no `joinError` the panel repaints to a plain offline state and
+      // the player is told NOTHING about why their Enter did nothing (the V.1 review finding). So we
+      // set the DISTINCT `seed-unreadable` reason — its own typed reason with its own human label, not
+      // a borrowed `connect-failed`/`game-mismatch` — and emit it, exactly as an admission reject is
+      // surfaced. The re-throw still hands the real error to the caller (`main.ts` logs it), so the
+      // failure is both visible to the player and diagnosable in the console.
+      this.resetToOffline('seed-unreadable');
       this.emit();
       throw err;
     }
@@ -965,9 +988,10 @@ export class NetSession {
   }
 
   /**
-   * Arbitrate ONE newcomer's `hello` against the current durable `seatMap` (design §4/§5): reconcile
-   * its proposal against ours, validate its seat, and publish an `admit` (agreed game + updated seat
-   * map) or a TYPED `reject`. Returns the (possibly-updated) seat map. Shared by the initiator
+   * Arbitrate ONE newcomer's `hello` against the current durable `seatMap` (design §3/§4/§5): reconcile
+   * its proposal against ours, check that the newcomer's SEED accepts the game we would actually serve,
+   * validate its seat, and publish an `admit` (agreed game + updated seat map) or a TYPED `reject`.
+   * Returns the (possibly-updated) seat map. Shared by the initiator
    * ({@link establishAsInitiator}) and the live arbiter ({@link onHello}) so both apply IDENTICAL
    * rules — the single arbitration path, never two subtly-different copies.
    */
@@ -988,6 +1012,24 @@ export class NetSession {
       this.publishAdmission(toRejectMessage(this.deps.newMessageId(), 'game-mismatch'));
       return seatMap;
     }
+    // WIRE ENFORCEMENT (design §3; the user's rule in #46) — the SENDING half. Reconciliation agreed at
+    // the PROPOSAL level, but the newcomer's seed also constrains the BYTES we are about to push: a peer
+    // that entered with `new` accepts an EMPTY game only, and a `resume`/`current` accepts only its own
+    // uuid. Those two facts can disagree with the proposals: OUR proposal may have been `new` while our
+    // board has since moved on (a resident can play while alone), so `reconcile(new, new)` agrees on "a
+    // fresh game" that our engine no longer holds. So we ask the SAME pure rule the newcomer applies on
+    // receipt ({@link acceptsGame}) against the EXACT payload we would send, and publish the TYPED
+    // reject instead when it would refuse. That is the structural #46/#43 fix on the serving side: "New
+    // Game" can never be handed a game in progress, whoever is arbitrating.
+    //
+    // Checked BEFORE `claimSeat` so a refused newcomer never occupies a seat in our durable map for a
+    // game it is never going to adopt (the reject is about the GAME, and it settles the entry).
+    const payload = this.currentSyncPayload();
+    const acceptance = acceptsGame(hello.proposal, offeredGameOf(payload));
+    if (!acceptance.ok) {
+      this.publishAdmission(toRejectMessage(this.deps.newMessageId(), acceptance.reason));
+      return seatMap;
+    }
     // Reconciled + serveable → seat the newcomer (identity-reclaim or first-available on the map).
     // The present-set decides the REFUSAL reason when both seats are owned: `room-full` if every
     // owner is present (scenario 1 — a full active game), `seat-reserved` if a blocking owner is
@@ -999,9 +1041,9 @@ export class NetSession {
       this.publishAdmission(toRejectMessage(this.deps.newMessageId(), claim.reason));
       return seatMap;
     }
-    this.publishAdmission(
-      toAdmitMessage(this.deps.newMessageId(), this.currentSyncPayload(), claim.seatMap),
-    );
+    // Admit with the very payload the acceptance was judged against — so what we CHECKED and what we
+    // SEND can never be two different games.
+    this.publishAdmission(toAdmitMessage(this.deps.newMessageId(), payload, claim.seatMap));
     return claim.seatMap;
   }
 
@@ -1046,8 +1088,12 @@ export class NetSession {
   }
 
   /**
-   * Handle the arbiter's `admit`: ADOPT the authoritative game wholesale and take the seat the map
-   * assigns us. The admit game has a DIFFERENT genesis uuid than our provisional game, so it cannot go
+   * Handle the arbiter's `admit`: ENFORCE OUR OWN SEED against the offered game (design §3 — a `new`
+   * entry adopts an EMPTY game only; only dealer's choice adopts a peer's real game), then ADOPT the
+   * authoritative game wholesale and take the seat the map assigns us. A game our seed refuses ends the
+   * entry with that TYPED reason (never a silent adoption).
+   *
+   * The admit game has a DIFFERENT genesis uuid than our provisional game, so it cannot go
    * through the prefix-based sync `receive` (that is same-uuid convergence, and two empty logs with
    * different uuids would falsely CONFLICT). Instead we re-verify the payload's hash chain
    * ({@link parseSyncMessage} — a tampered/mismatched payload throws honestly, never a masked
@@ -1057,6 +1103,24 @@ export class NetSession {
    */
   private onAdmit(admit: AdmitMessage): void {
     if (this.phase !== 'connecting') return; // already finalized (e.g. a duplicate racing an establish).
+    // WIRE ENFORCEMENT (design §3) — the RECEIVING half, and the honest answer to the user's rule in
+    // #46: *"i would expect my phone to reject any non-empty gamestate data"* when it chose New Game.
+    // The arbiter applied the SAME pure rule before admitting us, so reaching a refusal here means the
+    // peer did not enforce it (an older or modified client) — precisely the case the threat model says
+    // we must survive on our own ("the opponent's client is the validator", design §5). We re-judge the
+    // bytes we were ACTUALLY sent against OUR OWN seed and refuse honestly rather than silently adopting
+    // a game we did not ask for, surfacing the typed reason verbatim (lastReject + joinError) exactly as
+    // an arbiter reject. Checked before the seat, mirroring `arbitrate`'s order (the game first).
+    //
+    // A `null` proposal is unreachable here (`onAdmit` only runs while `connecting`, which means `enter`
+    // set one); `new` is the conservative stand-in — the one seed that accepts nothing but an empty
+    // game — so an impossible null can never be the reason we adopt a game unchecked.
+    const acceptance = acceptsGame(this.myProposal ?? { kind: 'new' }, offeredGameOf(admit.game));
+    if (!acceptance.ok) {
+      this.lastReject = acceptance.reason;
+      this.tearDownToOffline(acceptance.reason);
+      return this.finishEnter();
+    }
     const mySeat = seatOf(admit.seats, this.deps.playerId);
     if (mySeat === null) {
       // The admit does not seat us — treat as an honest room-full-style refusal (we own no seat) and

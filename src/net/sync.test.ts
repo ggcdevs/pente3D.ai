@@ -18,6 +18,7 @@ import {
   parseSyncMessage,
   parseGameMessage,
   AdmissionDeduper,
+  ADMISSION_REJECT_REASONS,
   SYNC_VERSION,
   SyncEngine,
   SyncError,
@@ -738,13 +739,36 @@ describe('parseGameMessage — admission messages (Task S.4: hello / admit / rej
   });
 
   describe('kind: reject', () => {
-    const reasons: AdmissionReject[] = ['room-full', 'seat-reserved', 'game-mismatch', 'game-divergent'];
+    // Enumerated from the codec's OWN exported reason set, so a reason added to the union is covered
+    // here the moment it exists instead of quietly falling outside a hand-copied list.
+    const reasons: readonly AdmissionReject[] = ADMISSION_REJECT_REASONS;
 
-    it('parses each of the four typed reject reasons, preserving it verbatim', () => {
+    it('parses EVERY typed reject reason, preserving it verbatim', () => {
+      expect(reasons.length).toBeGreaterThan(0);
       for (const reason of reasons) {
         const msg: RejectMessage = { kind: 'reject', id: `r-${reason}`, reason };
         expect(parseGameMessage(JSON.parse(JSON.stringify(msg)))).toEqual(msg);
       }
+    });
+
+    it('the exported reason SET is EXACTLY the design §7 reasons (the SSOT the codec validates against)', () => {
+      // Pins the CONTENTS, not just the shape: the enumerated round-trip above validates each reason
+      // against this very list, so without this assertion a corrupted entry would round-trip happily.
+      expect([...ADMISSION_REJECT_REASONS].sort()).toEqual([
+        'game-divergent',
+        'game-mismatch',
+        'room-full',
+        'seat-reserved',
+        'seed-refused',
+      ]);
+    });
+
+    it('carries the V.2 SEED refusal (`seed-refused`) — the design §3 reason, named explicitly', () => {
+      // Spelled out rather than only enumerated: the seed rule is only enforceable if its reason can
+      // actually cross the wire and arrive unchanged (#46 — surfaced verbatim, never relabelled).
+      const msg: RejectMessage = { kind: 'reject', id: 'r-seed', reason: 'seed-refused' };
+      expect(parseGameMessage(JSON.parse(JSON.stringify(msg)))).toEqual(msg);
+      expect(ADMISSION_REJECT_REASONS).toContain('seed-refused');
     });
 
     it('rejects a reject missing its id (non-string)', () => {
@@ -752,7 +776,7 @@ describe('parseGameMessage — admission messages (Task S.4: hello / admit / rej
       expect(() => parseGameMessage(bad)).toThrow(/reject message requires a string id/);
     });
 
-    it('rejects a reject with an UNKNOWN reason (not one of the four), echoing it', () => {
+    it('rejects a reject with an UNKNOWN reason (outside the typed set), echoing it', () => {
       const bad = { kind: 'reject', id: 'r', reason: 'because-i-said-so' };
       expect(() => parseGameMessage(bad)).toThrow(SyncError);
       expect(() => parseGameMessage(bad)).toThrow(/known reason/);
@@ -815,11 +839,11 @@ describe('parseGameMessage — admission messages (Task S.4: hello / admit / rej
       );
     });
 
-    it('any reject with one of the four typed reasons round-trips, preserving the reason', () => {
+    it('any reject with one of the typed reasons round-trips, preserving the reason', () => {
       fc.assert(
         fc.property(
           fc.string(),
-          fc.constantFrom<AdmissionReject>('room-full', 'seat-reserved', 'game-mismatch', 'game-divergent'),
+          fc.constantFrom<AdmissionReject>(...ADMISSION_REJECT_REASONS),
           (id, reason) => {
             const msg = toRejectMessage(id, reason);
             const parsed = parseGameMessage(JSON.parse(JSON.stringify(msg)));

@@ -937,6 +937,12 @@ classDiagram
         +readonly titleFlashCount: number
     }
     note for NotifyReadout "src/net/notifyGlue.ts"
+    class OfferedGame {
+        <<interface>>
+        +readonly empty: boolean
+        +readonly uuid: string
+    }
+    note for OfferedGame "src/net/admission.ts"
     class OpacityFieldModel {
         <<interface>>
         +readonly key: string

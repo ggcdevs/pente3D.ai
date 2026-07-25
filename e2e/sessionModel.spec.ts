@@ -45,6 +45,9 @@ import relay from '../src/config/defaults/relay.json' with { type: 'json' };
  *  5. A,B; A drops; C enters claiming A's spot → C rejected (A's white RESERVED). The admitted peer B
  *      ASSUMES the arbiter role on A's departure (presence handoff) and its persisted seat map still
  *      reserves white for the absent player-a, so C hits room-full. [PROVEN]
+ *  V.2 seed enforcement (design §3, #46/#43): A hosts + plays a move; B enters the SAME code with
+ *      **New game** → B is refused `seed-refused`, its panel says so in human words, and A's move never
+ *      crosses onto B's board. Dealer's choice in the same room IS admitted onto that game (contrast).
  *  #31 regression: BOTH peers choose the SAME code and 'defer'/'new' (the old both-Join) → they get
  *      DISTINCT seats (one white, one black), asserted on BOTH contexts' seat + game uuid + headHash.
  *      [PROVEN — and shown to BITE: restoring the old empty-map seeding makes it fail; see the report.]
@@ -115,8 +118,16 @@ type Pente = {
   getNet(): { phase: string; seat: 'white' | 'black' | null; code: string | null } | null;
   getNetSeatOwners(): { white: string | null; black: string | null } | null;
   getNetGameUuid(): string | null;
-  getNetLastReject(): 'room-full' | 'seat-reserved' | 'game-mismatch' | 'game-divergent' | null;
+  getNetLastReject():
+    | 'room-full'
+    | 'seat-reserved'
+    | 'game-mismatch'
+    | 'game-divergent'
+    | 'seed-refused'
+    | null;
   getHeadHash(): string | null;
+  getState(): { pieces: Record<string, string>; turn: string } | null;
+  place(coords: [number, number, number]): unknown;
   leaveNet(): void;
 };
 
@@ -319,6 +330,24 @@ async function enterDefer(page: Page, code: string): Promise<void> {
     pente.dispatch('joinGame');
   }, code);
   await waitConnected(page);
+}
+
+/**
+ * Dispatch a **New Game** entry at a SPECIFIC room code (the panel's stash-the-code-then-`hostGame`
+ * seam — `hostGame` carries a `new` seed proposal). Unlike {@link enterNew} it does NOT wait for
+ * `connected`: re-using a code with New Game is exactly the entry V.2 may REFUSE (design §3), so the
+ * caller decides which settled state to wait for.
+ */
+async function dispatchNewAt(page: Page, code: string): Promise<void> {
+  await page.evaluate((c: string) => {
+    const pente = (
+      window as unknown as {
+        __pente: { setPendingJoinCode(x: string): void; dispatch(id: string): boolean };
+      }
+    ).__pente;
+    pente.setPendingJoinCode(c);
+    pente.dispatch('hostGame');
+  }, code);
 }
 
 /** Wait until `page`'s session reports `connected`. */
@@ -687,6 +716,95 @@ test.describe('two-context session model over the injected MockTransport (S.7, e
       const shot = resolve('e2e/artifacts/sessionmodel-31-distinct-seats.png');
       mkdirSync(dirname(shot), { recursive: true });
       await b.page.screenshot({ path: shot });
+    } finally {
+      await a.context.close();
+      await b.context.close();
+    }
+  });
+
+  test('V.2 SEED ENFORCEMENT: "New game" at a code whose resident is mid-game is REFUSED (#46/#43)', async ({
+    browser,
+  }) => {
+    // The bug, end to end (issue #46, the user's words): the laptop is mid-game in room X; the phone
+    // enters X asking for a NEW game and gets handed the laptop's board. Same shape as #43 (re-using a
+    // code keeps the old game). Here the entry is refused with a typed reason and NOTHING crosses over.
+    //
+    // NOTE for V.3 (resident-peer republish): this scenario is a tripwire for it. Today a resident does
+    // not push its log to an arriving peer, so the seed gate is the only thing deciding what B adopts.
+    // A republish-on-presence that fires before/around admission must NOT let B's provisional engine
+    // adopt a game its seed just refused — if that regresses, this test is what says so.
+    const hub = new NodeRelayHub();
+    const a = await bootPeer(browser, hub, 'player-a');
+    const b = await bootPeer(browser, hub, 'player-b');
+    hub.register(a.playerId, a.page);
+    hub.register(b.playerId, b.page);
+    try {
+      // A hosts (a `new` seed → a genuinely EMPTY game) and then plays one move, so its board carries
+      // history while its seat map still leaves BLACK free — the refusal below therefore cannot be a
+      // disguised room-full.
+      const code = await enterNew(a.page);
+      await a.page.evaluate(() => (window as unknown as { __pente: Pente }).__pente.place([0, 0, 0]));
+      await a.page.waitForFunction(
+        () => (window as unknown as { __pente: Pente }).__pente.getState()?.pieces['0,0,0'] === 'white',
+        undefined,
+        { timeout: ROUND_TRIP_MS },
+      );
+      const residentUuid = await gameUuid(a.page);
+      const residentHead = await headHash(a.page);
+      expect(await owners(a.page)).toEqual({ white: 'player-a', black: null });
+
+      // B enters the SAME code with New game.
+      await dispatchNewAt(b.page, code);
+      await waitOffline(b.page);
+
+      // Refused with the honest typed reason — surfaced verbatim, never masked as room-full/mismatch.
+      expect(await lastReject(b.page)).toBe('seed-refused');
+      expect(await seatOf(b.page)).toBeNull();
+      expect(await gameUuid(b.page)).toBeNull();
+
+      // PROOF-BY-UI (design §7): B's panel says what happened, in human words.
+      const joinErr = b.page.locator(
+        '[data-widget-id="connectionStatus"] [data-testid="net-join-error"]',
+      );
+      await expect(joinErr).toBeVisible();
+      await expect(joinErr).toHaveText(
+        'One of you chose New game and the other brought an existing game. Pick the same game, or choose Dealer’s choice to take theirs.',
+      );
+
+      // THE POINT: A's move never appeared on B. B asked for a new game and still has an empty board.
+      const bState = await b.page.evaluate(
+        () => (window as unknown as { __pente: Pente }).__pente.getState(),
+      );
+      expect(bState?.pieces['0,0,0']).toBeUndefined();
+      expect(Object.keys(bState?.pieces ?? {})).toEqual([]);
+
+      // A is untouched: same game, same single move, black still free for a peer that brings a
+      // compatible seed.
+      expect(await gameUuid(a.page)).toBe(residentUuid);
+      expect(await headHash(a.page)).toBe(residentHead);
+      expect(await owners(a.page)).toEqual({ white: 'player-a', black: null });
+
+      // Capture the refusal as it is SHOWN to the player, before the contrast re-entry clears it.
+      const shot = resolve('e2e/artifacts/sessionmodel-v2-seed-refused.png');
+      mkdirSync(dirname(shot), { recursive: true });
+      await b.page.screenshot({ path: shot });
+
+      // CONTRAST — the room is open, the SEED was refused: B re-enters the SAME code with Dealer's
+      // choice and IS admitted onto that same game in progress, inheriting A's move.
+      await enterDefer(b.page, code);
+      await b.page.waitForFunction(
+        () => (window as unknown as { __pente: Pente }).__pente.getNet()?.seat === 'black',
+        undefined,
+        { timeout: ROUND_TRIP_MS },
+      );
+      expect(await lastReject(b.page)).toBeNull();
+      expect(await gameUuid(b.page)).toBe(residentUuid);
+      await b.page.waitForFunction(
+        () => (window as unknown as { __pente: Pente }).__pente.getState()?.pieces['0,0,0'] === 'white',
+        undefined,
+        { timeout: ROUND_TRIP_MS },
+      );
+      expect(await headHash(b.page)).toBe(residentHead);
     } finally {
       await a.context.close();
       await b.context.close();

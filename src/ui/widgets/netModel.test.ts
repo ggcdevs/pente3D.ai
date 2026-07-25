@@ -10,6 +10,7 @@ import {
   CODE_ALPHABET,
   CODE_LENGTH,
   CODE_ERROR_TEXT,
+  type JoinErrorReason,
   type NetSessionState,
 } from './netModel.ts';
 
@@ -121,6 +122,42 @@ describe('deriveNet — code + join error passthrough', () => {
     expect(deriveNet(state({ joinError: 'game-divergent' })).joinErrorText).toBe(
       'That game has diverged from yours and can’t be joined yet.',
     );
+  });
+
+  it('maps a seed-refused join error to its OWN human label naming the seed rule (design §3)', () => {
+    // The refusal a player is most likely to meet (#46: "New game" vs the other device's board), so the
+    // copy must say WHAT clashed and WHAT to pick instead — and must not read like the identity-level
+    // game-mismatch, which is a different fact.
+    const text = deriveNet(state({ joinError: 'seed-refused' })).joinErrorText;
+    expect(text).toBe(
+      'One of you chose New game and the other brought an existing game. Pick the same game, or choose Dealer’s choice to take theirs.',
+    );
+    expect(text).not.toBe(deriveNet(state({ joinError: 'game-mismatch' })).joinErrorText);
+  });
+
+  it('maps a seed-unreadable join error to its OWN label (a LOCAL failure, not a peer refusal)', () => {
+    // V.2 (carried from the V.1 review): a seed whose archived log is corrupt used to leave the panel
+    // silent. It now has its own message, distinct from connect-failed — nothing failed to connect.
+    const text = deriveNet(state({ joinError: 'seed-unreadable' })).joinErrorText;
+    expect(text).toBe('That saved game could not be read — it may be damaged. Try another game.');
+    expect(text).not.toBe(deriveNet(state({ joinError: 'connect-failed' })).joinErrorText);
+  });
+
+  it('gives EVERY join-error reason a distinct, non-empty human message', () => {
+    // design §7: no reason may reach the panel with no message (the Record type makes that a compile
+    // error) — and none may silently share another's copy, which would mislabel the failure.
+    const reasons: JoinErrorReason[] = [
+      'room-full',
+      'seat-reserved',
+      'game-mismatch',
+      'game-divergent',
+      'seed-refused',
+      'connect-failed',
+      'seed-unreadable',
+    ];
+    const texts = reasons.map((r) => deriveNet(state({ joinError: r })).joinErrorText);
+    for (const t of texts) expect(t).toMatch(/\S/);
+    expect(new Set(texts).size).toBe(reasons.length);
   });
 
   it('maps a connect-failed join error to its human label', () => {

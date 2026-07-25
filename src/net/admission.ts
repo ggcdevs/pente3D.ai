@@ -7,19 +7,45 @@
  *
  * When two peers enter the same room (rendezvous channel) they each bring a **seed
  * proposal** — what game, if any, they want to play. This module decides, PURELY, what a
- * pair of proposals agrees on:
+ * pair of proposals agrees on ({@link reconcile}) AND whether a peer may adopt the concrete
+ * game it is actually offered on the wire ({@link acceptsGame}).
+ *
+ * ## The SEED MATRIX (v3.1 design §3) — enforced on the wire
+ *
+ * | Seed | Sends | Accepts |
+ * |---|---|---|
+ * | **new** | empty only (a fresh uuid) | empty only — REJECTS a non-empty peer game |
+ * | **resume** / **current** | its own concrete game | the SAME uuid only — rejects a different concrete game |
+ * | **defer** (dealer's choice) | nothing | **the ONLY kind that adopts a peer's non-empty game** |
+ *
+ * The user's rule, verbatim (issue #46): *"when selecting 'New Game', i would expect the laptop
+ * to never send non-empty gamestate data and i would expect my phone to reject any non-empty
+ * gamestate data. only 'Dealer's Choice' should allow a device to accept non-empty gamestate
+ * data from the other device."* So a `new` beside a real resume/current is NOT "the real game
+ * wins" (that was the v3 behaviour, and it is exactly how a stale game got pushed onto a peer
+ * that asked to start over — #46/#43): it is an honest TYPED reject, `seed-refused`.
+ *
+ * Concretely, {@link reconcile}:
  *
  *   - both bring nothing (defer) → a fresh **new** game;
- *   - one brings a concrete game, the other defers → play that game (the deferrer adopts);
+ *   - a `new` beside a defer, or two `new`s → a fresh **new** game (empty and interchangeable;
+ *     which uuid the pair ends up on is settled at GENESIS by {@link electInitiator} — the #42
+ *     fix: a genuinely shared uuid from the start, not "converges on the first move");
+ *   - a concrete game beside a **defer** → play that game (the deferrer adopts it);
+ *   - a `new` beside a concrete resume/current → **reject** `seed-refused`;
  *   - both bring the SAME game with a matching `headHash` → **resume** it together;
  *   - both bring the same game UUID but DIVERGENT `headHash`es → **reject** `game-divergent`
  *     (a genuine conflict — the #38 merge/diff seam, NOT a silent pick);
  *   - both bring DIFFERENT game UUIDs → **reject** `game-mismatch`.
  *
- * A `new` proposal is **concrete-but-empty**: it means "I want a fresh game" but carries no
- * history to preserve, so two `new`s (or a `new` beside a defer) collapse to one fresh game,
- * and a `new` beside a real resume/current yields the real game (the empty side has nothing
- * to conflict with). Empty games are interchangeable, so this branch **never blocks**.
+ * A `new` proposal is **concrete-but-empty**: it means "I want a fresh game" and carries no
+ * history — so it agrees with anything else that has no history, and refuses anything that has.
+ *
+ * {@link reconcile} judges PROPOSALS; {@link acceptsGame} judges the BYTES a peer is about to be
+ * served (its uuid + whether it carries any history at all). Both sides of the wire apply the
+ * same {@link acceptsGame} rule — the arbiter before it publishes an `admit`, the newcomer again
+ * on receipt — so a peer that does not enforce it cannot silently push a game onto one that does
+ * (design §5: "the opponent's client is the validator").
  *
  * It also decides **initiator election** (design §4 Case 2): when two peers arrive together,
  * a deterministic order — **earlier live-presence `arrivalOrder`, then lower `playerId`** —
@@ -29,6 +55,11 @@
  *
  * - **Order-insensitive.** `reconcile(a, b)` and `reconcile(b, a)` agree on the same game or
  *   the same typed reject — a peer must not care who published first. (Proven by fast-check.)
+ * - **A `new` seed never yields a non-empty agreed game**, and only a `defer` ever adopts one:
+ *   the two halves of the design §3 enforcement, property-tested against both entry points.
+ * - **`reconcile` and `acceptsGame` agree.** Whenever `reconcile` refuses a pair, the same peer
+ *   refuses the other's concrete game with the SAME typed reason — the proposal-level and
+ *   byte-level gates can never disagree about who may play what (proven by fast-check).
  * - **Total + honest.** Every proposal pair yields a valid {@link AgreedGame} or a TYPED
  *   {@link Reject} — never a throw, never `undefined`, never a masked/mislabeled failure
  *   (agent-principles: reject honestly with a machine reason surfaced to the UI).
@@ -59,9 +90,10 @@
 /**
  * A seed proposal: what game a peer brings when entering a room (design §3, §5).
  *
- *   - `defer` — "dealer's choice": bring nothing, adopt whatever the opponent brings.
- *   - `new` — mint a fresh game. Concrete-but-EMPTY: it wants a game but has no history, so
- *     it never conflicts and two of them are interchangeable.
+ *   - `defer` — "dealer's choice": bring nothing, adopt whatever the opponent brings. The ONLY
+ *     kind that adopts a peer's NON-EMPTY game (design §3).
+ *   - `new` — mint a fresh game. Concrete-but-EMPTY: it wants a game and has no history, so two
+ *     of them are interchangeable — but it accepts EMPTY only and refuses a peer's real game.
  *   - `resume` — seed a specific persisted game (from the games list, #37) by `uuid` + its
  *     current `headHash`.
  *   - `current` — seed whatever game is currently loaded locally, by its `uuid` + `headHash`.
@@ -100,10 +132,12 @@ export function currentProposal(uuid: string, headHash: string): Proposal {
 }
 
 /**
- * True iff `p` is a **concrete** proposal — anything other than `defer`. `new` is concrete
- * (it wants a specific outcome: a fresh game) even though it carries no history. Only `defer`
- * ("I'll take yours") is non-concrete. This is the "count the concrete proposals" primitive
- * the reconciliation matrix (design §5) branches on.
+ * True iff `p` is a **concrete** proposal — anything other than `defer`. `new` is concrete (it
+ * wants a specific outcome: a fresh game) even though it carries no history; only `defer` ("I'll
+ * take yours") is non-concrete. The GLOSSARY vocabulary term, and the predicate the reconciliation
+ * INVARIANTS are stated against ("an agreed existing game is always one of the concrete proposals
+ * brought"). {@link reconcile} itself branches on {@link hasHistory}, not on this — the v3.1 matrix
+ * distinguishes "brought a real game" from "wants a fresh one", not concrete-vs-deferred.
  */
 export function isConcrete(p: Proposal): boolean {
   return p.kind !== 'defer';
@@ -132,10 +166,16 @@ export type AgreedGame =
  *
  *   - `game-mismatch` — the two peers proposed DIFFERENT games (different `uuid`s).
  *   - `game-divergent` — the SAME game (`uuid`) but forked histories (divergent `headHash`).
+ *   - `seed-refused` — the two SEEDS are incompatible: one side chose **New Game** (empty only)
+ *     while the other brought a real game. Neither may silently give way — adopting the peer's
+ *     game would override an explicit "start over" (#46/#43), and serving our empty game would
+ *     discard theirs — so the pair is refused (design §3, the user's rule quoted at the top).
  *
- * Both are the seams #38 later turns into a resolution flow (merge / diff / rewind).
+ * `game-mismatch`/`game-divergent` are the seams #38 later turns into a resolution flow (merge /
+ * diff / rewind). `seed-refused` is NOT such a seam: the two players chose incompatible things,
+ * and the honest answer is to tell them so.
  */
-export type ReconcileReject = 'game-mismatch' | 'game-divergent';
+export type ReconcileReject = 'game-mismatch' | 'game-divergent' | 'seed-refused';
 
 /** A typed reconciliation refusal — a machine reason surfaced to the UI (design §7). */
 export interface Reject {
@@ -162,19 +202,21 @@ function playHistory(p: HistoryProposal): ReconcileResult {
 }
 
 /**
- * Reconcile two seed proposals into a single agreed game, or a typed reject (design §5). The
- * decision is by the COUNT of concrete proposals and, when both are concrete with history,
- * by `uuid` + `headHash`:
+ * Reconcile two seed proposals into a single agreed game, or a typed reject — the design §3 SEED
+ * MATRIX at the PROPOSAL level:
  *
- *   - **0 concrete** (both defer) → a fresh **new** game.
- *   - **1 concrete** → play it; the deferrer adopts it. (A lone `new` → a fresh new game;
- *     a lone `resume`/`current` → that existing game.)
- *   - **2 concrete, but at least one is `new`** → the `new` side carries no history, so the
- *     real game (if any) wins; two `new`s collapse to one fresh new game. Never blocks —
- *     empty games are interchangeable.
- *   - **2 concrete with history, same `uuid` + matching `headHash`** → **resume** together.
- *   - **2 concrete with history, same `uuid` + divergent `headHash`** → reject `game-divergent`.
- *   - **2 concrete with history, different `uuid`s** → reject `game-mismatch`.
+ *   - **both defer** → a fresh **new** game (neither brought anything).
+ *   - **`new` + `defer`, or `new` + `new`** → a fresh **new** game. Two `new`s are interchangeable;
+ *     WHICH uuid the pair lands on is decided at genesis by {@link electInitiator} (#42).
+ *   - **a concrete `resume`/`current` + `defer`** → play that game; the deferrer adopts it. This is
+ *     the ONLY way a peer's non-empty game is adopted (design §3).
+ *   - **`new` + a concrete `resume`/`current`** → reject **`seed-refused`**: "New Game" sends and
+ *     accepts empty only, so there is no honest outcome (this is the #46/#43 fix — the v3 matrix
+ *     handed the real game to the peer that had asked to start over).
+ *   - **two concrete, same `uuid` + matching `headHash`** → **resume** together.
+ *   - **two concrete, same `uuid` + divergent `headHash`** → reject `game-divergent`.
+ *   - **two concrete, different `uuid`s** → reject `game-mismatch` (a `resume`/`current` accepts
+ *     the same uuid only).
  *
  * Order-insensitive: `reconcile(a, b)` and `reconcile(b, a)` agree on the same game or the
  * same reject (the only asymmetry — which side is "a" — never affects the outcome). Total:
@@ -184,7 +226,8 @@ export function reconcile(a: Proposal, b: Proposal): ReconcileResult {
   const aHist = hasHistory(a);
   const bHist = hasHistory(b);
 
-  // Both carry a real game to preserve → compare identities (the only reject paths).
+  // Both carry a real game to preserve → compare identities (a resume/current accepts its OWN
+  // uuid only; a matching uuid with a forked head is the #38 divergence seam).
   if (aHist && bHist) {
     if (a.uuid !== b.uuid) return reject('game-mismatch');
     if (a.headHash !== b.headHash) return reject('game-divergent');
@@ -192,14 +235,77 @@ export function reconcile(a: Proposal, b: Proposal): ReconcileResult {
     return playHistory(a);
   }
 
-  // At most one side has history. If exactly one does, play it (the other defers or is an
-  // empty `new`, both of which have nothing to preserve → they adopt the real game).
+  // A `new` beside the peer's REAL game: "New Game" sends and accepts EMPTY ONLY (design §3), and
+  // only dealer's choice adopts a peer's non-empty game — so this pair cannot play. Refuse it with
+  // a typed reason instead of silently overriding one player's explicit choice (#46/#43).
+  if ((a.kind === 'new' && bHist) || (b.kind === 'new' && aHist)) return reject('seed-refused');
+
+  // Exactly one side has history and the other DEFERS (a `new` opposite it was refused above), so
+  // the deferrer adopts the real game — dealer's choice, the only adopting kind.
   if (aHist) return playHistory(a);
   if (bHist) return playHistory(b);
 
-  // Neither carries history: any mix of defer/new. No history to preserve on either side, so
-  // the pair agrees on a single fresh new game — interchangeable, never blocks.
+  // Neither carries history: any mix of defer/new. Nothing to preserve on either side, so the pair
+  // agrees on a single fresh new game — interchangeable, never blocks.
   return agree({ kind: 'new' });
+}
+
+/**
+ * A concrete game a peer is about to be SERVED over the wire, reduced to the two facts the seed
+ * rules judge: WHICH game it is, and whether it carries ANY history. Projected from the sync
+ * payload / engine log by the caller (`session.ts`) — this module never reads a log.
+ */
+export interface OfferedGame {
+  /** The offered game's stable UUID (minted at genesis, intrinsic to its hash chain). */
+  readonly uuid: string;
+  /**
+   * True iff the offered log holds NO events at all — a genesis-only, interchangeable EMPTY game.
+   * "Empty" is about the LOG, not the board: a `place` followed by an `undo` leaves the board bare
+   * but the history real, and adopting it is not starting a fresh game.
+   */
+  readonly empty: boolean;
+}
+
+/** Whether a peer's own seed permits adopting an offered game, or the typed reason it does not. */
+export type SeedAcceptance = { readonly ok: true } | Reject;
+
+/** The accepted verdict — one literal, so the two acceptance paths cannot drift apart. */
+const ACCEPTED: SeedAcceptance = { ok: true };
+
+/**
+ * Decide whether a peer holding the seed `mine` may ADOPT the concrete game it is `offered` — the
+ * design §3 matrix at the BYTE level, and the enforcement the wire actually needs:
+ *
+ *   - **`defer`** (dealer's choice) → accepts ANYTHING. The only kind that adopts a peer's
+ *     non-empty game.
+ *   - **`new`** → accepts an EMPTY game only; a non-empty one is `seed-refused`. This is the user's
+ *     rule in #46 ("i would expect my phone to reject any non-empty gamestate data"), and it is
+ *     what {@link reconcile} alone cannot enforce: a peer whose PROPOSAL was `new` may by now hold
+ *     a game with moves in it, so the proposal pair can agree while the bytes still violate the
+ *     seed. Both #46 (a stale game pushed to a peer) and #43 (a reused code keeping the old board)
+ *     die here structurally, whichever side is asked.
+ *   - **`resume`/`current`** → accepts its OWN uuid only. A DIFFERENT non-empty game is
+ *     `game-mismatch` (the peers are on different games); a different EMPTY game is `seed-refused`
+ *     (the peer chose New / brought nothing while we asked for a specific game — the mirror of the
+ *     `new`-vs-real-game refusal, reported with the same reason from either side).
+ *
+ * Deliberately does NOT compare `headHash` when the uuid matches: being AHEAD of, or behind, the
+ * same game is convergence, not a seed violation — that decision belongs to the sync policy
+ * (design §5 / V.4 fast-forward-vs-resolution), and duplicating it here would fork the rule.
+ *
+ * Total and pure: every (seed, offer) pair yields an acceptance or a TYPED reject; never throws.
+ */
+export function acceptsGame(mine: Proposal, offered: OfferedGame): SeedAcceptance {
+  switch (mine.kind) {
+    case 'defer':
+      return ACCEPTED;
+    case 'new':
+      return offered.empty ? ACCEPTED : reject('seed-refused');
+    case 'resume':
+    case 'current':
+      if (offered.uuid === mine.uuid) return ACCEPTED;
+      return offered.empty ? reject('seed-refused') : reject('game-mismatch');
+  }
 }
 
 /**
