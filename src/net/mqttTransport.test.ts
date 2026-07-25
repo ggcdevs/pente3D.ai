@@ -88,6 +88,13 @@ const RELAY: RelayConfig = {
   topicRoot: 'pente/v1',
 };
 
+/** How many LIVE (non-retained, non-empty) presence publishes `peerId` has put on the wire. */
+function liveAcks(fake: FakeMqttClient, peerId = 'peer-A'): number {
+  return fake.published.filter(
+    (m) => m.topic.endsWith(`/presence/${peerId}`) && m.opts?.retain === false && m.payload !== '',
+  ).length;
+}
+
 /** Build a transport wired to a fresh fake client; return both. */
 function makeTransport(peerId = 'peer-A'): {
   transport: MqttTransport;
@@ -343,22 +350,97 @@ describe('MqttTransport message routing', () => {
     expect(afterAck).toBe(beforeAck + 1); // exactly one live ack published in response
   });
 
-  it('issue #5: does not re-ack a peer that announces live twice (one ack per peer)', async () => {
+  it('answers EVERY announce, including a re-announce from a peer we already believe is live', async () => {
+    // The V.3 (#45) correction: the ack used to be latched one-per-peer, which went silent for a
+    // peer that dropped and returned WITHOUT the broker publishing an absence — leaving the returner
+    // with no live signal at all, so it never republished the move only it holds (design §5 mirror).
+    // Every announce is answered; the ack flag (below) is what stops the ping-pong instead.
     const t = makeTransport();
     const pr = t.transport.connect('room1');
     t.fake.fireConnect();
     await pr;
 
     t.fake.fireMessage('pente/v1/room1/presence/peer-B', JSON.stringify({ id: 'peer-B' }), false);
-    const afterFirst = t.fake.published.filter(
-      (m) => m.topic.endsWith('/presence/peer-A') && m.opts?.retain === false,
-    ).length;
+    const afterFirst = liveAcks(t.fake);
+    // A socket-level return: peer-B re-announces into a live set that never changed.
     t.fake.fireMessage('pente/v1/room1/presence/peer-B', JSON.stringify({ id: 'peer-B' }), false);
-    const afterSecond = t.fake.published.filter(
-      (m) => m.topic.endsWith('/presence/peer-A') && m.opts?.retain === false,
-    ).length;
 
-    expect(afterSecond).toBe(afterFirst); // no second ack
+    expect(liveAcks(t.fake)).toBe(afterFirst + 1);
+  });
+
+  it('answers NOTHING once disconnected (a late presence after teardown must not publish)', async () => {
+    // mqtt.js can deliver a message that was already in flight when we tore the client down. There
+    // is no client to publish on then, so the answer is skipped — and skipped silently, not by
+    // throwing out of the broker's message handler.
+    const t = makeTransport();
+    const pr = t.transport.connect('room1');
+    t.fake.fireConnect();
+    await pr;
+    t.transport.disconnect();
+    const afterDisconnect = t.fake.published.length;
+
+    expect(() =>
+      t.fake.fireMessage('pente/v1/room1/presence/peer-B', JSON.stringify({ id: 'peer-B' }), false),
+    ).not.toThrow();
+
+    expect(t.fake.published.length).toBe(afterDisconnect);
+  });
+
+  it('never answers an ACK — the flag, not a latch, is what terminates the handshake', async () => {
+    // Our own ack is marked `ack: true`; a peer's ack carries the same flag. Answering one would
+    // make two peers publish live presence at each other forever, which is why the un-latched
+    // announce-answering above is safe.
+    const t = makeTransport();
+    const pr = t.transport.connect('room1');
+    t.fake.fireConnect();
+    await pr;
+    const before = liveAcks(t.fake);
+
+    t.fake.fireMessage(
+      'pente/v1/room1/presence/peer-B',
+      JSON.stringify({ id: 'peer-B', ack: true }),
+      false,
+    );
+
+    expect(liveAcks(t.fake)).toBe(before);
+  });
+
+  it('marks its own ack `ack: true` so the peer it answers does not answer back', async () => {
+    const t = makeTransport();
+    const pr = t.transport.connect('room1');
+    t.fake.fireConnect();
+    await pr;
+
+    t.fake.fireMessage('pente/v1/room1/presence/peer-B', JSON.stringify({ id: 'peer-B' }), false);
+
+    const ack = t.fake.published
+      .filter((m) => m.topic.endsWith('/presence/peer-A') && m.opts?.retain === false)
+      .at(-1);
+    expect(JSON.parse(ack!.payload)).toEqual({ id: 'peer-A', ack: true });
+    // …and the connect-time ANNOUNCE carries no flag, or a peer would never answer it.
+    const announce = t.fake.published.find(
+      (m) => m.topic.endsWith('/presence/peer-A') && m.opts?.retain === false,
+    );
+    expect(JSON.parse(announce!.payload)).toEqual({ id: 'peer-A' });
+  });
+
+  it('answers a MALFORMED live presence body (an unreadable peer is still a peer to answer)', async () => {
+    // Only an explicit `ack: true` suppresses the answer. Anything unparseable is read as an
+    // announce — the safe direction, and it must not crash routing either.
+    const t = makeTransport();
+    const live: string[] = [];
+    t.transport.onPeerLive((id) => live.push(id));
+    const pr = t.transport.connect('room1');
+    t.fake.fireConnect();
+    await pr;
+    const before = liveAcks(t.fake);
+
+    expect(() =>
+      t.fake.fireMessage('pente/v1/room1/presence/peer-B', 'not json at all', false),
+    ).not.toThrow();
+
+    expect(liveAcks(t.fake)).toBe(before + 1);
+    expect(live).toEqual(['peer-B']);
   });
 
   it('issue #5: ignores our OWN presence topic (never self-counts)', async () => {
@@ -478,12 +560,12 @@ describe('MqttTransport default construction (SSOT wiring)', () => {
 
 /**
  * Task V.3 (epic #47, fixes **#45**) — the FRESH-LIVE-PRESENCE signal resident-peer republish
- * stands on (`onPeerLive`). It exists because both of this adapter's other presence paths are
- * CHANGE-gated: `acked` suppresses the hello-ack once per peer, and `PresenceTracker` reports only a
- * change to the LIVE SET. An observed absence is what resets them, so a peer whose socket dropped
- * and returned WITHOUT the broker publishing an absence re-announces into an unchanged set and
- * produces no signal at all — and the resident never republishes the move it missed. That is the
- * exact suppression measured on the real relay while building the #45 repro.
+ * stands on (`onPeerLive`). It exists because this adapter's other presence path is CHANGE-gated:
+ * `PresenceTracker` reports only a change to the LIVE SET, and an observed absence is what makes a
+ * return a change. A peer whose socket dropped and returned WITHOUT the broker publishing an
+ * absence re-announces into an unchanged set and produces no presence callback at all — so the
+ * resident would never republish the move it missed. That is the exact suppression measured on the
+ * real relay while building the #45 repro.
  */
 describe('MqttTransport.onPeerLive — the un-gated fresh-live-presence signal (V.3, #45)', () => {
   it('fires on a peer\'s LIVE presence, carrying that peer\'s id', async () => {
@@ -499,10 +581,11 @@ describe('MqttTransport.onPeerLive — the un-gated fresh-live-presence signal (
     expect(live).toEqual(['peer-B']);
   });
 
-  it('fires AGAIN for an already-live peer, when NO presence change and NO ack occur (the #45 case)', async () => {
+  it('fires AGAIN for an already-live peer, when NO presence change occurs (the #45 case)', async () => {
     // The suppression this signal exists to survive, reproduced at the adapter level: peer-B is
-    // already live and already acked, so a re-announce changes the live SET not at all and triggers
-    // no new ack. Both of the older paths go quiet; the peer-live signal must not.
+    // already live, so a re-announce changes the live SET not at all. The change-gated path goes
+    // quiet; the peer-live signal must not — and our answer must go out anyway, because that answer
+    // is the only signal the RETURNER gets (design §5 mirror).
     const t = makeTransport();
     const presence: string[][] = [];
     const live: string[] = [];
@@ -514,17 +597,18 @@ describe('MqttTransport.onPeerLive — the un-gated fresh-live-presence signal (
 
     t.fake.fireMessage('pente/v1/room1/presence/peer-B', JSON.stringify({ id: 'peer-B' }), false);
     const presenceCallbacks = presence.length;
-    const acks = t.fake.published.length;
+    const acks = liveAcks(t.fake);
 
     // The peer drops and returns WITHOUT the broker ever publishing an absence: it simply
     // re-announces itself live.
     t.fake.fireMessage('pente/v1/room1/presence/peer-B', JSON.stringify({ id: 'peer-B' }), false);
 
-    // Proof the older paths are silent here — this is not a signal that could be derived from them.
+    // Proof the change-gated path is silent here — this is not a signal derivable from it.
     expect(presence.length).toBe(presenceCallbacks);
-    expect(t.fake.published.length).toBe(acks);
-    // …and the un-gated signal fired for the return.
+    // …the un-gated signal fired for the return…
     expect(live).toEqual(['peer-B', 'peer-B']);
+    // …and the returning peer was told we are live, so IT can republish too.
+    expect(liveAcks(t.fake)).toBe(acks + 1);
   });
 
   it('does NOT fire for a RETAINED snapshot (a ghost is not a returning peer)', async () => {

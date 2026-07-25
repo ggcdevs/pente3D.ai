@@ -47,18 +47,43 @@ export function linkStatus(): LinkStatus {
   return current.connected ? 'up' : 'down';
 }
 
+/** How an outage behaves at the broker — see {@link dropLink}. */
+export interface DropOptions {
+  /**
+   * GRACEFUL disconnect: send the MQTT DISCONNECT packet, which makes the broker DISCARD our
+   * Last-Will. The peer therefore never sees us go absent — its live set never changes, and the
+   * only thing that can tell it we came back is our re-announce (and its answer). This is the case
+   * resident-peer republish's un-gated trigger exists for; a Last-Will outage cannot exercise it.
+   */
+  readonly silent?: boolean;
+  /**
+   * LOSSY: publishes issued while the link is down are DROPPED (`queueQoSZero = false`) instead of
+   * being queued and flushed on reconnect. Without this, mqtt.js's own offline queue delivers the
+   * move made during the outage as soon as the socket returns — convergence would prove the queue
+   * works, not that the peers republished. "A move that never got out" (design §5) needs it gone.
+   */
+  readonly lossy?: boolean;
+}
+
 /**
- * DROP the link: stop mqtt.js from auto-reconnecting (`reconnectPeriod = 0`), then destroy
- * the socket — a screen-lock / lost-signal drop, indistinguishable from a real one at the
- * broker (our Last-Will fires, so the peer sees us go absent). The session keeps its engine,
- * seat and game in memory and stays `connected`, exactly as the browser tab does.
+ * DROP the link: stop mqtt.js from auto-reconnecting (`reconnectPeriod = 0`), then take the socket
+ * down — a screen-lock / lost-signal drop. The session keeps its engine, seat and game in memory and
+ * stays `connected`, exactly as the browser tab does.
+ *
+ * By default the drop is UNGRACEFUL (the socket is destroyed), which is indistinguishable from a
+ * real one at the broker: our Last-Will fires and the peer sees us go absent. {@link DropOptions}
+ * selects the harder variants the design has to survive.
  *
  * @returns `false` if there is no link to drop (never connected).
  */
-export function dropLink(): boolean {
+export function dropLink(opts: DropOptions = {}): boolean {
   if (current === null) return false;
   current.options.reconnectPeriod = 0;
-  current.stream.destroy();
+  // NB: the live flag is the CLIENT property (mqtt.js copies `options.queueQoSZero` once, at
+  // construction) — setting `options` here would silently keep queueing. Probed, not assumed.
+  if (opts.lossy === true) current.queueQoSZero = false;
+  if (opts.silent === true) current.end(false);
+  else current.stream.destroy();
   return true;
 }
 
@@ -73,6 +98,8 @@ export function dropLink(): boolean {
 export function restoreLink(): boolean {
   if (current === null) return false;
   current.options.reconnectPeriod = reconnectPeriod;
+  // Publishes are queued again once we are back — the loss belongs to the outage, not to the peer.
+  current.queueQoSZero = true;
   if (!current.connected) current.reconnect();
   return true;
 }

@@ -20,6 +20,12 @@
  * resident serves the returner, and the returner serves a resident that missed ITS last move
  * (design §5's mirror case) — and it needs no new message kind.
  *
+ * The mirror direction is only real because `MqttTransport` ANSWERS every live announce (an ack a
+ * returner cannot miss), rather than latching one answer per peer: the returner has no other way to
+ * learn anyone is in the room, and a socket-level return may produce no other signal at all. That is
+ * proven on the wire by `mqttTransport.pair.test.ts` (two real transports over a broker) and
+ * end-to-end by `npm run scenario:mirror` against the real relay.
+ *
  * ## What this module decides
  *
  * This is the decision half only: *given* that a peer showed fresh live presence, does anything go
@@ -27,13 +33,13 @@
  *
  * ## Why the trigger is ANY fresh live presence, not an absent→present EDGE
  *
- * Measured on the real relay while building the #45 repro: `MqttTransport`'s `acked` set dedupes
- * the live-presence ack per peer and `PresenceTracker` only notifies when the LIVE SET changes —
- * and an observed **absence** is what resets both. A blip the broker never turns into an absence
- * therefore produces no presence transition at all, so an edge-triggered republish would never
- * fire. The signal fed to {@link RepublishLimiter.onPeerLive} is consequently every fresh live
- * presence publish, transition or not; making repeats harmless is this module's job, not the
- * trigger's.
+ * Measured on the real relay while building the #45 repro: `PresenceTracker` only notifies when the
+ * LIVE SET changes, and an observed **absence** is what makes a return a change. A blip the broker
+ * never turns into an absence therefore produces no presence transition at all, so an edge-triggered
+ * republish would never fire. The signal fed to {@link RepublishLimiter.onPeerLive} is consequently
+ * every fresh live presence publish, transition or not; making repeats harmless is this module's
+ * job, not the trigger's. (The transport's live-presence ANSWER is deliberately un-latched for the
+ * same reason — see `MqttTransport.ackHello`.)
  *
  * ## The limiter, and why it is a window and not a latch
  *

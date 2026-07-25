@@ -135,11 +135,18 @@ export class MockRelayHub {
     const residents = [...members].filter((m) => m !== peer);
     members.add(peer);
     this.broadcastPresence(room);
-    // Mirror the real transport's live-presence handshake (mqttTransport `routePresence`), which
-    // runs just after the presence update: the arriver's live announce is seen by every resident,
-    // and each resident's live ack is seen by the arriver. That two-way exchange — NOT the
-    // presence-set change above — is what resident-peer republish (design §4) triggers on, so the
-    // mock must reproduce it or a MockTransport test would prove nothing about the real path.
+    // Mirror the real transport's live-presence handshake (mqttTransport `routePresence`/`ackHello`),
+    // which runs just after the presence update: the arriver's live announce is seen by every
+    // resident, and each resident ANSWERS it with a live ack the arriver sees. That two-way exchange
+    // — NOT the presence-set change above — is what resident-peer republish (design §4) triggers on,
+    // so the mock must reproduce it or a MockTransport test would prove nothing about the real path.
+    //
+    // It is unconditional here because it is unconditional there: the real ack answers EVERY
+    // announce, including a re-announce from a peer the broker never declared absent (a socket-level
+    // reconnect). An earlier one-shot ack latch made this double strictly more generous than
+    // production and hid the mirror deadlock behind a green session test, so the parity is no longer
+    // asserted in prose — `mqttTransport.pair.test.ts` drives two REAL transports over a broker and
+    // shows both directions firing on exactly that no-absence return.
     for (const resident of residents) {
       resident.peerLive(peer.peerId);
       peer.peerLive(resident.peerId);

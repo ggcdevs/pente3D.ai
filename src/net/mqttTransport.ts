@@ -125,8 +125,6 @@ export class MqttTransport implements Transport {
    * room — where a crashed peer left a stale retained presence — showing a phantom opponent.
    */
   private readonly presence = new PresenceTracker();
-  /** Peers we have already sent a live hello-ack to this session (dedupes the handshake reply). */
-  private readonly acked = new Set<string>();
 
   private msgCb: MessageHandler = () => {};
   private presenceCb: PresenceHandler = () => {};
@@ -175,8 +173,11 @@ export class MqttTransport implements Transport {
           () => {
             // Announce ourselves TWICE, deliberately (issue #5 handshake):
             //   1. a RETAINED presence so a late joiner discovers we exist (a candidate to ping);
-            //   2. a LIVE (non-retained) hello so an already-present peer sees a FRESH signal from us
-            //      and — per `route` — replies with its own live presence, proving IT is alive too.
+            //   2. a LIVE (non-retained) hello — an ANNOUNCE (no `ack` flag) so an already-present
+            //      peer sees a FRESH signal from us and — per `routePresence` — answers with its own
+            //      live presence, proving IT is alive too. mqtt.js re-emits `connect` on every
+            //      reconnect, so this pair is republished on a socket-level return as well: that
+            //      re-announce is what earns the resident's answer and lets a returner republish.
             // The retained publish does not carry liveness on its own (a crashed peer's retained
             // message looks identical); only the live exchange does. A dead peer never answers the
             // hello, so it stays a candidate and is never counted as a live opponent.
@@ -224,38 +225,53 @@ export class MqttTransport implements Transport {
    * Fold one peer's presence into the tracker and, if the LIVE-peer set changed, notify the caller
    * with the LIVE peers only (never a mere retained candidate — the issue #5 fix). An empty body is
    * an absence (graceful clear / Last-Will); a non-empty body is a candidate if retained, or a live
-   * confirmation if fresh. A fresh live signal from a not-yet-acked peer triggers a one-shot live
-   * hello-ack so that peer learns WE are alive too (completing the handshake both ways).
+   * confirmation if fresh. Every fresh live ANNOUNCE is answered with our own live ack so that peer
+   * learns WE are alive too (completing the handshake both ways); an ack is never answered, which is
+   * what terminates the exchange (see {@link ackHello}).
    *
-   * Every LIVE signal is ALSO forwarded verbatim to {@link onPeerLive} — unconditionally, after the
-   * presence update. That is deliberate and load-bearing for issue #45: both gates above are
-   * CHANGE-gated (`acked` suppresses the ack once per peer, `PresenceTracker.apply` reports only a
-   * change to the live SET) and an observed ABSENCE is what resets them. A peer whose socket dropped
-   * and returned without the broker ever publishing its absence therefore re-announces into an
-   * unchanged live set: no ack, no presence callback, no signal at all — and the resident never
-   * republishes the moves it missed. The peer-live callback is the un-gated signal that survives
+   * Every LIVE signal — announce or ack — is ALSO forwarded verbatim to {@link onPeerLive}, after
+   * the presence update. That is deliberate and load-bearing for issue #45: `PresenceTracker.apply`
+   * reports only a CHANGE to the live SET, and an observed ABSENCE is what makes a return a change.
+   * A peer whose socket dropped and returned without the broker ever publishing its absence
+   * re-announces into an unchanged live set: no presence callback at all — and the resident would
+   * never republish the moves it missed. The peer-live callback is the un-gated signal that survives
    * that; making its repeats harmless belongs to the decision layer (`republish.ts`), not here.
+   *
+   * The MIRROR direction (design §5) rides the ack: the returner learns the resident is live only
+   * because the resident answers its re-announce, so that answer must NOT be conditioned on the
+   * return having been seen as an absence. It is not — every announce is answered.
    */
   private routePresence(id: string, body: string, retained: boolean): void {
     const kind = body === '' ? 'absent' : retained ? 'retained' : 'live';
-    if (kind === 'absent') this.acked.delete(id);
-    else if (kind === 'live') this.ackHello(id);
+    if (kind === 'live' && !isPresenceAck(body)) this.ackHello();
     const changed = this.presence.apply({ peerId: id, kind });
     if (changed) this.presenceCb(this.presence.livePeers());
     if (kind === 'live') this.peerLiveCb(id);
   }
 
   /**
-   * Reply to a peer's fresh LIVE presence with our own live presence publish — once per peer per
-   * session — so the peer confirms our liveness in return. Skipped after the first ack (and while
-   * disconnected) so the handshake settles instead of ping-ponging live publishes forever.
+   * Answer a peer's fresh live ANNOUNCE with our own live presence publish, so it confirms our
+   * liveness in return. Marked `ack: true` on the wire, and an ack is never itself answered — that
+   * flag, not a per-peer latch, is what stops two peers ping-ponging live publishes forever.
+   *
+   * It deliberately answers EVERY announce, including a re-announce from a peer we already believe
+   * is live. That peer may have dropped and come back without the broker ever publishing an absence
+   * (a socket-level reconnect: mqtt.js re-subscribes and re-announces, nothing else changes). A
+   * latch would go quiet exactly there and leave the returner with no signal that anyone is in the
+   * room — so it would never republish the move it holds and the resident missed (issue #45's mirror
+   * case, design §5). Skipped only while disconnected, when there is no client to publish on.
+   *
+   * The ack goes on OUR presence topic (the same one our announce uses), so it needs no addressee:
+   * every peer subscribed to `/presence/+` reads it as "we are live", and a peer that was not
+   * waiting on it simply treats it as one more live signal.
    */
-  private ackHello(id: string): void {
-    if (this.acked.has(id) || this.client === null) return;
-    this.acked.add(id);
-    this.client.publish(this.topic(`/presence/${this.peerId}`), JSON.stringify({ id: this.peerId }), {
-      retain: false,
-    });
+  private ackHello(): void {
+    if (this.client === null) return;
+    this.client.publish(
+      this.topic(`/presence/${this.peerId}`),
+      JSON.stringify({ id: this.peerId, ack: true }),
+      { retain: false },
+    );
   }
 
   publish(msg: TransportMessage): void {
@@ -284,6 +300,23 @@ export class MqttTransport implements Transport {
     client.publish(presenceMine, '', { retain: true }, () => {
       client.end();
     });
+  }
+}
+
+/**
+ * Is this live presence body an ACK (an answer to someone's announce) rather than an ANNOUNCE?
+ *
+ * The only discriminator on the wire is the `ack: true` flag {@link MqttTransport.ackHello} sets;
+ * anything else — an announce, an unparseable body, a payload from an older client that predates
+ * the flag — is read as an ANNOUNCE and therefore answered. Erring that way is safe: answering an
+ * announce twice costs one extra live publish, whereas mistaking an announce for an ack would
+ * silently strand a returning peer with no signal that anyone is in the room.
+ */
+function isPresenceAck(body: string): boolean {
+  try {
+    return (JSON.parse(body) as { ack?: unknown }).ack === true;
+  } catch {
+    return false;
   }
 }
 

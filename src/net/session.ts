@@ -1781,16 +1781,25 @@ export class NetSession {
    * It runs in BOTH directions, because both peers do this: the resident serves the returner the
    * move it missed, and the returner serves the resident a move of its own that never got out
    * (design §5's mirror case). Whichever log is behind adopts; the other ignores a prefix of its
-   * own. Deliberately NOT retained state on the broker — that would re-couple code↔game at the
-   * relay and kill room-code reuse (design §4).
+   * own — sync's `ignore` arm never answers, so the mirror depends entirely on the returner getting
+   * a live signal of its own. It does: `MqttTransport` answers EVERY live announce, so the resident's
+   * answer to a re-announce is the returner's trigger even when no absence was ever observed (proven
+   * on the wire in `mqttTransport.pair.test.ts`, and over the real relay by `npm run scenario:mirror`).
+   * Deliberately NOT retained state on the broker — that would re-couple code↔game at the relay and
+   * kill room-code reuse (design §4).
    *
    * Republishing is gated on the phase being exactly `connected`, which excludes three states for
    * three different reasons: while `connecting`, the admission protocol — not this rule — decides
-   * what a peer gets, and publishing a provisional log mid-negotiation would put a game on the wire
-   * the arbiter may be about to refuse; `offline` has no engine at all; and a `conflict` game is
-   * STOPPED, exchanging no further traffic of any kind (the same rule {@link SyncEngine.assertLive}
-   * enforces on moves and handshakes). The pure limiter is still consulted in those cases (with
-   * nothing to serve) so the decision, including its honest reason, lives in one place.
+   * what a peer gets, and re-pushing our provisional log at every live signal would keep offering a
+   * game the arbiter may be about to refuse (entry announces it once, on connect, and that is the
+   * protocol's own publish); `offline` has no engine at all; and a `conflict` game is STOPPED,
+   * exchanging no further traffic of any kind — the rule {@link SyncEngine.assertLive} enforces on
+   * moves and handshakes, but NOT on {@link SyncEngine.publishState}, so for a stopped game this
+   * gate is the only thing keeping a forked log off the wire. Both refusals are watched rejecting
+   * something in `session.test.ts` ("adds NOTHING to the wire across the WHOLE connecting window",
+   * "republishes NOTHING once a CONFLICT has stopped the game"). The pure limiter is still consulted
+   * in those cases (with nothing to serve) so the decision, including its honest reason, lives in
+   * one place.
    */
   private onPeerLive(peerId: string): void {
     const engine = this.phase === 'connected' ? this.engine : null;

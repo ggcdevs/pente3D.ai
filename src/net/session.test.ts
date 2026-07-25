@@ -2485,6 +2485,37 @@ function sessionWithTransport(
 }
 
 /**
+ * A session whose transport is SPIED from the moment it is CREATED — before `enter()` has published
+ * anything. The ordinary {@link sessionWithTransport} only hands a test the transport after entry,
+ * so a spy installed on it can never see the connecting window; a test that must prove NOTHING went
+ * on the wire during entry needs this one, or it proves only what happened after it started looking.
+ */
+function sessionWithSpiedTransport(
+  hub: MockRelayHub,
+  playerId: string,
+  captured: SpiedTransport[],
+  opts: Partial<NetSessionDeps> = {},
+): NetSession {
+  return makeSession(hub, playerId, {
+    createTransport: (): Transport => {
+      const t = new MockTransport(hub, playerId);
+      captured.push({ t, spy: vi.spyOn(t, 'publish') });
+      return t;
+    },
+    ...opts,
+  });
+}
+
+/** A `vi.spyOn(transport, 'publish')`, as far as {@link syncPublishCount} is concerned. */
+type PublishSpy = { mock: { calls: unknown[][] } };
+
+/** A captured transport together with the publish spy installed on it at construction. */
+interface SpiedTransport {
+  readonly t: MockTransport;
+  readonly spy: PublishSpy;
+}
+
+/**
  * SEVER a peer's link the way a locked screen does: the broker drops it from the room (its Last-Will
  * fires, so the other peer sees it absent) AND its own publishes go nowhere. The session is untouched
  * — it keeps its engine/seat/game and still believes it is connected.
@@ -2504,6 +2535,45 @@ function restoreMockLink(
   spy: ReturnType<typeof severMockLink>,
 ): void {
   spy.mockRestore();
+  hub.join(room, t);
+}
+
+/** The two spies a QUIET sever installs (nothing leaves, nothing arrives). */
+interface QuietSever {
+  readonly publish: { mockRestore: () => void };
+  readonly deliver: { mockRestore: () => void };
+}
+
+/**
+ * SEVER a peer's link the way a dead socket the broker never notices does: nothing it publishes
+ * leaves and nothing addressed to it arrives, but NO absence is ever announced — from the room's
+ * point of view the peer is still there, so the other session's presence never changes.
+ *
+ * This is the case resident-peer republish's un-gated trigger exists for (`republish.ts` header) and
+ * the one {@link severMockLink} cannot model: with a Last-Will there is a presence transition to key
+ * off, without one there is nothing but the re-announce itself.
+ */
+function severMockLinkQuietly(t: MockTransport): QuietSever {
+  return {
+    publish: vi.spyOn(t, 'publish').mockImplementation(() => {}),
+    deliver: vi.spyOn(t, 'deliver').mockImplementation(() => {}),
+  };
+}
+
+/**
+ * RESTORE a quietly-severed link: traffic flows again and the peer RE-ANNOUNCES itself (mqtt.js
+ * re-subscribes and re-publishes its presence on reconnect — `MqttTransport.connect`). The room
+ * membership never changed, so this produces no presence transition on either side: the live-presence
+ * exchange is the only signal, exactly as on the real adapter.
+ */
+function restoreMockLinkQuietly(
+  hub: MockRelayHub,
+  room: string,
+  t: MockTransport,
+  spies: QuietSever,
+): void {
+  spies.publish.mockRestore();
+  spies.deliver.mockRestore();
   hub.join(room, t);
 }
 
@@ -2572,6 +2642,65 @@ describe('NetSession — resident-peer republish on live presence (V.3, epic #47
     expect(a.ply()).toBe(1);
   });
 
+  it('a return the broker never announced as an ABSENCE still resyncs the returner', async () => {
+    // The case the un-gated trigger exists for, at the session level: B's socket dies and comes back
+    // without the room ever seeing it leave. There is NO presence transition anywhere in this test —
+    // only the live-presence exchange on the return, which is why an edge-triggered republish would
+    // leave B one ply behind forever. (`mqttTransport.pair.test.ts` proves the real adapter emits
+    // that exchange in both directions on exactly this return.)
+    const hub = new MockRelayHub();
+    const aT: MockTransport[] = [];
+    const bT: MockTransport[] = [];
+    const a = sessionWithTransport(hub, 'player-a', aT);
+    const b = sessionWithTransport(hub, 'player-b', bT);
+    await a.enter(ROOM, NEW);
+    await flush();
+    await b.enter(ROOM, DEFER);
+    await flush();
+
+    const severed = severMockLinkQuietly(bT[0]!);
+    a.place(coordsOf('2,2,2'));
+    // The premise: A never learned B was gone — no absence, no presence change to trigger on.
+    expect(a.state().peerPresent).toBe(true);
+    expect(b.ply()).toBe(0);
+
+    restoreMockLinkQuietly(hub, ROOM, bT[0]!, severed);
+
+    expect(b.ply()).toBe(1);
+    expect(b.gameState()!.pieces['2,2,2']).toBe('white');
+    expect(b.gameState()!.turn).toBe('black');
+    expect(a.state().peerPresent).toBe(true); // …still no absence: the return was the only signal
+  });
+
+  it('a return the broker never announced as an ABSENCE resyncs the RESIDENT too (§5 mirror)', async () => {
+    // The mirror of the above, and the case a one-shot ack latch used to strand: the peer that went
+    // away is the one holding the move. It must republish on its own return, which it can only do if
+    // it HEARS the resident — i.e. if the resident answers a re-announce it never saw as a return.
+    const hub = new MockRelayHub();
+    const aT: MockTransport[] = [];
+    const bT: MockTransport[] = [];
+    const a = sessionWithTransport(hub, 'player-a', aT);
+    const b = sessionWithTransport(hub, 'player-b', bT);
+    await a.enter(ROOM, NEW);
+    await flush();
+    await b.enter(ROOM, DEFER);
+    await flush();
+
+    const severed = severMockLinkQuietly(aT[0]!);
+    a.place(coordsOf('2,2,2')); // white moves into the void — the move exists only on A
+    expect(b.state().peerPresent).toBe(true);
+    expect(b.ply()).toBe(0);
+
+    restoreMockLinkQuietly(hub, ROOM, aT[0]!, severed);
+
+    // B fast-forwards onto the move it never received, with no absence anywhere in the exchange.
+    expect(b.ply()).toBe(1);
+    expect(b.gameState()!.pieces['2,2,2']).toBe('white');
+    expect(b.gameState()!.turn).toBe('black');
+    // …and A did not adopt anything backwards: B's own (shorter) republish is a prefix it ignores.
+    expect(a.ply()).toBe(1);
+  });
+
   it('serves a peer ONCE per head: the live-presence echo publishes nothing, a new move does', async () => {
     const hub = new MockRelayHub();
     const aT: MockTransport[] = [];
@@ -2605,30 +2734,72 @@ describe('NetSession — resident-peer republish on live presence (V.3, epic #47
     expect(b.ply()).toBe(1);
   });
 
-  it('republishes NOTHING for a peer going live while entry is still open (admission decides that)', async () => {
+  it('adds NOTHING to the wire across the WHOLE connecting window (admission owns that window)', async () => {
     const hub = new MockRelayHub();
     // A silent peer already occupies the room: it holds the entry OPEN by answering no hello, so the
-    // newcomer is still negotiating on its PROVISIONAL game when the live signal arrives.
+    // newcomer is still negotiating on its PROVISIONAL game for the whole settle window.
     const silent = new MockTransport(hub, 'player-silent');
     await silent.connect(ROOM);
 
-    const bT: MockTransport[] = [];
-    const b = sessionWithTransport(hub, 'player-b', bT, { settleMs: 50 });
+    // Spied from CREATION, not after entry: the FIRST live-presence signal arrives from the hub the
+    // moment this transport joins the room — inside `enter()`, before any spy a test installs later
+    // could see it. Measured after entry, the hand-fired signals below are refused by the pure rate
+    // limiter (same head, same window) and the phase gate is never the thing under test.
+    const captured: SpiedTransport[] = [];
+    const b = sessionWithSpiedTransport(hub, 'player-b', captured, { settleMs: 50 });
     const entering = b.enter(ROOM, DEFER);
     await flush();
     // The premise, asserted rather than assumed: nothing has admitted or rejected this entry, and
     // the settle window has not expired — so the session is genuinely mid-negotiation.
     expect(b.state().phase).toBe('connecting');
+    // Entry itself puts our provisional log on the wire exactly ONCE (`SyncEngine.connect()` →
+    // `publishState()`, the admission protocol's own announce). What this gate forbids is THIS rule
+    // adding more: a provisional game the arbiter may be about to refuse must not be re-pushed at
+    // every live signal while the negotiation is still open.
+    expect(syncPublishCount(captured[0]!.spy)).toBe(1);
 
-    const published = vi.spyOn(bT[0]!, 'publish');
-    bT[0]!.peerLive('player-silent');
-    bT[0]!.peerLive('player-silent');
-    // Not one full-state publish: a provisional log must never reach the wire before the session
-    // settles on a game — what a peer gets before then is the admission protocol's decision.
-    expect(syncPublishCount(published)).toBe(0);
+    captured[0]!.t.peerLive('player-silent');
+    captured[0]!.t.peerLive('player-silent');
+    expect(syncPublishCount(captured[0]!.spy)).toBe(1);
 
     await entering;
     expect(b.state().phase).toBe('connected');
+    // POSITIVE CONTROL: the gate OPENS on `connected`, so the silence above is the phase gate doing
+    // its job and not a permanently-dead trigger.
+    captured[0]!.t.peerLive('player-silent');
+    expect(syncPublishCount(captured[0]!.spy)).toBe(2);
+  });
+
+  it('republishes NOTHING once a CONFLICT has stopped the game (a fork exchanges no traffic)', async () => {
+    const hub = new MockRelayHub();
+    const aT: MockTransport[] = [];
+    const bT: MockTransport[] = [];
+    const a = sessionWithTransport(hub, 'player-a', aT);
+    const b = sessionWithTransport(hub, 'player-b', bT);
+    await a.enter(ROOM, NEW);
+    await flush();
+    await b.enter(ROOM, DEFER);
+    await flush();
+    a.place(coordsOf('2,2,2'));
+    expect(b.ply()).toBe(1);
+
+    // A third client publishes a DIFFERENT history for the very same game: a genuine fork, which
+    // stops the game on both peers (`SyncEngine` archives both sides and refuses further play).
+    const forked = new Game(SIZE, b.gameUuid()!);
+    forked.place(coordsOf('1,1,1'));
+    const stranger = new MockTransport(hub, 'player-stranger');
+    await stranger.connect(ROOM);
+    stranger.publish(toSyncMessage(forked.log));
+    expect(b.state().phase).toBe('conflict');
+    expect(b.syncEngine()!.status().kind).toBe('conflict');
+
+    // A stopped game must put nothing further on the wire — the same rule `assertLive` enforces on
+    // moves and handshakes, which `publishState()` does NOT check, so this gate is the only one.
+    const published = vi.spyOn(bT[0]!, 'publish');
+    bT[0]!.peerLive('player-a');
+    expect(syncPublishCount(published)).toBe(0);
+    // …and the fork is still stopped afterwards (the signal changed nothing).
+    expect(b.syncEngine()!.status().kind).toBe('conflict');
   });
 
   it('a live signal arriving after the session LEFT the room publishes nothing', async () => {

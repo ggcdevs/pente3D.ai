@@ -10,7 +10,7 @@
  *   pente undo  <CODE>                          request an undo of your last move
  *   pente redo  <CODE>
  *   pente status <CODE>                         connection/seat/turn readout
- *   pente drop  <CODE>                          simulate a network outage (kill the socket)
+ *   pente drop  <CODE> [--silent] [--lossy]      simulate a network outage (kill the socket)
  *   pente restore <CODE>                        end the outage (let mqtt.js reconnect)
  *   pente quit  <CODE>                          stop the daemon
  *   pente views                                 list available board views
@@ -105,10 +105,20 @@ async function main(): Promise<void> {
     }
 
     // Outage control for scenario scripts (issue #45): `drop` kills the socket under a
-    // session that stays `connected`; `restore` lets mqtt.js reconnect.
+    // session that stays `connected`; `restore` lets mqtt.js reconnect. `drop --silent` leaves via
+    // a graceful DISCONNECT so no Last-Will fires (the peer never sees an absence — the #45 mirror
+    // case); `drop --lossy` throws away anything published while down instead of queueing it.
     case 'drop':
     case 'restore': {
-      const r = await request(requireCode(args), { cmd: args.verb }, 10_000);
+      const modes = [
+        ...(args.flags.silent === true ? ['silent'] : []),
+        ...(args.flags.lossy === true ? ['lossy'] : []),
+      ].join(',');
+      const r = await request(
+        requireCode(args),
+        { cmd: args.verb, ...(modes === '' ? {} : { arg: modes }) },
+        10_000,
+      );
       if (!r.ok) return fail(r.data);
       if (jsonMode(args.flags)) return console.log(JSON.stringify(r.data));
       console.log(args.verb === 'drop' ? 'link dropped (offline).' : 'link restoring…');
@@ -165,7 +175,9 @@ async function main(): Promise<void> {
   pente move  <CODE> <x,y,z> [--view NAME]         place a stone (must be your turn)
   pente undo  <CODE> | pente redo <CODE>
   pente status <CODE>                              one-line readout
-  pente drop  <CODE>                               simulate a network outage (kill the socket)
+  pente drop  <CODE> [--silent] [--lossy]          simulate an outage (--silent: no Last-Will,
+                                                   so the peer never sees an absence; --lossy:
+                                                   publishes made while down are LOST, not queued)
   pente restore <CODE>                             end the outage (reconnect)
   pente quit  <CODE>                               stop the daemon
   pente views                                      list board views

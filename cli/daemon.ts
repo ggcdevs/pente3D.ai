@@ -182,10 +182,16 @@ export async function runDaemon(opts: PlayOptions): Promise<void> {
       // `connected` — a screen-lock, not a leave. `restore` lets mqtt.js reconnect. What
       // the session does (or fails to do) about the moves it missed in between is the
       // behaviour under test.
-      case 'drop':
-        if (!dropLink()) return reply(conn, false, 'no live link to drop');
-        console.log('[pente] link DROPPED (socket killed; session still thinks it is connected)');
+      case 'drop': {
+        // `arg` is a comma list of outage modifiers (`silent`, `lossy`) — see `DropOptions`.
+        const modes = (req.arg ?? '').split(',');
+        const opts = { silent: modes.includes('silent'), lossy: modes.includes('lossy') };
+        if (!dropLink(opts)) return reply(conn, false, 'no live link to drop');
+        console.log(
+          `[pente] link DROPPED (silent=${opts.silent} lossy=${opts.lossy}; session still thinks it is connected)`,
+        );
         return reply(conn, true, snapshot());
+      }
       case 'restore':
         if (!restoreLink()) return reply(conn, false, 'no link to restore');
         console.log('[pente] link RESTORING…');
