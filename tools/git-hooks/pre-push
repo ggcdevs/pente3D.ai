@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+#
+# pre-push — refuse to push the protected branches while v3.1 is in flight.
+#
+# WHY: v3 is frozen at 5c73104 and `main` at v3.0.0 (design §11 — v3 never ships standalone,
+# v3.1 is what reaches `main`). Nothing should land on dev/test/main until the remodel is done
+# and deliberately promoted. Autonomous build/gate agents push on their own after a passing
+# review gate, so this is a mechanical stop rather than a matter of everyone remembering.
+#
+# Installed to the repo's SHARED hooks dir by tools/install-git-hooks.sh, so it covers every
+# worktree (the v3.1 worktree and the main checkout alike).
+#
+# Deliberate promotion, when the time comes:
+#   PENTE_ALLOW_PROTECTED_PUSH=1 git push origin test
+# …or drop the guard entirely: rm "$(git rev-parse --git-common-dir)/hooks/pre-push"
+#
+# stdin: <local ref> <local sha> <remote ref> <remote sha>, one line per ref being pushed.
+
+set -euo pipefail
+
+PROTECTED_RE='^refs/heads/(dev|test|main)$'
+
+if [[ "${PENTE_ALLOW_PROTECTED_PUSH:-}" == "1" ]]; then
+    echo "pre-push: PENTE_ALLOW_PROTECTED_PUSH=1 — protected-branch guard bypassed deliberately." >&2
+    exit 0
+fi
+
+blocked=()
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+    [[ -z "${remote_ref}" ]] && continue
+    if [[ "${remote_ref}" =~ ${PROTECTED_RE} ]]; then
+        blocked+=("${remote_ref#refs/heads/}")
+    fi
+done
+
+if [[ ${#blocked[@]} -gt 0 ]]; then
+    cat >&2 <<EOF
+
+  ✗ push REFUSED — protected branch(es): ${blocked[*]}
+
+  dev / test / main are frozen while the v3.1 networked-game remodel (#47) is in flight:
+  v3 is feature-complete but carries the game-bricking #45 and the stale-game push #46, so
+  v3.1 is what ships to main (planning/2026-07-24-net-model-v3.1-design.md §11).
+
+  Push feature work instead:   git push origin HEAD        (on feat/net-model-v3.1)
+  Promote on purpose:          PENTE_ALLOW_PROTECTED_PUSH=1 git push origin <branch>
+  Remove the guard for good:   rm "\$(git rev-parse --git-common-dir)/hooks/pre-push"
+
+EOF
+    exit 1
+fi
+
+exit 0

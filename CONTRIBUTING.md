@@ -34,6 +34,22 @@ has caused real incidents. Push with `git push origin HEAD`.
 Issues stay **open until the work reaches `main`**. The `on-dev` label marks "built and live on
 `/dev/`, pending promotion".
 
+### `dev` / `test` / `main` are FROZEN while v3.1 is in flight
+
+v3 is feature-complete but carries the game-bricking #45 and the stale-game push #46, so **v3.1 is
+what ships to `main`** (design §11) and nothing lands on the three shared branches until the remodel
+is done and deliberately promoted. That is enforced mechanically, not by memory — autonomous build
+and gate agents push on their own after a passing review gate:
+
+```bash
+tools/install-git-hooks.sh    # symlinks tools/git-hooks/* into the SHARED hooks dir (all worktrees)
+```
+
+The `pre-push` hook refuses `dev`/`test`/`main` and prints why. To promote on purpose:
+`PENTE_ALLOW_PROTECTED_PUSH=1 git push origin test`. To drop the guard once v3.1 has shipped:
+`rm "$(git rev-parse --git-common-dir)/hooks/pre-push"`. (The hook is a symlink into the worktree it
+was installed from — if that worktree is removed, re-run the installer from the main checkout.)
+
 ## Commits
 
 **Format:** conventional commit + the issue number.
