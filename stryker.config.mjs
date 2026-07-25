@@ -2,13 +2,21 @@
 /**
  * StrykerJS mutation-testing config.
  *
- * SCOPE: mutate the pure, deterministic logic only — `src/core`, `src/config`,
- * `src/persist`, `src/util` (the crypto-global-reading but otherwise pure random-id
- * helper), and the pure `src/net` logic (`seats.ts`, `sync.ts`). The IO
- * transport adapter (`src/net/transport.ts`, `mqttTransport.ts`) is deliberately NOT
- * mutated; it is verified by the real-relay integration test (Task 3.3), not by
- * mutation-testing mqtt/DOM glue. Coverage is a floor; mutation is the real bar
+ * SCOPE: mutate the pure, deterministic logic only. The `mutate` list below is the single
+ * source of truth for WHICH files those are — it is not re-enumerated here, because a second
+ * copy of the list in prose goes stale the moment a file is added (agent-principles #8). The
+ * RULE it encodes: a file is mutated iff it is THREE-free / DOM-free pure logic (a file may
+ * read an injected `Storage`/browser global and still qualify — `net/activeGame.ts`,
+ * `net/seats.ts`, `ui/widgets/recentCodes.ts`, `util/randomId.ts`); the IO glue around it is
+ * deliberately excluded (`net/transport.ts`, `net/mqttTransport.ts`, `net/session.ts`,
+ * `net/appSession.ts`, `net/notifyGlue.ts`, the Three.js scene, the DOM widgets), because
+ * that boundary is verified by the real-relay integration tests and Playwright — not by
+ * mutating mqtt/DOM glue. Coverage is a floor; mutation is the real bar
  * (planning/agent-principles.md — "Mutation score is the real bar").
+ *
+ * COVERAGE ALIGNMENT: every file in `mutate` is ALSO pinned to a hard 100% coverage floor in
+ * `vite.config.ts` (`test.coverage.thresholds`), so a mutation-gated file can never silently
+ * drop below full unit coverage. Adding a file here means adding its coverage pin there.
  *
  * ENFORCED GATE: `thresholds.break = 95` → `npm run mutate` exits non-zero below 95%
  * overall. Without a `break` value Stryker defaults to no gate. Do NOT lower it to make
@@ -52,6 +60,15 @@
  *     Equivalent through the public seam — killing them would require asserting on the private
  *     helper's internal return, i.e. on non-behavior. (The corrupt-record-degrades-to-empty behavior
  *     the helper enables IS asserted, via the public list/record paths.)
+ *   - seats.ts: the `owner !== null &&` short-circuit in the private `blockingOwnersAllPresent`
+ *     helper (mutated to `true &&`). The helper's documented precondition is that it is called
+ *     ONLY when the claimant owns neither seat and BOTH seats are owned — so `owner` is never
+ *     null on any reachable call, and the mutant takes the identical path. The guard is a kept
+ *     defensive tripwire against a future caller violating that precondition; killing it would
+ *     require constructing a call that the public `claimSeat` boundary cannot produce, i.e.
+ *     asserting on non-behavior. The genuine room-full-vs-seat-reserved rejection behavior IS
+ *     asserted (all blocking owners present → `room-full`; an absent blocking owner →
+ *     `seat-reserved`).
  *   - admission.ts: BOTH `<` → `<=` comparisons in the `beats` tie-break are equivalent, each
  *     for a structural reason:
  *       · the arrival compare `return p.arrivalOrder < best.arrivalOrder` is GUARDED by
