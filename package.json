@@ -16,7 +16,8 @@
     "diagrams": "node tools/generate-diagrams.mjs",
     "diagrams:check": "node tools/generate-diagrams.mjs --check",
     "pente": "tsx cli/main.ts",
-    "typecheck:cli": "tsc -p cli/tsconfig.json --noEmit"
+    "typecheck:cli": "tsc -p cli/tsconfig.json --noEmit",
+    "scenario:issue45": "tsx cli/scenarios/issue45-reconnect-resync.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.48.0",
