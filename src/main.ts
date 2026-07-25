@@ -226,22 +226,42 @@ function currentGeneration(): number {
 }
 
 /**
- * The metadata attached to the current game's record (single-player defaults; result reflects a win).
+ * The record this autosave writes: its **id and its metadata together**, from ONE predicate.
  *
- * When a NETWORKED game is authoritative, the record is the SAME uuid-keyed record the net session
- * itself maintains (see {@link autosaveTick}), so this metadata must MATCH what the session writes —
- * otherwise the two writers would alternately erase each other's fields. Specifically it carries the
- * identity-owned SEAT MAP (design §2/§7): dropping it here would delete the very value a later return
- * reclaims its colour from, and `players`/`startedAt` come from the session for the same reason.
+ * When a NETWORKED game is authoritative the target is the SAME uuid-keyed record the net session
+ * maintains ({@link NetSession.persistGame}), and EVERY field comes from the session — the
+ * identity-owned SEAT MAP (design §2/§7; dropping it would delete the value a later return reclaims
+ * its colour from), the `players` projected from those seats, and the GAME's own `startedAt` — so the
+ * two writers of that one record cannot erase each other's fields. Otherwise the target is the app's
+ * local autosave record, local in every field.
+ *
+ * The id and the metadata are produced together, from a single {@link netAuthoritativeGame} read,
+ * precisely so they cannot disagree. They used to be decided separately, and drifted: `seats` and the
+ * record id asked `netAuthoritativeGame()` (null in the CONFLICT phase, where the scene falls back to
+ * its own local game) while `startedAt` asked `session.gameStartedAt()` (non-null whenever an engine
+ * exists — and the conflict phase deliberately KEEPS the engine). A move after a sync conflict thus
+ * wrote a local, seat-less record stamped with the CONFLICTED NET game's date — the value the archive
+ * browser renders and `listArchivedGames` sorts by. One read, one decision, no drift.
  */
-function autosaveMeta(): ArchivedMeta {
+function autosaveTarget(): { readonly recordId: string; readonly meta: ArchivedMeta } {
   const winner = scene.getState().winner;
-  const seats = netAuthoritativeGame() === null ? null : getNetSeatOwners();
+  const result: ArchivedMeta['result'] = winner === null ? 'in-progress' : `${winner}-wins`;
+  const netGame = netAuthoritativeGame();
+  if (netGame === null) {
+    return {
+      recordId: autosaveId,
+      meta: { players: { white: 'You', black: 'You' }, result, startedAt: autosaveStartedAt },
+    };
+  }
+  const seats = getNetSeatOwners();
   return {
-    players: seats === null ? { white: 'You', black: 'You' } : playersFromSeats(seats),
-    result: winner === null ? 'in-progress' : `${winner}-wins`,
-    startedAt: netGameStartedAt() ?? autosaveStartedAt,
-    ...(seats === null ? {} : { seats }),
+    recordId: netGame.uuid,
+    meta: {
+      players: seats === null ? { white: 'You', black: 'You' } : playersFromSeats(seats),
+      result,
+      startedAt: netGameStartedAt() ?? autosaveStartedAt,
+      ...(seats === null ? {} : { seats }),
+    },
   };
 }
 
@@ -299,8 +319,10 @@ async function autosaveTick(): Promise<void> {
   // and the session maintain ONE record per game instead of two copies of it, and that record is the
   // resumable entry the games list offers (#37). A LOCAL game keeps the app's autosave id (the freshly-
   // minted one on a mint, the same one otherwise; on a finalize this captures the won terminal state).
-  const recordId = netAuthoritativeGame() === null ? autosaveId : game.uuid;
-  await saveGame(archiveDb, recordId, game, autosaveMeta());
+  // Id + metadata come from ONE decision (see `autosaveTarget`) so they can never disagree about
+  // which game is being written.
+  const target = autosaveTarget();
+  await saveGame(archiveDb, target.recordId, game, target.meta);
   // The archive just changed — refresh the seed-games cache so the Network-Game panel's Resume list
   // reflects it on the next open (a newly-finalized game becomes resume-able; the current game stays
   // excluded). Best-effort: a refresh failure only leaves a stale list, never a broken save.
@@ -337,7 +359,10 @@ void openDatabase(resolveDbName())
       void autosaveTick().catch((err: unknown) => log.error('autosave failed', err));
     });
     // Persist the initial state immediately so a fresh game is browsable even before the first move.
-    await saveGame(db, autosaveId, authoritativeGame(), autosaveMeta());
+    // Through the same single decision as every later tick (there is no net session yet at boot, so
+    // this resolves to the local autosave record — but it reads the rule rather than restating it).
+    const bootTarget = autosaveTarget();
+    await saveGame(db, bootTarget.recordId, authoritativeGame(), bootTarget.meta);
     // Prime the seed-games cache off the now-open archive so the Network-Game panel's Resume list is
     // populated on its first open (before any autosave tick has run).
     await refreshSeedGames();

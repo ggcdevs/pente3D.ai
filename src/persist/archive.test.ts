@@ -561,6 +561,46 @@ describe('game archive', () => {
       expect(loaded!.game.ply()).toBe(sampleGame().ply());
       expect(loaded!.seats).toEqual({ white: 'player-a', black: null });
     });
+
+    it('a CORRUPT record under the uuid key does not sink the lookup — the scan still finds the game', async () => {
+      const { db } = await open();
+      // The canonical probe is exactly that: a probe. A corrupt record parked under the uuid key must
+      // not turn "this game is archived under another id" into a thrown lookup — the pre-canonical
+      // (scan-only) implementation resolved this case, and losing it would strand a resumable game.
+      await putGame(db, {
+        id: SAMPLE_UUID,
+        log: [{ type: 'teleport', node: '4,4,4' }],
+        meta: { players: {}, result: 'in-progress', startedAt: 0, uuid: SAMPLE_UUID, headHash: 'x' },
+      } as GameRecord);
+      await saveGame(db, 'the-intact-one', sampleGame(), {
+        ...sampleMeta,
+        seats: { white: 'player-a', black: 'player-b' },
+      });
+
+      const loaded = await loadNetGameByUuid(db, SAMPLE_UUID);
+      expect(loaded).not.toBeUndefined();
+      expect(loaded!.game.uuid).toBe(SAMPLE_UUID);
+      expect(loaded!.game.ply()).toBe(sampleGame().ply());
+      expect(loaded!.seats).toEqual({ white: 'player-a', black: 'player-b' });
+    });
+
+    it('…but with NO intact alternative the corruption is RE-THROWN, never masked as "no such game"', async () => {
+      const { db } = await open();
+      // Same corrupt canonical record, and this time it is the only record carrying that uuid. Passing
+      // over a corrupt record is only ever justified by having a real answer instead; with none, the
+      // honest outcome is the ArchiveError — returning `undefined` would report a DIFFERENT fact ("you
+      // have no such game") and silently drop a recoverable one.
+      await putGame(db, {
+        id: SAMPLE_UUID,
+        log: [{ type: 'teleport', node: '4,4,4' }],
+        meta: { players: {}, result: 'in-progress', startedAt: 0, uuid: SAMPLE_UUID, headHash: 'x' },
+      } as GameRecord);
+
+      await expect(loadNetGameByUuid(db, SAMPLE_UUID)).rejects.toBeInstanceOf(ArchiveError);
+      await expect(loadNetGameByUuid(db, SAMPLE_UUID)).rejects.toThrow(
+        new RegExp(`archived game "${SAMPLE_UUID}"`),
+      );
+    });
   });
 
   describe('listArchivedGames', () => {

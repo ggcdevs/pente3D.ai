@@ -24,7 +24,7 @@ import {
   ACTIVE_GAME_MAX_AGE_MS,
   type ActiveNetworkedGame,
 } from './activeGame.ts';
-import { CODE_ALPHABET, CODE_LENGTH } from '../ui/widgets/netModel.ts';
+import { CODE_ALPHABET, CODE_LENGTH, validateGameCode } from '../ui/widgets/netModel.ts';
 
 /** A spec-faithful in-memory `Storage`, mirroring config.test.ts's `memoryStorage`. */
 function memoryStorage(): Storage {
@@ -144,6 +144,20 @@ describe('readActiveGame — degrade paths (never throws, always null)', () => {
     expect(readActiveGame(storage)).toBeNull();
   });
 
+  it('ACCEPTS a longer-than-CODE_LENGTH code — `validateGameCode`\'s actual rule (see #30)', () => {
+    // A characterization test, not an endorsement. `validateGameCode` refuses a code SHORTER than
+    // CODE_LENGTH but has no upper bound, so `M2N7VBC` (7 chars) validates and the breadcrumb keeps
+    // it. Found by strengthening the garbage property below, which had been generating only
+    // unparseable strings and so never reached its own canonicality assertions.
+    // This is pre-existing behaviour on `dev` (the reader defers to the shared validator by design —
+    // one code rule, not two), and tightening it would change what codes the JOIN path accepts, so it
+    // belongs with issue #30's code-validation fixes rather than in a v3.1 breadcrumb change.
+    const overLong = code(0) + CODE_ALPHABET[0];
+    expect(validateGameCode(overLong).ok).toBe(true);
+    storage.setItem(ACTIVE_GAME_KEY, JSON.stringify({ ...CRUMB, code: overLong }));
+    expect(readActiveGame(storage)?.code).toBe(overLong);
+  });
+
   it('rejects a code with characters outside the alphabet', () => {
     storage.setItem(ACTIVE_GAME_KEY, JSON.stringify({ ...CRUMB, code: 'ABC-DE' }));
     expect(readActiveGame(storage)).toBeNull();
@@ -189,16 +203,40 @@ describe('readActiveGame — degrade paths (never throws, always null)', () => {
   });
 
   it('never throws on ARBITRARY stored garbage, and any non-null read is a canonical breadcrumb', () => {
+    // The generator deliberately MIXES free-form garbage with strings that are valid JSON and
+    // breadcrumb-SHAPED, so both halves of the claim are exercised. A bare `fc.string()` cannot do
+    // that: essentially every sample fails `JSON.parse`, the read is null, and the property returns
+    // before reaching a single canonical assertion (measured: 0 of 100 runs reached them) — a test
+    // whose name promises more than it checks.
+    const anyCode = fc.oneof(
+      fc.constant(CRUMB.code),
+      fc.string(),
+      fc.stringMatching(new RegExp(`^[${CODE_ALPHABET}]{1,8}$`)),
+    );
+    const anyStamp = fc.oneof(fc.integer(), fc.double(), fc.constant(0), fc.constant(-1));
+    const shaped = fc
+      .record({ code: anyCode, gameUuid: fc.oneof(fc.string(), fc.constant('g')), updatedAt: anyStamp })
+      .map((o) => JSON.stringify(o));
+    const raws = fc.oneof(
+      { weight: 3, arbitrary: shaped },
+      { weight: 1, arbitrary: fc.string() },
+      { weight: 1, arbitrary: fc.json() },
+    );
     fc.assert(
-      fc.property(fc.string(), (raw) => {
+      fc.property(raws, (raw) => {
         const s = memoryStorage();
         s.setItem(ACTIVE_GAME_KEY, raw);
         const read = readActiveGame(s);
         if (read === null) return;
-        // A surviving read is fully canonical: an upper-cased alphabet code of the right length, a
-        // non-empty uuid and a finite stamp — so a hand-edited record can never yield a usable-looking
-        // breadcrumb the rejoin path would then choke on.
-        expect(read.code).toMatch(new RegExp(`^[${CODE_ALPHABET}]{${CODE_LENGTH}}$`));
+        // A surviving read is fully canonical: a code that `validateGameCode` ACCEPTS, stored in its
+        // normalized (trimmed, upper-cased) form, a non-empty uuid and a finite stamp — so a
+        // hand-edited record can never yield a usable-looking breadcrumb the rejoin path would choke
+        // on. Note the bound is `>= CODE_LENGTH`, not `=== CODE_LENGTH`: `validateGameCode` refuses a
+        // code SHORTER than CODE_LENGTH but accepts a longer one — pinned by the "ACCEPTS a
+        // longer-than-CODE_LENGTH code" case above — and this property asserts the contract that
+        // exists rather than a stricter one it would be quietly claiming.
+        expect(validateGameCode(read.code).ok).toBe(true);
+        expect(read.code).toMatch(new RegExp(`^[${CODE_ALPHABET}]{${CODE_LENGTH},}$`));
         expect(read.gameUuid.length).toBeGreaterThan(0);
         expect(Number.isFinite(read.updatedAt)).toBe(true);
       }),

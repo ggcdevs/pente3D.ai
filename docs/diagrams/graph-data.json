@@ -1559,7 +1559,7 @@
     "typeAliases": [],
     "functions": [
       "authoritativeGame",
-      "autosaveMeta",
+      "autosaveTarget",
       "autosaveTick",
       "bumpGeneration",
       "currentGame",
@@ -2457,6 +2457,7 @@
         "target": "src/persist/archive.ts",
         "specifiers": [
           "ArchivedMeta",
+          "archivedStartedAts",
           "loadNetGameByUuid",
           "playersFromSeats",
           "saveGame"
@@ -3140,6 +3141,7 @@
       "ConflictedGame",
       "LEGACY_NET_ROOM_RESULT",
       "PersistedSeats",
+      "archivedStartedAts",
       "flagConflicted",
       "isEmptyShell",
       "listArchivedGames",
@@ -3261,6 +3263,7 @@
       }
     ],
     "functions": [
+      "archivedStartedAts",
       "flagConflicted",
       "gameFromStoredLog",
       "isEmptyShell",

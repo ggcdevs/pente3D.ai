@@ -280,11 +280,28 @@ export async function loadNetGameByUuid(
   db: IDBDatabase,
   uuid: string,
 ): Promise<{ game: Game; seats: PersistedSeats | null } | undefined> {
-  const canonical = await loadNetGame(db, uuid);
+  // Step 1 is a PROBE, so a corrupt record sitting under this key must not sink the lookup: the game
+  // may well be archived intact under a DIFFERENT record id (step 2), which is what the pre-V.1
+  // scan-only implementation would have found. A failure here is therefore REMEMBERED rather than
+  // fatal…
+  let canonicalError: unknown = null;
+  const canonical = await loadNetGame(db, uuid).catch((err: unknown) => {
+    canonicalError = err;
+    return undefined;
+  });
   if (canonical !== undefined && canonical.game.uuid === uuid) return canonical;
   const listings = await listGames(db);
-  const match = listings.find((l) => l.meta.uuid === uuid);
-  if (match === undefined) return undefined;
+  // Step 2 scans the OTHER records only: the record keyed by the uuid was just probed, and re-loading
+  // it here would either re-throw the corruption we deliberately passed over, or — when its meta
+  // claims a uuid its log does not bear — serve the very collider step 1 refused (a mis-resolution).
+  const match = listings.find((l) => l.meta.uuid === uuid && l.id !== uuid);
+  if (match === undefined) {
+    // …and re-thrown when there is no intact alternative: a corrupt record is only ever passed over in
+    // favour of a real answer, never silently turned into "no such game" (agent-principles: an error
+    // is surfaced, not masked).
+    if (canonicalError !== null) throw canonicalError;
+    return undefined;
+  }
   return loadNetGame(db, match.id);
 }
 
