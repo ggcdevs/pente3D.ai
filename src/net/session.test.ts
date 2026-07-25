@@ -2114,7 +2114,7 @@ describe('NetSession — the MOVE-SYNC channel gates which GAME may cross (#46, 
     const rematch = b.gameUuid();
     expect(b.ply()).toBe(0);
     // Stamped at a LIVE generation (a stale one would simply be dropped as superseded, which proves
-    // nothing about the gate): this is a message the epoch rule would otherwise adopt outright.
+    // nothing about the gate): a message at or above our generation is one only IDENTITY can refuse.
     const second = await pushForeignGame(hub, 5);
     await flush();
     expect(b.gameUuid()).toBe(rematch);

@@ -31,6 +31,12 @@
  * opponent's. A single entry that my own log says was MINE to add is not drift — it is a history I
  * never played, so it goes to resolution like any other anomaly.
  *
+ * All of this is WITHIN ONE GAME, and that is a PRECONDITION this module CHECKS rather than an
+ * assumption it makes: a log of a different game is refused outright (the prefix primitives are
+ * uuid-blind, so an empty board would otherwise adopt a stranger's game), and a GENERATION change —
+ * itself an identity change, since a reset re-derives the uuid — is decided by the caller's identity
+ * gate, never by the `epoch` integer on the wire (see {@link reconcileEpoched}).
+ *
  * ## Replay-validation (design §5, "Integrity")
  *
  * A dumb relay cannot referee, so **the opponent's client is the validator**: an adopted log is
@@ -78,9 +84,7 @@ export interface LastCommonAncestor {
 /** Why a log is being adopted automatically. */
 export type FastForwardReason =
   /** They are exactly one entry ahead on my own history, and that entry was theirs to make. */
-  | 'one-move'
-  /** They already reset to a newer GENERATION (an N.2 in-place rematch); it supersedes ours. */
-  | 'newer-generation';
+  'one-move';
 
 /** Why our own log goes back on the wire instead. */
 export type RepublishReason =
@@ -147,21 +151,32 @@ export function reconcile(mine: Game, theirs: EventLog, myColor: Player): Reconc
   // equal heads mean the same game with the same history.
   if (headHash(local) === headHash(theirs)) return { action: 'in-sync' };
 
-  const theirLead = theirs.entries.length - local.entries.length;
-  // THE one automatic path. All three conditions are load-bearing: one entry (the turn gate's cap),
-  // on my own history (a prefix, so nothing of mine is discarded), and an entry that was THEIRS to
-  // add (measured against my own folded state — see `theirsToAdd`).
-  if (
-    theirLead === 1 &&
-    isPrefix(local, theirs) &&
-    theirsToAdd(mine.state(), theirs.entries[theirs.entries.length - 1]!.event, myColor)
-  ) {
-    return { action: 'fast-forward', reason: 'one-move' };
-  }
-  // The mirror: my move never got out. Answering (rather than staying silent) is what turns a lost
-  // QoS-0 publish into a converging exchange instead of a bricked pair (#45).
-  if (theirLead === -1 && isPrefix(theirs, local)) {
-    return { action: 'republish', reason: 'one-ahead' };
+  // BOTH automatic paths are gated on ONE identity, and the gate is the whole reason this function is
+  // total rather than merely defensive-looking. {@link isPrefix} is deliberately uuid-BLIND (an EMPTY
+  // log is a prefix of ANY log) — correct for a chain primitive, wrong as a policy: without this
+  // check an empty log of MY game fast-forwards straight onto a STRANGER's game, and a stranger's
+  // game that happens to be empty draws my whole board back onto the wire as a "republish".
+  // {@link validateAdoptable} does not catch it either — it replays a log against its OWN uuid-seeded
+  // genesis, so a foreign log is perfectly legal on its own terms. Two different games are never each
+  // other's continuation, so the answer is the players': they do not even share an ancestor to rewind
+  // to ({@link lastCommonAncestor} reports `hash: null`).
+  if (local.uuid === theirs.uuid) {
+    const theirLead = theirs.entries.length - local.entries.length;
+    // THE one automatic path. All three conditions are load-bearing: one entry (the turn gate's cap),
+    // on my own history (a prefix, so nothing of mine is discarded), and an entry that was THEIRS to
+    // add (measured against my own folded state — see `theirsToAdd`).
+    if (
+      theirLead === 1 &&
+      isPrefix(local, theirs) &&
+      theirsToAdd(mine.state(), theirs.entries[theirs.entries.length - 1]!.event, myColor)
+    ) {
+      return { action: 'fast-forward', reason: 'one-move' };
+    }
+    // The mirror: my move never got out. Answering (rather than staying silent) is what turns a lost
+    // QoS-0 publish into a converging exchange instead of a bricked pair (#45).
+    if (theirLead === -1 && isPrefix(theirs, local)) {
+      return { action: 'republish', reason: 'one-ahead' };
+    }
   }
   return {
     action: 'needs-resolution',
@@ -192,18 +207,30 @@ function theirsToAdd(state: GameState, event: Event, myColor: Player): boolean {
 }
 
 /**
- * Generation-aware {@link reconcile}: a peer's GENERATION is settled before its history is, because
- * an in-place rematch (N.2) deliberately produces a log that is NOT a continuation of the game it
- * replaces.
+ * Generation-aware {@link reconcile}: the wire carries a GENERATION counter (`epoch`) beside the log,
+ * and a message from a SUPERSEDED generation must never be adopted — that is what stops a
+ * just-finished game resurrecting over the in-place rematch (N.2) that replaced it, however much
+ * history the stale message carries.
  *
- *  - their epoch **higher** → they already reset to a newer game: adopt it outright, whatever the
- *    logs say (the prefix policy has no meaning across generations);
- *  - their epoch **lower** → a late message from a superseded generation: never adopt it, and
- *    answer with our own state so they come forward onto the live one;
- *  - **same** epoch → the ordinary same-generation policy.
+ *  - their epoch **lower** → a late message from a superseded generation: never adopt it, and answer
+ *    with our own state so they come forward onto the live one;
+ *  - **otherwise** → the ordinary same-generation policy above, and NOTHING more.
  *
- * Because a reset only ever increments and both peers reset on the same accepted rematch, epochs
- * converge and delivery order still does not matter.
+ * **A higher epoch buys a peer nothing here, deliberately.** It used to adopt outright ("they must
+ * have reset to a newer game"), which was an unbounded escape hatch from the entire narrow policy
+ * this module exists to state: `epoch` is a sender-supplied integer that survives
+ * `normalizeEpoch` intact, so any peer on a publicly-writable relay could stamp `epoch: 999` on an
+ * empty — or forked — log and silently overwrite a live board, no prefix, no entitlement, no cap.
+ * It was also redundant: a generation change is an IDENTITY change, because a reset re-derives the
+ * game uuid (`rematchGameUuid`), so the pair's next generation arrives as a DIFFERENT GAME, never as
+ * a bigger number on the game we are already playing. Crossing onto it is therefore an identity
+ * decision and lives with the other identity decisions, in `SyncEngine.receiveOtherGame`, which
+ * requires the uuid to be the one OUR game derives at that generation — one rule, in one place,
+ * strictly narrower than any number on the wire.
+ *
+ * The counter itself still converges: `SyncEngine.receive` takes the max of the two generations for a
+ * message about the game it is on, so an epoch gap opened by an adoption closes without either side
+ * having to give up its history for it.
  */
 export function reconcileEpoched(
   myEpoch: number,
@@ -212,7 +239,6 @@ export function reconcileEpoched(
   theirs: EventLog,
   myColor: Player,
 ): ReconcileDecision {
-  if (theirEpoch > myEpoch) return { action: 'fast-forward', reason: 'newer-generation' };
   if (theirEpoch < myEpoch) return { action: 'republish', reason: 'superseded-generation' };
   return reconcile(mine, theirs, myColor);
 }

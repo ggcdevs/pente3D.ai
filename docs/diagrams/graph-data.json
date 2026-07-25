@@ -2522,7 +2522,7 @@
     "typeAliases": [
       {
         "name": "FastForwardReason",
-        "type": "| 'one-move'\n  /** They already reset to a newer GENERATION (an N.2 in-place rematch); it supersedes ours. */\n  | 'newer-generation'"
+        "type": "'one-move'"
       },
       {
         "name": "RepublishReason",

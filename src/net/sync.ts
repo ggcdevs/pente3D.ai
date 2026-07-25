@@ -817,12 +817,13 @@ export type MetaProvider = () => Omit<ArchivedMeta, 'result'>;
  *
  * On a local move the engine appends to its `Game` and publishes the full log. On
  * receipt it runs the epoch-aware {@link reconcileEpoched}; `fast-forward` replay-validates
- * the remote log and replaces the local game with it (advancing the generation on a higher
- * remote epoch), `in-sync` is a no-op, `republish` answers a peer that is behind (including
- * one on a superseded generation), and `needs-resolution` adopts NOTHING — it records the
- * ancestor + diff on {@link needsResolution} and, for a genuine fork, archives both
- * histories via {@link flagConflicted}, flips {@link status} to `conflict`, and refuses all
- * further local moves (the game is stopped).
+ * the remote log and replaces the local game with it, `in-sync` is a no-op, `republish`
+ * answers a peer that is behind (including one on a superseded generation), and
+ * `needs-resolution` adopts NOTHING — it records the ancestor + diff on
+ * {@link needsResolution} and, for a genuine fork, archives both histories via
+ * {@link flagConflicted}, flips {@link status} to `conflict`, and refuses all further
+ * local moves (the game is stopped). The generation counter converges to the max on any
+ * message about the game we are on; it is bookkeeping, never a licence to adopt.
  *
  * A rematch resets to a fresh game IN PLACE over the same transport via
  * {@link resetGame} — bumping the fresh-game {@link SyncMessage.epoch} rather than
@@ -1310,6 +1311,15 @@ export class SyncEngine {
       return;
     }
     const decision = reconcileEpoched(this._epoch, this._game, remoteEpoch, remote, this.myColor);
+    // Converge the GENERATION COUNTER on a message about the game we are on — never backward, and
+    // never as an authority over history (the decision above is already made, from our own epoch).
+    // One game is one generation: a reset re-derives the uuid, so two peers on the SAME uuid holding
+    // different epochs are not in different generations, they are one peer whose counter ran ahead
+    // through an adoption (`adopt` carries a crossed-onto game's epoch with it). Left unconverged,
+    // the lower peer's every publish comes back as `superseded-generation` and its moves are never
+    // adopted — the same brick the epoch rule exists to prevent, in the mirror direction. Converging
+    // the NUMBER costs nothing precisely because the number no longer authorizes an adopt.
+    this._epoch = Math.max(this._epoch, remoteEpoch);
     switch (decision.action) {
       case 'in-sync':
         // Identical histories: the game did not change, so no listener fires (a spurious re-render
@@ -1329,8 +1339,10 @@ export class SyncEngine {
         return;
       case 'fast-forward':
         // The ONE automatic case (design §5): they are exactly one entry ahead on our own history
-        // and that entry was theirs to make — or they already reset to a newer generation. Adopt
-        // through the replay-validating {@link adopt}; nothing here trusts their derived state.
+        // and that entry was theirs to make. Nothing else adopts on this path — a higher `epoch` is
+        // NOT a second automatic case, because a newer generation arrives as a different GAME and is
+        // gated on identity in {@link receiveOtherGame}. Adopt through the replay-validating
+        // {@link adopt}; nothing here trusts their derived state.
         this.adopt(remote, remoteEpoch);
         return;
       case 'needs-resolution':
@@ -1374,8 +1386,9 @@ export class SyncEngine {
       };
       return;
     }
-    // Our generation never moves backward; a peer that reset in place without re-deriving the uuid
-    // carries us forward to its epoch so both sides settle on the same generation.
+    // Our generation never moves backward; crossing onto a game published at a HIGHER generation
+    // (our own next one, or the agreed game held by a peer that has rematched more often) carries us
+    // forward to its epoch, so both sides settle on the same generation.
     this._epoch = Math.max(this._epoch, remoteEpoch);
     this._game = Game.fromLog(this.size, remote);
     this.emitChange();
@@ -1438,9 +1451,9 @@ export class SyncEngine {
    * a publisher swap a live board for an empty one at the current epoch.
    *
    * This is what makes a staggered rematch converge under EVERY seed (the peer that reset first is
-   * adopted onto the generation the other one derived), and it is strictly narrower than the epoch rule
-   * it guards: only a game derived from the one we hold can cross, never an unrelated game wearing a
-   * high epoch.
+   * adopted onto the generation the other one derived), and it is the ONLY route a new generation
+   * takes: only a game derived from the one we hold can cross, never an unrelated game — nor a bigger
+   * number on the game we are already playing ({@link reconcileEpoched}) — wearing a high epoch.
    */
   private isOwnNextGeneration(uuid: string, remoteEpoch: number): boolean {
     return remoteEpoch > this._epoch && uuid === rematchGameUuid(this._game.log.uuid, remoteEpoch);

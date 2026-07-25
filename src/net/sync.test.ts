@@ -1117,6 +1117,66 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
     ]);
   });
 
+  it('REFUSES a fabricated HIGHER epoch on our own game — a live board is not wiped by an integer', async () => {
+    // Through the PUBLIC seam, with a message that is well-formed on the wire (`toSyncMessage`
+    // recomputes `headHash`), so any peer on the publicly-writable relay can produce it. `epoch` is
+    // sender-supplied and survives `normalizeEpoch` intact; adopting on it alone was an unbounded
+    // bypass of the whole one-move policy — no prefix, no entitlement, no length cap.
+    const hub = new MockRelayHub();
+    const t = new MockTransport(hub, 'epoch-wipe');
+    await t.connect('ROOM-EPOCH');
+    const eng = new SyncEngine(new Game(9, PAIR_UUID), t, db, () => meta, 'black', ANY_SEED);
+    eng.receive(toSyncMessage(logOf('0,0,0')));
+    eng.place([1, 1, 1]);
+    eng.receive(toSyncMessage(logOf('0,0,0', '1,1,1', '2,2,2')));
+    expect(eng.game().ply()).toBe(3);
+    const headBefore = headHash(eng.game().log);
+
+    // (a) an EMPTY log at generation 999: the board survives, and the anomaly is RECORDED.
+    eng.receive({ ...toSyncMessage(emptyGameLog()), epoch: 999 });
+    expect(eng.game().ply()).toBe(3);
+    expect(headHash(eng.game().log)).toBe(headBefore);
+    expect(eng.needsResolution()?.lca.ply).toBe(0);
+    expect(eng.needsResolution()?.diff.theirs).toEqual([]);
+
+    // (b) an unrelated 3-ply FORK at a high generation: still refused, and now flagged as the fork
+    // it is (the epoch used to make forks unrecognizable — "across generations there are none").
+    eng.receive({ ...toSyncMessage(logOf('4,4,4', '3,3,3', '2,2,2')), epoch: 1000 });
+    expect(headHash(eng.game().log)).toBe(headBefore);
+    expect(eng.game().state().pieces['4,4,4']).toBeUndefined();
+    expect(eng.status().kind).toBe('conflict');
+  });
+
+  it('CONVERGES the generation counter on the game we are on, without giving up our history for it', async () => {
+    // The counter must still meet, or the lower peer's every publish comes back `superseded` and its
+    // moves are never adopted. Converging the NUMBER is safe precisely because the number no longer
+    // authorizes an adopt: we take their generation AND keep our board.
+    const hub = new MockRelayHub();
+    const t = new MockTransport(hub, 'epoch-converge');
+    await t.connect('ROOM-CONVERGE');
+    const eng = new SyncEngine(new Game(9, PAIR_UUID), t, db, () => meta, 'black', ANY_SEED);
+    eng.receive(toSyncMessage(logOf('0,0,0'))); // white's move: adopted, now black to play
+    eng.place([1, 1, 1]);
+    expect(eng.epoch()).toBe(0);
+
+    // (a) an EQUAL log stamped with a higher generation: there is nothing to adopt, so the COUNTER is
+    // the only thing that can move — and it must. This is the both-peers-rematched case: one game,
+    // one history, two counters that ran apart through an adoption.
+    eng.receive({ ...toSyncMessage(eng.game().log), epoch: 4 });
+    expect(eng.epoch()).toBe(4);
+    expect(eng.game().ply()).toBe(2); // history untouched: the number bought them nothing
+
+    // (b) the ordinary one-move fast-forward still adopts under a higher generation…
+    eng.receive({ ...toSyncMessage(logOf('0,0,0', '1,1,1', '2,2,2')), epoch: 5 });
+    expect(eng.game().ply()).toBe(3); // adopted on its own merits (the one-move rule)
+    expect(eng.epoch()).toBe(5);
+
+    // (c) …and a message from BELOW the converged generation is the stale one: never adopted.
+    eng.receive({ ...toSyncMessage(logOf('0,0,0', '1,1,1', '2,2,2', '3,3,3')), epoch: 4 });
+    expect(eng.game().ply()).toBe(3);
+    expect(eng.epoch()).toBe(5);
+  });
+
   it('REJECTS a log that does not replay through the rules engine, leaving the game untouched', async () => {
     // The relay is publicly writable and a peer's derived state is never trusted (design §5,
     // Integrity): a one-entry log is fast-forward-SHAPED, but it must still be playable.
@@ -2172,9 +2232,10 @@ describe('SyncEngine.receive — the seed gate on a FOREIGN game (design §3, #4
   });
 
   it('the gate applies ACROSS generations too — a higher epoch is not a licence to push a game', () => {
-    // `reconcileEpoched` adopts a higher-epoch log outright, so without the gate stamping any epoch on
-    // a payload would bypass every rule. Both shapes are covered, because an EMPTY foreign log at a
-    // high epoch is the one that slips past a seed check (`new` and `defer` both accept empty games):
+    // A generation is the only thing an epoch may order, and this gate is where that is enforced for
+    // a message naming another game: no number on the wire crosses a game onto us. Both shapes are
+    // covered, because an EMPTY foreign log at a high epoch is the one that slips past a seed check
+    // (`new` and `defer` both accept empty games):
     // it silently replaced a live board until the rule stopped asking only about the seed.
     for (const seed of [{ kind: 'new' } as Proposal, { kind: 'defer' } as Proposal]) {
       const withHistory = engineWith(seed, logFor(MINE, '4,4,4', '5,5,5'));

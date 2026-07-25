@@ -191,14 +191,49 @@ describe('reconcile — the v3.1 policy: ONE automatic case, everything else exp
   });
 
   it('treats a log of a DIFFERENT game as a resolution with no common ancestor', () => {
-    // The engine settles identity before reconciling, so this is a defensive total-function case:
-    // two games are never each other's prefix, and the answer must never be "adopt".
     const mine = gameOf('0,0,0');
     const theirs = append(emptyLog(OTHER_UUID), { type: 'place', node: '1,1,1' });
     const decision = reconcile(mine, theirs, 'white');
     expect(decision.action).toBe('needs-resolution');
     if (decision.action !== 'needs-resolution') throw new Error('expected needs-resolution');
     expect(decision.lca).toEqual({ ply: 0, hash: null });
+  });
+
+  it('REFUSES a different game from an EMPTY log — where every prefix rule says "adopt"', () => {
+    // The uuid check earns its keep on exactly this input and nowhere else: `isPrefix` is uuid-BLIND
+    // (an empty log is a prefix of ANY log), so from an empty board a stranger's one-entry log meets
+    // every other fast-forward condition — one entry, my log its prefix, and my own state says the
+    // mover is not me. Proof that it is the SHAPE that would adopt, and identity alone that refuses:
+    // the same shape in MY game does fast-forward.
+    expect(reconcile(gameOf(), logOf('0,0,0'), 'black')).toEqual({
+      action: 'fast-forward',
+      reason: 'one-move',
+    });
+    const decision = reconcile(gameOf(), append(emptyLog(OTHER_UUID), {
+      type: 'place',
+      node: '0,0,0',
+    }), 'black');
+    expect(decision.action).toBe('needs-resolution');
+    if (decision.action !== 'needs-resolution') throw new Error('expected needs-resolution');
+    expect(decision.lca).toEqual({ ply: 0, hash: null });
+    expect(decision.diff.mine).toEqual([]);
+    expect(decision.diff.theirs.map((m) => m.text)).toEqual(['white plays 0,0,0']);
+  });
+
+  it('does not answer a different game with OUR log either, when theirs is the empty one', () => {
+    // The republish mirror of the same uuid-blindness: an EMPTY stranger log is a "prefix" of mine
+    // and exactly one shorter — the accepted republish shape — which would put my whole board on the
+    // wire for anyone who publishes an empty game. Same shape in MY game does republish.
+    expect(reconcile(gameOf('0,0,0'), emptyLog(UUID), 'black')).toEqual({
+      action: 'republish',
+      reason: 'one-ahead',
+    });
+    const decision = reconcile(gameOf('0,0,0'), emptyLog(OTHER_UUID), 'black');
+    expect(decision.action).toBe('needs-resolution');
+    if (decision.action !== 'needs-resolution') throw new Error('expected needs-resolution');
+    expect(decision.lca).toEqual({ ply: 0, hash: null });
+    expect(decision.diff.mine.map((m) => m.text)).toEqual(['white plays 0,0,0']);
+    expect(decision.diff.theirs).toEqual([]);
   });
 
   it('fast-forwards an UNDO the opponent took of its OWN move — on my turn, not theirs', () => {
@@ -227,22 +262,61 @@ describe('reconcile — the v3.1 policy: ONE automatic case, everything else exp
   });
 });
 
-describe('reconcileEpoched — a fresh GENERATION still wins outright (N.2 rematch)', () => {
-  it('adopts a HIGHER generation whatever the logs say', () => {
+describe('reconcileEpoched — the epoch REFUSES a stale generation; it never authorizes an adopt', () => {
+  it('REFUSES to wipe a live board for a higher epoch — the number on the wire is not a generation', () => {
+    // The escape hatch this pins shut: `epoch` is a sender-supplied integer, so "higher epoch =>
+    // adopt outright" let any peer stamp a big number on an EMPTY log and silently overwrite three
+    // plies of real history. A generation change is an identity change (a reset re-derives the uuid),
+    // so it can never arrive as a bigger number on the game we are already on.
     const mine = gameOf('0,0,0', '1,1,1', '2,2,2');
-    // The fresh generation's EMPTY log is deliberately not a continuation of the finished game.
-    expect(reconcileEpoched(0, mine, 1, emptyLog(UUID), 'white')).toEqual({
+    const decision = reconcileEpoched(0, mine, 999, emptyLog(UUID), 'white');
+    expect(decision.action).toBe('needs-resolution');
+    if (decision.action !== 'needs-resolution') throw new Error('expected needs-resolution');
+    expect(decision.lca).toEqual({ ply: 0, hash: genesisHash(UUID) });
+    expect(decision.diff.mine.map((m) => m.text)).toEqual([
+      'white plays 0,0,0',
+      'black plays 1,1,1',
+      'white plays 2,2,2',
+    ]);
+    expect(decision.diff.theirs).toEqual([]);
+  });
+
+  it('REFUSES a higher-epoch FORK too — it goes to the players like any other fork', () => {
+    const mine = gameOf('0,0,0', '1,1,1');
+    const decision = reconcileEpoched(0, mine, 1, logOf('4,4,4'), 'white');
+    expect(decision.action).toBe('needs-resolution');
+    if (decision.action !== 'needs-resolution') throw new Error('expected needs-resolution');
+    expect(decision.lca).toEqual({ ply: 0, hash: genesisHash(UUID) });
+    expect(isFork(decision.diff)).toBe(true);
+  });
+
+  it('and REFUSES a higher-epoch log that is two moves ahead on my own history', () => {
+    const mine = gameOf('0,0,0');
+    const theirs = eventsOnto(mine.log, [
+      { type: 'place', node: '1,1,1' },
+      { type: 'place', node: '2,2,2' },
+    ]);
+    expect(reconcileEpoched(0, mine, 4, theirs, 'white').action).toBe('needs-resolution');
+  });
+
+  it('still fast-forwards the ONE legitimate move under a higher epoch — the epoch neither grants nor blocks', () => {
+    const mine = gameOf('0,0,0');
+    const theirs = eventsOnto(mine.log, [{ type: 'place', node: '1,1,1' }]);
+    expect(reconcileEpoched(0, mine, 5, theirs, 'white')).toEqual({
       action: 'fast-forward',
-      reason: 'newer-generation',
+      reason: 'one-move',
     });
   });
 
-  it('adopts a higher generation even when its log would FORK within one', () => {
-    // Across generations there is no such thing as a fork — a higher epoch is simply the newer game.
-    const mine = gameOf('0,0,0', '1,1,1');
-    expect(reconcileEpoched(0, mine, 1, logOf('4,4,4'), 'white')).toEqual({
-      action: 'fast-forward',
-      reason: 'newer-generation',
+  it('never adopts a SUPERSEDED generation, however legitimately its log would fast-forward', () => {
+    // The mirror the epoch DOES decide: the same one-move log that adopts within a generation is
+    // refused when it is stamped with an older one — that is what stops a finished game resurrecting.
+    const mine = gameOf('0,0,0');
+    const theirs = eventsOnto(mine.log, [{ type: 'place', node: '1,1,1' }]);
+    expect(reconcile(mine, theirs, 'white')).toEqual({ action: 'fast-forward', reason: 'one-move' });
+    expect(reconcileEpoched(2, mine, 1, theirs, 'white')).toEqual({
+      action: 'republish',
+      reason: 'superseded-generation',
     });
   });
 
