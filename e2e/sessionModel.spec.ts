@@ -270,6 +270,10 @@ async function bootPeer(
         onMessage: (cb: (msg: unknown) => void) => {
           wiring.msgCb = cb;
         },
+        // V.3 (#45) resident-peer republish trigger: this double models the presence SET only,
+        // so the fresh-live-presence signal is a no-op here. The republish path is proven by the
+        // MockTransport session test + `npm run scenario:issue45` over the real relay.
+        onPeerLive: () => {},
         onPresence: (cb: (peers: readonly string[]) => void) => {
           wiring.presenceCb = cb;
         },

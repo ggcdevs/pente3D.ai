@@ -34,6 +34,20 @@ export type MessageHandler = (msg: TransportMessage) => void;
 export type PresenceHandler = (peers: readonly string[]) => void;
 
 /**
+ * Callback invoked with a peer's id every time that peer shows **fresh live presence** — it
+ * announced itself, or answered our announce, on a live (non-retained) signal.
+ *
+ * Deliberately distinct from {@link PresenceHandler}, which reports the live SET and therefore only
+ * fires on a CHANGE. A peer whose socket dies and returns without the broker ever publishing an
+ * absence re-announces into an unchanged set — no presence change, no callback — which is precisely
+ * the case that left issue #45's returning peer un-resynced. This callback fires on the announce
+ * itself, transition or not, so "a peer is back, serve it our state" (design §4 resident-peer
+ * republish) has a signal that cannot be swallowed. Repeats are expected; the caller's decision
+ * layer (`republish.ts`) makes them harmless.
+ */
+export type PeerLiveHandler = (peerId: string) => void;
+
+/**
  * Options for {@link Transport.connect}. `password` is **reserved and ignored in
  * v1** — it exists so the room-password feature (fold password into the topic)
  * drops in without changing callers (design doc "Seams v1 MUST reserve now" #2).
@@ -44,8 +58,8 @@ export interface ConnectOptions {
 }
 
 /**
- * The swappable networking interface (GLOSSARY "Transport"). Five methods; MQTT
- * is one implementation. All bodies are opaque JSON to the relay.
+ * The swappable networking interface (GLOSSARY "Transport"). MQTT is one
+ * implementation. All bodies are opaque JSON to the relay.
  */
 export interface Transport {
   /**
@@ -59,6 +73,13 @@ export interface Transport {
   onMessage(cb: MessageHandler): void;
   /** Register the handler for presence changes. The latest registration wins. */
   onPresence(cb: PresenceHandler): void;
+  /**
+   * Register the handler for a peer's fresh LIVE presence ({@link PeerLiveHandler}) — the signal
+   * resident-peer republish stands on, which a presence-SET change cannot supply. The latest
+   * registration wins. REQUIRED of every implementation, deliberately: an optional method would let
+   * a transport silently never resync a returning peer, which is issue #45 all over again.
+   */
+  onPeerLive(cb: PeerLiveHandler): void;
   /** Leave the room and release resources. Idempotent. */
   disconnect(): void;
 }
@@ -108,8 +129,21 @@ export class MockRelayHub {
       members = new Set();
       this.rooms.set(room, members);
     }
+    // Everyone ALREADY in the room, never the arriver itself — the real adapter ignores its own
+    // presence topic (`route`: "our OWN presence is not a peer"), so a re-join must not announce a
+    // peer to itself.
+    const residents = [...members].filter((m) => m !== peer);
     members.add(peer);
     this.broadcastPresence(room);
+    // Mirror the real transport's live-presence handshake (mqttTransport `routePresence`), which
+    // runs just after the presence update: the arriver's live announce is seen by every resident,
+    // and each resident's live ack is seen by the arriver. That two-way exchange — NOT the
+    // presence-set change above — is what resident-peer republish (design §4) triggers on, so the
+    // mock must reproduce it or a MockTransport test would prove nothing about the real path.
+    for (const resident of residents) {
+      resident.peerLive(peer.peerId);
+      peer.peerLive(resident.peerId);
+    }
   }
 
   /** Remove a transport from a room; announce the updated presence. */
@@ -165,6 +199,7 @@ export class MockTransport implements Transport {
   private room: string | null = null;
   private msgCb: MessageHandler = () => {};
   private presenceCb: PresenceHandler = () => {};
+  private peerLiveCb: PeerLiveHandler = () => {};
 
   /**
    * @param hub The shared in-memory relay both peers rendezvous on.
@@ -199,6 +234,10 @@ export class MockTransport implements Transport {
     this.presenceCb = cb;
   }
 
+  onPeerLive(cb: PeerLiveHandler): void {
+    this.peerLiveCb = cb;
+  }
+
   disconnect(): void {
     if (this.room === null) return;
     const room = this.room;
@@ -214,6 +253,11 @@ export class MockTransport implements Transport {
   /** Hub-internal: notify this peer of a presence change. */
   presenceChanged(peers: readonly string[]): void {
     this.presenceCb(peers);
+  }
+
+  /** Hub-internal: notify this peer that `peerId` showed fresh live presence. */
+  peerLive(peerId: string): void {
+    this.peerLiveCb(peerId);
   }
 }
 

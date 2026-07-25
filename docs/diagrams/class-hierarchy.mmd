@@ -1194,6 +1194,13 @@ classDiagram
         +readonly wssUrl: string
     }
     note for RelayConfig "src/config/config.ts"
+    class RepublishSignal {
+        <<interface>>
+        +readonly at: number
+        +readonly peerId: string
+        +readonly serving: string | null
+    }
+    note for RepublishSignal "src/net/republish.ts"
     class Resolution {
         <<interface>>
         +readonly action: string
@@ -1369,6 +1376,12 @@ classDiagram
         +readonly value: T
     }
     note for SelectOption "src/ui/widgets/settingsModel.ts"
+    class Served {
+        <<interface>>
+        +readonly at: number
+        +readonly serving: string
+    }
+    note for Served "src/net/republish.ts"
     class SettingsDeps {
         <<interface>>
         +readonly doc: Document
@@ -1438,6 +1451,7 @@ classDiagram
         +connect(roomCode: string, opts: ConnectOptions): Promise~void~
         +disconnect(): void
         +onMessage(cb: MessageHandler): void
+        +onPeerLive(cb: PeerLiveHandler): void
         +onPresence(cb: PresenceHandler): void
         +publish(msg: TransportMessage): void
     }
@@ -1652,7 +1666,9 @@ classDiagram
         +deliver(msg: TransportMessage): void
         +disconnect(): void
         +onMessage(cb: MessageHandler): void
+        +onPeerLive(cb: PeerLiveHandler): void
         +onPresence(cb: PresenceHandler): void
+        +peerLive(peerId: string): void
         +presenceChanged(peers: readonly string[]): void
         +publish(msg: TransportMessage): void
     }
@@ -1662,6 +1678,7 @@ classDiagram
         +connect(roomCode: string, _opts: ConnectOptions): Promise~void~
         +disconnect(): void
         +onMessage(cb: MessageHandler): void
+        +onPeerLive(cb: PeerLiveHandler): void
         +onPresence(cb: PresenceHandler): void
         +publish(msg: TransportMessage): void
     }
@@ -1709,6 +1726,11 @@ classDiagram
         +livePeers(): string[]
     }
     note for PresenceTracker "src/net/presence.ts"
+    class RepublishLimiter {
+        +observePresent(peers: readonly string[]): void
+        +onPeerLive(signal: RepublishSignal): RepublishDecision
+    }
+    note for RepublishLimiter "src/net/republish.ts"
     class SyncEngine {
         +agreeOn(uuid: string): void
         +applyAgreedUndo(): void

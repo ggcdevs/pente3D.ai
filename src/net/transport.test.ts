@@ -218,3 +218,82 @@ describe('MockRelayHub direct guards (unknown room)', () => {
     expect(hub.peerIds('ghost-room')).toEqual([]);
   });
 });
+
+/**
+ * Task V.3 (epic #47, fixes **#45**) — the {@link MockTransport} half of the fresh-live-presence
+ * signal. The mock must mirror the real adapter's live-presence handshake (an arriver's live
+ * announce reaches every resident; each resident's live ack reaches the arriver), because that
+ * two-way exchange — not the presence SET change — is what resident-peer republish triggers on. A
+ * mock that only reported presence would let a session test "pass" while proving nothing about the
+ * path that actually converges two peers.
+ */
+describe('MockTransport.onPeerLive — the live-presence handshake, both ways', () => {
+  it('an arriving peer is announced to the resident, and the resident is announced back', async () => {
+    const hub = new MockRelayHub();
+    const a = new MockTransport(hub, 'A');
+    const b = new MockTransport(hub, 'B');
+    const aLive: string[] = [];
+    const bLive: string[] = [];
+    a.onPeerLive((id) => aLive.push(id));
+    b.onPeerLive((id) => bLive.push(id));
+
+    await a.connect('r');
+    // Alone in the room, A hears nobody go live.
+    expect(aLive).toEqual([]);
+
+    await b.connect('r');
+
+    expect(aLive).toEqual(['B']);
+    expect(bLive).toEqual(['A']);
+  });
+
+  it('a peer that leaves and rejoins is announced live AGAIN (a return, not a duplicate)', async () => {
+    const hub = new MockRelayHub();
+    const a = new MockTransport(hub, 'A');
+    const b = new MockTransport(hub, 'B');
+    const aLive: string[] = [];
+    a.onPeerLive((id) => aLive.push(id));
+    await a.connect('r');
+    await b.connect('r');
+
+    b.disconnect();
+    await b.connect('r');
+
+    expect(aLive).toEqual(['B', 'B']);
+  });
+
+  it('never announces a peer to ITSELF', async () => {
+    const hub = new MockRelayHub();
+    const a = new MockTransport(hub, 'A');
+    const aLive: string[] = [];
+    a.onPeerLive((id) => aLive.push(id));
+    await a.connect('r');
+    await a.connect('r'); // a re-connect of the same peer into the same room
+
+    expect(aLive).toEqual([]);
+  });
+
+  it('the latest onPeerLive registration wins', async () => {
+    const hub = new MockRelayHub();
+    const a = new MockTransport(hub, 'A');
+    const b = new MockTransport(hub, 'B');
+    const first = vi.fn();
+    const second = vi.fn();
+    a.onPeerLive(first);
+    a.onPeerLive(second);
+    await a.connect('r');
+    await b.connect('r');
+
+    expect(first).not.toHaveBeenCalled();
+    expect(second).toHaveBeenCalledWith('B');
+  });
+
+  it('tolerates a peer going live before any onPeerLive handler (default no-op)', async () => {
+    const hub = new MockRelayHub();
+    const a = new MockTransport(hub, 'A');
+    const b = new MockTransport(hub, 'B');
+    // Neither peer registers an onPeerLive handler.
+    await a.connect('r');
+    await expect(b.connect('r')).resolves.toBeUndefined();
+  });
+});

@@ -199,6 +199,14 @@ export default {
     // like `recentCodes.ts`. Separated from the `NetSession` IO glue that writes it, so it is
     // mutation-gated like the other pure net logic.
     'src/net/activeGame.ts',
+    // Pure RESIDENT-PEER REPUBLISH decision (Task V.3, epic #47 — fixes #45): whether a peer's fresh
+    // live presence should put our full authoritative log back on the wire, and the limiter that
+    // makes repeats free without ever starving a genuine second return (a new head, the window
+    // elapsing, or an observed absence each re-open a peer). No clock, no transport — the
+    // observation time is an argument. Separated from the `MqttTransport`/`NetSession` glue that
+    // supplies the signal and performs the publish, so it is mutation-gated like the other pure net
+    // logic; that glue is proven by the mock-transport tests + `npm run scenario:issue45`.
+    'src/net/republish.ts',
     '!src/net/**/*.test.ts',
     // Pure render resolvers only (THREE-free). (the net test-exclusion above covers notify.test.ts) The Three.js scene GLUE (`scene.ts`,
     // `lines.ts`) is NOT mutated — it is an IO boundary verified by Playwright (build

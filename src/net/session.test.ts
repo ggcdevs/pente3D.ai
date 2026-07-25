@@ -492,6 +492,7 @@ describe('NetSession.enter — a connect failure surfaces honestly', () => {
         publish: () => {},
         onMessage: () => {},
         onPresence: () => {},
+        onPeerLive: () => {},
         disconnect: () => {},
       }),
       db,
@@ -2446,5 +2447,201 @@ describe('NetSession — a deferring arbiter seats itself on the NEWCOMER’s ga
     expect(a.gameUuid()).toBe(aOwnGame);
     expect(a.seatOwners()).toEqual({ white: 'player-a', black: null });
     expect((await listArchivedGames(dbA)).map((l) => l.id)).toEqual([aOwnGame]);
+  });
+});
+
+/**
+ * Task V.3 (epic #47, fixes **#45**) — RESIDENT-PEER REPUBLISH, exercised through the real session
+ * GLUE over the {@link MockRelayHub}. The pure decision (who republishes, on what signal, with what
+ * limiter) is unit + mutation gated in `republish.test.ts`; what these tests prove is the WIRING:
+ * that a fresh live presence actually reaches the decision, and that a publish actually lands on the
+ * other session's game.
+ *
+ * The outage is modelled exactly as `cli/netlink.ts` models it against a real mqtt client — the
+ * broker drops the peer (its Last-Will clears presence) and its own publishes go nowhere, while its
+ * SESSION keeps its engine, seat and game and never learns anything happened. That split is where
+ * #45 lives: nothing re-runs admission on a socket-level reconnect, and sync is incremental and
+ * NON-retained, so a move made during the outage exists only on the peer that made it.
+ *
+ * Every assertion is on the OTHER session's observable game state after the traffic really crossed
+ * the hub — never on a log line (agent-principles #3).
+ */
+
+/** A session whose {@link MockTransport} is captured, so a test can drive the hub against it. */
+function sessionWithTransport(
+  hub: MockRelayHub,
+  playerId: string,
+  captured: MockTransport[],
+  opts: Partial<NetSessionDeps> = {},
+): NetSession {
+  return makeSession(hub, playerId, {
+    createTransport: (): Transport => {
+      const t = new MockTransport(hub, playerId);
+      captured.push(t);
+      return t;
+    },
+    ...opts,
+  });
+}
+
+/**
+ * SEVER a peer's link the way a locked screen does: the broker drops it from the room (its Last-Will
+ * fires, so the other peer sees it absent) AND its own publishes go nowhere. The session is untouched
+ * — it keeps its engine/seat/game and still believes it is connected.
+ *
+ * @returns the spy to restore in {@link restoreMockLink}.
+ */
+function severMockLink(hub: MockRelayHub, room: string, t: MockTransport) {
+  hub.leave(room, t);
+  return vi.spyOn(t, 'publish').mockImplementation(() => {});
+}
+
+/** RESTORE a severed link: publishes flow again and the peer re-announces itself into the room. */
+function restoreMockLink(
+  hub: MockRelayHub,
+  room: string,
+  t: MockTransport,
+  spy: ReturnType<typeof severMockLink>,
+): void {
+  spy.mockRestore();
+  hub.join(room, t);
+}
+
+/** How many of a captured transport's publishes were full-state (`kind: 'sync'`) publishes. */
+function syncPublishCount(spy: { mock: { calls: unknown[][] } }): number {
+  return spy.mock.calls.filter(([m]) => (m as { kind?: string }).kind === 'sync').length;
+}
+
+describe('NetSession — resident-peer republish on live presence (V.3, epic #47, fixes #45)', () => {
+  it('the RESIDENT republishes, so a peer that missed a move while away catches up on its return', async () => {
+    const hub = new MockRelayHub();
+    const aT: MockTransport[] = [];
+    const bT: MockTransport[] = [];
+    const a = sessionWithTransport(hub, 'player-a', aT);
+    const b = sessionWithTransport(hub, 'player-b', bT);
+    await a.enter(ROOM, NEW);
+    await flush();
+    await b.enter(ROOM, DEFER);
+    await flush();
+    expect([a.state().seat, b.state().seat]).toEqual(['white', 'black']);
+
+    // The phone locks its screen: B is gone from the broker's view, its session none the wiser.
+    const severed = severMockLink(hub, ROOM, bT[0]!);
+
+    a.place(coordsOf('2,2,2'));
+    // The precondition the bug needs: the move is real on A and simply does not exist on B.
+    expect(a.ply()).toBe(1);
+    expect(b.ply()).toBe(0);
+    expect(b.gameState()!.pieces['2,2,2']).toBeUndefined();
+
+    // The screen unlocks. Nothing replays that move — unless the resident republishes.
+    restoreMockLink(hub, ROOM, bT[0]!, severed);
+
+    expect(b.ply()).toBe(1);
+    expect(b.gameState()!.pieces['2,2,2']).toBe('white');
+    // …and B knows it is ITS move again, which is the deadlock #45 actually reported.
+    expect(b.gameState()!.turn).toBe('black');
+    expect(a.gameUuid()).toBe(b.gameUuid());
+  });
+
+  it('the RETURNER republishes too, so a resident that missed the returner’s move fast-forwards (design §5 mirror)', async () => {
+    const hub = new MockRelayHub();
+    const aT: MockTransport[] = [];
+    const bT: MockTransport[] = [];
+    const a = sessionWithTransport(hub, 'player-a', aT);
+    const b = sessionWithTransport(hub, 'player-b', bT);
+    await a.enter(ROOM, NEW);
+    await flush();
+    await b.enter(ROOM, DEFER);
+    await flush();
+
+    // A's link dies, and A (white, to move) plays anyway — its publish goes into the void, so the
+    // move exists ONLY on A. This is the mirror of the case above: the RESIDENT is the stale one.
+    const severed = severMockLink(hub, ROOM, aT[0]!);
+    a.place(coordsOf('2,2,2'));
+    expect(a.ply()).toBe(1);
+    expect(b.ply()).toBe(0);
+
+    restoreMockLink(hub, ROOM, aT[0]!, severed);
+
+    // B fast-forwards onto the move it never received — proof the republish runs in BOTH directions.
+    expect(b.ply()).toBe(1);
+    expect(b.gameState()!.pieces['2,2,2']).toBe('white');
+    expect(b.gameState()!.turn).toBe('black');
+    // …and A did not adopt anything backwards: B's own (shorter) republish is a prefix it ignores.
+    expect(a.ply()).toBe(1);
+  });
+
+  it('serves a peer ONCE per head: the live-presence echo publishes nothing, a new move does', async () => {
+    const hub = new MockRelayHub();
+    const aT: MockTransport[] = [];
+    const bT: MockTransport[] = [];
+    const a = sessionWithTransport(hub, 'player-a', aT);
+    const b = sessionWithTransport(hub, 'player-b', bT);
+    await a.enter(ROOM, NEW);
+    await flush();
+
+    const published = vi.spyOn(aT[0]!, 'publish');
+    await b.enter(ROOM, DEFER);
+    await flush();
+    // B appearing is a peer going live: the resident served it its state exactly once.
+    expect(syncPublishCount(published)).toBe(1);
+
+    // The transport's handshake echoes live presence (announce → ack) within milliseconds. Repeats
+    // must be free — this is why the trigger can be un-gated (see `republish.ts`).
+    aT[0]!.peerLive('player-b');
+    aT[0]!.peerLive('player-b');
+    expect(syncPublishCount(published)).toBe(1);
+
+    // A move advances our head, so the next live signal serves the log that peer has NOT had —
+    // exactly the #45 case, and it must not be mistaken for a repeat.
+    a.place(coordsOf('2,2,2'));
+    expect(syncPublishCount(published)).toBe(2); // the move's own publish
+    aT[0]!.peerLive('player-b');
+    expect(syncPublishCount(published)).toBe(3); // + the republish of the new head
+    aT[0]!.peerLive('player-b');
+    expect(syncPublishCount(published)).toBe(3); // …and suppressed again on the new head
+
+    expect(b.ply()).toBe(1);
+  });
+
+  it('republishes NOTHING for a peer going live while entry is still open (admission decides that)', async () => {
+    const hub = new MockRelayHub();
+    // A silent peer already occupies the room: it holds the entry OPEN by answering no hello, so the
+    // newcomer is still negotiating on its PROVISIONAL game when the live signal arrives.
+    const silent = new MockTransport(hub, 'player-silent');
+    await silent.connect(ROOM);
+
+    const bT: MockTransport[] = [];
+    const b = sessionWithTransport(hub, 'player-b', bT, { settleMs: 50 });
+    const entering = b.enter(ROOM, DEFER);
+    await flush();
+    // The premise, asserted rather than assumed: nothing has admitted or rejected this entry, and
+    // the settle window has not expired — so the session is genuinely mid-negotiation.
+    expect(b.state().phase).toBe('connecting');
+
+    const published = vi.spyOn(bT[0]!, 'publish');
+    bT[0]!.peerLive('player-silent');
+    bT[0]!.peerLive('player-silent');
+    // Not one full-state publish: a provisional log must never reach the wire before the session
+    // settles on a game — what a peer gets before then is the admission protocol's decision.
+    expect(syncPublishCount(published)).toBe(0);
+
+    await entering;
+    expect(b.state().phase).toBe('connected');
+  });
+
+  it('a live signal arriving after the session LEFT the room publishes nothing', async () => {
+    const hub = new MockRelayHub();
+    const aT: MockTransport[] = [];
+    const a = sessionWithTransport(hub, 'player-a', aT);
+    await a.enter(ROOM, NEW);
+    await flush();
+    a.place(coordsOf('2,2,2'));
+
+    a.disconnect();
+    // A late callback from the torn-down transport must not try to publish: the MockTransport would
+    // throw `publish: not connected`, so "does not throw" is the observable proof the gate held.
+    expect(() => aT[0]!.peerLive('player-b')).not.toThrow();
   });
 });

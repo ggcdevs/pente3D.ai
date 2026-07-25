@@ -475,3 +475,106 @@ describe('MqttTransport default construction (SSOT wiring)', () => {
     expect(transport.peerId.length).toBeGreaterThan(2);
   });
 });
+
+/**
+ * Task V.3 (epic #47, fixes **#45**) — the FRESH-LIVE-PRESENCE signal resident-peer republish
+ * stands on (`onPeerLive`). It exists because both of this adapter's other presence paths are
+ * CHANGE-gated: `acked` suppresses the hello-ack once per peer, and `PresenceTracker` reports only a
+ * change to the LIVE SET. An observed absence is what resets them, so a peer whose socket dropped
+ * and returned WITHOUT the broker publishing an absence re-announces into an unchanged set and
+ * produces no signal at all — and the resident never republishes the move it missed. That is the
+ * exact suppression measured on the real relay while building the #45 repro.
+ */
+describe('MqttTransport.onPeerLive — the un-gated fresh-live-presence signal (V.3, #45)', () => {
+  it('fires on a peer\'s LIVE presence, carrying that peer\'s id', async () => {
+    const t = makeTransport();
+    const live: string[] = [];
+    t.transport.onPeerLive((id) => live.push(id));
+    const p = t.transport.connect('room1');
+    t.fake.fireConnect();
+    await p;
+
+    t.fake.fireMessage('pente/v1/room1/presence/peer-B', JSON.stringify({ id: 'peer-B' }), false);
+
+    expect(live).toEqual(['peer-B']);
+  });
+
+  it('fires AGAIN for an already-live peer, when NO presence change and NO ack occur (the #45 case)', async () => {
+    // The suppression this signal exists to survive, reproduced at the adapter level: peer-B is
+    // already live and already acked, so a re-announce changes the live SET not at all and triggers
+    // no new ack. Both of the older paths go quiet; the peer-live signal must not.
+    const t = makeTransport();
+    const presence: string[][] = [];
+    const live: string[] = [];
+    t.transport.onPresence((p) => presence.push([...p]));
+    t.transport.onPeerLive((id) => live.push(id));
+    const pr = t.transport.connect('room1');
+    t.fake.fireConnect();
+    await pr;
+
+    t.fake.fireMessage('pente/v1/room1/presence/peer-B', JSON.stringify({ id: 'peer-B' }), false);
+    const presenceCallbacks = presence.length;
+    const acks = t.fake.published.length;
+
+    // The peer drops and returns WITHOUT the broker ever publishing an absence: it simply
+    // re-announces itself live.
+    t.fake.fireMessage('pente/v1/room1/presence/peer-B', JSON.stringify({ id: 'peer-B' }), false);
+
+    // Proof the older paths are silent here — this is not a signal that could be derived from them.
+    expect(presence.length).toBe(presenceCallbacks);
+    expect(t.fake.published.length).toBe(acks);
+    // …and the un-gated signal fired for the return.
+    expect(live).toEqual(['peer-B', 'peer-B']);
+  });
+
+  it('does NOT fire for a RETAINED snapshot (a ghost is not a returning peer)', async () => {
+    const t = makeTransport();
+    const live: string[] = [];
+    t.transport.onPeerLive((id) => live.push(id));
+    const p = t.transport.connect('room1');
+    t.fake.fireConnect();
+    await p;
+
+    t.fake.fireMessage('pente/v1/room1/presence/peer-B', JSON.stringify({ id: 'peer-B' }), true);
+
+    expect(live).toEqual([]);
+  });
+
+  it('does NOT fire for an ABSENCE (an empty payload — a leave or a fired Last-Will)', async () => {
+    const t = makeTransport();
+    const live: string[] = [];
+    t.transport.onPeerLive((id) => live.push(id));
+    const p = t.transport.connect('room1');
+    t.fake.fireConnect();
+    await p;
+
+    t.fake.fireMessage('pente/v1/room1/presence/peer-B', JSON.stringify({ id: 'peer-B' }), false);
+    t.fake.fireMessage('pente/v1/room1/presence/peer-B', '', false);
+
+    expect(live).toEqual(['peer-B']);
+  });
+
+  it('never fires for our OWN presence (we are not a peer to serve)', async () => {
+    const t = makeTransport('peer-A');
+    const live: string[] = [];
+    t.transport.onPeerLive((id) => live.push(id));
+    const p = t.transport.connect('room1');
+    t.fake.fireConnect();
+    await p;
+
+    t.fake.fireMessage('pente/v1/room1/presence/peer-A', JSON.stringify({ id: 'peer-A' }), false);
+
+    expect(live).toEqual([]);
+  });
+
+  it('with NO handler registered a live presence is harmless (the default is a no-op)', async () => {
+    const t = makeTransport();
+    const p = t.transport.connect('room1');
+    t.fake.fireConnect();
+    await p;
+
+    expect(() =>
+      t.fake.fireMessage('pente/v1/room1/presence/peer-B', JSON.stringify({ id: 'peer-B' }), false),
+    ).not.toThrow();
+  });
+});

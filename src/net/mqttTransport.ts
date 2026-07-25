@@ -30,6 +30,7 @@ import {
   roomTopic,
   type ConnectOptions,
   type MessageHandler,
+  type PeerLiveHandler,
   type PresenceHandler,
   type Transport,
   type TransportMessage,
@@ -129,6 +130,7 @@ export class MqttTransport implements Transport {
 
   private msgCb: MessageHandler = () => {};
   private presenceCb: PresenceHandler = () => {};
+  private peerLiveCb: PeerLiveHandler = () => {};
 
   /**
    * @param cfg The relay SSOT (endpoint + credentials + topic root).
@@ -224,6 +226,15 @@ export class MqttTransport implements Transport {
    * an absence (graceful clear / Last-Will); a non-empty body is a candidate if retained, or a live
    * confirmation if fresh. A fresh live signal from a not-yet-acked peer triggers a one-shot live
    * hello-ack so that peer learns WE are alive too (completing the handshake both ways).
+   *
+   * Every LIVE signal is ALSO forwarded verbatim to {@link onPeerLive} — unconditionally, after the
+   * presence update. That is deliberate and load-bearing for issue #45: both gates above are
+   * CHANGE-gated (`acked` suppresses the ack once per peer, `PresenceTracker.apply` reports only a
+   * change to the live SET) and an observed ABSENCE is what resets them. A peer whose socket dropped
+   * and returned without the broker ever publishing its absence therefore re-announces into an
+   * unchanged live set: no ack, no presence callback, no signal at all — and the resident never
+   * republishes the moves it missed. The peer-live callback is the un-gated signal that survives
+   * that; making its repeats harmless belongs to the decision layer (`republish.ts`), not here.
    */
   private routePresence(id: string, body: string, retained: boolean): void {
     const kind = body === '' ? 'absent' : retained ? 'retained' : 'live';
@@ -231,6 +242,7 @@ export class MqttTransport implements Transport {
     else if (kind === 'live') this.ackHello(id);
     const changed = this.presence.apply({ peerId: id, kind });
     if (changed) this.presenceCb(this.presence.livePeers());
+    if (kind === 'live') this.peerLiveCb(id);
   }
 
   /**
@@ -257,6 +269,10 @@ export class MqttTransport implements Transport {
 
   onPresence(cb: PresenceHandler): void {
     this.presenceCb = cb;
+  }
+
+  onPeerLive(cb: PeerLiveHandler): void {
+    this.peerLiveCb = cb;
   }
 
   disconnect(): void {

@@ -2041,6 +2041,7 @@
         "specifiers": [
           "ConnectOptions",
           "MessageHandler",
+          "PeerLiveHandler",
           "PresenceHandler",
           "Transport",
           "TransportMessage",
@@ -2059,6 +2060,7 @@
           "connect(roomCode: string, _opts: ConnectOptions): Promise<void>",
           "disconnect(): void",
           "onMessage(cb: MessageHandler): void",
+          "onPeerLive(cb: PeerLiveHandler): void",
           "onPresence(cb: PresenceHandler): void",
           "publish(msg: TransportMessage): void"
         ],
@@ -2413,6 +2415,62 @@
       "shouldPromptRematch"
     ]
   },
+  "src/net/republish.ts": {
+    "exports": [
+      "DEFAULT_REPUBLISH_INTERVAL_MS",
+      "RepublishDecision",
+      "RepublishLimiter",
+      "RepublishSignal",
+      "RepublishSkip"
+    ],
+    "imports": [],
+    "classes": [
+      {
+        "name": "RepublishLimiter",
+        "extends": null,
+        "implements": [],
+        "methods": [
+          "observePresent(peers: readonly string[]): void",
+          "onPeerLive(signal: RepublishSignal): RepublishDecision"
+        ],
+        "properties": [],
+        "isAbstract": false
+      }
+    ],
+    "interfaces": [
+      {
+        "name": "RepublishSignal",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly at: number",
+          "readonly peerId: string",
+          "readonly serving: string | null"
+        ]
+      },
+      {
+        "name": "Served",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly at: number",
+          "readonly serving: string"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [
+      {
+        "name": "RepublishSkip",
+        "type": "| 'nothing-to-serve'\n  /**\n   * We already served this peer this exact head, moments ago. The handshake's live-presence ack\n   * arrives right behind the announce it answers; without this, one return would publish twice.\n   */\n  | 'rate-limited'"
+      },
+      {
+        "name": "RepublishDecision",
+        "type": "| { readonly publish: true }\n  | { readonly publish: false; readonly reason: RepublishSkip }"
+      }
+    ],
+    "functions": []
+  },
   "src/net/seats.ts": {
     "exports": [
       "ClaimRejection",
@@ -2476,6 +2534,13 @@
         "target": "src/core/coords.ts",
         "specifiers": [
           "Coord"
+        ]
+      },
+      {
+        "source": "../core/eventLog",
+        "target": "src/core/eventLog.ts",
+        "specifiers": [
+          "headHash"
         ]
       },
       {
@@ -2574,6 +2639,13 @@
         "target": "src/net/rematch.ts",
         "specifiers": [
           "rematchGameUuid"
+        ]
+      },
+      {
+        "source": "./republish",
+        "target": "src/net/republish.ts",
+        "specifiers": [
+          "RepublishLimiter"
         ]
       },
       {
@@ -3022,6 +3094,7 @@
       "MessageHandler",
       "MockRelayHub",
       "MockTransport",
+      "PeerLiveHandler",
       "PresenceHandler",
       "Transport",
       "TransportMessage",
@@ -3053,7 +3126,9 @@
           "deliver(msg: TransportMessage): void",
           "disconnect(): void",
           "onMessage(cb: MessageHandler): void",
+          "onPeerLive(cb: PeerLiveHandler): void",
           "onPresence(cb: PresenceHandler): void",
+          "peerLive(peerId: string): void",
           "presenceChanged(peers: readonly string[]): void",
           "publish(msg: TransportMessage): void"
         ],
@@ -3079,6 +3154,7 @@
           "connect(roomCode: string, opts: ConnectOptions): Promise<void>",
           "disconnect(): void",
           "onMessage(cb: MessageHandler): void",
+          "onPeerLive(cb: PeerLiveHandler): void",
           "onPresence(cb: PresenceHandler): void",
           "publish(msg: TransportMessage): void"
         ],
@@ -3098,6 +3174,10 @@
       {
         "name": "PresenceHandler",
         "type": "(peers: readonly string[]) => void"
+      },
+      {
+        "name": "PeerLiveHandler",
+        "type": "(peerId: string) => void"
       }
     ],
     "functions": [

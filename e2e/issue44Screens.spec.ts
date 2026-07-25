@@ -39,6 +39,10 @@ async function installMock(page: import('@playwright/test').Page) {
       },
       publish: () => {},
       onMessage: () => {},
+      // V.3 (#45) resident-peer republish trigger: this double models the presence SET only,
+      // so the fresh-live-presence signal is a no-op here. The republish path is proven by the
+      // MockTransport session test + `npm run scenario:issue45` over the real relay.
+      onPeerLive: () => {},
       onPresence: (cb: (peers: readonly string[]) => void) => {
         shared.presenceCb = cb;
       },

@@ -78,6 +78,8 @@ import {
 } from './activeGame';
 import type { Transport } from './transport';
 import { SyncEngine } from './sync';
+import { RepublishLimiter } from './republish';
+import { headHash } from '../core/eventLog';
 import {
   initialHandshake,
   propose as hsPropose,
@@ -311,6 +313,15 @@ export class NetSession {
 
   private engine: SyncEngine | null = null;
   private transport: Transport | null = null;
+
+  /**
+   * The RESIDENT-PEER REPUBLISH decision (V.3, design §4 — the #45 fix). Every fresh live presence
+   * from a peer asks it whether to put our full authoritative log back on the wire; it answers once
+   * per peer per head, so the transport's ack echo is free while a genuine return is always served.
+   * Held per session (not per transport) so a reconnect that builds a fresh transport starts from a
+   * clean record. See `republish.ts` for why the trigger is not the absent→present edge.
+   */
+  private readonly republish = new RepublishLimiter();
 
   /**
    * The OUT-OF-BAND ask/accept handshake state (N.1). Held here in session memory — NEVER appended to
@@ -832,6 +843,10 @@ export class NetSession {
     const transport = this.deps.createTransport();
     this.transport = transport;
     transport.onPresence((peers) => this.onPresence(peers));
+    // RESIDENT-PEER REPUBLISH (design §4, fixes #45): registered BEFORE `connect` so the very first
+    // live presence a peer shows — including the resident's ack that arrives while we are still
+    // connecting — reaches the decision rather than being dropped on the floor.
+    transport.onPeerLive((peerId) => this.onPeerLive(peerId));
 
     const engine = this.wireEngine(transport, game, color, seatMap);
 
@@ -1683,6 +1698,9 @@ export class NetSession {
     this.code = null;
     this.peerPresent = false;
     this.presentPeers = new Set();
+    // Nobody is present any more, so forget who we republished to: the next session must serve a
+    // peer the moment it appears, not treat it as already-served from a room we have left.
+    this.republish.observePresent([]);
     this.joinError = err;
     this.established = false;
     this.myProposal = null;
@@ -1698,6 +1716,12 @@ export class NetSession {
     // blocking owner absent). Kept in sync on EVERY presence tick, even when the boolean
     // peerPresent is unchanged (e.g. a third peer arrives while one was already present).
     this.presentPeers = new Set([this.deps.playerId, ...peers]);
+    // Feed the republish limiter the live snapshot so a peer OBSERVED to leave is forgotten: it may
+    // have dropped before our republish reached it, so its return must be served at once instead of
+    // being mistaken for a repeat. This is a limiter reset only — the republish TRIGGER is the
+    // transport's un-gated peer-live signal ({@link onPeerLive}), never this presence edge, because
+    // an absence is exactly what may never be observed (see `republish.ts`).
+    this.republish.observePresent(peers);
     const others = peers.filter((id) => id !== this.deps.playerId);
     const present = others.length > 0;
     // RE-ANNOUNCE our hello when a peer JOINS while we are still resolving our OWN entry (design §4
@@ -1744,6 +1768,42 @@ export class NetSession {
     }
     this.peerPresent = present;
     this.emit();
+  }
+
+  /**
+   * RESIDENT-PEER REPUBLISH (Task V.3, design §4 — the **#45** fix): a peer just showed fresh live
+   * presence, so put our FULL authoritative log back on the wire. Sync is incremental and
+   * non-retained, so a move published while that peer was away no longer exists anywhere on the
+   * relay; only a peer that HAS it can hand it over. `SyncEngine.publishState()` is exactly that
+   * primitive — no new message kind, and the receiving peer converges through the ordinary
+   * prefix/epoch policy it already runs on every inbound log.
+   *
+   * It runs in BOTH directions, because both peers do this: the resident serves the returner the
+   * move it missed, and the returner serves the resident a move of its own that never got out
+   * (design §5's mirror case). Whichever log is behind adopts; the other ignores a prefix of its
+   * own. Deliberately NOT retained state on the broker — that would re-couple code↔game at the
+   * relay and kill room-code reuse (design §4).
+   *
+   * Republishing is gated on the phase being exactly `connected`, which excludes three states for
+   * three different reasons: while `connecting`, the admission protocol — not this rule — decides
+   * what a peer gets, and publishing a provisional log mid-negotiation would put a game on the wire
+   * the arbiter may be about to refuse; `offline` has no engine at all; and a `conflict` game is
+   * STOPPED, exchanging no further traffic of any kind (the same rule {@link SyncEngine.assertLive}
+   * enforces on moves and handshakes). The pure limiter is still consulted in those cases (with
+   * nothing to serve) so the decision, including its honest reason, lives in one place.
+   */
+  private onPeerLive(peerId: string): void {
+    const engine = this.phase === 'connected' ? this.engine : null;
+    const decision = this.republish.onPeerLive({
+      peerId,
+      // The head hash folds in the game uuid at genesis, so it fingerprints WHICH game and HOW MUCH
+      // history — precisely "has this peer already had what `publishState` would send".
+      serving: engine === null ? null : headHash(engine.game().log),
+      at: this.deps.now(),
+    });
+    if (!decision.publish) return;
+    if (engine === null) throw new Error('republish decided to publish with no engine');
+    engine.publishState();
   }
 
   /** Fold the engine's conflict status into the session phase (a fork stops the game). */

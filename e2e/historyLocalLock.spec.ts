@@ -113,6 +113,10 @@ async function installCountingMock(page: Page, senderId: string): Promise<void> 
           onMessage: (cb: (msg: unknown) => void) => {
             msgCb = cb;
           },
+          // V.3 (#45) resident-peer republish trigger: this double models the presence SET only,
+          // so the fresh-live-presence signal is a no-op here. The republish path is proven by the
+          // MockTransport session test + `npm run scenario:issue45` over the real relay.
+          onPeerLive: () => {},
           onPresence: (cb: (peers: readonly string[]) => void) => {
             presenceCb = cb;
           },
