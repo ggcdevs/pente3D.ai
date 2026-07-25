@@ -2506,7 +2506,11 @@ function sessionWithSpiedTransport(
   });
 }
 
-/** A `vi.spyOn(transport, 'publish')`, as far as {@link syncPublishCount} is concerned. */
+/**
+ * A `vi.spyOn(transport, …)` on a method whose first argument is a {@link TransportMessage} — either
+ * the `publish` side (what we put on the wire) or the `deliver` side (what a peer actually received),
+ * as far as {@link syncHeads} / {@link syncPublishCount} are concerned.
+ */
 type PublishSpy = { mock: { calls: unknown[][] } };
 
 /** A captured transport together with the publish spy installed on it at construction. */
@@ -2577,9 +2581,20 @@ function restoreMockLinkQuietly(
   hub.join(room, t);
 }
 
+/**
+ * The head hash of every full-state (`kind: 'sync'`) message the spy saw, in order — so a test can
+ * assert WHICH log went on the wire (or arrived at a peer), not merely that something did.
+ */
+function syncHeads(spy: PublishSpy): string[] {
+  return spy.mock.calls
+    .map(([m]) => m as { kind?: string; headHash?: string })
+    .filter((m) => m.kind === 'sync')
+    .map((m) => m.headHash as string);
+}
+
 /** How many of a captured transport's publishes were full-state (`kind: 'sync'`) publishes. */
-function syncPublishCount(spy: { mock: { calls: unknown[][] } }): number {
-  return spy.mock.calls.filter(([m]) => (m as { kind?: string }).kind === 'sync').length;
+function syncPublishCount(spy: PublishSpy): number {
+  return syncHeads(spy).length;
 }
 
 describe('NetSession — resident-peer republish on live presence (V.3, epic #47, fixes #45)', () => {
@@ -2732,6 +2747,101 @@ describe('NetSession — resident-peer republish on live presence (V.3, epic #47
     expect(syncPublishCount(published)).toBe(3); // …and suppressed again on the new head
 
     expect(b.ply()).toBe(1);
+  });
+
+  it('an OBSERVED ABSENCE re-opens the peer: it is served on return with our log UNCHANGED, inside the window', async () => {
+    // The third anti-starvation arm (`republish.ts` header) at the SESSION level: the pure limiter
+    // forgets a peer it saw leave, and this proves the session actually FEEDS it the presence
+    // snapshot. Everything the other two arms need is deliberately absent here — no move advances our
+    // head, and the injected clock never leaves the suppression window — so the ONLY thing that can
+    // put our log back on the wire is the observed absence.
+    const hub = new MockRelayHub();
+    const aT: MockTransport[] = [];
+    const bT: MockTransport[] = [];
+    const a = sessionWithTransport(hub, 'player-a', aT);
+    const b = sessionWithTransport(hub, 'player-b', bT);
+    await a.enter(ROOM, NEW);
+    await flush();
+    await b.enter(ROOM, DEFER);
+    await flush();
+    expect([a.state().seat, b.state().seat]).toEqual(['white', 'black']);
+    // B's arrival already served it this head (the join's live exchange), which is what makes the
+    // suppression below real rather than vacuous.
+    const head = headHash(a.syncEngine()!.game().log);
+
+    const published = vi.spyOn(aT[0]!, 'publish');
+    const arrived = vi.spyOn(bT[0]!, 'deliver');
+
+    // CONTROL: with B continuously present, a live echo on this same head is suppressed.
+    aT[0]!.peerLive('player-b');
+    expect(syncHeads(published)).toEqual([]);
+
+    // Now B genuinely LEAVES — its Last-Will fires, so A observes the absence…
+    const severed = severMockLink(hub, ROOM, bT[0]!);
+    expect(a.state().peerPresent).toBe(false); // the absence really was observed, not assumed
+    // …and returns with NOTHING having happened in between: same head, same window. A peer that left
+    // may have dropped before our republish reached it, so its return must be served at once.
+    restoreMockLink(hub, ROOM, bT[0]!, severed);
+
+    expect(syncHeads(published)).toEqual([head]);
+    // …and it is not just on the wire: B's transport actually received that log.
+    expect(syncHeads(arrived)).toContain(head);
+    // The absence RE-OPENED B; it did not disable the limiter — the very next echo is silent again.
+    aT[0]!.peerLive('player-b');
+    expect(syncHeads(published)).toEqual([head]);
+  });
+
+  it('after a DISCONNECT the session re-enters with a CLEAN record, so the peer still in the room is served', async () => {
+    // The limiter is held per SESSION, not per transport, so a reconnect that builds a fresh transport
+    // would otherwise inherit "already served player-w at <head>" from a room this session has LEFT —
+    // and, with the game unchanged, starve that peer for the rest of the window. Feeding the limiter an
+    // EMPTY presence snapshot on teardown is the only thing that makes the per-session field safe.
+    //
+    // The peer here is a SILENT transport rather than a second session on purpose: a session answers a
+    // re-entry with a live signal of its own, which drives us to `connected` and serves it mid-entry,
+    // so the stale record would never get the chance to bite. A quiet peer leaves us in control of
+    // exactly when the live signal lands — after entry has settled, which is where a real returning
+    // peer's re-announce lands too.
+    const hub = new MockRelayHub();
+    const aT: MockTransport[] = [];
+    const a = sessionWithTransport(hub, 'player-a', aT);
+    await a.enter(ROOM, NEW);
+    await flush();
+    expect(a.state().phase).toBe('connected');
+    const head = headHash(a.syncEngine()!.game().log);
+
+    // The quiet peer arrives while we are connected: it IS served, so the record that must not survive
+    // our disconnect genuinely exists.
+    const watcher = new MockTransport(hub, 'player-w');
+    const servedOnArrival = vi.spyOn(watcher, 'deliver');
+    await watcher.connect(ROOM);
+    expect(syncHeads(servedOnArrival)).toEqual([head]);
+
+    // We leave the room outright (the app's own disconnect), then re-enter the SAME room on a FRESH
+    // transport, landing back on the SAME game — so the head we would serve is byte-for-byte the head
+    // the stale record claims the watcher already has, and the injected clock is still deep inside the
+    // suppression window. Nothing but the teardown reset can re-open it.
+    a.disconnect();
+    await flush();
+    await a.enter(ROOM, DEFER);
+    await flush();
+    expect(a.state().phase).toBe('connected');
+    expect(headHash(a.syncEngine()!.game().log)).toBe(head);
+
+    const published = vi.spyOn(aT[1]!, 'publish');
+    const arrived = vi.spyOn(watcher, 'deliver');
+    // The watcher's socket blips and it re-announces itself (mqtt.js re-subscribes and re-publishes its
+    // presence on reconnect). Room membership never changes, so NO absence is observed anywhere in this
+    // exchange — the presence-snapshot arm cannot be what serves it here.
+    const severed = severMockLinkQuietly(watcher);
+    restoreMockLinkQuietly(hub, ROOM, watcher, severed);
+
+    expect(syncHeads(published)).toEqual([head]);
+    expect(syncHeads(arrived)).toEqual([head]); // …and it actually reached the peer
+    // …and the fresh record now suppresses the echo, exactly as a first serve should: the re-entry gave
+    // the limiter a clean slate, it did not switch it off.
+    aT[1]!.peerLive('player-w');
+    expect(syncHeads(published)).toEqual([head]);
   });
 
   it('adds NOTHING to the wire across the WHOLE connecting window (admission owns that window)', async () => {
