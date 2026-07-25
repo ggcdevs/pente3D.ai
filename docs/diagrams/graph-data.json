@@ -1481,6 +1481,7 @@
           "listArchivedGames",
           "loadConflicted",
           "loadGame",
+          "playersFromSeats",
           "saveGame"
         ]
       },
@@ -1570,6 +1571,50 @@
       "resumeArchived",
       "reviewArchived",
       "seedSources"
+    ]
+  },
+  "src/net/activeGame.ts": {
+    "exports": [
+      "ACTIVE_GAME_KEY",
+      "ACTIVE_GAME_MAX_AGE_MS",
+      "ActiveNetworkedGame",
+      "clearActiveGame",
+      "isActiveGameStale",
+      "readActiveGame",
+      "writeActiveGame"
+    ],
+    "imports": [
+      {
+        "source": "../ui/widgets/netModel",
+        "target": "src/ui/widgets/netModel.ts",
+        "specifiers": [
+          "validateGameCode"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "ActiveNetworkedGame",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly code: string",
+          "readonly gameUuid: string",
+          "readonly updatedAt: number"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "canonicalize",
+      "clearActiveGame",
+      "isActiveGameStale",
+      "isFiniteNumber",
+      "readActiveGame",
+      "resolveStorage",
+      "writeActiveGame"
     ]
   },
   "src/net/admission.ts": {
@@ -2408,9 +2453,8 @@
         "target": "src/persist/archive.ts",
         "specifiers": [
           "ArchivedMeta",
-          "NET_ROOM_RESULT",
-          "loadNetGame",
           "loadNetGameByUuid",
+          "playersFromSeats",
           "saveGame"
         ]
       },
@@ -2431,6 +2475,16 @@
         "target": "src/util/randomId.ts",
         "specifiers": [
           "randomId"
+        ]
+      },
+      {
+        "source": "./activeGame",
+        "target": "src/net/activeGame.ts",
+        "specifiers": [
+          "clearActiveGame",
+          "isActiveGameStale",
+          "readActiveGame",
+          "writeActiveGame"
         ]
       },
       {
@@ -2537,6 +2591,7 @@
           "canPlace(): boolean",
           "disconnect(): void",
           "enter(rawCode: string, proposal: Proposal): Promise<void>",
+          "gameStartedAt(): number | null",
           "gameState(): GameState | null",
           "gameUuid(): string | null",
           "getHandshake(): HandshakeState",
@@ -2578,6 +2633,7 @@
           "readonly db: IDBDatabase",
           "readonly playerId: string",
           "readonly size: number",
+          "readonly storage: Storage | null",
           "settleMs: number"
         ]
       }
@@ -3076,7 +3132,6 @@
       "ArchivedMeta",
       "ConflictInput",
       "ConflictedGame",
-      "NET_ROOM_RESULT",
       "PersistedSeats",
       "flagConflicted",
       "listArchivedGames",
@@ -3084,6 +3139,7 @@
       "loadGame",
       "loadNetGame",
       "loadNetGameByUuid",
+      "playersFromSeats",
       "saveGame"
     ],
     "imports": [
@@ -3202,6 +3258,7 @@
       "loadGame",
       "loadNetGame",
       "loadNetGameByUuid",
+      "playersFromSeats",
       "saveGame",
       "toPlainLog"
     ]

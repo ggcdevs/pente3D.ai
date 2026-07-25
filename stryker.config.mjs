@@ -174,6 +174,14 @@ export default {
     // values). Separated from the session/document.title/Notification IO glue so it is mutation-gated
     // like the other pure net logic.
     'src/net/notify.ts',
+    // Pure `activeNetworkedGame` BREADCRUMB store (Task V.1, epic #47 — the v3.1 net model): the
+    // single-valued "I am currently mid-game in room X as game Y" session record over an INJECTED
+    // `Storage` — read/write/clear with a shared validating canonicalizer (so the round-trip holds by
+    // construction and a corrupt record degrades to null) plus the `updatedAt` staleness predicate.
+    // It reads a DOM API (`localStorage`) so it is NOT `src/core`, but is otherwise pure logic, exactly
+    // like `recentCodes.ts`. Separated from the `NetSession` IO glue that writes it, so it is
+    // mutation-gated like the other pure net logic.
+    'src/net/activeGame.ts',
     '!src/net/**/*.test.ts',
     // Pure render resolvers only (THREE-free). (the net test-exclusion above covers notify.test.ts) The Three.js scene GLUE (`scene.ts`,
     // `lines.ts`) is NOT mutated — it is an IO boundary verified by Playwright (build

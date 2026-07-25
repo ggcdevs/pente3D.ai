@@ -26,7 +26,13 @@ interface GameStateReadout {
 }
 interface ArchiveListing {
   id: string;
-  meta: { players: Record<string, string>; result: string; startedAt: number; headHash: string };
+  meta: {
+    players: Record<string, string>;
+    result: string;
+    startedAt: number;
+    headHash: string;
+    uuid: string;
+  };
 }
 type Pente = {
   getState(): GameStateReadout | null;
@@ -340,6 +346,12 @@ async function isolateNet(
 const netReadout = (page: import('@playwright/test').Page) =>
   page.evaluate(() => (window as unknown as { __pente: Pente }).__pente.getNet());
 
+/** The live net game's uuid (`window.__pente.getNetGameUuid()`), the record key a net game is archived under. */
+const gameUuidOf = (page: import('@playwright/test').Page) =>
+  page.evaluate(
+    () => (window as unknown as { __pente: { getNetGameUuid(): string | null } }).__pente.getNetGameUuid(),
+  );
+
 async function waitNetConnected(page: import('@playwright/test').Page): Promise<void> {
   await page.waitForFunction(() => {
     const p = (window as unknown as { __pente: Pente }).__pente;
@@ -413,14 +425,25 @@ test('NETWORKED (issue #7): N moves in ONE net game keep EXACTLY ONE archive rec
   expect(await get(host, (p) => p.getHeadHash()!)).toBe(await get(joiner, (p) => p.getHeadHash()!));
 
   // Let any (erroneous per-move) mint writes settle, then the CORE assertion (RED against the bug):
-  // the host archive still holds EXACTLY ONE record for this ONE game — not five (one per adopted ply).
+  // the ONE net game still occupies EXACTLY ONE record — not five (one per adopted ply).
   await waitForAutosaved(host);
   await host.waitForTimeout(300);
   const hostArchive = await getAsync(host, (p) => p.getArchive());
-  expect(hostArchive).toHaveLength(1);
-  // And that single record IS the live net game at its final ply (headHash matches) — accumulation,
-  // not an early-ply leftover from a record that got abandoned by a spurious mint.
-  expect(hostArchive[0]!.meta.headHash).toBe(await get(host, (p) => p.getHeadHash()!));
+  const netUuid = await gameUuidOf(host);
+  expect(netUuid).not.toBeNull();
+  const netRecords = hostArchive.filter((r) => r.meta.uuid === netUuid);
+  expect(netRecords).toHaveLength(1);
+  // And that record IS the live net game at its final ply (headHash matches) — accumulation, not an
+  // early-ply leftover from a record abandoned by a spurious mint. Since V.1 (epic #47) it is keyed by
+  // the game's own UUID: the app's autosave and the net session maintain that ONE record together.
+  expect(netRecords[0]!.id).toBe(netUuid);
+  expect(netRecords[0]!.meta.headHash).toBe(await get(host, (p) => p.getHeadHash()!));
+  // The archive as a whole did not grow with the plies either: the only other record is the pristine
+  // EMPTY local game this tab booted with (a different game, never played), untouched by the net game.
+  expect(hostArchive).toHaveLength(2);
+  const others = hostArchive.filter((r) => r.meta.uuid !== netUuid);
+  expect(others).toHaveLength(1);
+  expect(others[0]!.id).toBe(bootHost[0]!.id);
 
   await context.close();
 });

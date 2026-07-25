@@ -15,7 +15,12 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { openDatabase } from '../persist/db';
-import { saveGame, NET_ROOM_RESULT } from '../persist/archive';
+import { saveGame } from '../persist/archive';
+import {
+  writeActiveGame,
+  readActiveGame,
+  ACTIVE_GAME_MAX_AGE_MS,
+} from './activeGame';
 import { Game } from '../core/game';
 import { headHash } from '../core/eventLog';
 import { coordsOf } from '../core/coords';
@@ -35,6 +40,25 @@ let db: IDBDatabase;
 beforeEach(async () => {
   db = await openDatabase(`net-session-test-${Math.random().toString(36).slice(2)}`);
 });
+
+/**
+ * A spec-faithful in-memory `Storage` (mirroring config.test.ts) standing in for ONE browser's
+ * localStorage — where the `activeNetworkedGame` BREADCRUMB lives. Two sessions sharing a store model
+ * the SAME browser returning; separate stores model two distinct browsers (as the separate `db`s do).
+ */
+function memoryStorage(): Storage {
+  const map = new Map<string, string>();
+  return {
+    get length() {
+      return map.size;
+    },
+    clear: () => map.clear(),
+    key: (i: number) => Array.from(map.keys())[i] ?? null,
+    getItem: (k: string) => (map.has(k) ? (map.get(k) as string) : null),
+    removeItem: (k: string) => void map.delete(k),
+    setItem: (k: string, v: string) => void map.set(k, String(v)),
+  };
+}
 
 /** A monotonic id source so each session's admission messages carry stable, unique ids. */
 function idSource(prefix: string): () => string {
@@ -65,6 +89,9 @@ function makeSession(
     // A distinct, monotonically-increasing arrivalTag per hello (the initiator-election input); a test
     // that needs a specific arrival order overrides `now`.
     now: () => arrival++,
+    // Its OWN breadcrumb store by default (one fresh "browser" per session); a test that models the
+    // SAME browser returning passes the same `storage` to both sessions, as it does with `db`.
+    storage: memoryStorage(),
     newMessageId: idSource(playerId),
     ...opts,
   });
@@ -213,12 +240,14 @@ describe('NetSession.reconnect — a returning owner RECLAIMS its seat by identi
    */
   it('a reconnect after a rematch color-swap reclaims the CURRENT (swapped) color, not the pre-swap one (#40)', async () => {
     const hub = new MockRelayHub();
-    // TWO distinct browsers (each its own IndexedDB) so their room-scoped persisted seat maps do not
-    // collide — mirrors the e2e's per-context isolation and the real /dev/ repro.
+    // TWO distinct browsers (each its own IndexedDB archive + its own breadcrumb store) so their
+    // persisted state does not collide — mirrors the e2e's per-context isolation and the /dev/ repro.
     const dbA = await openDatabase(`net-rematch-a-${Math.random().toString(36).slice(2)}`);
     const dbB = await openDatabase(`net-rematch-b-${Math.random().toString(36).slice(2)}`);
-    const a = makeSession(hub, 'player-a', { db: dbA });
-    const b = makeSession(hub, 'player-b', { db: dbB });
+    const storeA = memoryStorage();
+    const storeB = memoryStorage();
+    const a = makeSession(hub, 'player-a', { db: dbA, storage: storeA });
+    const b = makeSession(hub, 'player-b', { db: dbB, storage: storeB });
 
     // A enters → white; B enters → black (the #31-fixed distinct seats).
     await a.enter(ROOM, NEW);
@@ -256,9 +285,11 @@ describe('NetSession.reconnect — a returning owner RECLAIMS its seat by identi
     b.disconnect();
     await flush();
 
-    // B reconnects (same playerId = same browser; fresh admission ids so its hello is not deduped).
+    // B reconnects (same playerId + same db + same breadcrumb store = the same browser; fresh
+    // admission ids so its hello is not deduped).
     const b2 = makeSession(hub, 'player-b', {
       db: dbB,
+      storage: storeB,
       newMessageId: idSource('player-b-return'),
     });
     await b2.enter(ROOM, DEFER);
@@ -281,17 +312,20 @@ describe('NetSession.reconnect — a returning owner RECLAIMS its seat by identi
 
   /**
    * BUG #40, empty-room facet: after a rematch swap BOTH players drop, then the first owner returns
-   * into the EMPTY room and must reclaim its SWAPPED color from the PERSISTED `net-room:{code}` record
-   * — proving `resetForRematch` now persists the swapped seat map (not just updates it in memory). If
-   * the reset failed to persist, the returner would reclaim its PRE-swap color from the stale durable
+   * into the EMPTY room and must reclaim its SWAPPED color from the game its BREADCRUMB names (the
+   * archive record keyed by that game's uuid — V.1, epic #47) — proving `resetForRematch` persists the
+   * swapped seat map + re-points the breadcrumb at the fresh rematch game, not just updates memory. If
+   * the reset failed to persist either, the returner would reclaim its PRE-swap color from a stale
    * record (the same two-same-color deadlock, this time via the empty-room reclaim path).
    */
   it('after a rematch swap BOTH drop; the first returner reclaims its SWAPPED color from the PERSISTED map (#40)', async () => {
     const hub = new MockRelayHub();
     const dbA = await openDatabase(`net-rematch-empty-a-${Math.random().toString(36).slice(2)}`);
     const dbB = await openDatabase(`net-rematch-empty-b-${Math.random().toString(36).slice(2)}`);
-    const a = makeSession(hub, 'player-a', { db: dbA });
-    const b = makeSession(hub, 'player-b', { db: dbB });
+    const storeA = memoryStorage();
+    const storeB = memoryStorage();
+    const a = makeSession(hub, 'player-a', { db: dbA, storage: storeA });
+    const b = makeSession(hub, 'player-b', { db: dbB, storage: storeB });
 
     await a.enter(ROOM, NEW);
     await b.enter(ROOM, DEFER);
@@ -311,16 +345,18 @@ describe('NetSession.reconnect — a returning owner RECLAIMS its seat by identi
     expect(a.state().seat).toBe('black');
     expect(b.state().seat).toBe('white');
 
-    // BOTH drop → the room empties on the relay. Ownership now lives ONLY in each browser's persisted
-    // room-state record, which the reset must have written as the SWAPPED map.
+    // BOTH drop → the room empties on the relay. Ownership now lives ONLY in each browser's archived
+    // game (keyed by the post-swap game's uuid), which the reset must have written as the SWAPPED map,
+    // reachable via that browser's breadcrumb.
     a.disconnect();
     b.disconnect();
     await flush();
 
     // B returns FIRST into the empty room: it must re-seed as WHITE (its post-swap owned color),
-    // reclaiming from its OWN persisted record — not its pre-swap black.
+    // reclaiming from the game its OWN breadcrumb names — not its pre-swap black.
     const b2 = makeSession(hub, 'player-b', {
       db: dbB,
+      storage: storeB,
       newMessageId: idSource('player-b-return'),
     });
     await b2.enter(ROOM, DEFER);
@@ -334,6 +370,7 @@ describe('NetSession.reconnect — a returning owner RECLAIMS its seat by identi
     // A returns second: the resident B admits it back onto its RESERVED black.
     const a2 = makeSession(hub, 'player-a', {
       db: dbA,
+      storage: storeA,
       newMessageId: idSource('player-a-return'),
     });
     await a2.enter(ROOM, DEFER);
@@ -472,22 +509,25 @@ describe('NetSession.enter — two peers ARRIVE TOGETHER → initiator election 
 });
 
 /**
- * The DURABLE identity-owned seat map (design §2.3/§6.4): seat ownership is persisted WITH the game
- * under a room-scoped key, so it survives an EMPTY room. These model TWO distinct browsers, each with
- * its OWN archive db (mirroring the e2e's per-context IndexedDB isolation) so their room-scoped
- * persisted state does not collide on one store. `flush()` lets the fire-and-forget durable write
- * commit before the returning peer reads it.
+ * The DURABLE identity-owned seat map (design §2/§6.4): seat ownership is persisted WITH the game, in
+ * the archive keyed by that game's UUID, so it survives an EMPTY room — reached on a return via the
+ * `activeNetworkedGame` BREADCRUMB's uuid, never via the room code (V.1, epic #47: there is no
+ * code→game record any more). These model TWO distinct browsers, each with its OWN archive db + its
+ * OWN breadcrumb store (mirroring the e2e's per-context isolation) so their persisted state does not
+ * collide. `flush()` lets the fire-and-forget durable write commit before the returning peer reads it.
  */
 describe('NetSession — durable seats survive an empty room (design §6.4, scenario 4)', () => {
   it('both drop; the first returning owner re-seeds as the color it OWNED, not white-by-arrival', async () => {
     const hub = new MockRelayHub();
-    // Distinct per-browser stores so A and B's `net-room:CODE` records never collide.
+    // Distinct per-browser stores so A and B's archived games + breadcrumbs never collide.
     const dbA = await openDatabase(`net-durable-a-${Math.random().toString(36).slice(2)}`);
     const dbB = await openDatabase(`net-durable-b-${Math.random().toString(36).slice(2)}`);
-    const a = makeSession(hub, 'player-a', { db: dbA });
-    const b = makeSession(hub, 'player-b', { db: dbB });
+    const storeA = memoryStorage();
+    const storeB = memoryStorage();
+    const a = makeSession(hub, 'player-a', { db: dbA, storage: storeA });
+    const b = makeSession(hub, 'player-b', { db: dbB, storage: storeB });
 
-    // Establish A (white) + B (black), then await the durable persists so both browsers' room-scoped
+    // Establish A (white) + B (black), then await the durable persists so both browsers' uuid-keyed
     // seat map + game are COMMITTED before the drop (deterministic durability, not a timing guess).
     await a.enter(ROOM, NEW);
     await b.enter(ROOM, DEFER);
@@ -503,10 +543,11 @@ describe('NetSession — durable seats survive an empty room (design §6.4, scen
     await flush();
 
     // B rejoins FIRST into the now-empty room with `defer`. The OLD bug re-seeded a fresh empty game
-    // and grabbed first-available WHITE. The durable fix reloads B's persisted game (SAME uuid) and
-    // RECLAIMS black — the color B owned — even though B arrives first into the empty room.
+    // and grabbed first-available WHITE. The durable fix reloads the game B's BREADCRUMB names (SAME
+    // uuid) and RECLAIMS black — the color B owned — even though B arrives first into the empty room.
     const b2 = makeSession(hub, 'player-b', {
       db: dbB,
+      storage: storeB,
       newMessageId: idSource('player-b-return'),
     });
     await b2.enter(ROOM, DEFER);
@@ -523,6 +564,7 @@ describe('NetSession — durable seats survive an empty room (design §6.4, scen
     // A rejoins second; the resident B admits A back onto its RESERVED white — A resumes white.
     const a2 = makeSession(hub, 'player-a', {
       db: dbA,
+      storage: storeA,
       newMessageId: idSource('player-a-return'),
     });
     await a2.enter(ROOM, DEFER);
@@ -543,10 +585,12 @@ describe('NetSession — durable seats survive an empty room (design §6.4, scen
     const hub = new MockRelayHub();
     const dbA = await openDatabase(`net-reclaim-a-${Math.random().toString(36).slice(2)}`);
     const dbB = await openDatabase(`net-reclaim-b-${Math.random().toString(36).slice(2)}`);
+    const storeA = memoryStorage();
+    const storeB = memoryStorage();
 
-    // Establish A=white, B=black, commit both browsers' durable room state, then both drop.
-    const a = makeSession(hub, 'player-a', { db: dbA });
-    const b = makeSession(hub, 'player-b', { db: dbB });
+    // Establish A=white, B=black, commit both browsers' durable game + breadcrumb, then both drop.
+    const a = makeSession(hub, 'player-a', { db: dbA, storage: storeA });
+    const b = makeSession(hub, 'player-b', { db: dbB, storage: storeB });
     await a.enter(ROOM, NEW);
     await b.enter(ROOM, DEFER);
     await a.whenPersisted();
@@ -565,12 +609,14 @@ describe('NetSession — durable seats survive an empty room (design §6.4, scen
     // real macrotask flush below) makes this a genuine co-arrival, not a sequential resident/join.
     const b2 = makeSession(hub, 'player-b', {
       db: dbB,
+      storage: storeB,
       settleMs: 20,
       now: () => 0,
       newMessageId: idSource('player-b-return'),
     });
     const a2 = makeSession(hub, 'player-a', {
       db: dbA,
+      storage: storeA,
       settleMs: 20,
       now: () => 5,
       newMessageId: idSource('player-a-return'),
@@ -600,94 +646,303 @@ describe('NetSession — durable seats survive an empty room (design §6.4, scen
 });
 
 /**
- * CODE REUSE FOR A NEW GAME (#43, design §2.1/§6 "Code reuse for a new game"): a room code is a
- * rendezvous channel, NOT a game — reusing a code with a `new` (or `random`) proposal must MINT a
- * FRESH game, never resurrect the prior game persisted under `net-room:{code}`. The bug: the durable
- * empty-room reclaim in `buildProvisionalSeat` adopted the persisted room game whenever THIS browser
- * owned a seat in it — REGARDLESS of the proposal kind — so a `new` proposal at a re-used code
- * reclaimed the stale board (same uuid, same pieces) instead of starting over.
+ * SEEDING A RETURN — from the BREADCRUMB, NEVER from the room code (V.1, epic #47; #43/#46,
+ * design §2/§6).
  *
- * These model the SINGLE-BROWSER /dev/ repro: play a game at code X (leaving a persisted room record
- * with ≥1 piece + our owned seat), then re-enter code X choosing "New Game". The seed of the prior
- * record is written directly under the room-scoped key — exactly what a real prior game leaves — so
- * the test asserts on the OUTCOME (a fresh empty game, new uuid) independent of when persistence ran.
+ * A room code is a rendezvous channel, NOT a game: the v3 `net-room:{code}` record (a game + seat map
+ * persisted per CODE) is deleted, and with it every code→game lookup. What a live session leaves
+ * behind is (a) the game in the archive keyed by its OWN uuid and (b) a single `activeNetworkedGame`
+ * BREADCRUMB — "I am currently mid-game in room X as game Y" — which a `defer` return re-seeds from.
+ *
+ * The pair of tests below is the experiment that proves the rule bites (agent-principles #7): with an
+ * IDENTICAL precondition (a prior game archived + the breadcrumb pointing at it), `defer` ADOPTS that
+ * game and `new` MINTS a fresh one — only the proposal kind differs. The #43 bug was exactly the
+ * missing distinction: any owned prior game was adopted regardless of the proposal, so "New Game" at a
+ * re-used code resurrected the old board.
  */
-describe('NetSession — re-using a code with a NEW proposal MINTS a fresh game (#43)', () => {
+describe('NetSession — a return re-seeds from the BREADCRUMB, never from the room code (#43, #47)', () => {
+  /** A second valid room code, so a "different room" precondition is a real, enterable code. */
+  const OTHER_ROOM = 'QRSTUV';
+
   /**
-   * Persist a `net-room:{ROOM}` record holding `game` with `seatMap` — the durable artifact a prior
-   * game at this code leaves behind (via `persistRoomState`). Mirrors the internal room-scoped key
-   * (`net-room:{code}`) and the `NET_ROOM_RESULT` marker so `loadRoomState` reads it back verbatim.
+   * Leave behind exactly what a real prior session leaves: `game` archived UNDER ITS OWN UUID with the
+   * identity-owned seat map, plus the breadcrumb naming it. Written directly (rather than by playing a
+   * game) so each test states its own precondition explicitly and asserts on the OUTCOME.
    */
-  async function seedRoomState(
+  async function seedPriorGame(
     into: IDBDatabase,
+    store: Storage,
     game: Game,
     seatMap: { white: string | null; black: string | null },
+    crumb: { code: string; updatedAt: number } = { code: ROOM, updatedAt: 0 },
   ): Promise<void> {
-    await saveGame(into, `net-room:${ROOM}`, game, {
+    await saveGame(into, game.uuid, game, {
       players: {},
-      result: NET_ROOM_RESULT,
+      result: 'in-progress',
       startedAt: 0,
       seats: seatMap,
     });
+    writeActiveGame({ code: crumb.code, gameUuid: game.uuid, updatedAt: crumb.updatedAt }, store);
   }
 
-  it('a `new` proposal at a code with a prior game starts EMPTY with a DIFFERENT uuid (not the stale board)', async () => {
+  /** A three-move prior game whose WHITE seat player-a owns — the "mid-game I stepped away from". */
+  function priorGame(): Game {
+    const g = new Game(SIZE);
+    g.place(coordsOf('0,0,0'));
+    g.place(coordsOf('1,1,1'));
+    g.place(coordsOf('2,2,2'));
+    return g;
+  }
+
+  it('a DEFER return ADOPTS the breadcrumb\'s game — same uuid, same 3 pieces, owned colour', async () => {
     const hub = new MockRelayHub();
-    const own = await openDatabase(`net-reuse-new-${Math.random().toString(36).slice(2)}`);
+    const own = await openDatabase(`net-crumb-defer-${Math.random().toString(36).slice(2)}`);
+    const store = memoryStorage();
+    const prior = priorGame();
+    await seedPriorGame(own, store, prior, { white: 'player-a', black: 'player-b' });
 
-    // A prior game at ROOM left a durable record: a non-empty board whose white seat WE own.
-    const prior = new Game(SIZE);
-    prior.place(coordsOf('0,0,0'));
-    prior.place(coordsOf('1,1,1'));
-    prior.place(coordsOf('2,2,2'));
-    const priorUuid = prior.uuid;
+    // Returning to ROOM with `defer` ("dealer's choice" / a reconnect) re-seeds the game the BREADCRUMB
+    // names, resolved from the archive BY UUID.
+    const a = makeSession(hub, 'player-a', { db: own, storage: store });
+    await a.enter(ROOM, DEFER);
+    await a.whenPersisted();
+    await flush();
+
+    expect(a.state().phase).toBe('connected');
+    expect(a.gameUuid()).toBe(prior.uuid);
+    expect(Object.keys(a.gameState()!.pieces).length).toBe(3);
+    // The seat map came back with the game, so player-a reclaims WHITE and black stays reserved.
+    expect(a.state().seat).toBe('white');
+    expect(a.seatOwners()).toEqual({ white: 'player-a', black: 'player-b' });
+  });
+
+  it('a NEW proposal on the SAME precondition starts EMPTY with a DIFFERENT uuid (#43)', async () => {
+    const hub = new MockRelayHub();
+    const own = await openDatabase(`net-crumb-new-${Math.random().toString(36).slice(2)}`);
+    const store = memoryStorage();
+    const prior = priorGame();
     expect(Object.keys(prior.state().pieces).length).toBe(3); // sanity: the prior board has pieces.
-    await seedRoomState(own, prior, { white: 'player-a', black: 'player-b' });
+    await seedPriorGame(own, store, prior, { white: 'player-a', black: 'player-b' });
 
-    // Re-use ROOM choosing "New Game" (a `new` proposal). Reusing a code must NOT resurrect the game.
-    const a = makeSession(hub, 'player-a', { db: own });
+    // The ONLY difference from the test above: the seed kind. "New Game" must start over.
+    const a = makeSession(hub, 'player-a', { db: own, storage: store });
     await a.enter(ROOM, NEW);
     await a.whenPersisted();
     await flush();
 
     expect(a.state().phase).toBe('connected');
-    // The board is FRESH — empty, with a game identity DISTINCT from the stale one. The bug kept the
-    // 3 prior pieces (adopted `room.game`) and re-used `priorUuid`.
+    // FRESH board, DISTINCT identity. The bug kept the 3 prior pieces and re-used the prior uuid.
     expect(Object.keys(a.gameState()!.pieces).length).toBe(0);
-    expect(a.gameUuid()).not.toBe(priorUuid);
+    expect(a.gameUuid()).not.toBe(prior.uuid);
     expect(a.gameUuid()).not.toBeNull();
     // A `new` game claims WHITE as first owner on a FRESH map — black is unowned, not the stale owner.
     expect(a.state().seat).toBe('white');
     expect(a.seatOwners()).toEqual({ white: 'player-a', black: null });
   });
 
-  it("overwrites the stale `net-room:{code}` record so a later reconnect reclaims the FRESH game, not the old one", async () => {
+  it('a NEW game REPLACES the breadcrumb, so a later return reclaims the FRESH game, not the old one', async () => {
     const hub = new MockRelayHub();
-    const own = await openDatabase(`net-reuse-overwrite-${Math.random().toString(36).slice(2)}`);
+    const own = await openDatabase(`net-crumb-replace-${Math.random().toString(36).slice(2)}`);
+    const store = memoryStorage();
+    const prior = priorGame();
+    await seedPriorGame(own, store, prior, { white: 'player-a', black: 'player-b' });
 
-    const prior = new Game(SIZE);
-    prior.place(coordsOf('0,0,0'));
-    const priorUuid = prior.uuid;
-    await seedRoomState(own, prior, { white: 'player-a', black: 'player-b' });
-
-    const a = makeSession(hub, 'player-a', { db: own });
+    const a = makeSession(hub, 'player-a', { db: own, storage: store });
     await a.enter(ROOM, NEW);
     await a.whenPersisted();
     const freshUuid = a.gameUuid();
+    // The breadcrumb now names the FRESH game (the establish re-pointed it), not the pre-reuse one.
+    expect(readActiveGame(store)?.gameUuid).toBe(freshUuid);
+    expect(readActiveGame(store)?.code).toBe(ROOM);
     a.disconnect();
     await flush();
 
-    // A reconnect (defer) into the empty room reclaims from the persisted record: it must be the FRESH
-    // game the `new` established (overwrote the stale record), never the pre-reuse board.
-    const a2 = makeSession(hub, 'player-a', { db: own, newMessageId: idSource('player-a-return') });
+    // The same browser returns with `defer`: it must re-seed the FRESH game the `new` established.
+    const a2 = makeSession(hub, 'player-a', {
+      db: own,
+      storage: store,
+      newMessageId: idSource('player-a-return'),
+    });
     await a2.enter(ROOM, DEFER);
     await a2.whenPersisted();
     await flush();
 
     expect(a2.state().phase).toBe('connected');
     expect(a2.gameUuid()).toBe(freshUuid);
-    expect(a2.gameUuid()).not.toBe(priorUuid);
+    expect(a2.gameUuid()).not.toBe(prior.uuid);
     expect(Object.keys(a2.gameState()!.pieces).length).toBe(0);
+  });
+
+  it('a breadcrumb for a DIFFERENT room brings NOTHING — this code starts fresh (no code→game map)', async () => {
+    const hub = new MockRelayHub();
+    const own = await openDatabase(`net-crumb-otherroom-${Math.random().toString(36).slice(2)}`);
+    const store = memoryStorage();
+    const prior = priorGame();
+    // The breadcrumb says we are mid-game in OTHER_ROOM. Entering ROOM must not drag that game in —
+    // and there is no per-code record to consult either, because none exists any more.
+    await seedPriorGame(own, store, prior, { white: 'player-a', black: 'player-b' }, {
+      code: OTHER_ROOM,
+      updatedAt: 0,
+    });
+
+    const a = makeSession(hub, 'player-a', { db: own, storage: store });
+    await a.enter(ROOM, DEFER);
+    await a.whenPersisted();
+    await flush();
+
+    expect(a.gameUuid()).not.toBe(prior.uuid);
+    expect(Object.keys(a.gameState()!.pieces).length).toBe(0);
+    expect(a.state().seat).toBe('white');
+  });
+
+  it('a STALE breadcrumb expires QUIETLY — a return starts fresh (design §6)', async () => {
+    const hub = new MockRelayHub();
+    const own = await openDatabase(`net-crumb-stale-${Math.random().toString(36).slice(2)}`);
+    const store = memoryStorage();
+    const prior = priorGame();
+    await seedPriorGame(own, store, prior, { white: 'player-a', black: 'player-b' });
+
+    // The clock is now past the credibility horizon: "I am currently mid-game there" is no longer a
+    // believable claim, so the game is NOT dragged into the room (it stays reachable via the archive).
+    const a = makeSession(hub, 'player-a', {
+      db: own,
+      storage: store,
+      now: () => ACTIVE_GAME_MAX_AGE_MS + 1,
+    });
+    await a.enter(ROOM, DEFER);
+    await a.whenPersisted();
+    await flush();
+
+    expect(a.state().phase).toBe('connected');
+    expect(a.gameUuid()).not.toBe(prior.uuid);
+    expect(Object.keys(a.gameState()!.pieces).length).toBe(0);
+  });
+
+  it('a breadcrumb naming a game we do NOT hold degrades to a fresh game (honest, never a throw)', async () => {
+    const hub = new MockRelayHub();
+    const own = await openDatabase(`net-crumb-missing-${Math.random().toString(36).slice(2)}`);
+    const store = memoryStorage();
+    // A breadcrumb whose uuid resolves to nothing in THIS archive (e.g. the record was cleared).
+    writeActiveGame({ code: ROOM, gameUuid: 'a-uuid-this-browser-does-not-hold', updatedAt: 0 }, store);
+
+    const a = makeSession(hub, 'player-a', { db: own, storage: store });
+    await a.enter(ROOM, DEFER);
+    await a.whenPersisted();
+    await flush();
+
+    expect(a.state().phase).toBe('connected');
+    expect(Object.keys(a.gameState()!.pieces).length).toBe(0);
+    expect(a.state().seat).toBe('white');
+  });
+});
+
+/**
+ * THE BREADCRUMB ITSELF (design §2): session state — "I am CURRENTLY mid-game in room X as game Y" —
+ * written while a game is live, re-pointed when the session moves, CLEARED when the game is decided,
+ * and deliberately NOT cleared by a disconnect (a background drop / tab reload is what it recovers).
+ * Single-valued: entering a second room REPLACES it, never accumulates a per-code entry.
+ */
+describe('NetSession — the activeNetworkedGame breadcrumb', () => {
+  const OTHER_ROOM = 'QRSTUV';
+
+  it('records the live room + game uuid on establish, and the ADOPTED uuid on the admitted peer', async () => {
+    const hub = new MockRelayHub();
+    const storeA = memoryStorage();
+    const storeB = memoryStorage();
+    const a = makeSession(hub, 'player-a', { storage: storeA });
+    const b = makeSession(hub, 'player-b', { storage: storeB });
+
+    await a.enter(ROOM, NEW);
+    await b.enter(ROOM, DEFER);
+    await flush();
+
+    const crumbA = readActiveGame(storeA);
+    expect(crumbA?.code).toBe(ROOM);
+    expect(crumbA?.gameUuid).toBe(a.gameUuid());
+    expect(typeof crumbA?.updatedAt).toBe('number');
+    // The admitted peer's breadcrumb names the game it ADOPTED (A's uuid, which is also B's live game
+    // after admission) — NOT the provisional game B minted before it was admitted.
+    const crumbB = readActiveGame(storeB);
+    expect(crumbB?.code).toBe(ROOM);
+    expect(crumbB?.gameUuid).toBe(a.gameUuid());
+    expect(crumbB?.gameUuid).toBe(b.gameUuid());
+    expect(typeof crumbB?.updatedAt).toBe('number');
+  });
+
+  it('survives a disconnect (that is what a reload/return recovers from)', async () => {
+    const hub = new MockRelayHub();
+    const store = memoryStorage();
+    const a = makeSession(hub, 'player-a', { storage: store });
+
+    await a.enter(ROOM, NEW);
+    const uuid = a.gameUuid();
+    a.disconnect();
+    await flush();
+
+    expect(readActiveGame(store)).not.toBeNull();
+    expect(readActiveGame(store)?.gameUuid).toBe(uuid);
+    expect(readActiveGame(store)?.code).toBe(ROOM);
+  });
+
+  it('is SINGLE-VALUED: entering a second room REPLACES it (no per-code entry accumulates)', async () => {
+    const hub = new MockRelayHub();
+    const store = memoryStorage();
+    const first = makeSession(hub, 'player-a', { storage: store });
+    await first.enter(ROOM, NEW);
+    const firstUuid = first.gameUuid();
+    first.disconnect();
+    await flush();
+
+    const second = makeSession(hub, 'player-a', {
+      storage: store,
+      newMessageId: idSource('player-a-second'),
+    });
+    await second.enter(OTHER_ROOM, NEW);
+    await flush();
+
+    // Exactly ONE record, naming the CURRENT room + game. The prior room's game is not retrievable by
+    // its code from anywhere — it lives in the archive by uuid, reachable from the games list (#37).
+    expect(store.length).toBe(1);
+    expect(readActiveGame(store)?.code).toBe(OTHER_ROOM);
+    expect(readActiveGame(store)?.gameUuid).toBe(second.gameUuid());
+    expect(readActiveGame(store)?.gameUuid).not.toBe(firstUuid);
+  });
+
+  it('is CLEARED when the game is DECIDED — a finished game is never offered to rejoin', async () => {
+    const hub = new MockRelayHub();
+    const storeA = memoryStorage();
+    const storeB = memoryStorage();
+    const a = makeSession(hub, 'player-a', { storage: storeA });
+    const b = makeSession(hub, 'player-b', { storage: storeB });
+
+    await a.enter(ROOM, NEW);
+    await b.enter(ROOM, DEFER);
+    await flush();
+    expect(a.state().seat).toBe('white');
+    expect(b.state().seat).toBe('black');
+
+    // Play a REAL game to a white win: five white in a row along x while black builds elsewhere. Each
+    // move crosses the mock relay, so both sessions fold the same authoritative log.
+    const white = ['0,0,0', '1,0,0', '2,0,0', '3,0,0', '4,0,0'];
+    const black = ['0,4,4', '1,4,4', '2,4,4', '3,4,4'];
+    for (let i = 0; i < white.length; i++) {
+      a.place(coordsOf(white[i]!));
+      await flush();
+      // The breadcrumb is REFRESHED while the game is live — proof the clear below is a real
+      // transition, not a breadcrumb that was never written.
+      if (i === 0) expect(readActiveGame(storeA)?.gameUuid).toBe(a.gameUuid());
+      if (i < black.length) {
+        b.place(coordsOf(black[i]!));
+        await flush();
+      }
+    }
+
+    // The game is genuinely decided on BOTH sides…
+    expect(a.gameState()!.winner).toBe('white');
+    expect(b.gameState()!.winner).toBe('white');
+    // …and NEITHER browser keeps an "I am currently mid-game" claim.
+    expect(readActiveGame(storeA)).toBeNull();
+    expect(readActiveGame(storeB)).toBeNull();
   });
 });
 

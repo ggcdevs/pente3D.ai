@@ -1,4 +1,11 @@
 classDiagram
+    class ActiveNetworkedGame {
+        <<interface>>
+        +readonly code: string
+        +readonly gameUuid: string
+        +readonly updatedAt: number
+    }
+    note for ActiveNetworkedGame "src/net/activeGame.ts"
     class AdmitMessage {
         <<interface>>
         +readonly game: Object & SyncMessage
@@ -874,6 +881,7 @@ classDiagram
         +readonly db: IDBDatabase
         +readonly playerId: string
         +readonly size: number
+        +readonly storage: Storage | null
         +settleMs: number
         +createTransport(): Transport
     }
@@ -1649,6 +1657,7 @@ classDiagram
         +canPlace(): boolean
         +disconnect(): void
         +enter(rawCode: string, proposal: Proposal): Promise~void~
+        +gameStartedAt(): number | null
         +gameState(): GameState | null
         +gameUuid(): string | null
         +getHandshake(): HandshakeState

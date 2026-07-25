@@ -30,6 +30,7 @@ graph LR
         src_input_setup_ts["setup.ts"]
     end
     subgraph src/net
+        src_net_activeGame_ts["activeGame.ts"]
         src_net_admission_ts["admission.ts"]
         src_net_appSession_ts["appSession.ts"]
         src_net_endState_ts["endState.ts"]
@@ -172,6 +173,7 @@ graph LR
     src_main_ts --> src_ui_widgets_archiveModel_ts
     src_main_ts --> src_ui_widgets_netPanelModel_ts
     src_main_ts --> src_util_randomId_ts
+    src_net_activeGame_ts --> src_ui_widgets_netModel_ts
     src_net_appSession_ts --> src_config_config_ts
     src_net_appSession_ts --> src_debug_log_ts
     src_net_appSession_ts --> src_net_mqttTransport_ts
@@ -200,6 +202,7 @@ graph LR
     src_net_session_ts --> src_core_coords_ts
     src_net_session_ts --> src_core_game_ts
     src_net_session_ts --> src_core_gameState_ts
+    src_net_session_ts --> src_net_activeGame_ts
     src_net_session_ts --> src_net_admission_ts
     src_net_session_ts --> src_net_endState_ts
     src_net_session_ts --> src_net_handshake_ts

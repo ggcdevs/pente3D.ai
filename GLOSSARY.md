@@ -119,3 +119,14 @@ the tie-breaker.
   and publishes the agreed game — killing the initial double-white race.
 - **playerId** — a per-browser stable id (localStorage) that **owns a seat** and enables
   reconnect / reclaim-by-identity.
+- **Active-game breadcrumb** (`activeNetworkedGame`, localStorage) — the single record
+  *"I am **currently mid-game** in room X as game Y"* (`{code, gameUuid, updatedAt}`). It is
+  **session state, not a mapping**: single-valued (entering another room replaces it, there is no
+  per-code entry), it drives a **prompt, never an auto-load**, it is **cleared when the game is
+  decided**, it **expires quietly** once `updatedAt` is stale, and it is **never published**. It is
+  how a returning peer finds its game — by that game's **UUID** in the archive, never by the code.
+  ⚠️ The v3 `net-room:{code}` record (a game + seat map persisted **per code**) was the opposite of
+  this and is **deleted**: it made a rendezvous channel own a game (#43/#46).
+- **Visited room codes** (`pente:recentCodes`, localStorage) — the codes this browser has used,
+  newest-first: the code picker's memory. **Codes only** — it holds no game state, so a code in the
+  list says nothing about which game (if any) was ever played there.

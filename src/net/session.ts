@@ -36,6 +36,20 @@
  * over {@link enter} (host = a `new` proposal, join = `defer`), and {@link reconnect} re-enters the
  * remembered room to reclaim the sticky seat.
  *
+ * ## What a session leaves behind (V.1, epic #47 — the v3.1 model, design §2)
+ *
+ * A room CODE is pure rendezvous and identifies NO game: the v3 `net-room:{code}` record (a game +
+ * seat map persisted per code) is DELETED, together with every code→game lookup — it was the root of
+ * the resurrected-game bugs (#43/#46). What persists instead:
+ *
+ *  - the authoritative game + its identity-owned seat map in the **archive, keyed by the game's own
+ *    UUID** ({@link persistGame}) — the source of truth, an ordinary listed record;
+ *  - a single **`activeNetworkedGame` breadcrumb** ({@link markActiveGame}, `activeGame.ts`) saying
+ *    "I am currently mid-game in room X as game Y", cleared when the game is decided.
+ *
+ * A returning peer therefore re-seeds from the BREADCRUMB's uuid via the archive, never from the code
+ * — and the loaded game is a runtime value, never a per-room resurrection.
+ *
  * This is the **IO glue** (Playwright-verified, NOT mutation-gated): the PURE decisions it composes —
  * {@link reconcile} + {@link electInitiator} (`admission.ts`), {@link claimSeat} (`seats.ts`), the
  * admission-message codec + id-dedup (`sync.ts`), and the view derivation (`netModel.ts`) — carry the
@@ -47,11 +61,16 @@ import type { Coord } from '../core/coords';
 import type { GameState, Player } from '../core/gameState';
 import {
   saveGame,
-  loadNetGame,
   loadNetGameByUuid,
-  NET_ROOM_RESULT,
+  playersFromSeats,
   type ArchivedMeta,
 } from '../persist/archive';
+import {
+  readActiveGame,
+  writeActiveGame,
+  clearActiveGame,
+  isActiveGameStale,
+} from './activeGame';
 import type { Transport } from './transport';
 import { SyncEngine } from './sync';
 import {
@@ -124,6 +143,14 @@ export interface NetSessionDeps {
   rand?: () => number;
   /** Clock for the archived-meta `startedAt` (inject `Date.now`). */
   now?: () => number;
+  /**
+   * Where the `activeNetworkedGame` BREADCRUMB is kept (`src/net/activeGame.ts`, design §2): the
+   * single "I am currently mid-game in room X as game Y" record that lets a returning peer re-seed
+   * from the GAME's uuid — never from the room code (there is no code→game mapping anywhere). Omit
+   * for `globalThis.localStorage` (the browser app); pass `null` to disable it entirely (a headless
+   * CLI, or a test that does not exercise reload/return recovery).
+   */
+  readonly storage?: Storage | null;
   /**
    * How long {@link NetSession.enter} waits for presence + hellos to STABILIZE before branching
    * (design §4 "settle window"). A newcomer must give a resident (or a co-arriving peer) time to
@@ -411,25 +438,28 @@ export class NetSession {
   }
 
   /**
-   * Build the PROVISIONAL game + seat this peer runs on until the settle window finalizes it. It
-   * seeds from the DURABLE, persisted state that makes reclaim-by-identity survive an EMPTY room
-   * (design §2.3/§6.4) — NOT always a fresh empty game (the old #31-followup bug):
+   * Build the PROVISIONAL game + seat this peer runs on until the settle window finalizes it. There
+   * are exactly TWO sources — a game named by a UUID, or a genuinely fresh empty game. A room CODE is
+   * never one of them (V.1, epic #47: the `net-room:{code}` game-per-code record is deleted; a code
+   * is pure rendezvous and identifies no game — design §2):
    *
    *  - **`resume`/`current`** — load the game whose `uuid` the proposal names (design §3) from the
    *    archive, so our engine holds the SAME identity we publish in our hello. Without this the
    *    arbiter's honesty guard rejects its OWN resume as `game-mismatch` (the provisional fresh uuid
    *    would differ from the reconciled `existing` uuid). We reclaim the seat that game's persisted
    *    seat map owns for us (or take first-available white if it records no owner yet).
-   *  - **`defer` (dealer's choice / a reconnect), and we OWN a seat in this room's persisted game** —
-   *    reload that persisted game + seat map and RECLAIM our color. This is what lets the FIRST
-   *    returning owner re-seed an empty room as the color it owned (black stays black) instead of
-   *    grabbing white by arrival (design §6.4, scenario 4), and carries a `reconnect()` back onto its
-   *    in-progress game. GATED to `defer` (issue #43): a `new` proposal is a "start over" request, so
-   *    it must NOT adopt the persisted room game even when we own a seat in it — a room code is a
-   *    rendezvous channel, not a game (design §2.1). `new` falls through to genuine creation below.
-   *  - **`new` (or `defer` with no owned seat here)** — a genuinely fresh game, first-available white
-   *    on an empty map (true creation). For `new` this OVERWRITES the stale `net-room:{code}` record
-   *    when the fresh game establishes/persists, so re-using a code never resurrects the old board.
+   *  - **`defer` (dealer's choice / a reconnect) with a FRESH `activeNetworkedGame` breadcrumb for
+   *    THIS room** — re-seed the game the BREADCRUMB names, by UUID, from the archive. This is what
+   *    carries a returning peer back onto the game it was mid-way through: it re-seeds an empty room
+   *    as the color it owned (black stays black) instead of grabbing white by arrival (design §6.4,
+   *    scenario 4), and carries a `reconnect()` back onto its in-progress game. The breadcrumb is
+   *    SESSION state ("I am currently mid-game in room X as game Y"), not a mapping — it is
+   *    single-valued, cleared on completion and expires quietly ({@link isActiveGameStale}); entering
+   *    a DIFFERENT room, or returning long after, brings nothing. GATED to `defer` (issue #43): a
+   *    `new` proposal is a "start over" request, so it must NOT adopt the breadcrumb's game — re-using
+   *    a code with "New Game" mints a fresh one and REPLACES the breadcrumb.
+   *  - **`new`, or `defer` with no usable breadcrumb** — a genuinely fresh game, first-available white
+   *    on an empty map (true creation).
    *
    * This is the pre-settle placeholder so the engine is live to publish a hello + receive admission;
    * it is REPLACED by the resident's/initiator's authoritative game if we are admitted, and kept (as
@@ -450,24 +480,21 @@ export class NetSession {
       // The named game is not in our archive — fall through to a fresh game (an honest degrade: we
       // could not resume what we do not hold, so we bring an empty game rather than a wrong one).
     }
-    // 2. `defer` ("dealer's choice" / a reconnect) with an already-OWNED seat in this room's persisted
-    //    game: reload it and reclaim our color — the durable empty-room reclaim (design §6.4, scenario
-    //    4) that also carries a `reconnect()` back onto its in-progress game + seat (#40/#35).
+    // 2. `defer` ("dealer's choice" / a reconnect) with a FRESH breadcrumb for THIS room: re-seed the
+    //    game the breadcrumb NAMES BY UUID (design §2/§6.4, scenario 4) — the return path that keeps a
+    //    returning owner on its in-progress game + owned color (#40/#35).
     //
-    //    This is GATED to `defer` (issue #43): a `new` proposal is a request to START OVER, so it must
-    //    NEVER adopt the game persisted under `net-room:{code}`. A room code is a rendezvous channel,
-    //    not a game (design §2.1) — re-using a code with `new` must MINT a fresh game (case 3 below),
-    //    which then OVERWRITES the stale room record when it establishes/persists. Adopting the stale
-    //    room game for `new` was the #43 bug: "New Game" at a re-used code resurrected the old board.
+    //    GATED to `defer` (issue #43): a `new` proposal is a request to START OVER, so it must NEVER
+    //    adopt the breadcrumb's game — re-using a code with "New Game" mints a fresh one (case 3) and
+    //    replaces the breadcrumb. Adopting the prior game for `new` was the #43 bug.
     //    (`resume`/`current` never reach here — they returned above with the game their uuid names.)
     if (proposal.kind === 'defer') {
-      const room = await this.loadRoomState(code);
-      if (room !== null && seatOf(room.seatMap, this.deps.playerId) !== null) {
-        // A reclaim of an already-OWNED seat: the reject branch (and thus presence) is never
-        // reached, so the present-set only needs to be honest — ourselves.
-        const claim = claimSeat(room.seatMap, this.deps.playerId, this.presentPeers);
-        if (!claim.ok) throw new Error('reclaim of an owned seat must succeed');
-        return { game: room.game, color: claim.color, seatMap: claim.seatMap };
+      const uuid = this.resumableBreadcrumbUuid(code);
+      if (uuid !== null) {
+        const seeded = await this.seedFromUuid(uuid);
+        // A breadcrumb naming a game we no longer hold falls through to a fresh game (an honest
+        // degrade — we bring an empty game rather than a wrong one), exactly as a resume does.
+        if (seeded !== null) return seeded;
       }
     }
     // 3. Genuine creation (a `new` proposal, or a `defer` with no owned seat here): a fresh empty game,
@@ -502,30 +529,44 @@ export class NetSession {
   }
 
   /**
-   * The IndexedDB key under which this session persists a room's authoritative game + identity-owned
-   * seat map (design §2.4 "each peer's persisted game"): a room-scoped autosave id. Keeping it
-   * room-scoped is what lets the FIRST returning owner re-seed an empty room by IDENTITY — it looks
-   * the room up by code, reclaims the color the persisted seat map says it owns, and re-publishes the
-   * same game uuid.
+   * The gameUuid our `activeNetworkedGame` BREADCRUMB names, IF it is one we may re-seed from when
+   * entering `code`, else `null` (`src/net/activeGame.ts`, design §2/§6). Three honest refusals:
+   * no breadcrumb at all; a breadcrumb for a DIFFERENT room (session state says we were mid-game
+   * somewhere else — entering this room brings nothing, and there is no per-code record to consult
+   * because none exists); or one whose `updatedAt` is stale (it expires quietly rather than dragging
+   * a days-old game into a live room).
+   *
+   * This is NOT a code→game lookup: the breadcrumb is a single record whose OWN code is compared
+   * against the room we are entering. There is exactly one, and it is replaced (never accumulated)
+   * whenever a session becomes live somewhere else.
    */
-  private roomStateId(code: string): string {
-    return `net-room:${code}`;
+  private resumableBreadcrumbUuid(code: string): string | null {
+    const crumb = readActiveGame(this.deps.storage);
+    if (crumb === null) return null;
+    if (crumb.code !== code) return null;
+    if (isActiveGameStale(crumb, this.deps.now())) return null;
+    return crumb.gameUuid;
   }
 
   /**
-   * Load this room's persisted authoritative game + seat map (the durable value that survives an
-   * empty room), or `null` if this browser has never established/adopted a game in this room. A
-   * corrupt record surfaces its {@link ArchiveError} honestly rather than being masked.
+   * The `startedAt` stamp this session has already used for a given game uuid. Stamped ONCE per game
+   * (on its first persist) and reused, so the per-change autosave below cannot keep re-stamping the
+   * record and shuffling it to the top of the archive listing on every move.
    */
-  private async loadRoomState(code: string): Promise<{ game: Game; seatMap: SeatMap } | null> {
-    const loaded = await loadNetGame(this.deps.db, this.roomStateId(code));
-    if (loaded === undefined || loaded.seats === null) return null;
-    return { game: loaded.game, seatMap: loaded.seats };
+  private readonly startedAts = new Map<string, number>();
+
+  /** The `startedAt` for `uuid` — the first stamp this session used for it (minted on first use). */
+  private startedAtFor(uuid: string): number {
+    const known = this.startedAts.get(uuid);
+    if (known !== undefined) return known;
+    const stamp = this.deps.now();
+    this.startedAts.set(uuid, stamp);
+    return stamp;
   }
 
   /**
-   * The most recent durable {@link persistRoomState} write in flight, exposed via {@link whenPersisted}.
-   * A caller that must observe this room's persisted state on a LATER reconnect (the empty-room reclaim)
+   * The most recent durable {@link persistGame} write in flight, exposed via {@link whenPersisted}.
+   * A caller that must observe this game's persisted state on a LATER return (the empty-room reclaim)
    * awaits it after {@link enter}, so it reads a COMMITTED write, not a racing one — the durability
    * guarantee is deterministic, never a "usually committed by then" flake (agent-principles #2: proof
    * must be reliably observable). A rejected write surfaces through {@link whenPersisted} rather than
@@ -534,26 +575,67 @@ export class NetSession {
   private pendingPersist: Promise<void> = Promise.resolve();
 
   /**
-   * Persist this room's authoritative game + identity-owned seat map under the room-scoped id (design
-   * §2.3/§2.4), so a later reconnect into an EMPTY room reclaims the seat by identity and re-seeds the
-   * same game. Called whenever we establish, adopt an admit, or update our durable seat map as the
-   * arbiter. Records the in-flight write in {@link pendingPersist} so {@link finishEnter} can await
-   * durability; a failed write rejects honestly (never a swallowed error).
+   * Persist the authoritative game + its identity-owned seat map into the archive UNDER THE GAME'S
+   * OWN UUID (design §2: "games keyed by UUID" are the source of truth). This is the durable value a
+   * later return re-seeds from — reached via the breadcrumb's uuid or the games list (#37), NEVER via
+   * the room code: the record is keyed by the game, so re-using a code can no longer resurrect it
+   * (the #43/#46 root cause). It is an ORDINARY archive record — no internal marker, nothing hidden
+   * from the listing.
+   *
+   * Called on every engine change plus every establish/admit/arbitrate/rematch, so the stored bytes
+   * are the live log rather than a snapshot from entry time. Records the in-flight write in
+   * {@link pendingPersist} so a test/caller can await durability; a failed write rejects honestly
+   * (never a swallowed error).
    */
-  private persistRoomState(): Promise<void> {
+  private persistGame(): Promise<void> {
     const engine = this.engine;
-    const code = this.code;
-    if (engine === null || code === null || this.seatMap === null) return Promise.resolve();
-    const write = saveGame(this.deps.db, this.roomStateId(code), engine.game(), {
-      players: {},
-      // The INTERNAL room-state marker (design §2.4) — excluded from the user-facing archive listing
-      // + resume lookup so this durable coordination shard never shows as a spurious extra game.
-      result: NET_ROOM_RESULT,
-      startedAt: this.deps.now(),
+    if (engine === null || this.seatMap === null) return Promise.resolve();
+    const game = engine.game();
+    const winner = game.state().winner;
+    const write = saveGame(this.deps.db, game.uuid, game, {
+      // The seat OWNERS are the honest "players" of a networked game (real playerIds, no sentinel).
+      players: playersFromSeats(this.seatMap),
+      result: winner === null ? 'in-progress' : `${winner}-wins`,
+      startedAt: this.startedAtFor(game.uuid),
       seats: this.seatMap,
     });
     this.pendingPersist = write;
     return write;
+  }
+
+  /**
+   * Record — or CLEAR — the `activeNetworkedGame` BREADCRUMB for the live session (design §2).
+   *
+   * It says "I am CURRENTLY mid-game in room X as game Y", so it is written while a game is live and
+   * CLEARED the moment that game is decided: a finished game is not something to offer to rejoin, and
+   * leaving the breadcrumb behind would make the next boot prompt about a game that is over. It is
+   * deliberately NOT cleared on {@link disconnect} — a background drop / tab reload is exactly what it
+   * exists to recover from — and it is never published (local session state, not protocol state).
+   */
+  private markActiveGame(): void {
+    const engine = this.engine;
+    const code = this.code;
+    if (engine === null || code === null) return;
+    const game = engine.game();
+    if (game.state().winner !== null) {
+      clearActiveGame(this.deps.storage);
+      return;
+    }
+    writeActiveGame(
+      { code, gameUuid: game.uuid, updatedAt: this.deps.now() },
+      this.deps.storage,
+    );
+  }
+
+  /**
+   * Persist the live game (by uuid) AND refresh the breadcrumb — the two halves of "what this session
+   * leaves behind", kept together so no call site can update one and forget the other. The archive
+   * write is fire-and-forget durability (awaitable via {@link whenPersisted}); the breadcrumb is
+   * synchronous localStorage.
+   */
+  private saveSessionState(): void {
+    void this.persistGame();
+    this.markActiveGame();
   }
 
   /**
@@ -630,6 +712,11 @@ export class NetSession {
     // phase here. AUTO-CANCEL on GAME-ADVANCED (N.1 guardrail): a landed move drops any stale proposal.
     engine.onChange(() => {
       this.setHandshake(onGameAdvanced(this.handshake));
+      // Keep the durable, uuid-keyed archive record and the breadcrumb CURRENT with every accepted
+      // move (local or adopted): the archive is the source of truth a returning peer re-seeds from
+      // (design §2), so persisting only at entry would hand a returner a snapshot from before the
+      // moves it missed. A decided game CLEARS the breadcrumb here (see `markActiveGame`).
+      this.saveSessionState();
       this.reflectEngineStatus();
       this.emit();
     });
@@ -697,19 +784,19 @@ export class NetSession {
   /**
    * ESTABLISH the room as the lone arriver (design §4 Case 2 "truly alone"): keep our provisional game
    * + seat as the authoritative game + seat map, mark ourselves ESTABLISHED (so we arbitrate the next
-   * hello), persist the durable room state, and reach `connected`. The provisional was already seeded
-   * by {@link buildProvisionalSeat} — a FRESH game + first-available white for genuine creation, or a
-   * RELOADED persisted game + reclaimed seat when we already owned a seat in this room (design §6.4),
-   * so a returning owner re-seeds an empty room as the color it owned, not white-by-arrival.
+   * hello), persist the game + refresh the breadcrumb, and reach `connected`. The provisional was
+   * already seeded by {@link buildProvisionalSeat} — a FRESH game + first-available white for genuine
+   * creation, or the game our breadcrumb named + our reclaimed seat when we are RETURNING (design
+   * §6.4), so a returning owner re-seeds an empty room as the color it owned, not white-by-arrival.
    */
   private establishAlone(): void {
     this.established = true;
     this.reflectEngineStatus();
     if (this.phase === 'connecting') this.phase = 'connected';
-    // Persist the room's game + seat map so a later reconnect into an empty room reclaims by identity
-    // (design §6.4). Fire-and-forget the durable write — a failure rejects honestly (unhandled), never
-    // masked; the in-memory state is already correct for this session.
-    void this.persistRoomState();
+    // Persist the game (by uuid) + record the breadcrumb, so a later return into an empty room re-seeds
+    // this game and reclaims by identity (design §6.4). Fire-and-forget the durable write — a failure
+    // rejects honestly (unhandled), never masked; the in-memory state is already correct for this session.
+    this.saveSessionState();
     this.emit();
   }
 
@@ -747,7 +834,7 @@ export class NetSession {
     this.established = true;
     this.reflectEngineStatus();
     if (this.phase === 'connecting') this.phase = 'connected';
-    void this.persistRoomState();
+    this.saveSessionState();
     this.emit();
   }
 
@@ -828,7 +915,7 @@ export class NetSession {
     // (the SAME rule the initiator applies), updating our seat map with the seat it granted.
     this.seatMap = this.arbitrate(hello, this.seatMap);
     // Persist the updated durable seat map so a reserved/absent owner survives our own later drop.
-    void this.persistRoomState();
+    this.saveSessionState();
     this.emit();
   }
 
@@ -866,10 +953,10 @@ export class NetSession {
     engine.attach();
     this.reflectEngineStatus();
     if (this.phase === 'connecting') this.phase = 'connected';
-    // Persist the adopted game + seat map so if the arbiter later leaves and we become the sole
-    // resident, our own reconnect (or a re-establish) reclaims this seat + game by identity (design
-    // §2.3/§6.4). This is what makes scenario 4 (both drop, both rejoin) preserve ownership.
-    void this.persistRoomState();
+    // Persist the ADOPTED game under ITS uuid + point the breadcrumb at it, so if the arbiter later
+    // leaves and we become the sole resident, our own return reclaims this seat + game by identity
+    // (design §2/§6.4). This is what makes scenario 4 (both drop, both rejoin) preserve ownership.
+    this.saveSessionState();
     this.emit();
     this.finishEnter();
   }
@@ -899,7 +986,7 @@ export class NetSession {
 
   /**
    * Resolve the pending {@link enter} promise exactly once (settle → establish/admit/reject done).
-   * Deliberately does NOT block on the durable {@link persistRoomState} write: `enter` reports the
+   * Deliberately does NOT block on the durable {@link persistGame} write: `enter` reports the
    * live session state as soon as it is negotiated (a fast, timer-driven path), and the durability
    * ordering a later reconnect needs is awaited separately via {@link whenPersisted} — coupling the
    * two would make `enter` sensitive to the archive write's async completion (it stalls a fake-timer
@@ -916,9 +1003,21 @@ export class NetSession {
   }
 
   /**
-   * Resolve once the most recent durable {@link persistRoomState} write has COMMITTED (design
-   * §2.3/§6.4). A reconnect that must observe this room's persisted seat map + game (the empty-room
-   * reclaim) awaits this after {@link enter} so it reads a settled write, not a racing one — the
+   * The `startedAt` stamp this session archives the LIVE game's record with, or `null` when there is no
+   * live game. Read by the app's autosave (`main.ts`), which writes the SAME uuid-keyed record while a
+   * networked game is authoritative, so both writers stamp the record identically instead of alternately
+   * re-dating it (which would jitter the games-list order between two values).
+   */
+  gameStartedAt(): number | null {
+    const engine = this.engine;
+    if (engine === null) return null;
+    return this.startedAtFor(engine.game().uuid);
+  }
+
+  /**
+   * Resolve once the most recent durable {@link persistGame} write has COMMITTED (design §2/§6.4).
+   * A return that must observe this game's persisted seat map + log (the empty-room reclaim) awaits
+   * this after {@link enter} so it reads a settled write, not a racing one — the
    * durability is deterministic rather than "usually committed by then" (agent-principles #2: proof
    * must be reliably observable). Resolves immediately when nothing was persisted (a reject/offline
    * entry). A failed write rejects here rather than being swallowed.
@@ -1028,11 +1127,12 @@ export class NetSession {
     // Swap a fresh empty game into the live engine over the SAME transport, re-basing the undo rule
     // onto the swapped color and bumping the epoch so the peer adopts the fresh generation.
     this.engine.resetGame(new Game(this.deps.size), nextColor as Player);
-    // Persist the SWAPPED seat map + the fresh rematch game under the room-scoped id (design §2.3/§6.4),
-    // reusing the SAME durable seam `enter`/establish use — so a subsequent reconnect (empty-room reclaim
-    // OR resident re-admission) reclaims the CURRENT color, not the stale pre-swap one (#40 fix). Records
-    // the write in `pendingPersist` so `whenPersisted()` observes durability; a failure rejects honestly.
-    void this.persistRoomState();
+    // Persist the SWAPPED seat map + the fresh rematch game under the NEW game's uuid, and re-point the
+    // breadcrumb at it (design §2/§6.4) — reusing the SAME durable seam `enter`/establish use, so a
+    // subsequent return (empty-room reclaim OR resident re-admission) reclaims the CURRENT color and the
+    // CURRENT game, not the stale pre-swap ones (#40 fix). Records the write in `pendingPersist` so
+    // `whenPersisted()` observes durability; a failure rejects honestly.
+    this.saveSessionState();
     // The rematch resolved and has now been applied — clear it so it cannot re-fire and the fresh
     // game starts from an idle handshake.
     this.handshake = clearResolution(this.handshake);

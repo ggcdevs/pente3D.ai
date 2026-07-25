@@ -294,10 +294,11 @@ test('JOINER-INHERITS-BOARD: a late joiner adopts the host board that already ha
 
 /**
  * CODE REUSE FOR A NEW GAME (#43) — the single-browser /dev/ repro end-to-end. Host a game at a
- * chosen code, place pieces (leaving a persisted `net-room:{code}` record), leave, then re-host
- * ("New Game") at the SAME code. Re-using a code with `new` must MINT a FRESH game — an EMPTY board
- * with a DIFFERENT game uuid — never resurrect the prior board. The bug kept the prior pieces (the
- * durable empty-room reclaim adopted the persisted room game regardless of the `new` proposal kind).
+ * chosen code, place pieces (so a real in-progress game is archived + pointed at by this browser's
+ * `activeNetworkedGame` breadcrumb), leave, then re-host ("New Game") at the SAME code. Re-using a
+ * code with `new` must MINT a FRESH game — an EMPTY board with a DIFFERENT game uuid — never
+ * resurrect the prior board. The bug kept the prior pieces: the durable reclaim adopted the prior
+ * game regardless of the `new` proposal kind (and, pre-V.1, found it by the room CODE at all).
  * Asserts on OBSERVABLE state (rendered pieces + game uuid), never a log line (agent-principles #3).
  */
 test('CODE-REUSE-NEW: re-hosting the SAME code with New Game starts a FRESH empty board, new uuid (#43)', async ({

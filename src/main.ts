@@ -17,6 +17,7 @@ import {
   loadGame as loadArchivedGame,
   loadConflicted,
   listArchivedGames,
+  playersFromSeats,
   type ArchivedMeta,
 } from './persist/archive.ts';
 import {
@@ -180,6 +181,9 @@ let getNetEndState: () => EndState = () => HIDDEN_END_STATE;
 // pre-wiring) there is no session, so they report `null` — the same honest-until-wired pattern the
 // other net holders use. Exposed on `window.__pente` for the two-context session-model e2e (S.7).
 let getNetSeatOwners: () => SeatMap | null = () => null;
+// The `startedAt` the live net session stamps its game's archive record with (null offline / pre-wiring),
+// so the app's autosave writes that SAME uuid-keyed record with an identical stamp (see `autosaveMeta`).
+let netGameStartedAt: () => number | null = () => null;
 let getNetGameUuid: () => string | null = () => null;
 let getNetLastReject: () => AdmissionReject | null = () => null;
 
@@ -219,13 +223,23 @@ function currentGeneration(): number {
   return generation;
 }
 
-/** The metadata attached to the current game's record (single-player defaults; result reflects a win). */
+/**
+ * The metadata attached to the current game's record (single-player defaults; result reflects a win).
+ *
+ * When a NETWORKED game is authoritative, the record is the SAME uuid-keyed record the net session
+ * itself maintains (see {@link autosaveTick}), so this metadata must MATCH what the session writes —
+ * otherwise the two writers would alternately erase each other's fields. Specifically it carries the
+ * identity-owned SEAT MAP (design §2/§7): dropping it here would delete the very value a later return
+ * reclaims its colour from, and `players`/`startedAt` come from the session for the same reason.
+ */
 function autosaveMeta(): ArchivedMeta {
   const winner = scene.getState().winner;
+  const seats = netAuthoritativeGame() === null ? null : getNetSeatOwners();
   return {
-    players: { white: 'You', black: 'You' },
+    players: seats === null ? { white: 'You', black: 'You' } : playersFromSeats(seats),
     result: winner === null ? 'in-progress' : `${winner}-wins`,
-    startedAt: autosaveStartedAt,
+    startedAt: netGameStartedAt() ?? autosaveStartedAt,
+    ...(seats === null ? {} : { seats }),
   };
 }
 
@@ -278,9 +292,13 @@ async function autosaveTick(): Promise<void> {
   if (decision.finalizeCurrent) {
     log.info('game won — finalizing archive record', { id: autosaveId, ply: game.ply() });
   }
-  // Save the live game under the current id (the freshly-minted one on a mint, the same one otherwise;
-  // on a finalize this captures the won game's terminal state under its own id).
-  await saveGame(archiveDb, autosaveId, game, autosaveMeta());
+  // Save the live game. A NETWORKED game is archived under its own game UUID — the v3.1 model's
+  // "games keyed by UUID" (design §2), and the SAME id `NetSession.persistGame` writes — so the app
+  // and the session maintain ONE record per game instead of two copies of it, and that record is the
+  // resumable entry the games list offers (#37). A LOCAL game keeps the app's autosave id (the freshly-
+  // minted one on a mint, the same one otherwise; on a finalize this captures the won terminal state).
+  const recordId = netAuthoritativeGame() === null ? autosaveId : game.uuid;
+  await saveGame(archiveDb, recordId, game, autosaveMeta());
   // The archive just changed — refresh the seed-games cache so the Network-Game panel's Resume list
   // reflects it on the next open (a newly-finalized game becomes resume-able; the current game stays
   // excluded). Best-effort: a refresh failure only leaves a stale list, never a broken save.
@@ -346,7 +364,10 @@ async function refreshSeedGames(): Promise<void> {
   if (archiveDb === null) return;
   const listings = await listArchivedGames(archiveDb);
   seedGamesCache = listings
-    .filter((l) => l.id !== autosaveId) // exclude the current game (that is "Current local board")
+    // Exclude the CURRENT game — the local autosave record (that is the "Current local board" seed),
+    // and, while a networked game is live, its own uuid-keyed record: offering to "resume" the game
+    // you are already playing is a confusing self-reference, not a seed.
+    .filter((l) => l.id !== autosaveId && l.meta.uuid !== getNetGameUuid())
     .map((l) => ({
       id: l.id,
       // A human, deterministic label — the seat players + outcome the archive round-trips. Rendered
@@ -595,6 +616,7 @@ void createAppNetSession(scene.getState().size)
     // the two-context e2e's proof-by-state that admission converged both clients onto one game with
     // DISTINCT real seat owners (the #31 fix), and that a refused entry surfaces its honest typed reason.
     getNetSeatOwners = () => session.seatOwners();
+    netGameStartedAt = () => session.gameStartedAt();
     getNetGameUuid = () => session.gameUuid();
     getNetLastReject = () => session.lastRejectReason();
 

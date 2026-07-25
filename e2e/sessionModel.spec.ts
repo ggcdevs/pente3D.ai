@@ -520,10 +520,12 @@ test.describe('two-context session model over the injected MockTransport (S.7, e
     }
   });
 
-  // Design §6.4: seat ownership is a DURABLE property of each peer's persisted game, so it survives an
-  // EMPTY room — B re-seeds as BLACK and A resumes WHITE regardless of who returns first. The S.5 glue
-  // now wires that persistence: `NetSession.buildProvisionalSeat` reloads this room's persisted game +
-  // seat map and RECLAIMS the owned color (`persistRoomState`/`loadRoomState` under a room-scoped key),
+  // Design §6.4: seat ownership is a DURABLE property of each peer's persisted GAME, so it survives an
+  // EMPTY room — B re-seeds as BLACK and A resumes WHITE regardless of who returns first. Since V.1
+  // (epic #47) the wiring runs entirely off the game's UUID, never the room code:
+  // `NetSession.persistGame` archives the game + identity-owned seat map UNDER ITS UUID, the
+  // `activeNetworkedGame` breadcrumb (localStorage, per browser context) records which uuid this peer
+  // is mid-game with, and `buildProvisionalSeat` re-seeds from THAT uuid and RECLAIMS the owned color —
   // so the first returning owner re-establishes as the color it owned, not first-available white. This
   // is the integration gate that exposed the missing wiring; it is now a REAL proof (proof-by-state on
   // both contexts). The mock-transport unit proof of the same mechanism lives in `session.test.ts`.

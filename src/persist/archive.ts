@@ -41,14 +41,20 @@ export interface PersistedSeats {
 }
 
 /**
- * The `meta.result` marker of an INTERNAL net-session room-state record (the durable, room-scoped
- * game + identity-owned seat map the net session persists so an empty-room reconnect reclaims by
- * identity — design §2.4). These are NOT user-facing games: they are excluded from the archive
- * BROWSER listing ({@link listArchivedGames}) and from the by-uuid resume lookup
- * ({@link loadNetGameByUuid}) so they never appear as a spurious extra game or duplicate a real
- * game's uuid. Filtering on this explicit marker (not a magic id prefix) keeps the intent legible.
+ * The archive record's human `players` map for a NETWORKED game: the REAL seat owners (playerIds),
+ * omitting a seat nobody owns yet rather than recording a `null`/sentinel "player".
+ *
+ * Shared by the two writers of a networked game's record — `NetSession.persistGame` (which owns it in
+ * the browser AND the CLI) and the app's autosave (`main.ts`, which writes the same uuid-keyed record
+ * while a net game is authoritative) — so the projection lives in ONE place and the two can never
+ * disagree about it.
  */
-export const NET_ROOM_RESULT = 'net-room';
+export function playersFromSeats(seats: PersistedSeats): Record<string, string> {
+  const players: Record<string, string> = {};
+  if (seats.white !== null) players.white = seats.white;
+  if (seats.black !== null) players.black = seats.black;
+  return players;
+}
 
 /** The board size assumed for archived games when none is stored (v1 default). */
 const DEFAULT_SIZE = 9;
@@ -239,11 +245,21 @@ export async function loadNetGame(
 
 /**
  * Load the archived game whose stable `uuid` (design §2.2, the portable identity, NOT the local
- * IndexedDB primary key) matches `uuid`, plus its persisted seat map — or `undefined` if none. This
- * is the lookup a `resume`/`current` seed proposal needs (design §3): the proposal carries only the
- * game's `uuid` + `headHash`, so the session resolves the actual log by uuid to seed its engine with
- * the SAME identity it published in its hello (else the arbiter's honesty guard would refuse its own
- * resume as `game-mismatch`). Scans the listing (uuid is not an index key); the archive is small.
+ * IndexedDB primary key) matches `uuid`, plus its persisted seat map — or `undefined` if none.
+ *
+ * This is the ONLY way back to a networked game in the v3.1 model (design §2: "games keyed by UUID"
+ * are the source of truth; the room CODE maps to nothing). Two seed paths use it: a `resume`/`current`
+ * proposal, which carries the game's `uuid` + `headHash` and needs the actual log to seed its engine
+ * with the SAME identity it published in its hello; and a returning peer re-seeding the game its
+ * `activeNetworkedGame` breadcrumb names (`src/net/activeGame.ts`).
+ *
+ * Resolution is DETERMINISTIC, in two steps:
+ *  1. the record stored UNDER the uuid — the canonical form a live net session writes (its record id
+ *     IS the game uuid), which is also the one carrying the identity-owned seat map the empty-room
+ *     reclaim needs. Its stored game must actually BEAR that uuid: a record id that merely collides
+ *     with another game's uuid is not that game, and serving it would be a silent mis-resolution.
+ *  2. otherwise a scan of the listing by `meta.uuid` — a game archived under a DIFFERENT record id,
+ *     e.g. the app's local autosave record that a `resume`/`current` proposal names.
  *
  * @throws {ArchiveError} if the matched record's log is corrupt or describes an illegal game.
  */
@@ -251,10 +267,10 @@ export async function loadNetGameByUuid(
   db: IDBDatabase,
   uuid: string,
 ): Promise<{ game: Game; seats: PersistedSeats | null } | undefined> {
+  const canonical = await loadNetGame(db, uuid);
+  if (canonical !== undefined && canonical.game.uuid === uuid) return canonical;
   const listings = await listGames(db);
-  // Skip internal net-room state records: they carry the room's LIVE game uuid too, and are a
-  // duplicate of the real game — a resume must resolve the real archived game, not the room shard.
-  const match = listings.find((l) => l.meta.uuid === uuid && l.meta.result !== NET_ROOM_RESULT);
+  const match = listings.find((l) => l.meta.uuid === uuid);
   if (match === undefined) return undefined;
   return loadNetGame(db, match.id);
 }
@@ -262,15 +278,16 @@ export async function loadNetGameByUuid(
 /**
  * List every archived game as `{ id, meta }` (no logs), sorted by `startedAt`
  * descending so the most recently started game is first — the natural order for an
- * archive browser (Stage 5). INTERNAL net-session room-state records ({@link NET_ROOM_RESULT}) are
- * excluded — they are durable coordination state (design §2.4), not user-facing games, so the
- * archive browser (and the resume seed list built off it) never shows a spurious extra entry.
+ * archive browser (Stage 5).
+ *
+ * EVERY archived game is listed. The v3 exclusion of internal `net-room:{code}` shards died with the
+ * coupling that created them (V.1, epic #47): a networked game is now an ordinary archive record
+ * keyed by its own UUID, and with reload → empty slate the games list is the ONLY route back to it
+ * (design §10, #37) — so hiding records here would hide real, resumable games.
  */
 export async function listArchivedGames(db: IDBDatabase): Promise<GameListing[]> {
   const listings = await listGames(db);
-  return listings
-    .filter((l) => l.meta.result !== NET_ROOM_RESULT)
-    .sort((a, b) => b.meta.startedAt - a.meta.startedAt);
+  return listings.sort((a, b) => b.meta.startedAt - a.meta.startedAt);
 }
 
 /** Inputs to {@link flagConflicted}: both forked logs plus the caller's metadata. */

@@ -9,8 +9,11 @@ import { test, expect } from '@playwright/test';
  *      hosting a game RESETS the visible board (getState back to empty) AND the just-abandoned local
  *      game is kept in the archive (a record whose headHash == the played board's head exists).
  *   2. JOIN-ONTO-A-PLAYED-BOARD does the same (host and join share one archive+reset seam).
- *   3. HOST-ONTO-AN-EMPTY-BOARD just starts — no spurious archive record is minted for the empty
- *      board (the pristine board is left untouched; nothing worth keeping).
+ *   3. HOST-ONTO-AN-EMPTY-BOARD just starts — no spurious archive record is minted for the LOCAL
+ *      board (the pristine board is left untouched; nothing worth keeping). Since V.1 (epic #47) the
+ *      networked game itself IS archived, under its own game UUID (design §2 "games keyed by UUID" —
+ *      the record a return re-seeds from and the games list offers, #37), so the archive grows by
+ *      exactly that ONE record and the pristine local record is left in place.
  *   4. PLAY-AGAIN on a finished networked game (Task N.2.2, issue #12) — two contexts play a networked
  *      game to a real five-in-a-row; when it ends BOTH clients surface the non-blocking view-only
  *      end-state overlay, one proposes Rematch through the N.1 handshake and the other Accepts, and on
@@ -30,7 +33,13 @@ type Pente = {
   getState(): { pieces: Record<string, string>; turn: string; winner: string | null } | null;
   getHeadHash(): string | null;
   getNet(): { phase: string; seat: string | null; code: string | null } | null;
-  getArchive(): Promise<readonly { id: string; meta: { headHash: string; result: string } }[]>;
+  getArchive(): Promise<
+    readonly {
+      id: string;
+      meta: { headHash: string; result: string; uuid: string; seats?: unknown };
+    }[]
+  >;
+  getNetGameUuid(): string | null;
   getHandshake(): { pending: { direction: string } | null; resolution: { outcome: string } | null } | null;
   place(coords: [number, number, number]): unknown;
   propose(action: string): boolean | null;
@@ -204,7 +213,7 @@ test('JOIN onto a played local board archives + resets identically (host/join sh
   expect(list.some((r) => r.meta.headHash === playedHead)).toBe(true);
 });
 
-test('HOST onto an EMPTY board just starts — no spurious archive record is minted', async ({
+test('HOST onto an EMPTY board just starts — no spurious LOCAL archive record is minted', async ({
   page,
 }) => {
   await installMock(page, 'host-empty');
@@ -215,16 +224,28 @@ test('HOST onto an EMPTY board just starts — no spurious archive record is min
     const l = await (window as unknown as { __pente: Pente }).__pente.getArchive();
     return l.length >= 1;
   });
-  const before = (await archive(page)).length;
+  const beforeIds = (await archive(page)).map((r) => r.id);
 
-  // Host with a pristine board: nothing to archive, so the archive count does not grow from a reset.
+  // Host with a pristine board: nothing local is worth archiving, so no reset-mint happens.
   await page.evaluate(() => (window as unknown as { __pente: Pente }).__pente.dispatch('hostGame'));
   await waitConnected(page);
 
-  // No played game existed, so `shouldArchiveBeforeNetStart` returned false: no extra reset-mint.
-  // (The count may still reflect the SAME single in-progress record being overwritten, not a new one.)
-  const after = (await archive(page)).length;
-  expect(after).toBe(before);
+  // No played game existed, so `shouldArchiveBeforeNetStart` returned false: NO extra record for the
+  // local board — every pre-host record is still there, unchanged, and none was abandoned/duplicated.
+  const after = await archive(page);
+  const netUuid = await page.evaluate(
+    () => (window as unknown as { __pente: Pente }).__pente.getNetGameUuid(),
+  );
+  expect(netUuid).not.toBeNull();
+  expect(after.map((r) => r.id).filter((id) => beforeIds.includes(id))).toEqual(beforeIds);
+  // The ONLY addition is the networked game's OWN record, keyed by its uuid and carrying the
+  // identity-owned seat map (V.1, #47: that record is how a return re-seeds this game — never the
+  // room code). So the archive grew by exactly one, and by exactly that game.
+  const added = after.filter((r) => !beforeIds.includes(r.id));
+  expect(added).toHaveLength(1);
+  expect(added[0]!.id).toBe(netUuid);
+  expect(added[0]!.meta.uuid).toBe(netUuid);
+  expect(added[0]!.meta.seats).not.toBeUndefined();
 });
 
 /** Host on `host`, join on `joiner`, then drive a REAL networked white five-in-a-row (host = white)
