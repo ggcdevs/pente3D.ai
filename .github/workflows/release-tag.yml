@@ -1,0 +1,162 @@
+# Cut the version tag for a push (issue #22).
+#
+# GIT TAGS ARE THE SINGLE SOURCE OF TRUTH for this project's version. `package.json` stays
+# at the placeholder "0.0.0" and nothing reads it; the app's `__APP_VERSION__` and the
+# `version.json` deploy fingerprint both come from `git describe` at build time. This
+# workflow is what MOVES that source of truth forward.
+#
+# CADENCE
+#   push to main → release tag `vX.Y.Z` + a GitHub Release listing the commits
+#   push to test → prerelease tag `vX.Y.Z-rc.N` (no Release; it is a staging marker)
+#   dev / feature branches → NO TAG AT ALL. Their version is whatever `git describe`
+#     says (`v3.0.0-84-gb0cf3cb`), which is already unambiguous.
+#
+# HOW THE BUMP IS DERIVED — two redundant signals, the HIGHER wins:
+#   commit prefixes  `feat:` → minor, `fix:` → patch, docs/test/chore/style/ci/refactor/
+#                    workflow/plan → no release
+#   ticket labels    every `#N` a commit cites: `enhancement` → minor, `bug` → patch
+# When they DISAGREE the higher wins and the pair is logged as a MISMATCH warning — that
+# is the mislabel-catcher, and it deliberately does not fail the run. When `gh` cannot be
+# reached the ticket half is skipped with a logged reason and the commit half still
+# decides (see tools/versionBump.mjs).
+#
+# MAJOR IS NEVER AUTOMATIC. `tools/versionBump.mjs` cannot return "major" — no code path
+# produces it. Nothing in a commit message proves a change is backwards-INCOMPATIBLE; only
+# a human can. A `feat!:` / `BREAKING CHANGE` commit raises the `manualMajor` flag, which
+# is echoed loudly in this job's log; cutting `vX+1.0.0` is then a deliberate manual
+# `git tag -a` by a person.
+#
+# NO `npm ci` STEP ON PURPOSE: `tools/version.mjs` imports only node builtins and its own
+# pure sibling, so the tag decision never waits on (or breaks because of) a dependency
+# install.
+#
+# RELATIONSHIP TO deploy.yml — they do not fight:
+#   * deploy.yml triggers on `push` to BRANCHES; a tag push is not a branch push, and refs
+#     pushed with GITHUB_TOKEN do not trigger workflows anyway, so tagging cannot start a
+#     second deploy.
+#   * they write disjoint refs: deploy.yml writes `gh-pages`, this writes `refs/tags/*`.
+#   * ORDERING CAVEAT, stated honestly: both run on the SAME push, so the artifact deploy.yml
+#     publishes for that commit was built BEFORE this tag existed. Its `version.json` will
+#     read `v3.0.0-84-gb0cf3cb` rather than the freshly-cut `v3.1.0`. That is accurate (the
+#     build genuinely predates the tag) and the `sha` still identifies the commit exactly;
+#     the next push to the branch reports the new tag. Coupling the two workflows to fix a
+#     cosmetic lag is not worth the fragility.
+name: release-tag
+
+on:
+  push:
+    branches: [main, test]
+
+permissions:
+  contents: write # create and push the tag, and create the Release
+  issues: read # read `#N` labels for the ticket half of the bump
+
+concurrency:
+  # Two pushes racing would compute their bump from the same last tag and try to cut the
+  # same version. Serialise per branch; never cancel a run that may already have tagged.
+  group: release-tag-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      # FULL history + tags REQUIRED: the bump is computed over `<last tag>..HEAD`, which
+      # is meaningless in checkout's default shallow, tag-less clone (see deploy.yml).
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Compute the release plan
+        id: plan
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_NAME}" = "main" ]; then channel=release; else channel=prerelease; fi
+          echo "channel: ${channel}"
+
+          # stdout is the JSON plan; stderr carries the MISMATCH / degraded-lookup /
+          # manual-major warnings, which land in this step's log for a human to read.
+          node tools/version.mjs --plan --channel "${channel}" > plan.json
+
+          cat plan.json
+          {
+            echo "tag=$(jq -r '.tag // ""' plan.json)"
+            echo "bump=$(jq -r '.bump // "none"' plan.json)"
+            echo "last_tag=$(jq -r '.lastTag // ""' plan.json)"
+            echo "range=$(jq -r '.range' plan.json)"
+            echo "channel=${channel}"
+            echo "manual_major=$(jq -r '.manualMajor' plan.json)"
+          } >> "$GITHUB_OUTPUT"
+
+      # Every step below passes workflow values through `env:` rather than interpolating
+      # `${{ }}` straight into the shell — a tag/range string is data, not script.
+      - name: Announce a manual-major requirement
+        if: steps.plan.outputs.manual_major == 'true'
+        env:
+          RANGE: ${{ steps.plan.outputs.range }}
+        run: |
+          echo "::warning::A commit in ${RANGE} carries a breaking marker."
+          echo "::warning::This workflow NEVER cuts a major tag. If the break is real, a human must"
+          echo "::warning::run: git tag -a vX+1.0.0 -m '...' && git push origin vX+1.0.0"
+
+      - name: Skip — nothing in this range warrants a release
+        if: steps.plan.outputs.tag == ''
+        env:
+          RANGE: ${{ steps.plan.outputs.range }}
+          LAST_TAG: ${{ steps.plan.outputs.last_tag }}
+        run: |
+          echo "No feat/fix commit and no enhancement/bug ticket in ${RANGE}."
+          echo "Leaving the version at ${LAST_TAG:-<untagged>} — no tag created."
+
+      - name: Create and push the annotated tag
+        if: steps.plan.outputs.tag != ''
+        env:
+          TAG: ${{ steps.plan.outputs.tag }}
+          RANGE: ${{ steps.plan.outputs.range }}
+          BUMP: ${{ steps.plan.outputs.bump }}
+        run: |
+          set -euo pipefail
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            echo "${TAG} already exists — nothing to do."
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # ANNOTATED (-a), not lightweight: it carries the tagger, date and this message,
+          # and only annotated tags are what `git describe` prefers.
+          {
+            printf '%s (%s bump from %s)\n\n' "${TAG}" "${BUMP}" "${RANGE}"
+            git log --format='- %s' "${RANGE}"
+          } > tag-message.txt
+          git tag -a "${TAG}" -F tag-message.txt
+          git push origin "refs/tags/${TAG}"
+          echo "created and pushed annotated tag ${TAG}"
+
+      - name: Create the GitHub Release (main only)
+        if: steps.plan.outputs.tag != '' && github.ref_name == 'main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.plan.outputs.tag }}
+          RANGE: ${{ steps.plan.outputs.range }}
+          BUMP: ${{ steps.plan.outputs.bump }}
+        run: |
+          set -euo pipefail
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "release ${TAG} already exists — nothing to do."
+            exit 0
+          fi
+          {
+            printf 'A **%s** bump over `%s`.\n\n## Commits\n\n' "${BUMP}" "${RANGE}"
+            git log --format='- %s (%h)' "${RANGE}"
+          } > release-notes.md
+          gh release create "${TAG}" --title "${TAG}" --notes-file release-notes.md
+          echo "created GitHub Release ${TAG}"
