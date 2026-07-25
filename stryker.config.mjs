@@ -75,6 +75,19 @@
  *     require a game with a `null` id, which the type forbids — i.e. asserting on non-behavior. The
  *     resume actionability behavior IS asserted (no-pick → not actionable; member pick → actionable;
  *     stale/non-member pick → not actionable).
+ *   - versionBump.mjs: BOTH surviving mutants replace an empty ARRAY LITERAL with Stryker's
+ *     `["Stryker was here"]` sentinel, and both are equivalent because that sentinel is not a
+ *     bump-carrying value anywhere it lands:
+ *       · the `subjects = []` parameter default. The sentinel string has no conventional-commit
+ *         header, no `#N` ref and no breaking marker, so it contributes nothing to any field of
+ *         the result — `computeBump()` with no arguments returns the identical object either way.
+ *       · the `ticketLabels[ticket] ?? []` fallback for a ticket with no supplied labels. The
+ *         sentinel is not `enhancement` or `bug`, so `labelRank` ranks it exactly as it ranks an
+ *         empty label list: no opinion. Killing either would require asserting that a specific
+ *         junk string is absent from an internal array, i.e. on non-behavior.
+ *     The behavior these literals enable IS asserted (an empty range yields the no-release
+ *     answer; a cited-but-unlabelled ticket degrades to the commit-prefix half and is reported
+ *     in `unlabelledTickets`).
  *
  * Gate-rejection is re-proven on every review-gate run (agent-principles #7): temporarily
  * raising `break` above the current score makes `npm run mutate` exit non-zero.
@@ -261,6 +274,13 @@ export default {
     // as the menu/net/slider glue is above.
     'src/ui/widgets/archiveModel.ts',
     '!src/ui/**/*.test.ts',
+    // Pure version-bump logic (issue #22): the commit-prefix + ticket-label signals → the
+    // minor/patch/no-release decision, the disagreement report, and the semver arithmetic.
+    // IO-free — the git/`gh` half (`tools/version.mjs`) and the filesystem-walking
+    // `tools/generate-diagrams.mjs` are IO boundaries verified by RUNNING them against this
+    // repo, NOT mutated, exactly as the scene/DOM glue is excluded above. Do NOT add them here.
+    'tools/versionBump.mjs',
+    '!tools/**/*.test.mjs',
   ],
   coverageAnalysis: 'perTest',
   // Generous timeout to make Killed-vs-Timeout classification DETERMINISTIC (see header):

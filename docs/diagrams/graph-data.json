@@ -1018,6 +1018,15 @@
       "installInspectApi"
     ]
   },
+  "src/env.d.ts": {
+    "exports": [],
+    "imports": [],
+    "classes": [],
+    "interfaces": [],
+    "enums": [],
+    "typeAliases": [],
+    "functions": []
+  },
   "src/input/commands.ts": {
     "exports": [
       "Command",
@@ -1537,7 +1546,8 @@
         "extends": [],
         "methods": [],
         "properties": [
-          "__penteNotifyNotificationCtor: NotificationApi"
+          "__penteNotifyNotificationCtor: NotificationApi",
+          "__penteVersion: string"
         ]
       }
     ],

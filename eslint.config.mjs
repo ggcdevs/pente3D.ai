@@ -6,10 +6,13 @@ import vitest from 'eslint-plugin-vitest';
  *
  * These enforce that tests actually assert (no coverage-padding shells) and that
  * no test is silently disabled or focused — matching planning/agent-principles.md
- * ("Never weaken a gate", "Tests must be genuine"). Applied only to *.test.ts.
+ * ("Never weaken a gate", "Tests must be genuine"). Applied to every Vitest suite — the
+ * `.test.ts` suites under src/, and the pure build-tooling `.test.mjs` suites under
+ * tools/ (issue #22). See the `files` globs below for the exact patterns; they are not
+ * repeated in this comment because a `**` glob would close the block comment early.
  */
 const vitestTestIntegrity = {
-  files: ['src/**/*.test.ts'],
+  files: ['src/**/*.test.ts', 'tools/**/*.test.mjs'],
   plugins: { vitest },
   rules: {
     'vitest/expect-expect': 'error',

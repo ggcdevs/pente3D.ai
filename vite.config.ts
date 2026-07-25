@@ -1,7 +1,43 @@
 /// <reference types="vitest/config" />
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
+import { resolveVersionInfo } from './tools/version.mjs';
+
+// Resolved ONCE per config load, so `__APP_VERSION__` and the emitted `version.json`
+// describe the same commit and carry the same `builtAt` (a per-call `new Date()` would
+// make the two disagree by milliseconds and defeat the fingerprint).
+const versionInfo = resolveVersionInfo();
+
+/**
+ * Emit the deploy fingerprint at `<base>version.json` (issue #22).
+ *
+ * GIT TAGS ARE THE SINGLE SOURCE OF TRUTH for the version (README "Versioning");
+ * `package.json`'s `"version": "0.0.0"` is a placeholder nothing reads. This file is how
+ * you find out WHICH commit a deployed environment is actually serving without guessing
+ * from asset hashes — fetch `/pente3D.ai/dev/version.json` and read `describe`/`sha`.
+ *
+ * Emitted through `emitFile` (not a raw `writeFile`) so it flows through Rollup's normal
+ * asset pipeline and lands in `outDir` for every build, including `--watch`.
+ */
+function versionJsonPlugin(): Plugin {
+  return {
+    name: 'pente-version-json',
+    generateBundle() {
+      this.emitFile({
+        type: 'asset',
+        fileName: 'version.json',
+        source: `${JSON.stringify(versionInfo, null, 2)}\n`,
+      });
+    },
+  };
+}
 
 export default defineConfig({
+  plugins: [versionJsonPlugin()],
+  // Compile-time version constant (issue #22). Declared for TypeScript in `src/env.d.ts`,
+  // so `tsc --noEmit` in `npm run build` type-checks every use of it.
+  define: {
+    __APP_VERSION__: JSON.stringify(versionInfo.version),
+  },
   // Per-env base (issue #22): the GitHub Actions deploy sets DEPLOY_BASE per branch
   //   main → '/pente3D.ai/'      (Pages root)
   //   dev  → '/pente3D.ai/dev/'  (Pages /dev subpath)
@@ -18,21 +54,30 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    // Vitest owns src/**/*.test.ts; Playwright owns e2e/. Keep them from colliding.
-    include: ['src/**/*.test.ts'],
+    // Vitest owns src/**/*.test.ts plus the PURE build-tooling suites under tools/
+    // (issue #22 version resolution); Playwright owns e2e/. Keep them from colliding.
+    include: ['src/**/*.test.ts', 'tools/**/*.test.mjs'],
     exclude: ['e2e/**', 'node_modules/**', 'docs/**', 'poc/**'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
       // Core is the pure rules engine held to a 100% floor (see testing-strategy).
       // The rest is pragmatic; boundaries added per-stage.
-      include: ['src/**/*.ts'],
+      include: ['src/**/*.ts', 'tools/**/*.mjs'],
       // `src/render/**` is the Three.js IO glue (verified by Playwright, not unit
       // coverage) EXCEPT the pure, THREE-free resolvers (`sceneConfig.ts`, …), which
       // are held to the strict pure-logic gate below. Excluding the glue file-by-file
       // (not the whole dir) keeps the pure files measured.
       exclude: [
         'src/**/*.test.ts',
+        'tools/**/*.test.mjs',
+        // Build TOOLING glue (issue #22). `tools/version.mjs` shells out to `git`/`gh` and
+        // `tools/generate-diagrams.mjs` walks the filesystem — both are IO boundaries verified
+        // by RUNNING them against this repo, not by unit coverage. Excluded file-by-file (NOT
+        // the whole `tools/` dir) so the PURE `tools/versionBump.mjs` stays measured and pinned
+        // to the 100% floor below.
+        'tools/version.mjs',
+        'tools/generate-diagrams.mjs',
         'src/main.ts',
         'src/render/scene.ts',
         'src/debug/window.ts',
@@ -357,6 +402,18 @@ export default defineConfig({
         // wiring (`main.ts`) are the Playwright-verified IO boundary, excluded above. In the mutation
         // scope and held to the hard 100% floor. Do not weaken (agent-principles #6).
         'src/ui/widgets/archiveModel.ts': {
+          statements: 100,
+          branches: 100,
+          functions: 100,
+          lines: 100,
+        },
+        // Pure version-bump logic (issue #22): commit prefixes + ticket labels → the
+        // minor/patch/no-release decision, the commit-vs-ticket mismatch report, and the
+        // semver arithmetic (`nextVersion`, `nextRcTag`). IO-free by construction — the
+        // git/`gh` half lives in `tools/version.mjs`, which is the excluded IO boundary
+        // above. In the mutation scope and held to the hard 100% floor. Do not weaken
+        // (agent-principles #6).
+        'tools/versionBump.mjs': {
           statements: 100,
           branches: 100,
           functions: 100,

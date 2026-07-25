@@ -7,6 +7,10 @@
     "skipLibCheck": true,
 
     "moduleResolution": "bundler",
+    // `vite.config.ts` imports the JSDoc-typed `tools/version.mjs` (issue #22). allowJs lets
+    // TypeScript read its types straight from the source JSDoc instead of us hand-maintaining
+    // a parallel `.d.mts` that could drift out of sync with it.
+    "allowJs": true,
     "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "isolatedModules": true,

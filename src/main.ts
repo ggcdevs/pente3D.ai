@@ -42,6 +42,12 @@ const log = createLogger('app:boot');
 declare global {
   interface Window {
     __penteNotifyNotificationCtor?: NotificationApi;
+    /**
+     * The build's version, from git tags (issue #22). Set at boot from the compile-time
+     * `__APP_VERSION__` so a browser agent (Playwright / cdp) can read WHICH build a page is
+     * running without parsing asset hashes. The same value is written to `<base>version.json`.
+     */
+    __penteVersion?: string;
   }
 }
 
@@ -817,4 +823,9 @@ installInspectApi(scene, ui, {
   getNetLastReject: () => getNetLastReject(),
 });
 
-log.info('app booted');
+// Publish the build fingerprint (issue #22). `__APP_VERSION__` is substituted at build time from
+// `git describe` (vite.config.ts `define`); the matching `<base>version.json` carries the branch,
+// sha and build timestamp alongside it.
+window.__penteVersion = __APP_VERSION__;
+
+log.info('app booted', { version: __APP_VERSION__ });
