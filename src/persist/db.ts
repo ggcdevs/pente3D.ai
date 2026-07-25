@@ -109,8 +109,22 @@ export interface GameRecord {
   readonly meta: GameMeta;
 }
 
-/** The listing form of a record: id + metadata, deliberately **without** the log. */
-export type GameListing = Omit<GameRecord, 'log'>;
+/**
+ * The listing form of a record: id + metadata, deliberately **without** the log — plus the log's
+ * LENGTH, the one fact about the history a browser needs that the metadata cannot answer.
+ */
+export interface GameListing extends Omit<GameRecord, 'log'> {
+  /**
+   * How many events the stored log holds. Projected by {@link listGames} while the cursor already
+   * has the whole record in hand, so it costs nothing — unlike shipping the log itself to a caller
+   * that only needs to know *whether anything ever happened* in this game (`events === 0` = a board
+   * with no history at all).
+   *
+   * Deliberately NOT called `ply`: an undo/redo is an event too, so a game whose cursor is back at
+   * ply 0 still reports a non-zero count. "Did anything happen here" is exactly what this answers.
+   */
+  readonly events: number;
+}
 
 /**
  * Wrap an `IDBRequest` as a promise resolving with its `result` (or rejecting with
@@ -201,9 +215,9 @@ export async function getGame(
 }
 
 /**
- * List every stored game as `{ id, meta }`, **omitting the full log**. Uses a cursor
- * and projects each record to its listing form, so browsing the archive never loads
- * the (potentially large) event logs into memory.
+ * List every stored game as `{ id, meta, events }`, **omitting the full log**. Uses a cursor and
+ * projects each record to its listing form (keeping only the log's LENGTH), so browsing the archive
+ * never holds the (potentially large) event logs in memory.
  */
 export function listGames(db: IDBDatabase): Promise<GameListing[]> {
   return new Promise<GameListing[]>((resolve, reject) => {
@@ -214,7 +228,7 @@ export function listGames(db: IDBDatabase): Promise<GameListing[]> {
       const cursor = request.result;
       if (cursor) {
         const record = cursor.value as GameRecord;
-        listings.push({ id: record.id, meta: record.meta });
+        listings.push({ id: record.id, meta: record.meta, events: record.log.length });
         cursor.continue();
       } else {
         resolve(listings);

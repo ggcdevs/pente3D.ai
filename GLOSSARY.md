@@ -119,14 +119,23 @@ the tie-breaker.
   and publishes the agreed game — killing the initial double-white race.
 - **playerId** — a per-browser stable id (localStorage) that **owns a seat** and enables
   reconnect / reclaim-by-identity.
-- **Active-game breadcrumb** (`activeNetworkedGame`, localStorage) — the single record
-  *"I am **currently mid-game** in room X as game Y"* (`{code, gameUuid, updatedAt}`). It is
-  **session state, not a mapping**: single-valued (entering another room replaces it, there is no
-  per-code entry), it drives a **prompt, never an auto-load**, it is **cleared when the game is
-  decided**, it **expires quietly** once `updatedAt` is stale, and it is **never published**. It is
-  how a returning peer finds its game — by that game's **UUID** in the archive, never by the code.
+- **Active-game breadcrumb** (`activeNetworkedGame`) — the single record *"I am **currently
+  mid-game** in room X as game Y"* (`{code, gameUuid, updatedAt}`). It is **session state, not a
+  mapping**: single-valued (entering another room replaces it, there is no per-code entry), it drives
+  a **prompt, never an auto-load**, it **expires quietly** once `updatedAt` is stale, and it is
+  **never published**. It is how a returning peer finds its game — by that game's **UUID** in the
+  archive, never by the code. **Dual-tracked** (design §2): the **localStorage** half is the reload
+  path and is **cleared when the game is decided** (a finished game is never offered to a fresh boot);
+  a **JS-var** half on the live session **survives a win**, so that session's own return / rematch
+  still finds the game it just finished instead of establishing an empty one over it.
   ⚠️ The v3 `net-room:{code}` record (a game + seat map persisted **per code**) was the opposite of
-  this and is **deleted**: it made a rendezvous channel own a game (#43/#46).
+  this and is **deleted**: it made a rendezvous channel own a game (#43/#46). Shards a v3 build left
+  in a real user's IndexedDB are **purged on boot** (`purgeLegacyNetRoomRecords`), not hidden.
+- **Empty shell** (`isEmptyShell`) — an archive record for a board with **no history and no
+  outcome**. Kept in the store (a live session writes its game's record as soon as seats are
+  negotiated, and the empty-room reclaim re-seeds an unplayed post-rematch game from it by UUID) but
+  **not shown as a game**: entering a room and leaving before a single move must not litter the games
+  list, exactly as an idle reset of a never-played local board mints nothing.
 - **Visited room codes** (`pente:recentCodes`, localStorage) — the codes this browser has used,
   newest-first: the code picker's memory. **Codes only** — it holds no game state, so a code in the
   list says nothing about which game (if any) was ever played there.

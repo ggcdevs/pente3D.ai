@@ -45,7 +45,10 @@
  *  - the authoritative game + its identity-owned seat map in the **archive, keyed by the game's own
  *    UUID** ({@link persistGame}) — the source of truth, an ordinary listed record;
  *  - a single **`activeNetworkedGame` breadcrumb** ({@link markActiveGame}, `activeGame.ts`) saying
- *    "I am currently mid-game in room X as game Y", cleared when the game is decided.
+ *    "I am currently mid-game in room X as game Y", DUAL-TRACKED (design §2): the localStorage half
+ *    is the reload path and is cleared when the game is decided, while the JS-var half
+ *    ({@link NetSession.activeGame}) survives a win so this session's own return/rematch still finds
+ *    the game it just finished.
  *
  * A returning peer therefore re-seeds from the BREADCRUMB's uuid via the archive, never from the code
  * — and the loaded game is a runtime value, never a per-room resurrection.
@@ -70,6 +73,7 @@ import {
   writeActiveGame,
   clearActiveGame,
   isActiveGameStale,
+  type ActiveNetworkedGame,
 } from './activeGame';
 import type { Transport } from './transport';
 import { SyncEngine } from './sync';
@@ -85,7 +89,14 @@ import {
   incomingPending,
   type HandshakeState,
 } from './handshake';
-import { claimSeat, seatOf, emptySeatMap, type SeatColor, type SeatMap } from './seats';
+import {
+  claimSeat,
+  seatOf,
+  emptySeatMap,
+  type ClaimRejection,
+  type SeatColor,
+  type SeatMap,
+} from './seats';
 import {
   reconcile,
   electInitiator,
@@ -339,7 +350,10 @@ export class NetSession {
    *       other validates & adopts (or rejects). This kills the initial double-white race (#31).
    *
    * On a connect failure the phase returns to `offline` with a `connect-failed` join error (honest,
-   * observable, never swallowed). A no-op if a session is already live (`phase !== 'offline'`).
+   * observable, never swallowed). A `resume`/`current` seed naming a game whose seats are all owned by
+   * OTHER identities is likewise refused before the transport is touched, with the seat manager's own
+   * typed reason as the join error ({@link buildProvisionalSeat}). A no-op if a session is already live
+   * (`phase !== 'offline'`).
    */
   async enter(rawCode: string, proposal: Proposal): Promise<void> {
     if (this.phase !== 'offline') return;
@@ -371,7 +385,30 @@ export class NetSession {
     // its own resume as `game-mismatch`). The authoritative game + seat map are still FINALIZED after
     // the settle window (we may adopt a resident's/initiator's game), but we need a live engine to
     // publish our hello and to receive admission traffic on `onAdmission`.
-    const provisional = await this.buildProvisionalSeat(code, proposal);
+    let provisional;
+    try {
+      provisional = await this.buildProvisionalSeat(code, proposal);
+    } catch (err) {
+      // A seed we cannot even LOAD — a corrupt/illegal archived log surfaces as an `ArchiveError` — is
+      // a genuine FAILURE, not a refusal, so it propagates VERBATIM (never masked, never relabelled as
+      // one of the seat/connect reasons it is not). What it must NOT do is leave this session reporting
+      // `connecting` with no transport: that readout would lie about what is happening. So we return to
+      // `offline` (with no invented joinError) and re-throw for the caller to surface.
+      this.resetToOffline(null);
+      this.emit();
+      throw err;
+    }
+    if (provisional.kind === 'refused') {
+      // We hold the game the seed NAMES, but its identity-owned seat map owns no seat for us — both
+      // seats belong to other playerIds (design §2.3: absence never vacates ownership). There is no
+      // honest way to enter as a player of THAT game, so we refuse HERE, before touching the
+      // transport, and surface the seat manager's own typed reason as the user-facing `joinError`
+      // (design §7 — every refusal carries a human message). Reachable whenever this browser's
+      // `pente:playerId` is lost while its archive survives.
+      this.resetToOffline(provisional.reason);
+      this.emit();
+      return;
+    }
     const connected = await this.beginEngine(code, provisional.game, provisional.color, provisional.seatMap);
     if (!connected) return; // beginEngine surfaced connect-failed + reset to offline.
 
@@ -464,19 +501,27 @@ export class NetSession {
    * This is the pre-settle placeholder so the engine is live to publish a hello + receive admission;
    * it is REPLACED by the resident's/initiator's authoritative game if we are admitted, and kept (as
    * the established game) only if we turn out to be alone.
+   *
+   * A `resume`/`current` seed can also come back REFUSED: we hold that exact game, but its persisted
+   * seat map owns both seats for OTHER playerIds, so there is no seat to enter it on (see
+   * {@link seedFromUuid}). That refusal is returned, not thrown — {@link enter} turns it into an
+   * honest `joinError` and stays offline.
    */
   private async buildProvisionalSeat(
     code: string,
     proposal: Proposal,
-  ): Promise<{
-    game: Game;
-    color: SeatColor;
-    seatMap: SeatMap;
-  }> {
+  ): Promise<
+    | { kind: 'seeded'; game: Game; color: SeatColor; seatMap: SeatMap }
+    | { kind: 'refused'; reason: ClaimRejection }
+  > {
     // 1. A concrete resume/current: seed the actual game named by the proposal's uuid.
     if (proposal.kind === 'resume' || proposal.kind === 'current') {
       const seeded = await this.seedFromUuid(proposal.uuid);
-      if (seeded !== null) return seeded;
+      if (seeded.kind === 'seeded') return seeded;
+      // We hold the game but own no seat in it → refuse the entry with the seat manager's own reason
+      // rather than silently establishing some OTHER game under a `resume` proposal (which the
+      // arbiter would then have to refuse as `game-mismatch` — a mislabeled version of this fact).
+      if (seeded.kind === 'unclaimable') return { kind: 'refused', reason: seeded.reason };
       // The named game is not in our archive — fall through to a fresh game (an honest degrade: we
       // could not resume what we do not hold, so we bring an empty game rather than a wrong one).
     }
@@ -492,9 +537,13 @@ export class NetSession {
       const uuid = this.resumableBreadcrumbUuid(code);
       if (uuid !== null) {
         const seeded = await this.seedFromUuid(uuid);
-        // A breadcrumb naming a game we no longer hold falls through to a fresh game (an honest
-        // degrade — we bring an empty game rather than a wrong one), exactly as a resume does.
-        if (seeded !== null) return seeded;
+        // A breadcrumb naming a game we no longer hold — or one whose seats are owned by other
+        // playerIds, so we could not sit down at it — falls through to a fresh game (the honest
+        // degrade this branch promises: we bring an empty game rather than a wrong one). Unlike a
+        // `resume`, a `defer` did not ASK for that specific game: the breadcrumb is a hint about what
+        // we were last doing, so an unusable hint degrades to "dealer's choice" instead of refusing
+        // an entry the player never aimed at a particular game.
+        if (seeded.kind === 'seeded') return seeded;
       }
     }
     // 3. Genuine creation (a `new` proposal, or a `defer` with no owned seat here): a fresh empty game,
@@ -506,26 +555,40 @@ export class NetSession {
     // never reached; pass our own present-set for honesty.
     const claim = claimSeat(emptySeatMap(), this.deps.playerId, this.presentPeers);
     if (!claim.ok) throw new Error('provisional claim on an empty map must succeed');
-    return { game, color: claim.color, seatMap: claim.seatMap };
+    return { kind: 'seeded', game, color: claim.color, seatMap: claim.seatMap };
   }
 
   /**
    * Seed a provisional from the archived game whose stable `uuid` matches (a `resume`/`current`
-   * proposal). Returns the reconstructed game + our reclaimed seat + its persisted seat map, or
-   * `null` if we hold no such game. If the persisted seat map records no owner for us yet (e.g. a
-   * local game being seeded into a room for the first time), we take first-available white.
+   * proposal, or the game our breadcrumb names). Three OBSERVABLE outcomes, no throw:
+   *
+   *  - `seeded` — the reconstructed game + our seat + its persisted seat map. Our seat is a RECLAIM
+   *    when that map already owns one for us, else first-available white (e.g. a local game being
+   *    carried into a room for the first time, whose record has no owners yet).
+   *  - `absent` — we hold no such game (nothing to seed from).
+   *  - `unclaimable` — we DO hold the game, but its seat map owns both seats for other playerIds, so
+   *    we cannot be a player of it. That is a real, reachable state (a game archived from a session
+   *    whose `pente:playerId` this browser has since lost), and the seat manager's own typed reason
+   *    (`seat-reserved` / `room-full`) is the honest account of it. The caller decides what to do with
+   *    that fact — a `resume` refuses the entry with the reason, a `defer` degrades to a fresh game —
+   *    because masking it here (as a throw, or as a silent fresh game) would either wedge `enter` or
+   *    mislabel the outcome.
    */
   private async seedFromUuid(
     uuid: string,
-  ): Promise<{ game: Game; color: SeatColor; seatMap: SeatMap } | null> {
+  ): Promise<
+    | { kind: 'seeded'; game: Game; color: SeatColor; seatMap: SeatMap }
+    | { kind: 'absent' }
+    | { kind: 'unclaimable'; reason: ClaimRejection }
+  > {
     const loaded = await loadNetGameByUuid(this.deps.db, uuid);
-    if (loaded === undefined) return null;
+    if (loaded === undefined) return { kind: 'absent' };
     const seatMap: SeatMap = loaded.seats ?? emptySeatMap();
-    // A reclaim-or-first-available seed of OUR OWN seat — never the reject branch, so presence
-    // is immaterial here; pass our own present-set for honesty.
+    // Reclaim our owned seat, or take first-available on a map with a free seat. Presence is
+    // immaterial to WHICH seat we get; it only colors the refusal reason, so pass our own snapshot.
     const claim = claimSeat(seatMap, this.deps.playerId, this.presentPeers);
-    if (!claim.ok) throw new Error('seed-from-uuid claim must succeed (owner or first-available)');
-    return { game: loaded.game, color: claim.color, seatMap: claim.seatMap };
+    if (!claim.ok) return { kind: 'unclaimable', reason: claim.reason };
+    return { kind: 'seeded', game: loaded.game, color: claim.color, seatMap: claim.seatMap };
   }
 
   /**
@@ -541,7 +604,12 @@ export class NetSession {
    * whenever a session becomes live somewhere else.
    */
   private resumableBreadcrumbUuid(code: string): string | null {
-    const crumb = readActiveGame(this.deps.storage);
+    // The LIVE-SESSION half first (design §2 "Dual-tracked"): it is written by the same seam as the
+    // localStorage half but SURVIVES a win, so a peer that drops after a decided game and comes back
+    // still finds the game it just finished — rather than establishing a brand-new empty one over it
+    // and orphaning the result (which is also what the rematch flow needs to stay reachable). The
+    // localStorage half is the RELOAD path, and it deliberately holds no finished game.
+    const crumb = this.activeGame ?? readActiveGame(this.deps.storage);
     if (crumb === null) return null;
     if (crumb.code !== code) return null;
     if (isActiveGameStale(crumb, this.deps.now())) return null;
@@ -604,27 +672,49 @@ export class NetSession {
   }
 
   /**
+   * The `activeNetworkedGame` breadcrumb's **JS-var half** (design §2: "Dual-tracked: localStorage for
+   * reload recovery, a JS var for the live session — the JS var survives a win so the rematch flow
+   * works; localStorage is re-set only on mutual rematch").
+   *
+   * Written by {@link markActiveGame} alongside the localStorage half, but — unlike it — NOT cleared
+   * when the game is decided: within one live session (a drop-and-return, a rematch) the just-finished
+   * game must stay reachable, or the returning peer establishes a fresh empty game and ORPHANS the
+   * result. It carries the same `updatedAt`, so {@link isActiveGameStale} judges it by the same rule,
+   * and it dies with the JS session — a brand-new browser session after a decided game reaches that
+   * game through the games list (design §6/§10, #37), never through a stale "currently mid-game" claim.
+   */
+  private activeGame: ActiveNetworkedGame | null = null;
+
+  /**
    * Record — or CLEAR — the `activeNetworkedGame` BREADCRUMB for the live session (design §2).
    *
-   * It says "I am CURRENTLY mid-game in room X as game Y", so it is written while a game is live and
-   * CLEARED the moment that game is decided: a finished game is not something to offer to rejoin, and
-   * leaving the breadcrumb behind would make the next boot prompt about a game that is over. It is
-   * deliberately NOT cleared on {@link disconnect} — a background drop / tab reload is exactly what it
-   * exists to recover from — and it is never published (local session state, not protocol state).
+   * It says "I am CURRENTLY mid-game in room X as game Y". Both halves are refreshed while the game is
+   * live; when the game is DECIDED the two diverge deliberately (design §2 "dual-tracked"):
+   *
+   *  - the **localStorage** half is CLEARED — a reload must not prompt to rejoin a game that is over;
+   *  - the **JS-var** half ({@link activeGame}) survives, so this session's own return / rematch still
+   *    finds the finished game instead of silently replacing it with an empty one.
+   *
+   * Neither is cleared on {@link disconnect} — a background drop / tab reload is exactly what the
+   * breadcrumb exists to recover from — and neither is ever published (local session state, not
+   * protocol state).
    */
   private markActiveGame(): void {
     const engine = this.engine;
     const code = this.code;
     if (engine === null || code === null) return;
     const game = engine.game();
+    const crumb: ActiveNetworkedGame = {
+      code,
+      gameUuid: game.uuid,
+      updatedAt: this.deps.now(),
+    };
+    this.activeGame = crumb;
     if (game.state().winner !== null) {
       clearActiveGame(this.deps.storage);
       return;
     }
-    writeActiveGame(
-      { code, gameUuid: game.uuid, updatedAt: this.deps.now() },
-      this.deps.storage,
-    );
+    writeActiveGame(crumb, this.deps.storage);
   }
 
   /**

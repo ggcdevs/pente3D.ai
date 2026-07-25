@@ -32,6 +32,8 @@ import {
   loadNetGame,
   loadNetGameByUuid,
   listArchivedGames,
+  isEmptyShell,
+  purgeLegacyNetRoomRecords,
   flagConflicted,
   loadConflicted,
   ArchiveError,
@@ -379,6 +381,10 @@ describe('game archive', () => {
       const loaded = await loadNetGame(db, 'local');
       expect(loaded!.game.uuid).toBe(SAMPLE_UUID);
       expect(loaded!.seats).toBeNull();
+      // The STORED record carries no `seats` KEY at all — not a key holding `undefined`. A local game
+      // that never negotiated seats must not look like a networked game whose owners are blank.
+      const stored = await getGame(db, 'local');
+      expect('seats' in stored!.meta).toBe(false);
     });
 
     it('loadNetGame returns undefined for a missing id (negative case)', async () => {
@@ -430,11 +436,13 @@ describe('game archive', () => {
 
     it('a networked game keyed by its UUID is an ordinary LISTED game (V.1, #47 — nothing is hidden)', async () => {
       const { db } = await open();
-      await saveGame(db, 'local-autosave', sampleGame(), { ...sampleMeta, startedAt: 1 });
+      // A DIFFERENT local game, so the assertion below shows the net game listed ALONGSIDE ordinary
+      // records rather than in place of them (no marker filter survives: the v3 `net-room:{code}`
+      // shard and the exclusion that hid it are gone).
+      await saveGame(db, 'local-autosave', forkedGame(), { ...sampleMeta, startedAt: 1 });
       // A live net session persists its authoritative game under the game's OWN uuid, with the
-      // identity-owned seat map. There is no internal marker any more (the v3 `net-room:{code}` shard
-      // and the listing filter that hid it are deleted): with reload → empty slate, the games list is
-      // the ONLY route back to this game, so it MUST be listed.
+      // identity-owned seat map. With reload → empty slate, the games list is the ONLY route back to
+      // this game, so it MUST be listed.
       await saveGame(db, SAMPLE_UUID, sampleGame(), {
         ...sampleMeta,
         startedAt: 2,
@@ -448,6 +456,74 @@ describe('game archive', () => {
         white: 'player-a',
         black: null,
       });
+    });
+
+    it('ONE game archived twice lists ONCE — the canonical uuid-keyed record, not the shadow', async () => {
+      const { db } = await open();
+      // The exact state a `current`/`resume` entry produces: the app archived the played local board
+      // under its autosave id, then the net session persisted the SAME game (same uuid) under the
+      // game's own uuid with the identity-owned seat map. Two records, ONE game — listing both would
+      // show the game twice, and resuming the shadow would open a stale fork of it and drop the seats.
+      await saveGame(db, 'app-autosave-id', sampleGame(), { ...sampleMeta, startedAt: 1 });
+      await saveGame(db, SAMPLE_UUID, sampleGame(), {
+        ...sampleMeta,
+        startedAt: 2,
+        seats: { white: 'player-a', black: 'player-b' },
+      });
+
+      const list = await listArchivedGames(db);
+      expect(list.map((l) => l.id)).toEqual([SAMPLE_UUID]);
+      // The surviving entry is the one carrying the seat map the empty-room reclaim depends on.
+      expect(list[0]!.meta.seats).toEqual({ white: 'player-a', black: 'player-b' });
+      // Both records are still IN the store — the listing collapses a duplicate view of one game, it
+      // does not delete anything (the shadow remains loadable by its own id).
+      expect(await getGame(db, 'app-autosave-id')).not.toBeUndefined();
+    });
+
+    it('two records of one game with NO canonical copy BOTH list (a resumed game continuing under a fresh id)', async () => {
+      const { db } = await open();
+      // Resuming an archived game keeps its uuid and continues under a FRESH autosave id, so two
+      // records legitimately share a uuid while NEITHER is keyed by it. Both are real, distinct
+      // snapshots the player may reopen — collapsing them would hide the original game.
+      await saveGame(db, 'original', sampleGame(), { ...sampleMeta, startedAt: 1 });
+      await saveGame(db, 'continued', sampleGame(), { ...sampleMeta, startedAt: 2 });
+
+      expect((await listArchivedGames(db)).map((l) => l.id)).toEqual(['continued', 'original']);
+    });
+
+    it('a CONFLICTED record of the same game is NOT hidden (it holds both forks — nothing stands in for it)', async () => {
+      const { db } = await open();
+      // A live net game (canonical, keyed by its uuid) that then FORKED: `SyncEngine.onConflict`
+      // archives both forks under a `conflict-…` id whose meta.uuid is the local fork's — i.e. the
+      // same uuid as the canonical record. Collapsing it would delete the only route to the fork pair.
+      await saveGame(db, SAMPLE_UUID, sampleGame(), { ...sampleMeta, startedAt: 2 });
+      await flagConflicted(db, 'conflict-mine-theirs', {
+        mineLog: sampleGame().log,
+        theirsLog: forkedGame().log,
+        meta: { ...sampleMeta, startedAt: 1 },
+      });
+
+      const list = await listArchivedGames(db);
+      expect(list.map((l) => l.id)).toEqual([SAMPLE_UUID, 'conflict-mine-theirs']);
+      // …and it is still the conflicted pair, both forks reconstructable.
+      const forks = await loadConflicted(db, 'conflict-mine-theirs');
+      expect(forks!.mine.uuid).toBe(SAMPLE_UUID);
+      expect(forks!.theirs.uuid).toBe(FORKED_UUID);
+    });
+
+    it('a shadow with MORE history than the canonical record is NOT hidden (never hide history)', async () => {
+      const { db } = await open();
+      // Anomalous: the canonical uuid-keyed record holds FEWER events than the other copy of the same
+      // game. Collapsing to the canonical one would silently serve the shorter history, so both are
+      // listed and the player chooses.
+      const short = new Game(9, SAMPLE_UUID);
+      short.place([4, 4, 4]);
+      await saveGame(db, SAMPLE_UUID, short, { ...sampleMeta, startedAt: 2 });
+      await saveGame(db, 'longer-shadow', sampleGame(), { ...sampleMeta, startedAt: 1 });
+
+      const list = await listArchivedGames(db);
+      expect(list.map((l) => l.id)).toEqual([SAMPLE_UUID, 'longer-shadow']);
+      expect(list.map((l) => l.events)).toEqual([1, sampleGame().log.entries.length]);
     });
 
     it('loadNetGameByUuid prefers the CANONICAL record stored UNDER the uuid (the seated net game)', async () => {
@@ -513,6 +589,114 @@ describe('game archive', () => {
     it('returns an empty array when nothing is archived', async () => {
       const { db } = await open();
       expect(await listArchivedGames(db)).toEqual([]);
+    });
+
+    it('reports each listing’s EVENT COUNT (how much history it holds, without the log)', async () => {
+      const { db } = await open();
+      await saveGame(db, 'played', sampleGame(), sampleMeta);
+      await saveGame(db, 'untouched', new Game(9, 'empty-uuid'), { ...sampleMeta, startedAt: 1 });
+
+      const list = await listArchivedGames(db);
+      expect(list.find((l) => l.id === 'played')!.events).toBe(3);
+      expect(list.find((l) => l.id === 'untouched')!.events).toBe(0);
+    });
+  });
+
+  /**
+   * `isEmptyShell` — the "nothing ever happened here" predicate the app applies to what it SHOWS
+   * (`main.ts`: the archive browser + the Resume seed list). A record for a board with no history and
+   * no outcome is not a game to offer; anything with history, or any decided/conflicted game, is.
+   */
+  describe('isEmptyShell', () => {
+    it('is TRUE for a record with no events and no outcome, FALSE once anything happened', async () => {
+      const { db } = await open();
+      await saveGame(db, 'pristine', new Game(9, 'pristine-uuid'), sampleMeta);
+      await saveGame(db, 'played', sampleGame(), sampleMeta);
+
+      const list = await listArchivedGames(db);
+      expect(isEmptyShell(list.find((l) => l.id === 'pristine')!)).toBe(true);
+      expect(isEmptyShell(list.find((l) => l.id === 'played')!)).toBe(false);
+    });
+
+    it('is FALSE for an empty board that carries an OUTCOME (a decided or conflicted record)', async () => {
+      const { db } = await open();
+      await saveGame(db, 'resigned', new Game(9, 'resigned-uuid'), {
+        ...sampleMeta,
+        result: 'white-wins',
+      });
+      await flagConflicted(db, 'forked', {
+        mineLog: new Game(9, 'fork-a').log,
+        theirsLog: new Game(9, 'fork-b').log,
+        meta: sampleMeta,
+      });
+
+      const list = await listArchivedGames(db);
+      expect(list.every((l) => l.events === 0)).toBe(true); // both really are empty boards
+      expect(list.map((l) => isEmptyShell(l))).toEqual([false, false]);
+    });
+  });
+
+  /**
+   * The v3 → v3.1 MIGRATION (V.1, epic #47): the `net-room:{code}` shards a deployed v3 build wrote
+   * into this ORIGIN's IndexedDB are DELETED, not hidden. v3.1 has no marker filter, so an un-migrated
+   * shard would render as a user-facing game and be offered as a resume seed.
+   */
+  describe('purgeLegacyNetRoomRecords', () => {
+    /** A v3 shard exactly as `net-room:{code}` was written: a real log + seat map, marked `net-room`. */
+    async function writeV3Shard(db: IDBDatabase, code: string): Promise<void> {
+      await saveGame(db, `net-room:${code}`, sampleGame(), {
+        ...sampleMeta,
+        result: 'net-room',
+        seats: { white: 'player-a', black: 'player-b' },
+      });
+    }
+
+    it('deletes every legacy shard, leaves real games alone, and reports the ids removed', async () => {
+      const { db } = await open();
+      await writeV3Shard(db, 'RMBBCC');
+      await writeV3Shard(db, 'DUDEEE');
+      await saveGame(db, 'a-real-game', forkedGame(), sampleMeta);
+      // Before the migration the shards are indistinguishable from games in the listing — this is the
+      // user-facing symptom (a bogus "? vs ? · net-room" entry per room code ever used).
+      expect((await listArchivedGames(db)).map((l) => l.id).sort()).toEqual([
+        'a-real-game',
+        'net-room:DUDEEE',
+        'net-room:RMBBCC',
+      ]);
+
+      const purged = await purgeLegacyNetRoomRecords(db);
+
+      expect([...purged].sort()).toEqual(['net-room:DUDEEE', 'net-room:RMBBCC']);
+      // GONE from the store itself, not merely filtered out of a view.
+      expect(await getGame(db, 'net-room:RMBBCC')).toBeUndefined();
+      expect(await getGame(db, 'net-room:DUDEEE')).toBeUndefined();
+      // The real game survives untouched, still loadable with its history intact.
+      expect((await listArchivedGames(db)).map((l) => l.id)).toEqual(['a-real-game']);
+      expect((await loadGame(db, 'a-real-game'))!.ply()).toBe(forkedGame().ply());
+    });
+
+    it('is idempotent — a second run finds nothing and removes nothing (negative case)', async () => {
+      const { db } = await open();
+      await writeV3Shard(db, 'RMBBCC');
+      await saveGame(db, 'a-real-game', forkedGame(), sampleMeta);
+
+      expect(await purgeLegacyNetRoomRecords(db)).toHaveLength(1);
+      expect(await purgeLegacyNetRoomRecords(db)).toEqual([]);
+      expect((await listArchivedGames(db)).map((l) => l.id)).toEqual(['a-real-game']);
+    });
+
+    it('never touches a v3.1 networked game (keyed by uuid, seat map and all)', async () => {
+      const { db } = await open();
+      await saveGame(db, SAMPLE_UUID, sampleGame(), {
+        ...sampleMeta,
+        seats: { white: 'player-a', black: 'player-b' },
+      });
+
+      expect(await purgeLegacyNetRoomRecords(db)).toEqual([]);
+      expect((await loadNetGame(db, SAMPLE_UUID))?.seats).toEqual({
+        white: 'player-a',
+        black: 'player-b',
+      });
     });
   });
 

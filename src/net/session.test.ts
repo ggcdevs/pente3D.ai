@@ -14,8 +14,8 @@
 
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { openDatabase } from '../persist/db';
-import { saveGame } from '../persist/archive';
+import { openDatabase, getGame, putGame } from '../persist/db';
+import { saveGame, listArchivedGames, ArchiveError } from '../persist/archive';
 import {
   writeActiveGame,
   readActiveGame,
@@ -1044,5 +1044,231 @@ describe('NetSession — a `current` establisher resumes its real game and admit
     expect(a.gameUuid()).toBe(b.gameUuid());
     expect(a.seatOwners()).toEqual({ white: 'player-a', black: 'player-b' });
     expect(b.seatOwners()).toEqual({ white: 'player-a', black: 'player-b' });
+  });
+});
+
+/**
+ * SEEDING A GAME THIS BROWSER OWNS NO SEAT IN (V.1 review round 4) — the honest outcomes for a
+ * `resume`/`current` proposal and for a breadcrumb, where the game IS in our archive but its
+ * identity-owned seat map owns BOTH seats for other playerIds (design §2.3: absence never vacates
+ * ownership). Reachable for real: `pente:playerId` lives in localStorage while the games live in
+ * IndexedDB, so losing the former (cleared site data, a fresh profile) while keeping the latter puts
+ * this browser in front of games it can no longer sit down at.
+ *
+ * Neither path may THROW: `enter()` is called as `void session.enter(...).then(refreshUi)` in the app,
+ * so a rejected promise is unhandled — the session would be left reporting `phase: 'connecting'`
+ * forever with no reason anywhere, a readout that LIES about what is happening.
+ */
+describe('NetSession — a seed whose seats belong to OTHER identities (no throw, no wedge)', () => {
+  /** A 3-move game archived UNDER ITS UUID whose seats are owned by two OTHER playerIds. */
+  async function seedForeignOwnedGame(into: IDBDatabase): Promise<Game> {
+    const g = new Game(SIZE);
+    g.place(coordsOf('0,0,0'));
+    g.place(coordsOf('1,1,1'));
+    g.place(coordsOf('2,2,2'));
+    await saveGame(into, g.uuid, g, {
+      players: { white: 'player-OLD', black: 'player-OTHER' },
+      result: 'in-progress',
+      startedAt: 0,
+      seats: { white: 'player-OLD', black: 'player-OTHER' },
+    });
+    return g;
+  }
+
+  it('a RESUME of it is refused with the seat manager’s typed reason — offline, never connecting', async () => {
+    const hub = new MockRelayHub();
+    const own = await openDatabase(`net-foreign-resume-${Math.random().toString(36).slice(2)}`);
+    const prior = await seedForeignOwnedGame(own);
+
+    const a = makeSession(hub, 'player-NEW', { db: own, storage: memoryStorage() });
+    await a.enter(ROOM, { kind: 'resume', uuid: prior.uuid, headHash: headHash(prior.log) });
+    await flush();
+
+    // OFFLINE with the honest reason on the USER-FACING state (design §7) — both seats are owned by
+    // absent players, so the seat manager's `seat-reserved` is exactly what happened.
+    expect(a.state().phase).toBe('offline');
+    expect(a.state().joinError).toBe('seat-reserved');
+    expect(a.state().seat).toBeNull();
+    expect(a.gameUuid()).toBeNull();
+    // Not an ARBITER reject: nobody refused us over the relay, so the typed admission readout stays
+    // null rather than claiming a reject that never crossed the wire.
+    expect(a.lastRejectReason()).toBeNull();
+    // The transport was never even connected — we refused before touching the relay, so the room has
+    // no phantom peer sitting in it.
+    expect(hub.peerIds(ROOM)).toEqual([]);
+  });
+
+  it('a DEFER whose BREADCRUMB names it degrades to a fresh game (the honest degrade it promises)', async () => {
+    const hub = new MockRelayHub();
+    const own = await openDatabase(`net-foreign-defer-${Math.random().toString(36).slice(2)}`);
+    const store = memoryStorage();
+    const prior = await seedForeignOwnedGame(own);
+    writeActiveGame({ code: ROOM, gameUuid: prior.uuid, updatedAt: 0 }, store);
+
+    // A `defer` did not ASK for that game — the breadcrumb is a hint about what we were last doing, so
+    // an unusable hint brings an EMPTY game rather than refusing an entry aimed at no game in
+    // particular (the same degrade a breadcrumb naming a game we no longer hold takes).
+    const a = makeSession(hub, 'player-NEW', { db: own, storage: store });
+    await a.enter(ROOM, DEFER);
+    await a.whenPersisted();
+    await flush();
+
+    expect(a.state().phase).toBe('connected');
+    expect(a.state().joinError).toBeNull();
+    expect(a.gameUuid()).not.toBe(prior.uuid);
+    expect(Object.keys(a.gameState()!.pieces).length).toBe(0);
+    // A genuinely fresh game: first-available white on an EMPTY map, not the foreign owners' map.
+    expect(a.state().seat).toBe('white');
+    expect(a.seatOwners()).toEqual({ white: 'player-NEW', black: null });
+  });
+});
+
+/**
+ * THE BREADCRUMB'S JS-VAR HALF (design §2 "Dual-tracked: localStorage for reload recovery, a JS var
+ * for the live session — the JS var survives a win so the rematch flow works").
+ *
+ * The regression this pins: with only the localStorage half implemented (cleared on the winning move),
+ * a peer that dropped after a decided game and returned established a BRAND-NEW empty game and
+ * ORPHANED the finished one — the #40 empty-room facet, and the state the rematch flow needs.
+ */
+describe('NetSession — a return after a WIN recovers the finished game (design §2 dual-tracking)', () => {
+  it('the live session re-seeds the DECIDED game on return, while localStorage still offers nothing', async () => {
+    const hub = new MockRelayHub();
+    const dbA = await openDatabase(`net-postwin-a-${Math.random().toString(36).slice(2)}`);
+    const dbB = await openDatabase(`net-postwin-b-${Math.random().toString(36).slice(2)}`);
+    const storeA = memoryStorage();
+    const storeB = memoryStorage();
+    const a = makeSession(hub, 'player-a', { db: dbA, storage: storeA });
+    const b = makeSession(hub, 'player-b', { db: dbB, storage: storeB });
+
+    await a.enter(ROOM, NEW);
+    await b.enter(ROOM, DEFER);
+    await flush();
+    expect(a.state().seat).toBe('white');
+    expect(b.state().seat).toBe('black');
+
+    // A REAL networked white five-in-a-row over the mock relay (black builds elsewhere, no captures).
+    const white = ['0,0,0', '1,0,0', '2,0,0', '3,0,0', '4,0,0'];
+    const black = ['0,4,4', '1,4,4', '2,4,4', '3,4,4'];
+    for (let i = 0; i < white.length; i++) {
+      a.place(coordsOf(white[i]!));
+      await flush();
+      if (i < black.length) {
+        b.place(coordsOf(black[i]!));
+        await flush();
+      }
+    }
+    await a.whenPersisted();
+    const wonUuid = a.gameUuid();
+    expect(a.gameState()!.winner).toBe('white');
+    // The reload half is CLEARED by the win (a finished game must not be offered to a fresh boot)…
+    expect(readActiveGame(storeA)).toBeNull();
+
+    // BOTH peers drop after the win (nobody proposed a rematch yet), then A returns to the room.
+    a.disconnect();
+    b.disconnect();
+    await flush();
+    await a.enter(ROOM, DEFER);
+    await a.whenPersisted();
+    await flush();
+
+    // …yet THIS session's return lands back on the game it just finished: same identity, the full
+    // nine-piece board, the white seat it owned, and the result still visible. Before the JS-var half
+    // existed this was a fresh empty game with a different uuid and the win orphaned.
+    expect(a.state().phase).toBe('connected');
+    expect(a.gameUuid()).toBe(wonUuid);
+    expect(Object.keys(a.gameState()!.pieces).length).toBe(9);
+    expect(a.gameState()!.winner).toBe('white');
+    expect(a.state().seat).toBe('white');
+    expect(a.seatOwners()).toEqual({ white: 'player-a', black: 'player-b' });
+    // The localStorage half is STILL empty — re-establishing a decided game must not resurrect the
+    // "I am currently mid-game" claim a reload would act on.
+    expect(readActiveGame(storeA)).toBeNull();
+  });
+});
+
+/**
+ * ONE GAME, ONE LISTED RECORD — the reachable `current`-seed path (V.1 review round 4, design §2 "the
+ * UUID-keyed archive is the source of truth").
+ *
+ * Carrying a played local board into a room genuinely writes TWO records: the app already archived
+ * that board under its own autosave id, and the session then persists the SAME game under the game's
+ * uuid (with the identity-owned seat map). This drives the real seam — a `current` entry over the mock
+ * relay — and asserts the games list shows the game ONCE, as the canonical record. Listing both would
+ * offer the player two entries for one game, the seat-less one being a stale fork of it.
+ */
+describe('NetSession — a `current`-seeded game is ONE entry in the games list, not two', () => {
+  it('the played board carried into a room lists once, keyed by its uuid, with its seat map', async () => {
+    const hub = new MockRelayHub();
+    const own = await openDatabase(`net-current-listing-${Math.random().toString(36).slice(2)}`);
+
+    // What the app leaves behind for a PLAYED local board before a net start: the game archived under
+    // the app's autosave id (`archiveResetBeforeStart` → the lifecycle's finalize).
+    const local = new Game(SIZE);
+    local.place(coordsOf('0,0,0'));
+    local.place(coordsOf('1,1,1'));
+    await saveGame(own, 'app-autosave-id', local, {
+      players: { white: 'You', black: 'You' },
+      result: 'in-progress',
+      startedAt: 1,
+    });
+
+    const a = makeSession(hub, 'player-a', { db: own, storage: memoryStorage() });
+    await a.enter(ROOM, { kind: 'current', uuid: local.uuid, headHash: headHash(local.log) });
+    await a.whenPersisted();
+    await flush();
+    expect(a.gameUuid()).toBe(local.uuid); // the session really is running THAT game
+
+    // Both records exist in the store (the session wrote the canonical one)…
+    expect(await getGame(own, 'app-autosave-id')).not.toBeUndefined();
+    expect(await getGame(own, local.uuid)).not.toBeUndefined();
+    // …and the games list shows the game ONCE: the canonical uuid-keyed record, seat map intact.
+    const list = await listArchivedGames(own);
+    expect(list.filter((l) => l.meta.uuid === local.uuid).map((l) => l.id)).toEqual([local.uuid]);
+    expect(list[0]!.meta.seats).toEqual({ white: 'player-a', black: null });
+  });
+});
+
+/**
+ * A seed we cannot LOAD (V.1 review round 4): the archived record the proposal/breadcrumb names holds a
+ * corrupt or illegal log, so reconstructing it fails. That is a genuine FAILURE, not a refusal — the
+ * `ArchiveError` must reach the caller VERBATIM (never masked, never relabelled as a seat/connect
+ * reason) while the session state stays HONEST about where it ended up: `offline`, with no phantom
+ * `connecting` phase and no transport left in the room.
+ */
+describe('NetSession — a seed whose archived log is CORRUPT fails honestly (no phantom connecting)', () => {
+  it('propagates the ArchiveError verbatim and leaves the session offline, out of the room', async () => {
+    const hub = new MockRelayHub();
+    const own = await openDatabase(`net-corrupt-seed-${Math.random().toString(36).slice(2)}`);
+    // A record whose stored log is ILLEGAL: two placements on the SAME node (the rules engine refuses
+    // the second), so folding it throws — exactly what a truncated/tampered record does.
+    const corruptUuid = 'corrupt-seed-uuid';
+    await putGame(own, {
+      id: corruptUuid,
+      log: [
+        { type: 'place', node: '0,0,0' },
+        { type: 'place', node: '0,0,0' },
+      ],
+      meta: {
+        players: {},
+        result: 'in-progress',
+        startedAt: 0,
+        uuid: corruptUuid,
+        headHash: 'unused-on-load',
+      },
+    });
+
+    const a = makeSession(hub, 'player-a', { db: own, storage: memoryStorage() });
+    await expect(
+      a.enter(ROOM, { kind: 'resume', uuid: corruptUuid, headHash: 'whatever' }),
+    ).rejects.toThrow(ArchiveError);
+
+    // The failure is honest in the STATE too: offline, unseated, no invented joinError, and the room
+    // holds no phantom peer (we never connected a transport).
+    expect(a.state().phase).toBe('offline');
+    expect(a.state().seat).toBeNull();
+    expect(a.state().joinError).toBeNull();
+    expect(a.gameUuid()).toBeNull();
+    expect(hub.peerIds(ROOM)).toEqual([]);
   });
 });

@@ -11,13 +11,15 @@ import { NotifyGlue, type NotifyReadout, type NotificationApi } from './net/noti
 import type { SeatMap } from './net/seats.ts';
 import type { AdmissionReject } from './net/sync.ts';
 import { headHash } from './core/eventLog.ts';
-import { openDatabase, resolveDbName } from './persist/db.ts';
+import { openDatabase, resolveDbName, type GameListing } from './persist/db.ts';
 import {
   saveGame,
   loadGame as loadArchivedGame,
   loadConflicted,
   listArchivedGames,
   playersFromSeats,
+  isEmptyShell,
+  purgeLegacyNetRoomRecords,
   type ArchivedMeta,
 } from './persist/archive.ts';
 import {
@@ -308,6 +310,13 @@ async function autosaveTick(): Promise<void> {
 void openDatabase(resolveDbName())
   .then(async (db) => {
     archiveDb = db;
+    // MIGRATION FIRST (V.1, epic #47): drop any v3 `net-room:{code}` shard this ORIGIN's store still
+    // holds. IndexedDB is per-origin, so a deployed v3 build's coordination records live in the SAME
+    // store this build reads — and v3.1 has no marker filter to hide them, so an un-migrated shard
+    // would render as a bogus user-facing game and be offered as a resume seed. Runs before the
+    // restore/listing below so nothing ever observes one. The count is an OBSERVED fact, not a claim.
+    const purged = await purgeLegacyNetRoomRecords(db);
+    if (purged.length > 0) log.info('purged legacy net-room records', { ids: purged });
     // RESTORE ON LOAD: if the current game was autosaved under our (persisted) id, reconstruct it
     // (fold its event log) and swap it into the scene, so a refresh resumes exactly where the player
     // left off — the IN-PROGRESS game, since a finalized game re-minted the id before the refresh. A
@@ -340,12 +349,29 @@ void openDatabase(resolveDbName())
   });
 
 /**
+ * The archived records that are GAMES to this app — the ONE rule both the archive browser and the
+ * Resume seed list obey, so the two can never disagree about what counts as a game.
+ *
+ * Drops every {@link isEmptyShell} record (a board with no history and no result) EXCEPT the app's
+ * current autosave record, which is the board the player has loaded right now: it is legitimately
+ * empty at boot, becomes the played game in place, and is what "Current local board" seeds from — so
+ * it is always shown. Every OTHER empty shell is an abandoned husk (a room that was entered and left
+ * before a single move; the net session keeps its record for the by-uuid reclaim, design §6.4) and
+ * showing one as a game would litter the only route back to real games (#37) with boards that never
+ * happened. This mirrors the local rule the lifecycle already enforces — a never-played board is not
+ * a game (`gameLifecycle.ts`: an idle reset mints nothing).
+ */
+function userFacingGames(listings: readonly GameListing[]): readonly GameListing[] {
+  return listings.filter((l) => l.id === autosaveId || !isEmptyShell(l));
+}
+
+/**
  * List every archived game for the browser (Task 5.8) — the app's `listArchivedGames` projected to
  * the widget's `ArchiveListing` shape. Resolves empty until the DB is open (honest, never a crash).
  */
 async function listArchive(): Promise<readonly ArchiveListing[]> {
   if (archiveDb === null) return [];
-  return await listArchivedGames(archiveDb);
+  return userFacingGames(await listArchivedGames(archiveDb));
 }
 
 /**
@@ -363,7 +389,7 @@ let seedGamesCache: readonly SeedGame[] = [];
 async function refreshSeedGames(): Promise<void> {
   if (archiveDb === null) return;
   const listings = await listArchivedGames(archiveDb);
-  seedGamesCache = listings
+  seedGamesCache = userFacingGames(listings)
     // Exclude the CURRENT game — the local autosave record (that is the "Current local board" seed),
     // and, while a networked game is live, its own uuid-keyed record: offering to "resume" the game
     // you are already playing is a confusing self-reference, not a seed.
@@ -514,6 +540,20 @@ void createAppNetSession(scene.getState().size)
       bumpGeneration();
       begin();
     };
+    /**
+     * Drive one room-ENTRY attempt (`enter`/`host`/`join`/`reconnect`) and repaint whatever it settled
+     * on. A REFUSED entry is not an error — the session records its typed `joinError` and this repaints
+     * the panel with it. A genuinely FAILED entry (e.g. the seed's archived log is corrupt — an
+     * `ArchiveError`) rejects; the session has already returned itself to `offline`, so we log the real
+     * error and repaint from that honest state rather than leaving an UNHANDLED rejection and a stale
+     * widget behind (agent-principles: errors propagate honestly, never silently).
+     */
+    const driveEntry = (attempt: Promise<unknown>): void => {
+      void attempt.then(refreshUi).catch((err: unknown) => {
+        log.error('room entry failed', err);
+        refreshUi();
+      });
+    };
     scene.setNetHooks({
       host: () => {
         // Host the chosen room code (issue #13: the picked code IS the room). The Network-Game panel
@@ -522,12 +562,12 @@ void createAppNetSession(scene.getState().size)
         // (e.g. a keybinding) generates a fresh code instead of re-using a stale one.
         const code = pendingJoinCode;
         pendingJoinCode = '';
-        startNetGame(() => void session.host(code).then(refreshUi));
+        startNetGame(() => driveEntry(session.host(code)));
       },
       join: () => {
         const code = pendingJoinCode;
         pendingJoinCode = '';
-        startNetGame(() => void session.join(code).then(refreshUi));
+        startNetGame(() => driveEntry(session.join(code)));
       },
       setPendingJoinCode: (code) => {
         pendingJoinCode = code;
@@ -627,7 +667,7 @@ void createAppNetSession(scene.getState().size)
     // rather than by which button was pressed (the #31 fix). A `defer`/`new` mirrors the old join/host;
     // `current`/`resume` carry a real game identity the protocol reconciles against the peer's.
     enterRoom = (code, proposal) => {
-      startNetGame(() => void session.enter(code, proposal).then(refreshUi));
+      startNetGame(() => driveEntry(session.enter(code, proposal)));
     };
 
     // MUTUAL-ACCEPT in-place rematch reset (Task N.2.2, plan N.2 decision 2: "both reset to a fresh
@@ -681,7 +721,7 @@ void createAppNetSession(scene.getState().size)
       getGameState: () => session.gameState(),
       getPly: () => session.ply(),
       getSeat: () => session.state().seat,
-      reconnect: () => void session.reconnect().then(refreshUi),
+      reconnect: () => driveEntry(session.reconnect()),
     });
 
     // On EVERY session-state change — a local move, a REMOTE move adopted by the transport pump

@@ -9,11 +9,12 @@ import { test, expect } from '@playwright/test';
  *      hosting a game RESETS the visible board (getState back to empty) AND the just-abandoned local
  *      game is kept in the archive (a record whose headHash == the played board's head exists).
  *   2. JOIN-ONTO-A-PLAYED-BOARD does the same (host and join share one archive+reset seam).
- *   3. HOST-ONTO-AN-EMPTY-BOARD just starts — no spurious archive record is minted for the LOCAL
- *      board (the pristine board is left untouched; nothing worth keeping). Since V.1 (epic #47) the
- *      networked game itself IS archived, under its own game UUID (design §2 "games keyed by UUID" —
- *      the record a return re-seeds from and the games list offers, #37), so the archive grows by
- *      exactly that ONE record and the pristine local record is left in place.
+ *   3. HOST-ONTO-AN-EMPTY-BOARD just starts — no spurious archive record is minted (the pristine
+ *      local board is left untouched, and the unplayed networked board is not a game either, so
+ *      hosting a room nobody joins and leaving cannot litter the games list). Since V.1 (epic #47)
+ *      the networked game IS archived under its own game UUID (design §2 "games keyed by UUID" — the
+ *      record a return re-seeds from and the games list offers, #37); the same test then plays ONE
+ *      move and proves that record shows up, so the anti-litter assertion above is not vacuous.
  *   4. PLAY-AGAIN on a finished networked game (Task N.2.2, issue #12) — two contexts play a networked
  *      game to a real five-in-a-row; when it ends BOTH clients surface the non-blocking view-only
  *      end-state overlay, one proposes Rematch through the N.1 handshake and the other Accepts, and on
@@ -213,7 +214,7 @@ test('JOIN onto a played local board archives + resets identically (host/join sh
   expect(list.some((r) => r.meta.headHash === playedHead)).toBe(true);
 });
 
-test('HOST onto an EMPTY board just starts — no spurious LOCAL archive record is minted', async ({
+test('HOST onto an EMPTY board just starts — no spurious archive record is minted', async ({
   page,
 }) => {
   await installMock(page, 'host-empty');
@@ -229,23 +230,38 @@ test('HOST onto an EMPTY board just starts — no spurious LOCAL archive record 
   // Host with a pristine board: nothing local is worth archiving, so no reset-mint happens.
   await page.evaluate(() => (window as unknown as { __pente: Pente }).__pente.dispatch('hostGame'));
   await waitConnected(page);
-
-  // No played game existed, so `shouldArchiveBeforeNetStart` returned false: NO extra record for the
-  // local board — every pre-host record is still there, unchanged, and none was abandoned/duplicated.
-  const after = await archive(page);
   const netUuid = await page.evaluate(
     () => (window as unknown as { __pente: Pente }).__pente.getNetGameUuid(),
   );
   expect(netUuid).not.toBeNull();
-  expect(after.map((r) => r.id).filter((id) => beforeIds.includes(id))).toEqual(beforeIds);
-  // The ONLY addition is the networked game's OWN record, keyed by its uuid and carrying the
-  // identity-owned seat map (V.1, #47: that record is how a return re-seeds this game — never the
-  // room code). So the archive grew by exactly one, and by exactly that game.
+
+  // THE ANTI-LITTER GATE: the games list does NOT grow. Two things had to hold for that — no local
+  // reset-mint (`shouldArchiveBeforeNetStart` said the pristine board was not worth archiving), AND
+  // the networked board nobody has played on is not a game either. Hosting a room and walking away
+  // must leave the list exactly as it was, however many times you do it (V.1, epic #47: the session
+  // DOES keep a uuid-keyed record for the by-uuid reclaim, but an empty shell is not offered as a
+  // game — `isEmptyShell`, mirroring the local rule that an idle reset of a never-played board mints
+  // nothing).
+  await page.waitForTimeout(300); // let any (erroneous) mint/persist writes land before asserting
+  expect((await archive(page)).map((r) => r.id)).toEqual(beforeIds);
+
+  // …and the gate is not vacuous: ONE move turns that board into a real game, which then appears —
+  // exactly once, keyed by the game's own uuid and carrying the identity-owned seat map (the record a
+  // return re-seeds from, never the room code). Proof the record is really there and really listed.
+  await place(page, [0, 0, 0]);
+  expect((await state(page))?.pieces['0,0,0']).toBe('white');
+  await page.waitForFunction(async (id: string) => {
+    const l = await (window as unknown as { __pente: Pente }).__pente.getArchive();
+    return l.some((r) => r.id === id);
+  }, netUuid!);
+  const after = await archive(page);
   const added = after.filter((r) => !beforeIds.includes(r.id));
   expect(added).toHaveLength(1);
   expect(added[0]!.id).toBe(netUuid);
   expect(added[0]!.meta.uuid).toBe(netUuid);
   expect(added[0]!.meta.seats).not.toBeUndefined();
+  // Every pre-host record survived untouched — nothing was abandoned or duplicated by the net start.
+  expect(after.map((r) => r.id).filter((id) => beforeIds.includes(id))).toEqual(beforeIds);
 });
 
 /** Host on `host`, join on `joiner`, then drive a REAL networked white five-in-a-row (host = white)

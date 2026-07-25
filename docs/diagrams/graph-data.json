@@ -1478,10 +1478,12 @@
         "target": "src/persist/archive.ts",
         "specifiers": [
           "ArchivedMeta",
+          "isEmptyShell",
           "listArchivedGames",
           "loadConflicted",
           "loadGame",
           "playersFromSeats",
+          "purgeLegacyNetRoomRecords",
           "saveGame"
         ]
       },
@@ -1489,6 +1491,7 @@
         "source": "./persist/db.ts",
         "target": "src/persist/db.ts",
         "specifiers": [
+          "GameListing",
           "openDatabase",
           "resolveDbName"
         ]
@@ -1570,7 +1573,8 @@
       "resolveAutosaveId",
       "resumeArchived",
       "reviewArchived",
-      "seedSources"
+      "seedSources",
+      "userFacingGames"
     ]
   },
   "src/net/activeGame.ts": {
@@ -2481,6 +2485,7 @@
         "source": "./activeGame",
         "target": "src/net/activeGame.ts",
         "specifiers": [
+          "ActiveNetworkedGame",
           "clearActiveGame",
           "isActiveGameStale",
           "readActiveGame",
@@ -2524,6 +2529,7 @@
         "source": "./seats",
         "target": "src/net/seats.ts",
         "specifiers": [
+          "ClaimRejection",
           "SeatColor",
           "SeatMap",
           "claimSeat",
@@ -3132,14 +3138,17 @@
       "ArchivedMeta",
       "ConflictInput",
       "ConflictedGame",
+      "LEGACY_NET_ROOM_RESULT",
       "PersistedSeats",
       "flagConflicted",
+      "isEmptyShell",
       "listArchivedGames",
       "loadConflicted",
       "loadGame",
       "loadNetGame",
       "loadNetGameByUuid",
       "playersFromSeats",
+      "purgeLegacyNetRoomRecords",
       "saveGame"
     ],
     "imports": [
@@ -3173,6 +3182,7 @@
         "specifiers": [
           "GameListing",
           "GameRecord",
+          "deleteGame",
           "getGame",
           "listGames",
           "putGame"
@@ -3253,12 +3263,14 @@
     "functions": [
       "flagConflicted",
       "gameFromStoredLog",
+      "isEmptyShell",
       "listArchivedGames",
       "loadConflicted",
       "loadGame",
       "loadNetGame",
       "loadNetGameByUuid",
       "playersFromSeats",
+      "purgeLegacyNetRoomRecords",
       "saveGame",
       "toPlainLog"
     ]
@@ -3311,15 +3323,20 @@
           "readonly log: readonly Readonly<Record<string, unknown>>[]",
           "readonly meta: GameMeta"
         ]
+      },
+      {
+        "name": "GameListing",
+        "extends": [
+          "Omit"
+        ],
+        "methods": [],
+        "properties": [
+          "readonly events: number"
+        ]
       }
     ],
     "enums": [],
-    "typeAliases": [
-      {
-        "name": "GameListing",
-        "type": "Omit<GameRecord, 'log'>"
-      }
-    ],
+    "typeAliases": [],
     "functions": [
       "deleteGame",
       "getGame",

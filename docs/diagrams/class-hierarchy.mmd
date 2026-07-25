@@ -317,6 +317,11 @@ classDiagram
         +readonly uuid: string
     }
     note for GameExport "src/core/serialize.ts"
+    class GameListing {
+        <<interface>>
+        +readonly events: number
+    }
+    note for GameListing "src/persist/db.ts"
     class GameMeta {
         <<interface>>
         +readonly headHash: string
@@ -1727,5 +1732,6 @@ classDiagram
     Error <|-- SyncError
     GameRecord <|-- ConflictedRecord
     LineGroup <|-- ResolvedLineGroup
+    Omit <|-- GameListing
     Transport <|.. MockTransport
     Transport <|.. MqttTransport

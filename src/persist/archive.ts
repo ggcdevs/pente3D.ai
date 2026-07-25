@@ -30,6 +30,7 @@ import {
   getGame,
   putGame,
   listGames,
+  deleteGame,
   type GameListing,
   type GameRecord,
 } from './db';
@@ -55,6 +56,18 @@ export function playersFromSeats(seats: PersistedSeats): Record<string, string> 
   if (seats.black !== null) players.black = seats.black;
   return players;
 }
+
+/**
+ * The `meta.result` marker of a **v3** internal `net-room:{code}` record — a game + seat map that v3
+ * persisted per room CODE, the coupling epic #47 deleted (design §1/§2 "Deleted: `net-room:{code}`").
+ *
+ * v3.1 never writes one. It exists only so {@link purgeLegacyNetRoomRecords} can RECOGNIZE the shards
+ * a deployed v3 build already wrote into a real user's IndexedDB — the store is per-ORIGIN, so the
+ * same origin's v3 and v3.1 builds share it. Their game bytes are not user data at risk: v3's autosave
+ * archived the same authoritative net game under the app's own autosave id, so a shard is a duplicate
+ * of a listed game plus a room-scoped seat map that means nothing in a model with no code→game link.
+ */
+export const LEGACY_NET_ROOM_RESULT = 'net-room';
 
 /** The board size assumed for archived games when none is stored (v1 default). */
 const DEFAULT_SIZE = 9;
@@ -276,18 +289,87 @@ export async function loadNetGameByUuid(
 }
 
 /**
- * List every archived game as `{ id, meta }` (no logs), sorted by `startedAt`
- * descending so the most recently started game is first — the natural order for an
- * archive browser (Stage 5).
+ * List every archived GAME as `{ id, meta, events }` (no logs), sorted by `startedAt` descending so
+ * the most recently started game is first — the natural order for an archive browser (Stage 5).
  *
- * EVERY archived game is listed. The v3 exclusion of internal `net-room:{code}` shards died with the
- * coupling that created them (V.1, epic #47): a networked game is now an ordinary archive record
- * keyed by its own UUID, and with reload → empty slate the games list is the ONLY route back to it
- * (design §10, #37) — so hiding records here would hide real, resumable games.
+ * Every game appears, and each appears **once**. There is no marker-based exclusion any more (the v3
+ * `net-room:{code}` shard + its filter died with the coupling that created them — V.1, epic #47; the
+ * shards a v3 build left behind are DELETED by {@link purgeLegacyNetRoomRecords}, not hidden): a
+ * networked game is an ordinary record keyed by its own UUID, and with reload → empty slate the games
+ * list is the ONLY route back to it (design §10, #37), so hiding a real game would lose it.
+ *
+ * What IS collapsed is a **shadow** of a game already stored canonically. One game legitimately ends
+ * up in two records: the app's autosave record (a local board, keyed by the app's autosave id) and —
+ * once that same game is carried into a room — the canonical record the net session keeps under the
+ * game's OWN uuid (design §2: "games keyed by UUID" are the source of truth). Listing both would show
+ * ONE game twice, and picking the shadow would open a stale fork of it and silently drop the
+ * identity-owned seat map the empty-room reclaim needs. So a record whose `meta.uuid` is the id of
+ * ANOTHER record — i.e. that game is canonically archived under its uuid — is dropped in favour of
+ * the canonical one.
+ *
+ * Two records are NEVER collapsed: a CONFLICTED record (it stores both forks — information no other
+ * record holds, so it is its own artifact rather than a duplicate view of one game), and a shadow that
+ * holds MORE events than the canonical record (two records for one game where the canonical one has
+ * LESS history is anomalous; this listing never hides history — it shows both and lets the player
+ * choose rather than silently serving the shorter one).
  */
 export async function listArchivedGames(db: IDBDatabase): Promise<GameListing[]> {
   const listings = await listGames(db);
-  return listings.sort((a, b) => b.meta.startedAt - a.meta.startedAt);
+  // The canonical record of a game is the one whose primary key IS the game's uuid.
+  const canonical = new Map<string, GameListing>();
+  for (const listing of listings) {
+    if (listing.id === listing.meta.uuid) canonical.set(listing.meta.uuid, listing);
+  }
+  return listings
+    .filter((listing) => {
+      if (listing.id === listing.meta.uuid) return true; // the canonical record itself
+      // A conflicted record carries BOTH forks (see `flagConflicted`); the canonical record of the
+      // same uuid carries neither, so it can never stand in for it.
+      if (listing.meta.result === 'conflicted') return true;
+      const owner = canonical.get(listing.meta.uuid);
+      if (owner === undefined) return true; // no canonical copy → this IS the game's only record
+      return listing.events > owner.events; // never hide MORE history than the canonical holds
+    })
+    .sort((a, b) => b.meta.startedAt - a.meta.startedAt);
+}
+
+/**
+ * Whether a listing is an **empty shell**: a record for a game with no history at all and no outcome
+ * (`events === 0`, still `in-progress`) — a board on which nothing ever happened.
+ *
+ * Kept in the store (a live net session's record is written the moment seats are negotiated, and the
+ * empty-room reclaim re-seeds an unplayed game — a post-rematch board — from it by uuid), but it is
+ * not a *game* to offer the player: there is nothing to return to that "New game" would not give
+ * them, and one such record per abandoned room would accumulate into pure noise in the games list.
+ * The app applies this to what it SHOWS (`main.ts`), keeping the store honest and complete while the
+ * archive browser + resume list agree with the local rule that a never-played board is not a game.
+ */
+export function isEmptyShell(listing: GameListing): boolean {
+  return listing.events === 0 && listing.meta.result === 'in-progress';
+}
+
+/**
+ * MIGRATION (V.1, epic #47) — delete every v3 internal `net-room:{code}` shard
+ * ({@link LEGACY_NET_ROOM_RESULT}) this origin's IndexedDB still holds, resolving with the ids
+ * removed (empty when there were none, so a caller can log an observed fact).
+ *
+ * v3 hid these from the listing with a marker filter; v3.1 has no such filter, so without this
+ * migration every shard a deployed v3 build wrote would render as a user-facing game ("? vs ? ·
+ * net-room", unresumable) and be offered as a resume seed. They are not games: the same authoritative
+ * game was archived under the app's autosave id too, so the history survives this delete — what goes
+ * is a duplicate keyed by a room code, the exact artifact the v3.1 model exists to abolish.
+ *
+ * Idempotent: a second run finds nothing and deletes nothing. Errors propagate (a failed delete
+ * rejects with its `DOMException` rather than resolving as a silent success).
+ */
+export async function purgeLegacyNetRoomRecords(db: IDBDatabase): Promise<readonly string[]> {
+  const shards = (await listGames(db)).filter(
+    (listing) => listing.meta.result === LEGACY_NET_ROOM_RESULT,
+  );
+  for (const shard of shards) {
+    await deleteGame(db, shard.id);
+  }
+  return shards.map((shard) => shard.id);
 }
 
 /** Inputs to {@link flagConflicted}: both forked logs plus the caller's metadata. */
