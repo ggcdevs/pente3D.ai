@@ -29,6 +29,9 @@ const BRANCH_NOTE =
 const TRAILER = 'Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>'
 // Stages from V.3 on must keep the #45 acceptance test green; before that it legitimately fails.
 const SCENARIO_GREEN_FROM = 'V.3'
+// Resume support: skip tasks BEFORE this id (they are already built, gated and pushed). Announced in
+// the log rather than applied silently — a skipped task must never read as a covered one.
+const START_FROM = A.startFrom || null
 
 const DOCTRINE =
   'Read planning/agent-principles.md and obey it (genuine tests, proof-by-behaviour-not-log, never weaken a gate, #7 prove-gates-bite, #8 no hardcoded volatile facts, commit hygiene: reference the issue). PROOF, NOT INFERENCE: run the command, paste real output; if you did not observe it, it is not done. ' +
@@ -65,6 +68,7 @@ const TASKS = [
       "Make `reconcile` the design's SEED MATRIX, enforced on the wire: `new` SENDS and ACCEPTS empty state only and REJECTS a non-empty peer game; `resume`/`current` send their own concrete game and accept only the SAME uuid (reject a different concrete game); `defer` (dealer's choice) is the ONLY kind that adopts a peer's non-empty game. Mismatched seeds (e.g. New vs Current) produce an honest TYPED reject — add the reason(s) to the AdmissionReject union, the codec, and the human-facing copy; surface it VERBATIM (never masked or relabelled). The user's words: \"when selecting 'New Game', i would expect the laptop to never send non-empty gamestate data and i would expect my phone to reject any non-empty gamestate data. only 'Dealer's Choice' should allow a device to accept non-empty gamestate data.\" " +
       "BOTH peers picking `new` are interchangeable → they must converge on ONE shared game uuid at GENESIS via the deterministic initiator election (earlier arrival, then lower playerId). That is the real #42 fix: a genuinely shared UUID from the start, NOT 'converges on the first move'. " +
       "This is also what structurally fixes #46 (New Game pushing a stale code-saved game) and #43 (New Game at a reused code keeping the old board) now that V.1 removed the store they read from. " +
+      "ALSO CARRY OVER from V.1's review (a real gap, now yours because it is about surfacing refusals): a room entry that genuinely FAILS — e.g. the seed's archived log is corrupt, so `enter` rejects with an ArchiveError — is caught in main.ts `driveEntry` and only LOGGED; the session sets no `joinError` (`resetToOffline(null)`), so the panel repaints to a plain offline state and the player is told NOTHING. Give that path an honest typed reason surfaced in the panel, exactly like an admission reject. " +
       "PURE → strict TDD + fast-check (reconcile is ORDER-INSENSITIVE: reconcile(a,b) and reconcile(b,a) agree on the same game or the same typed reject; `new` never yields a non-empty agreed game; both-new yields ONE uuid and two DISTINCT seat owners; the election is deterministic under permutation) + negative cases for every reject + mutation + 100% coverage.",
   },
   {
@@ -118,6 +122,7 @@ const TASKS = [
       "READ src/main.ts (AUTOSAVE_ID_KEY and the boot restore), src/net/session.ts (enter/reconnect), src/net/activeGame.ts (V.1) and design §6 FIRST. " +
       "(1) A tab reload ALWAYS lands on an EMPTY SLATE — stop auto-restoring the autosave game on boot. Games are not lost: they are durable in the archive by UUID and reachable from the games list (V.6). The user's words: \"if you restart (i.e.: reload the tab), you should always get dropped back to the main page with an empty slate/board\". " +
       "(2) If the breadcrumb exists, PROBE the room on load (connect, check presence, compare the waiting peer's game uuid from its `hello`) and OFFER — never auto-load: peer present with the SAME uuid → 'Rejoin DUDEEE as Black?' where the colour is DERIVED from the game's seat map (displayed, never negotiated — that is what keeps #31/#40 closed); peer present with a DIFFERENT uuid → warn, do not hijack ('Do you want to restart your last DUDEEE game with a new code?'); room empty → 'You were playing DUDEEE, but no one is there anymore. Rejoin as Black anyway?' (rejoin and wait). Declining CLEARS the breadcrumb; a stale updatedAt expires quietly. If the game ended while we were away we rejoin, adopt, see the result, and the breadcrumb clears — the flow self-heals. " +
+      "(3) RESOLVE THE TWO-WRITER ARRANGEMENT V.1 left behind — this task owns it because it already rewrites main.ts's boot/restore path. Today ONE game can occupy TWO records: the app autosave record (keyed by the app's `autosaveId`) and, once that game is carried into a room, the canonical record under the GAME'S UUID that `NetSession.persistGame` writes. V.1 made the two writers cooperate (a shared `playersFromSeats` projection, `archivedStartedAts` priming so both agree on the date, and a shadow-collapse rule in `listArchivedGames` that hides the non-canonical copy) — machinery that exists only because of the double write. Since #35/S.1 EVERY `Game` already carries a uuid, so the simpler structure is to key EVERY autosave record by `game.uuid` (local games included) and retire `autosaveId` + AUTOSAVE_ID_KEY, which this task is removing from the boot path anyway: then one game has exactly one record, always, and the shadow-collapse rule, the startedAt priming and the cooperating-writers comments all DELETE. Evaluate that; if it holds, do it (it should be a net REMOVAL of code) and say so; if it does not, explain precisely what breaks and leave the current arrangement documented as deliberate. Either way V.6 must not inherit an undecided listing rule. " +
       "PURE src/ui/widgets/rejoinPromptModel.ts: `deriveRejoinPrompt(probe) → view-model` (strict TDD + fast-check over the probe cases + mutation + 100%). GLUE: the probe itself, the DOM prompt, main.ts boot. Playwright: reload lands empty; each of the three probe outcomes renders its prompt; declining clears the breadcrumb (assert via window.__pente / storage, not a log). COLLABORATION POINT: the copy — keep it plain, the user will tune it.",
   },
   {
@@ -175,7 +180,15 @@ const BUILD_SCHEMA = {
 const results = []
 let halted = null
 
+let skipping = START_FROM !== null
 for (const t of TASKS) {
+  if (skipping) {
+    if (t.id !== START_FROM) {
+      log(`SKIPPED ${t.id} (${t.label}) — already built + gated + pushed before this run (startFrom=${START_FROM}); NOT verified by this run.`)
+      continue
+    }
+    skipping = false
+  }
   // The phase title lives on the TASK (kept identical to the meta phase titles): the harness
   // parses `meta` as a pure literal, so it is NOT a runtime binding in this body — reading it
   // here threw "meta is not defined" and killed the run before a single agent started.
