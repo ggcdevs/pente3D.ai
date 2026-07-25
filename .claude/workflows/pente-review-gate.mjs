@@ -1,6 +1,6 @@
 export const meta = {
   name: 'pente-review-gate',
-  description: 'Test-integrity + adversarial review gate: assertion-lint, mutation testing, 2 reviewers, fix loop (max 3, then escalate), push on green',
+  description: 'Test-integrity + adversarial review gate: assertion-lint, mutation testing, 2 reviewers, fix→review loop (max 3 rounds, then escalate with findings UNFIXED), push on green. REQUIRES args {repoPath, scope}; optional {stage, mutateScope, coverageScope, marker}.',
   phases: [
     { title: 'Harden', detail: 'install/config eslint-plugin-vitest + StrykerJS; apply required assert-over-delete fix' },
     { title: 'Review', detail: '2 adversarial reviewers scrutinize impl+tests vs agent-principles.md' },
@@ -9,7 +9,6 @@ export const meta = {
   ],
 }
 
-const REPO = '/home/guy/code/git/github.com/ggcdevs/pente3D.ai'
 // args may arrive as an object OR a JSON string depending on the caller — handle both,
 // and FAIL LOUD if scope is missing rather than silently gating the wrong code.
 const A = typeof args === 'string' ? JSON.parse(args) : (args || {})
@@ -18,6 +17,18 @@ const STAGE = A.stage
 if (!SCOPE || typeof SCOPE !== 'string') {
   throw new Error('pente-review-gate: args.scope (a whitespace-separated path string, e.g. "src/config src/persist") is REQUIRED — refusing to run with a silent default that could gate the wrong code.')
 }
+// The WORKING TREE to gate. Was hardcoded to the main checkout, which is a volatile fact
+// (agent-principles #8) and an active hazard: this repo uses WORKTREES, so a hardcoded path
+// combined with "work in-place, never checkout" sends every agent into whatever branch that one
+// tree happens to be on — and then pushes it. Required, no default.
+const REPO = A.repoPath
+if (!REPO || typeof REPO !== 'string') {
+  throw new Error('pente-review-gate: args.repoPath (absolute path to the worktree to gate, e.g. "/home/guy/.config/superpowers/worktrees/pente3D.ai/net-model-v3.1") is REQUIRED — a hardcoded path would gate/push the wrong branch.')
+}
+// Optional extra ref to publish on success (each branch deploys to /<branch>/, so a per-stage
+// marker makes that stage separately playable). Pushed only when the gate passes AND reviewers
+// approved — never as a way to get unapproved work onto a URL.
+const MARKER = (A.marker && typeof A.marker === 'string') ? A.marker : null
 // SCOPE = the full changed surface the REVIEWERS read (impl + tests + glue + e2e). It is NOT the
 // coverage target: glue (THREE/DOM/net) and e2e specs are Playwright-verified, not vitest-measured,
 // so demanding "100% coverage on all of SCOPE" is structurally impossible and used to false-escalate
@@ -28,10 +39,13 @@ if (!SCOPE || typeof SCOPE !== 'string') {
 // weakening: the bar stays 100% on every measurable pure file; glue stays Playwright-verified.
 const MUTATE_SCOPE = (A.mutateScope && typeof A.mutateScope === 'string') ? A.mutateScope : SCOPE
 const COVERAGE_SCOPE = (A.coverageScope && typeof A.coverageScope === 'string') ? A.coverageScope : MUTATE_SCOPE
-log(`review-gate resolved review-scope="${SCOPE}" coverage-scope="${COVERAGE_SCOPE}" mutate-scope="${MUTATE_SCOPE}" stage=${STAGE}`)
+log(`review-gate resolved repo="${REPO}" review-scope="${SCOPE}" coverage-scope="${COVERAGE_SCOPE}" mutate-scope="${MUTATE_SCOPE}" stage=${STAGE}${MARKER ? ` marker=${MARKER}` : ''}`)
 const PRINCIPLES = 'planning/agent-principles.md'
 const MUT_MIN = 95
-const TRAILER = 'Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>'
+const TRAILER = 'Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>'
+// Max REVIEW rounds. The loop below reviews after EVERY fix (see the invariant note), so the cap
+// can only ever be reached with the last round's findings unfixed — never with unreviewed fixes.
+const MAX_REVIEW_ROUNDS = 3
 const DOCTRINE =
   'Read planning/agent-principles.md and obey it as hard constraints. PROOF, NOT INFERENCE: run the command, paste real output; if not observed, it is not done.'
 
@@ -76,11 +90,17 @@ const FIX_SCHEMA = {
 }
 const GATE_SCHEMA = {
   type: 'object', additionalProperties: false,
-  required: ['passed', 'lintPassed', 'testsPassed', 'coveragePct', 'mutationScore'],
+  required: ['passed', 'lintPassed', 'testsPassed', 'coveragePct', 'mutationScore', 'cliTypecheckPassed', 'scenarioIssue45'],
   properties: {
     passed: { type: 'boolean' }, lintPassed: { type: 'boolean' }, testsPassed: { type: 'boolean' },
     coveragePct: { type: 'number' }, mutationScore: { type: 'number' },
-    survivors: { type: 'string' }, pushedRange: { type: 'string' }, failureDetail: { type: 'string' },
+    cliTypecheckPassed: { type: 'boolean' },
+    // The #45 acceptance test's own outcome, kept separate from `passed` so "skipped for lack of
+    // egress" can never masquerade as "converges correctly".
+    scenarioIssue45: { type: 'string', enum: ['pass', 'fail', 'skipped-unreachable'] },
+    scenarioDetail: { type: 'string' },
+    survivors: { type: 'string' }, pushedRange: { type: 'string' }, markerPushed: { type: 'string' },
+    failureDetail: { type: 'string' },
   },
 }
 
@@ -99,8 +119,13 @@ log(`Harden: stryker=${setup?.strykerRuns} lint=${setup?.lintPasses} gatesBite=$
 
 let round = 0
 let approved = false
+let escalatedUnfixed = null
 const allIssues = []
-while (round < 3) {
+// INVARIANT: every FIX is followed by a REVIEW. The old `while (round < 3)` could spend its last
+// round fixing and then exit — escalating to a human with that round's fixes never reviewed by
+// anyone (a known gotcha that has bitten before). Here the loop always reviews first; on hitting
+// the cap it escalates with the findings LEFT UNFIXED rather than applying unreviewed patches.
+for (;;) {
   phase('Review')
   const LENSES = [
     { key: 'test-integrity', focus: 'hollow/tautological tests, coverage-padding, proof-by-log, missing negative cases, over-mocking, weakened thresholds/disabled tests' },
@@ -108,7 +133,7 @@ while (round < 3) {
   ]
   const reviews = (await parallel(LENSES.map((L) => () =>
     agent(
-      `You are an ADVERSARIAL REVIEWER for Pente3D Stage ${STAGE}, lens: ${L.key}. ${DOCTRINE}\n` +
+      `You are an ADVERSARIAL REVIEWER for Pente3D Stage ${STAGE}, lens: ${L.key}. Work in the worktree ${REPO} (that exact path — this repo has several worktrees on different branches; reviewing the wrong one reviews the wrong code). ${DOCTRINE}\n` +
         `Read ${PRINCIPLES} (esp. the Reviewer Charter) and enforce it rigidly. Your goal is to FIND PROBLEMS, not approve — approving is the lazy path and is forbidden unless the code genuinely holds up.\n` +
         `Read the real implementation AND tests under ${SCOPE}. Focus especially on: ${L.focus}.\n` +
         `VISUAL VERIFICATION: if the stage produced Playwright screenshot artifacts (e2e/artifacts/*.png), VIEW them (Read the image files) and confirm each shows what its test claims — a passing Playwright test paired with a blank, empty, or visibly-wrong screenshot is a BLOCKER (proof-by-inference, not proof-by-behavior).\n` +
@@ -121,6 +146,12 @@ while (round < 3) {
   const open = reviews.flatMap((r) => r.issues || []).filter((i) => i.severity === 'blocker' || i.severity === 'major')
   allIssues.push(...open.map((i) => ({ ...i, round: round + 1 })))
   if (open.length === 0) { approved = true; log(`Review round ${round + 1}: clean`); break }
+
+  if (round + 1 >= MAX_REVIEW_ROUNDS) {
+    escalatedUnfixed = open
+    log(`Review round ${round + 1}: ${open.length} blocking/major issues and the ${MAX_REVIEW_ROUNDS}-round cap is reached — ESCALATING with them UNFIXED (never leave a human unreviewed fixes).`)
+    break
+  }
 
   round++
   log(`Review round ${round}: ${open.length} blocking/major issues -> fixing`)
@@ -135,15 +166,21 @@ while (round < 3) {
 
 phase('Gate')
 const gate = await agent(
-  `VERIFICATION GATE for Pente3D Stage ${STAGE}. ${DOCTRINE}\n` +
+  `VERIFICATION GATE for Pente3D Stage ${STAGE}. Run everything IN ${REPO} (that exact worktree — this repo has several on different branches, and this gate PUSHES). Work in-place on the branch it has checked out; do NOT \`git checkout\`/\`git switch\`. ${DOCTRINE}\n` +
     `Run and PASTE full output:\n` +
     `1. \`npm run lint\` -> exit 0 (incl. assertion-lint rules).\n` +
     `2. \`npm test\` -> all pass (note count).\n` +
     `3. \`npm run coverage\` -> the COVERAGE_SCOPE files "${COVERAGE_SCOPE}" must be 100% on all four metrics. (These are the pure/vitest-measured files. The rest of the review-scope is THREE/DOM/net glue + e2e specs verified by Playwright, NOT by \`npm run coverage\` — do NOT expect them in the coverage report or weaken the config to force them; instead confirm the relevant e2e specs pass.)\n` +
     `4. \`npm run mutate\` (Stryker, mutates "${MUTATE_SCOPE}") -> overall mutation score must be >= ${MUT_MIN}%. List EVERY surviving mutant with a justification; a survivor is only acceptable if genuinely equivalent/unreachable and explained.\n` +
-    `passed = lint(0) AND all tests pass AND coverage 100% AND mutation >= ${MUT_MIN}% (survivors justified).\n` +
+    `5. \`npm run typecheck:cli\` -> exit 0. \`npm run build\` typechecks src/ ONLY, so cli/ (the scenario harness + net client) has no other gate.\n` +
+    `6. \`npm run scenario:issue45\` — the CLI-driven #45 repro over the real relay. THREE distinct outcomes, do not conflate them: exit 0 = a reconnecting peer converges to the live game (the v3.1 acceptance test, required from task V.3 onward); exit 2 = SKIPPED, relay unreachable (missing egress, NOT a regression — report it as skipped and do not block on it); exit 1 = checks FAILED, i.e. the bug is present. Report the exit code and the failing check lines verbatim.\n` +
+    `FLAKY-E2E RULE: two-context networked Playwright specs are load-sensitive under parallel workers. Before reporting any such failure as real, RE-RUN it with \`--workers=1\` and report both results; several past "failures" were load, not logic.\n` +
+    `passed = lint(0) AND all tests pass AND coverage 100% AND mutation >= ${MUT_MIN}% (survivors justified) AND typecheck:cli 0 AND scenario:issue45 in {0, 2} (2 = skipped) once V.3 has landed.\n` +
     `REVIEWERS APPROVED = ${approved}. Push ONLY if passed AND reviewers approved. If reviewers did NOT approve (this run escalates to a human), DO NOT push regardless of the mechanical result — a human must resolve the outstanding review findings first.\n` +
-    `If (passed AND reviewers approved): push the CURRENT branch with \`git push origin HEAD\` (do NOT hardcode a branch name — never push one branch's work onto another) and report the range. Else: DO NOT push; report exactly what blocks it.\n` +
+    `If (passed AND reviewers approved): push the CURRENT branch with \`git push origin HEAD\` (do NOT hardcode a branch name — never push one branch's work onto another) and report the range.` +
+    (MARKER ? ` THEN also publish this stage's marker ref so it is separately playable: \`git push -f origin HEAD:refs/heads/${MARKER}\`.` : '') +
+    ` Else: DO NOT push; report exactly what blocks it.\n` +
+    `NOTE: a pre-push hook REFUSES dev/test/main while v3.1 is in flight (by design — see CONTRIBUTING). If you ever see that refusal you are pushing the wrong ref; never bypass it with PENTE_ALLOW_PROTECTED_PUSH.\n` +
     `Return structured evidence.`,
   { schema: GATE_SCHEMA, phase: 'Gate', label: 'gate:mutation' }
 )
@@ -158,6 +195,8 @@ return {
   reviewRounds: round,
   approvedByReviewers: approved,
   escalate: !approved || !(gate && gate.passed),
+  // The findings that hit the round cap and were deliberately left UNFIXED for a human.
+  unfixedAtCap: escalatedUnfixed,
   issuesByRound: allIssues,
   recurringCategoriesForInstructionTuning: recurring,
 }
