@@ -1304,6 +1304,20 @@ export class SyncEngine {
         // no listener fires (a spurious re-render on an ignored replay would be a lie about state
         // changing — keep the notification truthful). This is what stops the finished board from
         // resurrecting over the fresh rematch game.
+        //
+        // But ANSWER a peer that is BEHIND (design §5: "I am ahead → republish, do not adopt").
+        // `ignore` covers two different situations: an exact replay of what we already hold — there
+        // is nothing to say, and answering it would ping-pong forever — and a log STRICTLY SHORTER
+        // than ours, i.e. a peer that missed moves. Only the second is answered, and one answer is
+        // enough: it adopts our longer log, and its next publish is an equal one, which is silent.
+        // Terminating by construction, because "behind" is a prefix relation — two peers cannot each
+        // be behind the other (a genuine fork is `conflict`, not `ignore`).
+        //
+        // Without this, convergence in the MIRROR direction of an outage (OUR move never got out)
+        // rested on a single unacknowledged QoS-0 publish triggered by the returner's own re-announce:
+        // if that one message was lost, nothing retried and the pair stayed bricked — issue #45 again
+        // with the roles swapped. Measured at ~10% of real-relay runs before this arm existed.
+        if (this.isBehind(remote, remoteEpoch)) this.publishState();
         return;
       case 'adopt':
         // Adopt the peer's longer log for the game we are BOTH on, then notify so the scene re-renders
@@ -1482,6 +1496,21 @@ export class SyncEngine {
    */
   async whenSettled(): Promise<void> {
     await this._archiving;
+  }
+
+  /**
+   * Whether the peer that sent `remote` is BEHIND us — the `ignore` case that deserves an answer
+   * rather than silence (see {@link receive}). True when the message is from a superseded generation,
+   * or when it is from OUR generation and strictly shorter than our log. Within `ignore` at the same
+   * epoch the remote is already known to be a PREFIX of ours (that is what `decideSync` decided), so
+   * a shorter length is exactly "missing moves we hold" and never a fork.
+   */
+  private isBehind(remote: EventLog, remoteEpoch: number): boolean {
+    // A SUPERSEDED generation is behind whatever its log holds — it may even be longer (an old game
+    // that ran on) but it is not this game any more, so the answer carries our generation to it.
+    // A HIGHER remote epoch never reaches here: that is `adopt`, decided before this is consulted.
+    if (remoteEpoch < this._epoch) return true;
+    return remote.entries.length < this._game.log.entries.length;
   }
 
   /** Throw if the game has been stopped by a conflict. */

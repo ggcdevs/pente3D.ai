@@ -5,7 +5,7 @@ import { Game } from '../core/game';
 import { emptyLog, append, headHash, type EventLog } from '../core/eventLog';
 import { openDatabase } from '../persist/db';
 import { loadConflicted } from '../persist/archive';
-import { MockRelayHub, MockTransport } from './transport';
+import { MockRelayHub, MockTransport, type TransportMessage } from './transport';
 import {
   decideSync,
   decideSyncEpoched,
@@ -1130,11 +1130,56 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
     expect(b.game().ply()).toBe(plyBefore);
   });
 
-  it('tolerates OUT-OF-ORDER delivery: converges to the longest valid log', () => {
+  it('ANSWERS a peer that is BEHIND with our longer log, and stays silent on an equal one', async () => {
+    // Design §5: "I am ahead → republish, do not adopt". Convergence must not rest on the single
+    // unacknowledged QoS-0 publish a returning peer makes: if that one message is lost, nothing
+    // retries and both peers sit waiting on each other — issue #45 with the roles swapped (it was
+    // measured failing ~10% of real-relay runs). A peer that is behind publishes its shorter log; we
+    // answer with ours, and it converges on the reply.
+    const hub = new MockRelayHub();
+    const mine = new MockTransport(hub, 'ahead');
+    const theirs = new MockTransport(hub, 'behind');
+    await mine.connect('ROOM01');
+    await theirs.connect('ROOM01');
+    const heard: TransportMessage[] = [];
+    theirs.onMessage((m) => heard.push(m));
+
+    const eng = new SyncEngine(new Game(9, PAIR_UUID), mine, db, () => meta, 'white', ANY_SEED);
+    eng.receive(toSyncMessage(logOf('0,0,0', '1,1,1', '2,2,2')));
+    expect(eng.game().ply()).toBe(3);
+    heard.length = 0;
+
+    // A log we already contain (they missed two moves) → we answer, and the answer is OUR log.
+    eng.receive(toSyncMessage(logOf('0,0,0')));
+    expect(heard).toHaveLength(1);
+    expect(parseSyncMessage(heard[0] as SyncMessage)).toEqual(eng.game().log);
+
+    // An EQUAL log is a plain replay: answering it would ping-pong between two peers forever.
+    heard.length = 0;
+    eng.receive(toSyncMessage(eng.game().log));
+    expect(heard).toHaveLength(0);
+
+    // A SUPERSEDED generation is behind however much history it carries: this stale log is LONGER
+    // than ours, and it still gets our (newer-generation) answer — otherwise a peer left on the old
+    // game after an in-place reset would sit there forever, which is the same brick in a new costume.
+    eng.resetGame(new Game(9, PAIR_UUID), 'white');
+    expect(eng.epoch()).toBe(1);
+    heard.length = 0;
+    eng.receive(toSyncMessage(logOf('0,0,0', '1,1,1', '2,2,2'), 0));
+    expect(heard).toHaveLength(1);
+    expect(parseSyncMessage(heard[0] as SyncMessage)).toEqual(eng.game().log);
+  });
+
+  it('tolerates OUT-OF-ORDER delivery: converges to the longest valid log', async () => {
     // Deliver a 3-move log, then a stale 1-move log, then the 2-move middle —
     // in a deliberately scrambled order. Result must be the longest (3 moves).
     const hub = new MockRelayHub();
     const t = new MockTransport(hub, 'solo');
+    // Connected, because a stale log now draws an ANSWER (we publish our longer log at a peer that
+    // is behind — see `receive`'s `ignore` arm), and in production `receive` is only ever reached
+    // through the connected transport pump. Left unconnected this asserted on a state the engine
+    // cannot actually be in.
+    await t.connect('ROOM01');
     const eng = new SyncEngine(new Game(9, PAIR_UUID),t, db, () => meta, 'white', ANY_SEED);
     const full = logOf('0,0,0', '1,1,1', '2,2,2');
     const mid = logOf('0,0,0', '1,1,1');

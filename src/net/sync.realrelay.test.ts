@@ -161,13 +161,21 @@ describe.skipIf(!reachable)('real relay: two SyncEngines over the LIVE MQTT brok
   let db: IDBDatabase;
 
   /** Build a SyncEngine on a real MqttTransport with a stable peer id. */
+  /**
+   * @param uuid Give BOTH engines of a pair the SAME game uuid when the test is about two peers on
+   *   ONE game (a fork, a resync). Omitted, each engine mints its own — fine only while at least one
+   *   side holds no history, because the seed gate (V.2, design §3) refuses a FOREIGN game's log once
+   *   we have moves of our own. The conflict test below drifted red on exactly that: two engines with
+   *   different uuids are not a fork, they are two games, and refusing the crossing is correct.
+   */
   function makeEngine(
     peerId: string,
     myColor: 'white' | 'black' = 'white',
     size = 9,
+    uuid?: string,
   ): SyncEngine {
     const transport = new MqttTransport(relay, { connect: realConnect, peerId });
-    const engine = new SyncEngine(new Game(size), transport, db, () => meta, myColor, ANY_SEED);
+    const engine = new SyncEngine(new Game(size, uuid), transport, db, () => meta, myColor, ANY_SEED);
     engines.push(engine);
     return engine;
   }
@@ -318,8 +326,12 @@ describe.skipIf(!reachable)('real relay: two SyncEngines over the LIVE MQTT brok
     'detects a CONFLICT over the live relay: forked histories stop the game',
     async () => {
       const room = `it-conflict-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const a = makeEngine('rr-a4');
-      const b = makeEngine('rr-b4');
+      // ONE game, two divergent histories — that is what a fork IS. (Distinct uuids would be two
+      // different games, which the seed gate refuses rather than calls a conflict, mirroring the
+      // hermetic twin's shared PAIR_UUID in sync.test.ts.)
+      const forked = `rr-fork-${Date.now()}`;
+      const a = makeEngine('rr-a4', 'white', 9, forked);
+      const b = makeEngine('rr-b4', 'white', 9, forked);
       // Fork BEFORE connecting so neither adopts the other first.
       a.placeLocalOnly([0, 0, 0]);
       b.placeLocalOnly([1, 1, 1]);
