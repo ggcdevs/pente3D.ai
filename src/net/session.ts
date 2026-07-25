@@ -1064,7 +1064,7 @@ export class NetSession {
       hello.proposal,
     );
     if (!decision.ok) {
-      this.publishAdmission(toRejectMessage(this.deps.newMessageId(), decision.reason));
+      this.publishAdmission(toRejectMessage(this.deps.newMessageId(), hello.playerId, decision.reason));
       return seatMap;
     }
     if (decision.serve === 'theirs') {
@@ -1080,12 +1080,12 @@ export class NetSession {
     // absent OTHER owner is the sole way to reach `seat-reserved`.
     const claim = claimSeat(seatMap, hello.playerId, this.presentPeers);
     if (!claim.ok) {
-      this.publishAdmission(toRejectMessage(this.deps.newMessageId(), claim.reason));
+      this.publishAdmission(toRejectMessage(this.deps.newMessageId(), hello.playerId, claim.reason));
       return seatMap;
     }
     // Admit with the very payload the acceptance was judged against — so what we CHECKED and what we
     // SEND can never be two different games.
-    this.publishAdmission(toAdmitMessage(this.deps.newMessageId(), payload, claim.seatMap));
+    this.publishAdmission(toAdmitMessage(this.deps.newMessageId(), hello.playerId, payload, claim.seatMap));
     return claim.seatMap;
   }
 
@@ -1121,7 +1121,7 @@ export class NetSession {
   ): SeatMap {
     const claim = claimSeat(hello.seats, this.deps.playerId, this.presentPeers);
     if (!claim.ok) {
-      this.publishAdmission(toRejectMessage(this.deps.newMessageId(), claim.reason));
+      this.publishAdmission(toRejectMessage(this.deps.newMessageId(), hello.playerId, claim.reason));
       return seatMap;
     }
     if (seatOf(claim.seatMap, hello.playerId) === null) {
@@ -1129,7 +1129,7 @@ export class NetSession {
       // itself — a map no honest client produces (a peer always claims its seat before it announces).
       // Admitting it would durably record a game whose two owners are absent strangers, so refuse with
       // the same reason a full room gives rather than persist a seating nobody present owns.
-      this.publishAdmission(toRejectMessage(this.deps.newMessageId(), 'room-full'));
+      this.publishAdmission(toRejectMessage(this.deps.newMessageId(), hello.playerId, 'room-full'));
       return seatMap;
     }
     // Take the seat we own in THEIR game, and agree onto that game BEFORE the admit goes out: the
@@ -1139,7 +1139,7 @@ export class NetSession {
     this.seatMap = claim.seatMap;
     engine.reseat(claim.color as Player);
     engine.agreeOn(uuid);
-    this.publishAdmission(toAdoptAdmitMessage(this.deps.newMessageId(), uuid, claim.seatMap));
+    this.publishAdmission(toAdoptAdmitMessage(this.deps.newMessageId(), hello.playerId, uuid, claim.seatMap));
     return claim.seatMap;
   }
 
@@ -1151,6 +1151,16 @@ export class NetSession {
    *    the seat the map assigns us. Finalizes a pending {@link enter}.
    *  - `reject` — the arbiter refused us with a TYPED reason: record it, go offline (surfaced to the
    *    UI verbatim — never masked). Finalizes a pending {@link enter}.
+   *
+   * An `admit`/`reject` ADDRESSED TO ANOTHER PEER is dropped here. The relay gives a room ONE topic,
+   * so every admission message reaches everyone, and the arbiter answers each `hello` individually:
+   * without this check a refusal aimed at one newcomer settles a DIFFERENT one offline — carrying a
+   * reason for a choice it never made — and a grant aimed at one newcomer is read by another, which
+   * finds itself unseated in the enclosed map and tears itself down as `room-full`. Both were
+   * reachable with three peers arriving together (a `current` resident, a `new` newcomer refused
+   * `seed-refused`, and an innocent dealer's-choice peer knocked out by it), and `seed-refused` makes
+   * exactly that mixed-seed room a routine case. A `hello` is deliberately NOT addressed: it is an
+   * announcement to the room, and every peer needs it for the settle-window election.
    */
   private onAdmission(msg: AdmissionMessage): void {
     switch (msg.kind) {
@@ -1158,9 +1168,11 @@ export class NetSession {
         this.onHello(msg);
         return;
       case 'admit':
+        if (msg.to !== this.deps.playerId) return;
         this.onAdmit(msg);
         return;
       case 'reject':
+        if (msg.to !== this.deps.playerId) return;
         this.onReject(msg);
         return;
     }

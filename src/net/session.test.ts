@@ -24,8 +24,8 @@ import {
 import { Game } from '../core/game';
 import { headHash } from '../core/eventLog';
 import { coordsOf } from '../core/coords';
-import { MockRelayHub, MockTransport, type Transport } from './transport';
-import { toAdmitMessage, toAdoptAdmitMessage, toHelloMessage, toSyncMessage } from './sync';
+import { MockRelayHub, MockTransport, type Transport, type TransportMessage } from './transport';
+import { toAdmitMessage, toAdoptAdmitMessage, toHelloMessage, toRejectMessage, toSyncMessage } from './sync';
 import { NetSession, type NetSessionDeps } from './session';
 import { rematchGameUuid } from './rematch';
 import type { Proposal } from './admission';
@@ -105,6 +105,30 @@ async function flush(): Promise<void> {
   await new Promise((r) => setTimeout(r, 0));
 }
 
+/**
+ * Wait until `peer` has OBSERVED an entering session's `hello` — the fact that its transport is
+ * connected, subscribed and publishing, so a message sent now is genuinely delivered.
+ *
+ * `enter()` awaits async archive reads (the startedAt priming and the provisional seed) BEFORE it
+ * wires the transport, so `phase === 'connecting'` — set synchronously at the top of `enter` — does
+ * NOT establish that. Publishing on that readout raced the wiring: the admit was simply never
+ * received and the session settled alone, which made two backstop tests fail 5/5 and 2/3 and once
+ * aborted a Stryker dry run. Proof-by-behaviour, not by scheduling luck (agent-principles #2).
+ */
+async function awaitHelloFrom(
+  observed: readonly TransportMessage[],
+  playerId: string,
+  what = 'hello',
+): Promise<void> {
+  for (let i = 0; i < 500; i++) {
+    if (observed.some((m) => (m as { kind?: string; playerId?: string }).kind === 'hello' && (m as { playerId?: string }).playerId === playerId)) {
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 0));
+  }
+  throw new Error(`timed out waiting for ${what} from ${playerId} (it never reached the wire)`);
+}
+
 const NEW: Proposal = { kind: 'new' };
 const DEFER: Proposal = { kind: 'defer' };
 
@@ -182,6 +206,63 @@ describe('NetSession.enter — a third peer is REJECTED room-full (design §4 / 
     expect(c.state().joinError).toBe('room-full');
     // The admitted pair is untouched — C's rejected entry never displaced an owner.
     expect(a.seatOwners()).toEqual({ white: 'player-a', black: 'player-b' });
+  });
+});
+
+describe('admission answers are ADDRESSED — an answer for another peer is not ours', () => {
+  it('a reject aimed at ANOTHER newcomer leaves us connecting; our own admit still lands', async () => {
+    // The relay gives a room ONE topic, so every admission message reaches every peer, and an
+    // established arbiter answers each `hello` INDIVIDUALLY. Unaddressed, those answers cross: a
+    // refusal meant for one newcomer settles a different one offline — carrying a reason for a choice
+    // it never made — and a grant meant for one newcomer is read by another, which finds itself
+    // unseated in the enclosed map and tears down as `room-full`. Found with three peers arriving
+    // together (a resident holding a played game, a `new` peer refused `seed-refused`, and an innocent
+    // dealer's-choice peer knocked out by that refusal); V.2 makes it routine, because `seed-refused`
+    // is exactly what a mixed-seed room produces.
+    //
+    // Driven at the PROTOCOL seam rather than by racing three sessions: the bug is in whether an
+    // answer addressed elsewhere is acted on, and a three-peer race only exposes it in the ordering
+    // where the other peer's refusal happens to arrive first. Here the crossing is deterministic.
+    const hub = new MockRelayHub();
+    const b = makeSession(hub, 'player-b', { settleMs: 200 });
+    const arbiterTransport = new MockTransport(hub, 'player-arb');
+    await arbiterTransport.connect(ROOM);
+    const seen: TransportMessage[] = [];
+    arbiterTransport.onMessage((m) => seen.push(m));
+
+    const entering = b.enter(ROOM, DEFER);
+    await awaitHelloFrom(seen, 'player-b');
+    expect(b.state().phase).toBe('connecting');
+
+    // Someone ELSE's refusal, and someone else's grant (which does not seat us), both cross our wire.
+    arbiterTransport.publish(toRejectMessage('r-for-c', 'player-c', 'seed-refused'));
+    arbiterTransport.publish(
+      toAdmitMessage('a-for-c', 'player-c', toSyncMessage(new Game(SIZE).log, 0), {
+        white: 'player-arb',
+        black: 'player-c',
+      }),
+    );
+    await flush();
+
+    // Untouched: still entering, no seat torn away, and — the user-facing half — NO foreign reason.
+    expect(b.state().phase).toBe('connecting');
+    expect(b.lastRejectReason()).toBeNull();
+    expect(b.state().joinError).toBeNull();
+
+    // …and our OWN grant still lands, so the filter refuses foreign answers without deafening us.
+    const ours = new Game(SIZE);
+    ours.place(coordsOf('2,2,2'));
+    arbiterTransport.publish(
+      toAdmitMessage('a-for-b', 'player-b', toSyncMessage(ours.log, 0), {
+        white: 'player-arb',
+        black: 'player-b',
+      }),
+    );
+    await entering;
+
+    expect(b.state().phase).toBe('connected');
+    expect(b.state().seat).toBe('black');
+    expect(b.ply()).toBe(1);
   });
 });
 
@@ -1184,11 +1265,15 @@ describe('NetSession — a `new` entry is never served a game WITH HISTORY (#46/
     pushed.place(coordsOf('1,1,1'));
 
     // Kick the entry (connect + hello happen inside), then push the admit while B is still `connecting`.
+    const seen: TransportMessage[] = [];
+    rogueTransport.onMessage((m) => seen.push(m));
     const entering = b.enter(ROOM, NEW);
-    await flush();
+    // Wait for B's hello to actually REACH the rogue peer: that is the observable proof B's transport
+    // is wired, so the admit below is genuinely delivered rather than published into the void.
+    await awaitHelloFrom(seen, 'player-b');
     expect(b.state().phase).toBe('connecting');
     rogueTransport.publish(
-      toAdmitMessage('rogue-admit-1', toSyncMessage(pushed.log, 0), {
+      toAdmitMessage('rogue-admit-1', 'player-b', toSyncMessage(pushed.log, 0), {
         white: 'player-rogue',
         black: 'player-b',
       }),
@@ -1220,16 +1305,20 @@ describe('NetSession — a `new` entry is never served a game WITH HISTORY (#46/
     const b = makeSession(hub, 'player-b', { db: own, settleMs: 200 });
     const rogueTransport = new MockTransport(hub, 'player-rogue');
     await rogueTransport.connect(ROOM);
+    const seen: TransportMessage[] = [];
+    rogueTransport.onMessage((m) => seen.push(m));
 
     const entering = b.enter(ROOM, {
       kind: 'resume',
       uuid: mineGame.uuid,
       headHash: headHash(mineGame.log),
     });
-    await flush();
+    // Readiness = B's hello observed on the wire (see awaitHelloFrom): `enter` awaits async archive
+    // reads for a `resume` seed BEFORE wiring the transport, so the phase readout is not the fact.
+    await awaitHelloFrom(seen, 'player-b');
     expect(b.state().phase).toBe('connecting');
     rogueTransport.publish(
-      toAdoptAdmitMessage('rogue-adopt-1', 'a-game-we-never-brought', {
+      toAdoptAdmitMessage('rogue-adopt-1', 'player-b', 'a-game-we-never-brought', {
         white: 'player-rogue',
         black: 'player-b',
       }),
@@ -1255,15 +1344,18 @@ describe('NetSession — a `new` entry is never served a game WITH HISTORY (#46/
     const b = makeSession(hub, 'player-b', { db: own, settleMs: 200 });
     const arbiterTransport = new MockTransport(hub, 'player-arb');
     await arbiterTransport.connect(ROOM);
+    const seen: TransportMessage[] = [];
+    arbiterTransport.onMessage((m) => seen.push(m));
 
     const entering = b.enter(ROOM, {
       kind: 'resume',
       uuid: mineGame.uuid,
       headHash: headHash(mineGame.log),
     });
-    await flush();
+    // Readiness = B's hello observed on the wire (see awaitHelloFrom), not the phase readout.
+    await awaitHelloFrom(seen, 'player-b');
     arbiterTransport.publish(
-      toAdoptAdmitMessage('arb-adopt-1', mineGame.uuid, {
+      toAdoptAdmitMessage('arb-adopt-1', 'player-b', mineGame.uuid, {
         white: 'player-arb',
         black: 'player-b',
       }),
@@ -1287,10 +1379,12 @@ describe('NetSession — a `new` entry is never served a game WITH HISTORY (#46/
     await rogueTransport.connect(ROOM);
     const fresh = new Game(SIZE);
 
+    const seen2: TransportMessage[] = [];
+    rogueTransport.onMessage((m) => seen2.push(m));
     const entering = b.enter(ROOM, NEW);
-    await flush();
+    await awaitHelloFrom(seen2, 'player-b');
     rogueTransport.publish(
-      toAdmitMessage('rogue-admit-2', toSyncMessage(fresh.log, 0), {
+      toAdmitMessage('rogue-admit-2', 'player-b', toSyncMessage(fresh.log, 0), {
         white: 'player-rogue',
         black: 'player-b',
       }),
@@ -2340,7 +2434,14 @@ describe('NetSession — a deferring arbiter seats itself on the NEWCOMER’s ga
     );
     await flush();
 
-    expect(seen).toContainEqual({ kind: 'reject', id: expect.any(String), reason: 'room-full' });
+    // The refusal names its ADDRESSEE: on one shared topic an unaddressed reject settles whoever
+    // happens to be entering, not the peer it was meant for.
+    expect(seen).toContainEqual({
+      kind: 'reject',
+      id: expect.any(String),
+      to: 'player-c',
+      reason: 'room-full',
+    });
     // The arbiter stayed on its own game and kept its own seating.
     expect(a.gameUuid()).toBe(aOwnGame);
     expect(a.seatOwners()).toEqual({ white: 'player-a', black: null });

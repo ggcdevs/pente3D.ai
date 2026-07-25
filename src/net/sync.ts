@@ -239,6 +239,14 @@ export interface AdmitMessage {
   readonly kind: 'admit';
   /** Unique message id (dedup on receive). */
   readonly id: string;
+  /**
+   * The playerId this grant is FOR. The relay has one topic per room, so every admission message
+   * reaches every peer: without an addressee a grant meant for one newcomer is read by all of them,
+   * and a peer that finds itself unseated in the enclosed map tears itself down as `room-full`. The
+   * arbiter answers each `hello` individually (see `NetSession.arbitrate`), so each answer names its
+   * recipient and everyone else ignores it.
+   */
+  readonly to: string;
   /** WHICH game the pair agreed on, and whose bytes they are (see {@link AdmittedGame}). */
   readonly agreed: AdmittedGame;
   /** The identity-owned seat map (real playerIds; no `'host'` sentinel). */
@@ -289,6 +297,13 @@ export interface RejectMessage {
   readonly kind: 'reject';
   /** Unique message id (dedup on receive). */
   readonly id: string;
+  /**
+   * The playerId this refusal is FOR — see {@link AdmitMessage.to}. Load-bearing here in exactly the
+   * way it is for an admit, and more visibly: `seed-refused` makes refusals a ROUTINE outcome of a
+   * mixed-seed room, and an unaddressed refusal knocks a legitimate dealer's-choice peer offline
+   * carrying someone else's reason — a user-facing lie about a choice they never made.
+   */
+  readonly to: string;
   /** The typed refusal reason, surfaced verbatim to the UI. */
   readonly reason: AdmissionReject;
 }
@@ -404,20 +419,26 @@ export function parseGameMessage(msg: unknown): GameMessage {
       if (typeof rec.id !== 'string') {
         throw new SyncError('admit message requires a string id');
       }
+      if (typeof rec.to !== 'string' || rec.to.length === 0) {
+        throw new SyncError('admit message requires a non-empty `to` playerId (its addressee)');
+      }
       const agreed = parseAdmittedGame(rec.agreed);
       const seats = parseSeatMap(rec.seats);
-      return { kind: 'admit', id: rec.id, agreed, seats };
+      return { kind: 'admit', id: rec.id, to: rec.to, agreed, seats };
     }
     case 'reject': {
       if (typeof rec.id !== 'string') {
         throw new SyncError('reject message requires a string id');
+      }
+      if (typeof rec.to !== 'string' || rec.to.length === 0) {
+        throw new SyncError('reject message requires a non-empty `to` playerId (its addressee)');
       }
       if (!isAdmissionReject(rec.reason)) {
         throw new SyncError(
           `reject message requires a known reason (one of ${ADMISSION_REJECT_REASONS.join('/')}); got ${String(rec.reason)}`,
         );
       }
-      return { kind: 'reject', id: rec.id, reason: rec.reason };
+      return { kind: 'reject', id: rec.id, to: rec.to, reason: rec.reason };
     }
     default:
       throw new SyncError(`unknown game message kind: ${String(kind)}`);
@@ -750,10 +771,11 @@ export function toHelloMessage(
  */
 export function toAdmitMessage(
   id: string,
+  to: string,
   game: { readonly kind: 'sync' } & SyncMessage,
   seats: SeatMap,
 ): AdmitMessage {
-  return { kind: 'admit', id, agreed: { source: 'arbiter', game }, seats };
+  return { kind: 'admit', id, to, agreed: { source: 'arbiter', game }, seats };
 }
 
 /**
@@ -762,16 +784,25 @@ export function toAdmitMessage(
  * adopts a peer's non-empty game). It carries no payload because the arbiter has none to give: the
  * newcomer keeps the game it brought, and the arbiter adopts that game off the move-sync channel.
  */
-export function toAdoptAdmitMessage(id: string, uuid: string, seats: SeatMap): AdmitMessage {
-  return { kind: 'admit', id, agreed: { source: 'newcomer', uuid }, seats };
+export function toAdoptAdmitMessage(
+  id: string,
+  to: string,
+  uuid: string,
+  seats: SeatMap,
+): AdmitMessage {
+  return { kind: 'admit', id, to, agreed: { source: 'newcomer', uuid }, seats };
 }
 
 /**
  * Build a `kind:'reject'` admission message (Task S.4) carrying a typed {@link AdmissionReject}
  * reason surfaced verbatim to the UI. `id` is the UNIQUE dedup id.
  */
-export function toRejectMessage(id: string, reason: AdmissionReject): RejectMessage {
-  return { kind: 'reject', id, reason };
+export function toRejectMessage(
+  id: string,
+  to: string,
+  reason: AdmissionReject,
+): RejectMessage {
+  return { kind: 'reject', id, to, reason };
 }
 
 /**

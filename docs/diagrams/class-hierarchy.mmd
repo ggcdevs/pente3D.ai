@@ -12,6 +12,7 @@ classDiagram
         +readonly id: string
         +readonly kind: 'admit'
         +readonly seats: SeatMap
+        +readonly to: string
     }
     note for AdmitMessage "src/net/sync.ts"
     class AppliedPresetTag {
@@ -1182,6 +1183,7 @@ classDiagram
         +readonly id: string
         +readonly kind: 'reject'
         +readonly reason: AdmissionReject
+        +readonly to: string
     }
     note for RejectMessage "src/net/sync.ts"
     class RelayConfig {

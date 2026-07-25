@@ -2940,7 +2940,8 @@
           "readonly agreed: AdmittedGame",
           "readonly id: string",
           "readonly kind: 'admit'",
-          "readonly seats: SeatMap"
+          "readonly seats: SeatMap",
+          "readonly to: string"
         ]
       },
       {
@@ -2950,7 +2951,8 @@
         "properties": [
           "readonly id: string",
           "readonly kind: 'reject'",
-          "readonly reason: AdmissionReject"
+          "readonly reason: AdmissionReject",
+          "readonly to: string"
         ]
       }
     ],
