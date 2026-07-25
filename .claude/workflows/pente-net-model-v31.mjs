@@ -42,6 +42,7 @@ const DOCTRINE =
 const TASKS = [
   {
     id: 'V.1', label: 'decouple-code-from-game', refs: '#47 #43',
+    phase: 'V.1 decouple',
     stage: 'v31-decouple',
     scope: 'src/net src/persist src/ui/widgets src/debug',
     mutate: 'src/net/activeGame.ts src/net/seats.ts src/ui/widgets/recentCodes.ts',
@@ -55,6 +56,7 @@ const TASKS = [
   },
   {
     id: 'V.2', label: 'wire-enforced-seeds', refs: '#47 #46 #43 #42',
+    phase: 'V.2 seeds',
     stage: 'v31-seeds',
     scope: 'src/net src/ui/widgets src/debug',
     mutate: 'src/net/admission.ts src/net/sync.ts src/ui/widgets/netPanelModel.ts src/net/activeGame.ts',
@@ -67,6 +69,7 @@ const TASKS = [
   },
   {
     id: 'V.3', label: 'resident-peer-republish', refs: '#47 #45',
+    phase: 'V.3 republish',
     stage: 'v31-republish',
     scope: 'src/net src/debug cli',
     mutate: 'src/net/republish.ts src/net/presence.ts src/net/admission.ts',
@@ -81,6 +84,7 @@ const TASKS = [
   },
   {
     id: 'V.4a', label: 'reconcile-decision-lca-diff', refs: '#47 #38',
+    phase: 'V.4a reconcile',
     stage: 'v31-reconcile-pure',
     scope: 'src/net src/core',
     mutate: 'src/net/reconcile.ts src/net/logDiff.ts src/net/sync.ts',
@@ -93,6 +97,7 @@ const TASKS = [
   },
   {
     id: 'V.4b', label: 'resolution-handshake-and-panel', refs: '#47 #38',
+    phase: 'V.4b resolution',
     stage: 'v31-resolution',
     scope: 'src/net src/ui/widgets src/debug e2e',
     mutate: 'src/net/handshake.ts src/net/reconcile.ts src/ui/widgets/divergenceModel.ts',
@@ -105,6 +110,7 @@ const TASKS = [
   },
   {
     id: 'V.5', label: 'empty-slate-reload-and-rejoin-probe', refs: '#47',
+    phase: 'V.5 reload',
     stage: 'v31-reload',
     scope: 'src/net src/ui/widgets src/persist src/debug e2e',
     mutate: 'src/ui/widgets/rejoinPromptModel.ts src/net/activeGame.ts',
@@ -116,6 +122,7 @@ const TASKS = [
   },
   {
     id: 'V.6', label: 'games-list-resume-ui', refs: '#47 #37',
+    phase: 'V.6 games-list',
     stage: 'v31-games-list',
     scope: 'src/ui/widgets src/persist src/net src/debug e2e',
     mutate: 'src/ui/widgets/archiveModel.ts src/ui/widgets/netPanelModel.ts',
@@ -126,6 +133,7 @@ const TASKS = [
   },
   {
     id: 'V.7', label: 'scenario-matrix', refs: '#47 #45 #46 #40',
+    phase: 'V.7 scenarios',
     stage: 'v31-scenarios',
     scope: 'cli e2e src/net src/debug',
     mutate: 'src/net/reconcile.ts src/net/republish.ts src/net/admission.ts',
@@ -138,6 +146,7 @@ const TASKS = [
   },
   {
     id: 'V.8a', label: 'docs-glossary-diagrams', refs: '#47',
+    phase: 'V.8a docs',
     stage: 'v31-docs',
     scope: 'planning docs src cli',
     mutate: '',
@@ -167,7 +176,10 @@ const results = []
 let halted = null
 
 for (const t of TASKS) {
-  const phaseTitle = meta.phases.find((p) => p.title.startsWith(t.id))?.title ?? t.id
+  // The phase title lives on the TASK (kept identical to the meta phase titles): the harness
+  // parses `meta` as a pure literal, so it is NOT a runtime binding in this body — reading it
+  // here threw "meta is not defined" and killed the run before a single agent started.
+  const phaseTitle = t.phase
   phase(phaseTitle)
 
   const scenarioRule = t.id === 'V.1' || t.id === 'V.2'
