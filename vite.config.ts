@@ -88,7 +88,6 @@ export default defineConfig({
         // `widgets/**` dir) so the pure `bannerModel.ts` stays measured.
         'src/ui/container.ts',
         'src/ui/setup.ts',
-        'src/ui/widgets/placeholder.ts',
         'src/ui/widgets/banner.ts',
         'src/ui/widgets/menu.ts',
         'src/ui/widgets/settings.ts',
