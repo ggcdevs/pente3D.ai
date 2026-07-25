@@ -1272,3 +1272,159 @@ describe('NetSession — a seed whose archived log is CORRUPT fails honestly (no
     expect(hub.peerIds(ROOM)).toEqual([]);
   });
 });
+
+/**
+ * THE ARCHIVED `startedAt` — ONE date per GAME, established once and never re-minted (V.1 review).
+ *
+ * `startedAt` is the date the archive browser renders for a game and the key
+ * {@link listArchivedGames} sorts newest-first by — and since V.1 the uuid-keyed record it lives on is
+ * the SOLE user-facing record of a networked game, reached through the games list (design §10, #37).
+ * Two regressions are pinned here, both invisible to every other gate:
+ *
+ *  1. RE-STAMPING PER MOVE. The session persists on every engine change, so a stamp minted per write
+ *     would re-date the record on every move and keep shuffling it to the top of the listing.
+ *  2. RE-DATING A GAME WE RETURN TO. `startedAtFor` mints from the clock for any uuid it has no stamp
+ *     for, so without {@link NetSession.primeStartedAts} the FIRST persist after a return overwrote the
+ *     archived date with `now()` — permanently, and visibly, since the record is what the player sees.
+ *     Both the breadcrumb-return path and the wire-adopt path are covered.
+ */
+describe('NetSession — the archived startedAt is the GAME’s date, not the writing session’s clock', () => {
+  /** The `meta.startedAt` currently stored for `uuid`, read straight out of the store. */
+  async function storedStartedAt(from: IDBDatabase, uuid: string): Promise<number | undefined> {
+    return (await getGame(from, uuid))?.meta.startedAt;
+  }
+
+  it('is stamped ONCE per game — three moves later the record still carries the FIRST stamp', async () => {
+    const hub = new MockRelayHub();
+    const own = await openDatabase(`net-stamp-once-${Math.random().toString(36).slice(2)}`);
+    // A MOVING clock: every read returns a later value, so a per-write stamp would be observably
+    // different on each persist (a frozen clock could not tell the two behaviours apart).
+    let clock = 5_000;
+    const a = makeSession(hub, 'player-a', {
+      db: own,
+      storage: memoryStorage(),
+      now: () => clock++,
+    });
+
+    await a.enter(ROOM, NEW);
+    await a.whenPersisted();
+    const uuid = a.gameUuid()!;
+    const first = await storedStartedAt(own, uuid);
+    expect(first).not.toBeUndefined();
+    expect(a.gameStartedAt()).toBe(first);
+
+    // Three real moves, each of which persists the record again (the per-change autosave).
+    for (const node of ['0,0,0', '1,1,1', '2,2,2']) {
+      a.place(coordsOf(node));
+      await flush();
+    }
+    await a.whenPersisted();
+
+    // The record genuinely WAS re-written (its history grew to 3 events)…
+    const listing = (await listArchivedGames(own)).find((l) => l.id === uuid)!;
+    expect(listing.events).toBe(3);
+    // …and yet its date is UNCHANGED — the stamp is the game's, not each write's. The clock has moved
+    // on by now, so a re-stamping session would fail this.
+    expect(await storedStartedAt(own, uuid)).toBe(first);
+    expect(a.gameStartedAt()).toBe(first);
+    expect(clock).toBeGreaterThan(first! + 1); // the clock really did advance past the stamp
+  });
+
+  it('a genuinely NEW game IS stamped from the clock (the control: priming suppresses no mint)', async () => {
+    const hub = new MockRelayHub();
+    const own = await openDatabase(`net-stamp-mint-${Math.random().toString(36).slice(2)}`);
+    const a = makeSession(hub, 'player-a', {
+      db: own,
+      storage: memoryStorage(),
+      now: () => 4_242_000,
+    });
+
+    await a.enter(ROOM, NEW);
+    await a.whenPersisted();
+
+    // A game this browser has never held gets TODAY's date — the mint path is alive.
+    expect(await storedStartedAt(own, a.gameUuid()!)).toBe(4_242_000);
+  });
+
+  it('a breadcrumb RETURN preserves the archived startedAt (never re-dates the game to now)', async () => {
+    const hub = new MockRelayHub();
+    const own = await openDatabase(`net-stamp-return-${Math.random().toString(36).slice(2)}`);
+    const store = memoryStorage();
+    // The precondition a real prior session leaves: a 3-move game archived under its uuid with the date
+    // it BEGAN, plus a fresh breadcrumb naming it. `NOW` is a much later clock — the return is happening
+    // long after the game started (but inside the breadcrumb's credibility horizon).
+    const BEGAN_AT = 1_000_000;
+    const NOW = 999_000_000;
+    const prior = new Game(SIZE);
+    prior.place(coordsOf('0,0,0'));
+    prior.place(coordsOf('1,1,1'));
+    prior.place(coordsOf('2,2,2'));
+    await saveGame(own, prior.uuid, prior, {
+      players: {},
+      result: 'in-progress',
+      startedAt: BEGAN_AT,
+      seats: { white: 'player-a', black: 'player-b' },
+    });
+    writeActiveGame({ code: ROOM, gameUuid: prior.uuid, updatedAt: NOW }, store);
+
+    const a = makeSession(hub, 'player-a', { db: own, storage: store, now: () => NOW });
+    await a.enter(ROOM, DEFER);
+    await a.whenPersisted();
+    await flush();
+    // Sanity: we really did return to THAT game (else the assertions below would be about a fresh one).
+    expect(a.gameUuid()).toBe(prior.uuid);
+
+    // The return re-persisted the record (that is how a returner's seat map + log stay current) — and
+    // a further move re-persists it again — yet the date it BEGAN at survives both writes.
+    a.place(coordsOf('3,3,3'));
+    await flush();
+    await a.whenPersisted();
+    expect((await listArchivedGames(own)).find((l) => l.id === prior.uuid)!.events).toBe(4);
+    expect(await storedStartedAt(own, prior.uuid)).toBe(BEGAN_AT);
+    expect(a.gameStartedAt()).toBe(BEGAN_AT);
+    // The user-facing consequence: the games list still dates the game when it began, so returning to
+    // it does not shuffle it to the top of the newest-first listing.
+    expect((await listArchivedGames(own))[0]!.meta.startedAt).toBe(BEGAN_AT);
+  });
+
+  it('a game ADOPTED from the arbiter keeps the date THIS browser archived it with', async () => {
+    const hub = new MockRelayHub();
+    const dbA = await openDatabase(`net-stamp-adopt-a-${Math.random().toString(36).slice(2)}`);
+    const dbB = await openDatabase(`net-stamp-adopt-b-${Math.random().toString(36).slice(2)}`);
+    const BEGAN_AT = 777_000;
+    // The shared game both browsers hold from an earlier sitting, with its identity-owned seat map.
+    const shared = new Game(SIZE);
+    shared.place(coordsOf('0,0,0'));
+    shared.place(coordsOf('1,1,1'));
+    const seats = { white: 'player-a', black: 'player-b' };
+    for (const into of [dbA, dbB]) {
+      await saveGame(into, shared.uuid, shared, {
+        players: {},
+        result: 'in-progress',
+        startedAt: BEGAN_AT,
+        seats,
+      });
+    }
+
+    // A RESUMES the game (arbiter). B has NO breadcrumb, so it enters "dealer's choice" with a fresh
+    // provisional and receives the shared game over the wire in A's admit — the adopt path, which never
+    // touches `seedFromUuid`.
+    const a = makeSession(hub, 'player-a', { db: dbA, storage: memoryStorage(), now: () => 999_000_000 });
+    const b = makeSession(hub, 'player-b', { db: dbB, storage: memoryStorage(), now: () => 999_000_000 });
+    await a.enter(ROOM, { kind: 'resume', uuid: shared.uuid, headHash: headHash(shared.log) });
+    await b.enter(ROOM, DEFER);
+    await flush();
+    await a.whenPersisted();
+    await b.whenPersisted();
+
+    // B really did adopt A's game (not a fresh one), and its OWN archive still dates that game when it
+    // began — the adopting peer does not re-date a game it already holds either.
+    expect(b.gameUuid()).toBe(shared.uuid);
+    expect(b.state().seat).toBe('black');
+    expect(await storedStartedAt(dbB, shared.uuid)).toBe(BEGAN_AT);
+    expect(b.gameStartedAt()).toBe(BEGAN_AT);
+    // …and so does the arbiter's, via the resume/seed path.
+    expect(await storedStartedAt(dbA, shared.uuid)).toBe(BEGAN_AT);
+    expect(a.gameStartedAt()).toBe(BEGAN_AT);
+  });
+});

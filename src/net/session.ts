@@ -65,6 +65,7 @@ import type { GameState, Player } from '../core/gameState';
 import {
   saveGame,
   loadNetGameByUuid,
+  archivedStartedAts,
   playersFromSeats,
   type ArchivedMeta,
 } from '../persist/archive';
@@ -387,6 +388,11 @@ export class NetSession {
     // publish our hello and to receive admission traffic on `onAdmission`.
     let provisional;
     try {
+      // Learn when every game this browser already holds BEGAN, before we seed or adopt one, so a game
+      // we return to is re-persisted with its original date instead of being re-stamped "now" (see
+      // {@link primeStartedAts}). A store we cannot read fails the entry through the same honest path
+      // as a seed we cannot load (below) — never a silently mis-dated archive.
+      await this.primeStartedAts();
       provisional = await this.buildProvisionalSeat(code, proposal);
     } catch (err) {
       // A seed we cannot even LOAD — a corrupt/illegal archived log surfaces as an `ArchiveError` — is
@@ -617,13 +623,43 @@ export class NetSession {
   }
 
   /**
-   * The `startedAt` stamp this session has already used for a given game uuid. Stamped ONCE per game
-   * (on its first persist) and reused, so the per-change autosave below cannot keep re-stamping the
-   * record and shuffling it to the top of the archive listing on every move.
+   * The `startedAt` stamp this session archives a given game uuid with. Established ONCE per game and
+   * then reused, from one of two sources:
+   *
+   *  - ADOPTED from the archive by {@link primeStartedAts} — a game this browser already holds began
+   *    when it began, so a return/resume/adopt must write that same date back;
+   *  - MINTED from the clock in {@link startedAtFor} for a game we are persisting for the first time
+   *    (a genuinely new game, or one adopted from a peer that this browser has never archived).
+   *
+   * Reuse is what keeps the per-change autosave from re-stamping the record on every move and
+   * shuffling it to the top of the (startedAt-sorted) archive listing. Both halves are asserted in
+   * `session.test.ts` ("stamped ONCE per game", "a return PRESERVES the archived startedAt").
    */
   private readonly startedAts = new Map<string, number>();
 
-  /** The `startedAt` for `uuid` — the first stamp this session used for it (minted on first use). */
+  /**
+   * Prime {@link startedAts} from the archive so every game this browser ALREADY HOLDS keeps the date
+   * it began on when we re-persist it.
+   *
+   * Without this, `startedAtFor` mints a fresh stamp for any uuid this JS session has not persisted
+   * yet — which silently REWRITES the archived `startedAt` of every game we return to (a breadcrumb
+   * return, a `resume`/`current` seed, or an arbiter's game we adopt over the wire and happen to hold
+   * archived). That is user-visible: {@link listArchivedGames} sorts by `startedAt` and the games list
+   * renders it as the game's date, and that list is the only route back to a game (design §10, #37).
+   *
+   * Runs once per {@link enter}, BEFORE any game is seeded or adopted, over the archive's metadata
+   * cursor (no logs are folded). Doing it here — rather than at each persist — keeps the stamp lookup
+   * SYNCHRONOUS afterwards, which the design requires: the app's autosave reads {@link gameStartedAt}
+   * synchronously on the same state change the session persists on, so an async read per write would
+   * let the two writers of one record disagree about its date.
+   */
+  private async primeStartedAts(): Promise<void> {
+    for (const [uuid, startedAt] of await archivedStartedAts(this.deps.db)) {
+      this.startedAts.set(uuid, startedAt);
+    }
+  }
+
+  /** The `startedAt` for `uuid` — the stamp established for it (minted here on genuinely first use). */
   private startedAtFor(uuid: string): number {
     const known = this.startedAts.get(uuid);
     if (known !== undefined) return known;
@@ -1097,6 +1133,11 @@ export class NetSession {
    * live game. Read by the app's autosave (`main.ts`), which writes the SAME uuid-keyed record while a
    * networked game is authoritative, so both writers stamp the record identically instead of alternately
    * re-dating it (which would jitter the games-list order between two values).
+   *
+   * It is the game's date, not this session's clock: {@link startedAts} adopts what the archive already
+   * holds for a game we returned to and only mints for a game being persisted for the first time. Both
+   * this readout and the record it stamps are asserted after a real page reload + re-entry in
+   * `e2e/breadcrumbReload.spec.ts` (the wiring `main.ts` is excluded from unit coverage for).
    */
   gameStartedAt(): number | null {
     const engine = this.engine;

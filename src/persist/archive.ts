@@ -334,6 +334,33 @@ export async function listArchivedGames(db: IDBDatabase): Promise<GameListing[]>
 }
 
 /**
+ * When each archived GAME began, keyed by its portable `uuid` (design §2.2) — the identity a
+ * networked session knows a game by, NOT the local record id.
+ *
+ * `startedAt` is a durable property of the GAME, not of whichever session last wrote its record: the
+ * listing is sorted by it and the archive browser renders it as the game's date, and since the games
+ * list is the only route back to a game (design §10, #37) re-dating a game the player returns to is a
+ * user-visible loss. A writer that re-persists a game it did not start reads its stamp from here
+ * instead of minting one (`NetSession.primeStartedAts`).
+ *
+ * Read over the LISTING (metadata only, via the store's cursor — no event logs are folded), so one
+ * pass answers the question for every archived game at once.
+ *
+ * One game legitimately occupies two records (the app's autosave shadow plus the canonical uuid-keyed
+ * record — see {@link listArchivedGames}); the EARLIEST stamp wins, since the game began once and the
+ * shadow is the record that existed first. That also makes the result independent of store order.
+ */
+export async function archivedStartedAts(db: IDBDatabase): Promise<ReadonlyMap<string, number>> {
+  const stamps = new Map<string, number>();
+  for (const listing of await listGames(db)) {
+    const known = stamps.get(listing.meta.uuid);
+    const began = listing.meta.startedAt;
+    stamps.set(listing.meta.uuid, known === undefined ? began : Math.min(known, began));
+  }
+  return stamps;
+}
+
+/**
  * Whether a listing is an **empty shell**: a record for a game with no history at all and no outcome
  * (`events === 0`, still `in-progress`) — a board on which nothing ever happened.
  *

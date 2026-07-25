@@ -32,6 +32,7 @@ import {
   loadNetGame,
   loadNetGameByUuid,
   listArchivedGames,
+  archivedStartedAts,
   isEmptyShell,
   purgeLegacyNetRoomRecords,
   flagConflicted,
@@ -633,6 +634,49 @@ describe('game archive', () => {
       const list = await listArchivedGames(db);
       expect(list.every((l) => l.events === 0)).toBe(true); // both really are empty boards
       expect(list.map((l) => isEmptyShell(l))).toEqual([false, false]);
+    });
+  });
+
+  /**
+   * `archivedStartedAts` — when each archived GAME began, keyed by its portable uuid. The durable
+   * answer a re-persisting writer (`NetSession`) reads instead of minting a fresh stamp, so returning
+   * to a game never re-dates it in the (startedAt-sorted) games list.
+   */
+  describe('archivedStartedAts', () => {
+    it('maps every archived game uuid to the startedAt its record carries', async () => {
+      const { db } = await open();
+      await saveGame(db, SAMPLE_UUID, sampleGame(), { ...sampleMeta, startedAt: 111 });
+      await saveGame(db, 'other-record-id', forkedGame(), { ...sampleMeta, startedAt: 222 });
+
+      const stamps = await archivedStartedAts(db);
+
+      // Keyed by the game's UUID (design §2.2) — NOT by the local record id, which for the second
+      // game is a different string entirely.
+      expect(stamps.get(SAMPLE_UUID)).toBe(111);
+      expect(stamps.get(FORKED_UUID)).toBe(222);
+      expect(stamps.size).toBe(2);
+    });
+
+    it('takes the EARLIEST stamp when one game occupies two records, in EITHER store order', async () => {
+      const { db } = await open();
+      // One game in two records is real: the app's autosave shadow (written when the board began) plus
+      // the canonical uuid-keyed net record. The store's cursor walks records in KEY order, so the two
+      // games below present the pair in OPPOSITE orders — the earlier stamp first for one, last for the
+      // other — proving the result is the game's true start either way (not "whichever came last").
+      await saveGame(db, 'a-early-first', sampleGame(), { ...sampleMeta, startedAt: 1_000 });
+      await saveGame(db, 'z-late-second', sampleGame(), { ...sampleMeta, startedAt: 9_000 });
+      await saveGame(db, 'b-late-first', forkedGame(), { ...sampleMeta, startedAt: 8_000 });
+      await saveGame(db, 'y-early-second', forkedGame(), { ...sampleMeta, startedAt: 2_000 });
+
+      const stamps = await archivedStartedAts(db);
+
+      expect(stamps.get(SAMPLE_UUID)).toBe(1_000);
+      expect(stamps.get(FORKED_UUID)).toBe(2_000);
+    });
+
+    it('is EMPTY for an empty archive (negative case)', async () => {
+      const { db } = await open();
+      expect((await archivedStartedAts(db)).size).toBe(0);
     });
   });
 
