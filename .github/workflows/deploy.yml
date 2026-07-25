@@ -79,3 +79,59 @@ jobs:
           publish_branch: gh-pages
           destination_dir: ${{ steps.env.outputs.dest }}
           keep_files: true
+
+      # LAZY PRUNE of subpaths whose branch no longer exists.
+      #
+      # GitHub only fires `on: delete` workflows from the DEFAULT branch, and we don't want to
+      # add plumbing to `main`, so cleanup runs opportunistically on EVERY push instead: delete
+      # a branch, and its subpath disappears on the next push to any branch.
+      #
+      # SAFETY — the prune is driven by an explicit manifest (`.deployed-branches`) on gh-pages,
+      # never by scanning directories. Only paths this workflow itself recorded can ever be
+      # removed, so `main`'s root build (index.html, assets/, …) and any hand-placed file are
+      # unreachable by construction. Branches absent from the manifest (e.g. deployed before it
+      # existed) are simply never pruned — fail-safe, not fail-destructive.
+      - name: Prune subpaths of deleted branches
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          REMOTE="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          work="$(mktemp -d)"
+          if ! git clone --quiet --depth 1 --branch gh-pages "$REMOTE" "$work/ghp" 2>/dev/null; then
+            echo "gh-pages not present yet — nothing to prune."; exit 0
+          fi
+          cd "$work/ghp"
+          manifest=.deployed-branches
+          touch "$manifest"
+
+          # Record this deploy. `main` publishes to the ROOT and is never tracked or pruned.
+          if [ "${GITHUB_REF_NAME}" != "main" ]; then
+            grep -qxF "${GITHUB_REF_NAME}" "$manifest" || echo "${GITHUB_REF_NAME}" >> "$manifest"
+          fi
+
+          # Branches that still exist on the remote.
+          git ls-remote --heads "$REMOTE" | sed 's#.*refs/heads/##' | sort -u > "$work/live"
+
+          : > "$work/keep"
+          while IFS= read -r branch; do
+            [ -n "$branch" ] || continue
+            if grep -qxF "$branch" "$work/live"; then
+              echo "$branch" >> "$work/keep"
+            else
+              echo "pruning stale subpath for deleted branch: $branch"
+              [ -d "$branch" ] && git rm -r --quiet -- "$branch"
+            fi
+          done < "$manifest"
+          sort -u "$work/keep" -o "$manifest"
+
+          if [ -n "$(git status --porcelain)" ]; then
+            git config user.name  "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add -A
+            git commit --quiet -m "chore(pages): sync subpaths for live branches [skip ci]"
+            git push --quiet origin gh-pages
+            echo "gh-pages pruned/synced."
+          else
+            echo "gh-pages already in sync — nothing to do."
+          fi
