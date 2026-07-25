@@ -43,6 +43,7 @@ import {
   check,
   log,
   report,
+  requireRelay,
   showBoard,
   sleep,
   startPeer,
@@ -62,6 +63,7 @@ const PHONE_MOVE_2 = '3,3,3';
 const SETTLE_MS = 4000;
 
 async function main(): Promise<number> {
+  await requireRelay();
   const code = generateGameCode(Math.random);
   log(`room ${code} — starting the host (phone)`);
   const phone = await startPeer({ name: 'phone', code, host: true });

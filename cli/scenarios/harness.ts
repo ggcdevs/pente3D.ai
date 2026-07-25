@@ -25,7 +25,17 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import mqtt from 'mqtt';
+import { relayConfig } from '../relay';
 import { render, type Snapshot } from '../views';
+
+/**
+ * Exit code a scenario uses for SKIPPED (relay unreachable), distinct from 1 = checks failed.
+ * An unattended gate must not read "no egress" as "the bug is back": one is missing test
+ * infrastructure, the other is a regression, and conflating them is exactly the masked-failure
+ * the principles forbid.
+ */
+export const EXIT_UNREACHABLE = 2;
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 /** Repo root (…/cli/scenarios → …). */
@@ -39,6 +49,49 @@ export function log(msg: string): void {
 }
 
 export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * PREFLIGHT: confirm the relay is actually reachable before spinning up peers. Without this a
+ * missing network looks identical to the bug under test — every peer times out and the scenario
+ * "fails". Called first by each scenario; on failure it prints why and exits
+ * {@link EXIT_UNREACHABLE} so a caller can report SKIPPED honestly instead of a false regression.
+ */
+export async function requireRelay(timeoutMs = 12_000): Promise<void> {
+  const cfg = relayConfig();
+  const reachable = await new Promise<string | true>((resolve) => {
+    const client = mqtt.connect(cfg.wssUrl, {
+      username: cfg.username,
+      password: cfg.password,
+      reconnectPeriod: 0,
+      connectTimeout: timeoutMs,
+    });
+    const timer = setTimeout(() => {
+      client.end(true);
+      resolve(`no CONNACK within ${timeoutMs}ms`);
+    }, timeoutMs);
+    client.on('connect', () => {
+      clearTimeout(timer);
+      client.end(true);
+      resolve(true);
+    });
+    client.on('error', (e: Error) => {
+      clearTimeout(timer);
+      client.end(true);
+      resolve(e.message);
+    });
+  });
+  if (reachable === true) {
+    log(`relay reachable at ${cfg.wssUrl}`);
+    return;
+  }
+  console.error(
+    `\nSKIPPED: the relay is unreachable (${reachable}).\n` +
+      `  url=${cfg.wssUrl}\n` +
+      `  This scenario needs live egress to the MQTT relay; it proves nothing without it.\n` +
+      `  Exiting ${EXIT_UNREACHABLE} (skipped) — NOT 1, which would mean the bug is present.`,
+  );
+  process.exit(EXIT_UNREACHABLE);
+}
 
 /** One CLI peer: a `pente play` daemon process with its own identity + state dir. */
 export interface Peer {
