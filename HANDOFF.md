@@ -1,147 +1,127 @@
 # Pente3D — Supervisor Handoff
 
-You are picking up as the **supervising Claude** on this project. Your role is orchestration:
-design with the user, break work into tickets, **delegate to subagents** (single agents for
-localized work, **Workflows** for multi-task stages), **gate rigorously**, and **independently
-verify** — never trust an agent's "it passed." This doc is everything hard-won so you don't
-re-learn it. Read `planning/agent-principles.md` first — it's the constitution.
+You are picking up as the **supervising Claude**. Your role is orchestration: design with the user,
+break work into tickets, **delegate to subagents** (single agents for localized work, **Workflows**
+for multi-task stages), **gate rigorously**, and **independently verify** — never trust an agent's
+"it passed." Read `planning/agent-principles.md` first (the constitution) and `CONTRIBUTING.md`
+(branches, commits, tickets, versioning, deploy conventions). This doc is state + hard-won lessons.
 
 ---
 
-## 1. What this is / current state
+## 1. What this is / where it stands
 
-A **3D Pente** game (N×N×N cubic lattice): deterministic rules core, IndexedDB game archive,
-**real networked play** over an MQTT relay, instanced Three.js rendering, composable
-config-driven UI. **v1 is complete, gated, and deployed live.**
+A **3D Pente** game (N×N×N lattice): pure deterministic rules core, IndexedDB archive, real
+networked play over an MQTT relay, instanced Three.js rendering, composable config-driven UI.
 
-- **Live:** prod `https://ggcdevs.github.io/pente3D.ai/`, staging `…/dev/` and `…/test/`.
-- **Branches:** `main`/`dev`/`test` are the app; `archive/*` holds all pre-v1 history. Deploy
-  is CI (Actions → `gh-pages` subpaths); **source branches hold pure source** (build → gitignored
-  `dist/`, no committed builds).
-- **Backlog:** 14 open GitHub issues (`gh issue list`), all groomed with design guidance and
-  cross-links. Nothing in flight.
+**v3 is feature-complete and frozen. v3.1 — a networked-game-model remodel — is designed and is the
+thing that will ship to `main`.**
 
-## 2. Orientation — key references
-
-| File | What |
+| Where | State |
 |---|---|
-| **`planning/agent-principles.md`** | The constitution for every agent (proof-not-inference, genuine tests, no volatile hardcoded facts, assert-over-delete, reviewer charter, nip-the-pattern). **Give it to every subagent.** |
-| `GLOSSARY.md` | Vocabulary (node/sphere/piece, 13 line-axes, seat, headHash, etc.). Keep it consistent. |
-| `planning/2026-07-18-game-core-design.md` | Rules, immutable `GameState`, `placePiece`, event-log + hash-chain, sync/conflict, undo/redo, input scope-stack. |
-| `planning/2026-07-18-networking-poc-design.md` | Relay/transport/seats + the **shitchell.com server setup** (see #23 to codify it). |
-| `planning/2026-07-19-render-ui-design.md` | Hybrid instanced/individual rendering, visuals, camera presets, composable zone-based UI. |
-| `planning/2026-07-18-testing-strategy.md` | The testing doctrine (below). |
-| `planning/review-log.md` | Learning log — what adversarial reviews caught + instruction tweaks. Append after each gate. |
-| `README.md` | Local dev, incl. supplying your own relay via a localStorage override. |
-| **`docs/diagrams/`** | Auto-generated **class-hierarchy** + **module-dependency** diagrams from `src/` (TS AST → Mermaid). Skim these first for the architecture shape; regenerate with `npm run diagrams` (CI staleness-checks `main`/`test`). |
+| `main` | `v3.0.0` (`80e9ead`) — the last release. **Frozen**; v3 never ships standalone. |
+| `dev` / `test` | v3 complete (`5c73104` + CLI work). Playable, but carries the bugs v3.1 fixes. |
+| `feat/net-model-v3.1` | The remodel. Design committed; **implementation not started**. |
+| `feat/cli-analyzer` | CLI tactical analyzer (#48), 10 commits ahead of `dev`, unmerged. |
 
-**Source layout:** `src/core` (pure rules — imports nothing from render/net/ui, eslint-enforced),
-`src/config` (layered config: JSON defaults + localStorage override), `src/persist` (IndexedDB +
-archive + game-lifecycle), `src/net` (transport/seats/sync/routing/turn-gate/presence),
-`src/render` (Three.js glue + pure resolvers), `src/input` (command registry, keybindings,
-scope-stack, placement), `src/ui` (DOM widgets + pure view-models on a zone layout), `src/util`
-(`randomId`), `src/debug/window.ts` (**`window.__pente`** inspection API — the linchpin for
-Playwright assertions).
+Live: root = `main`, plus `/dev/`, `/test/`, and **every branch at `/<branch>/`**.
 
-## 3. The build/review pipeline (Workflows)
+**Why v3 is frozen:** hands-on cross-device play found #45 (reconnect never resyncs → stuck turn →
+Undo diverges → *game bricked*) and #46 (New Game pushes a stale code-saved game to the peer).
+Shipping v3 would hand friends the exact bugs the remodel removes.
 
-Everything ships through a two-part gated flow:
+## 2. The v3.1 model (read the design doc before touching net code)
 
-1. **Build** (`.claude/workflows/pente-stage-N.mjs`): sequential TDD, one subagent per task,
-   **HALTS on a `null` task** (a failed agent) so dependents aren't built on a gap. Splits **pure
-   logic** (unit + mutation) from **IO glue** (Playwright). Commits per task; does **not** push.
-2. **Review-gate** (`.claude/workflows/pente-review-gate.mjs`, args `{stage, scope, mutateScope}`):
-   Harden (ensure gates enforce the scope) → **2 adversarial reviewers** (test-integrity +
-   correctness-vs-design, they **view screenshots**) → **fix loop (max 3, then escalate to you)** →
-   Gate (lint + coverage 100% + **mutation ≥95** + push **only if reviewers approved**).
+**Plan of record: `planning/2026-07-24-net-model-v3.1-design.md`.** Epic **#47**, milestone `v3.1`.
 
-`scope` = coverage/reviewer dirs; `mutateScope` = the **pure** files only (glue is Playwright-
-verified, never mutation-tested). To iterate a workflow: edit the `.mjs`, re-invoke with
-`{scriptPath}`. **Never call `Workflow` unless the user has opted into multi-agent orchestration.**
+One root caused the whole v3 bug cluster: #35's `net-room:{code}` (a game + seatmap persisted per
+room **code**) both re-coupled code↔game *and* became a stale local substitute for real state-sync.
 
-## 4. Testing
+The remodel, in four sentences:
+- **A room code is pure rendezvous; a game is a UUID; there is NO mapping between them anywhere.**
+  localStorage keeps only visited codes + a session breadcrumb; games live in the archive by UUID.
+- **Seed selection is explicit and enforced on the wire** — `New` sends/accepts only empty state;
+  **Dealer's-choice is the only kind that adopts a peer's non-empty game**.
+- **On (re)connect, converge to the LIVE state via resident-peer republish** (deliberately *not*
+  retained MQTT — that would re-couple code↔game at the broker and kill code reuse).
+- **The turn gate caps legitimate drift at exactly one move**, so the *only* automatic path is a
+  one-move fast-forward; anything else gets last-common-ancestor + diff + a resolution handshake.
 
-- **Commands:** `npm run lint | test | coverage | mutate | e2e` (+ `dev`, `build`).
-- **Pyramid:** Vitest unit + **fast-check** property tests on pure logic; **Stryker mutation**
-  (break=95, generous `timeoutMS/timeoutFactor` for determinism) as the real bar; **coverage 100%
-  pinned on pure files** (vite thresholds; glue excluded). `eslint-plugin-vitest` bans
-  assertion-free/skipped/focused tests.
-- **Rendering/UI:** **Playwright** drives the real app headless via **SwiftShader** software WebGL
-  (no display needed) and asserts on **`window.__pente`** real state + screenshots — never on log
-  lines.
-- **Networked:** two **isolated browser contexts** (distinct playerId/seats) for genuine two-player
-  tests; **real-relay** integration tests hit the live broker (they self-skip if unreachable).
-- **Proof doctrine:** every gate proves it *bites* (raise the threshold / inject a regression →
-  non-zero exit, then restore). Coverage means "executed," mutation means "verified."
+Integrity: a dumb relay cannot referee (one shared credential; retained messages are client-written).
+Defense is the hash chain + **validating an adopted log by replaying it through the rules engine**.
+An authoritative server is captured as #50 — v4-scale, not planned.
 
-## 5. Supervisor gotchas (learned the hard way)
+**Next step:** write the implementation plan, and **build the CLI-driven #45 repro first** so the
+bug that started this has a failing test before the model changes.
 
-- **NEVER hardcode a branch name in an agent/workflow prompt.** An agent reading "branch X" will
-  `git checkout X` and switch the shared working tree (this happened — a gate ran on the wrong
-  branch, local dev showed the old build). Say *"work in-place on the current branch; never
-  checkout/switch."* Push with `git push origin HEAD`. (See `memory` note.)
-- **Independently verify every agent claim.** The gates caught a *fake* mutation gate (config with
-  no `break`), a *flaky* gate (timeout jitter around 95), a *per-move* archive bug, a hover-render
-  bug — several reported as "passed." Re-run the metric yourself; **re-run flaky metrics ≥2×**.
-- **Screenshots:** the **review agents** view them; **you (main loop) do NOT** — they're expensive
-  in context. Only look if the user says something's wrong.
-- **The git wrapper** GPG-signs and re-authors commits to "Claude Code" (expected). Its
-  `commit_trailing_whitespace` hook **rejects minified bundles** — strip trailing whitespace or
-  don't commit build output (we deploy via CI now, so you shouldn't need to).
-- **Don't do git ops while a workflow/subagent is committing** to the same branch (push races,
-  interleaved commits). Wait for it, or work non-overlapping files.
-- **Subagents can leave orphaned `while … sleep` polling shells** running after they finish
-  (burns CPU, holds RAM, re-notifies). Don't write polling loops into agent tasks; prefer the
-  harness's completion notifications.
-- **Integration gaps slip past component gates.** Each stage tested its parts in isolation; the
-  scene↔SyncEngine *wiring* was never tasked → networked moves silently didn't sync until a
-  **two-browser e2e** exposed it. Add cross-component tests for anything spanning stages.
-- **GitHub Pages:** one site per repo (multi-env = **subpaths**, not subdomains); changing the
-  Pages **source branch does NOT auto-trigger a build** — `POST /pages/builds`.
-- **Secure-context APIs** (`crypto.randomUUID`, `crypto.subtle`) are `undefined` over plain LAN
-  http — guard them (we use `src/util/randomId.ts`). Test insecure-context paths (Playwright runs
-  on localhost = always secure, so it won't catch these).
-- **Relay config is portable:** blank in-repo, injected at build from the `RELAY_CONFIG` repo
-  variable; local dev via a `pente:config:relay` localStorage override. The relay itself runs on
-  shitchell.com (`guy@shitchell`, passwordless sudo) — see the networking design doc + #23.
+## 3. The apparatus
 
-## 6. Approaching the tickets — sequencing & delegation
+- **Build workflows** (`.claude/workflows/pente-*.mjs`): sequential TDD, one subagent per task,
+  **HALT on a `null` task**. Commits per task; never pushes.
+- **Review gate** (`pente-review-gate.mjs`, args `{stage, scope, mutateScope}`): harden → 2 adversarial
+  reviewers (they **view screenshots**; you do not — too expensive in context) → fix loop → gate
+  (lint + coverage 100% + mutation ≥95) → **pushes only if reviewers approved**.
+  `scope` = what reviewers read; `mutateScope` = **pure files only**.
+- **The `cli/` client is the testing lever** — a scriptable Node net client (play daemon, wait/move
+  verbs, board slicing, tactical analyzer). It drives deterministic cross-"device" scenarios the
+  browser can't: the #45 repro, rematch+reconnect, code reuse. Use it. It is also *yours to change
+  freely* — one rule: work in a worktree.
+- **Never call `Workflow` unless the user has opted into multi-agent orchestration.**
 
-The backlog is **already grouped into coherent, shared-surface batches** — do a batch as one
-piece, not N scattered passes:
+## 4. Gotchas — learned the hard way, do not re-learn
 
-- **Menu & live settings** (#24 side-drawer · #15 live-apply · #13 network-in-menu · #16 CSS
-  modernization) — same surface (menu/settings UI + config subscription + scope-stack).
-- **Networking UX** (#12 rematch · #18 undo/redo · #17 slider-local-only · #20 reconnect+notify) —
-  **build ONE ask/accept handshake primitive** and reuse it for #12 + #18.
-- **Board size** (#9) — single source of truth through render+picking+authoritative game;
-  arbitrary N; "takes effect next game"; networked size agreement. Depends on #15's mechanism.
-- **Rendering** (#19 last-piece animation — config-driven, fires on remote moves too).
-- **Mobile** (#10 touch line-visibility control — dispatches the same command IDs as `d/s/f`).
-- **Platform** (#21 PWA/offline), **Infra** (#23 relay-as-code, pairs with the `RELAY_CONFIG` var).
+**Trust & verification**
+- **Independently verify every agent claim.** Gates have caught a *fake* mutation gate, a flaky one,
+  a per-move archive bug — several reported as "passed". Re-run the metric yourself; re-run flaky
+  ones ≥2×.
+- **A subagent can fire a premature "done" notification.** One reported completion mid-edit; the
+  half-written tree produced phantom test failures. **Always confirm `git log`/`git status` before
+  trusting a completion**, and re-run gates on the committed SHA.
+- **The review gate's fix-loop cap counts REVIEW rounds** — it can exhaust the budget and escalate
+  with its *own* final-round fixes never reviewed. Verify those separately (or raise the cap).
+- **A gate agent once invented a precondition** ("no review-log entry exists") and withheld an
+  already-approved push. The contract is `passed AND approved` — nothing else.
 
-**Per batch:** brainstorm/design with the user if non-trivial → write a mini-plan → **delegate**.
-Use a **single Agent** for a localized fix (like the #1/#3/#6/#7 fixes); use a **build Workflow**
-(sequential, null-halt) for a multi-module batch; **always run the review-gate afterward**, then
-**independently verify** and close the ticket with the commit SHA.
+**Environment**
+- **NEVER hardcode a branch name in an agent prompt.** Agents `git checkout` it and switch the shared
+  working tree. Say *"work in-place on the current branch; never checkout/switch."*
+- **Use worktrees** for parallel work — the user often has a dev server running on the main tree.
+- **Don't do git ops while a workflow/subagent is committing** to the same branch.
+- Subagents can leave orphaned `while … sleep` polling shells. Don't write polling into agent tasks.
+- `gh` auth can expire mid-session — git-over-SSH keeps working while the API 401s. Ask the user to
+  re-auth (`gh auth login`); you cannot do it for them.
 
-**Scope heuristic (in-session vs ticket):** fix now if it breaks the *core designed experience*;
-ticket it if it's a new feature beyond the design, an off-path edge case, or polish.
+**CI / build**
+- **`diagrams-check` runs only on `test`/`main`.** Regenerate diagrams before pushing there or CI
+  goes red (this happened after a `netModel` trim).
+- **`actions/checkout@v4` defaults to depth 1 with NO tags** — `git describe` then yields
+  `0.0.0-unknown`. `fetch-depth: 0` is required wherever the version matters.
+- **Two-context networked e2e are flaky under parallel workers.** Re-run with `--workers=1` before
+  concluding a failure is real; several "failures" were load, not logic.
+- The git wrapper GPG-signs and re-authors commits to "Claude Code" (expected). Its trailing-
+  whitespace hook rejects minified bundles — never commit build output.
+- **Secure-context APIs** (`crypto.randomUUID`) are `undefined` over plain LAN http — use
+  `src/util/randomId.ts`. Playwright runs on localhost (always secure) so it won't catch these.
+- Relay creds live in the `RELAY_CONFIG` repo variable, injected at build; the tracked
+  `relay.json` ships blank. Real-relay tests self-skip without egress — **they were never green in
+  CI**, so exercise them on a real deploy.
 
-**Suggested order:** Menu & live-settings batch first (biggest UX lift, and #15 unblocks #9/#19/#24)
-→ Networking UX → board size → rendering/mobile polish → PWA/infra.
+**Design**
+- **Integration gaps slip past component gates.** The scene↔SyncEngine wiring was never tasked and
+  silently didn't sync; #35 passed every mechanical gate (98% mutation!) while not actually wiring
+  the durable seat map. Add cross-component tests for anything spanning stages.
+- **The user's hands-on findings are first-class signal** — #40, #45 and #46 all came from real
+  cross-device play, not tests. When they report a quirk, look for the *shared root* before patching.
 
-## 7. Deploy & infra quick-ref
+## 5. Working with this user
 
-- **Deploy:** push to `main`/`dev`/`test` → `.github/workflows/deploy.yml` builds (relay injected
-  from `RELAY_CONFIG`) and publishes to `gh-pages` at `/`, `/dev/`, `/test/`. Pages source =
-  `gh-pages`. A new branch needs the workflow present on it (fast-forward from main) to deploy.
-- **Verify a deploy:** wait for the Actions run (`gh run list`), then `curl` the URL for a 200 +
-  the right `/pente3D.ai[/env]/assets/…` base.
-- **Relay:** Mosquitto behind nginx (wss on 443) on shitchell.com. To repoint, update the
-  `RELAY_CONFIG` repo variable. #23 will bring the server setup into `infra/`.
+Sharp collaborator who catches subtle bugs by actually playing, and who thinks structurally — several
+times they proposed a *simpler* model than the one on the table (deleting the code↔game pointer
+entirely; keeping the auto-fast-forward narrow) and were right. **Push back once with reasoning if
+you disagree; if they reaffirm, it's their call — proceed and say so.** They prefer structural fixes
+over rule-patching, want rationale captured verbatim, and dislike time estimates (use token/complexity
+instead). Ticket disposition style: leave tickets where they are and re-review *behaviourally* at the
+end rather than pre-sorting.
 
 ---
 
-*Have fun. The apparatus works — trust it, but verify it. The user is a sharp collaborator who
-catches subtle bugs by actually playing; treat their hands-on findings as first-class signal.*
+*The apparatus works — trust it, but verify it. Have fun.*
