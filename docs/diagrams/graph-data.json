@@ -1623,7 +1623,9 @@
   },
   "src/net/admission.ts": {
     "exports": [
+      "AdmissionDecision",
       "AgreedGame",
+      "GameGate",
       "OfferedGame",
       "Peer",
       "Proposal",
@@ -1631,8 +1633,10 @@
       "ReconcileResult",
       "Reject",
       "SeedAcceptance",
+      "acceptsCrossing",
       "acceptsGame",
       "currentProposal",
+      "decideAdmission",
       "deferProposal",
       "electInitiator",
       "isConcrete",
@@ -1696,13 +1700,24 @@
       {
         "name": "SeedAcceptance",
         "type": "{ readonly ok: true } | Reject"
+      },
+      {
+        "name": "GameGate",
+        "type": "| { readonly kind: 'entry'; readonly seed: Proposal }\n  | { readonly kind: 'agreed'; readonly uuid: string }"
+      },
+      {
+        "name": "AdmissionDecision",
+        "type": "| { readonly ok: true; readonly serve: 'mine' }\n  | { readonly ok: true; readonly serve: 'theirs'; readonly uuid: string }\n  | Reject"
       }
     ],
     "functions": [
+      "acceptsCrossing",
       "acceptsGame",
+      "acceptsOnlyGame",
       "agree",
       "beats",
       "currentProposal",
+      "decideAdmission",
       "deferProposal",
       "electInitiator",
       "hasHistory",
@@ -2368,6 +2383,7 @@
   },
   "src/net/rematch.ts": {
     "exports": [
+      "rematchGameUuid",
       "shouldArchiveBeforeNetStart",
       "shouldPromptRematch"
     ],
@@ -2378,6 +2394,13 @@
         "specifiers": [
           "GameState"
         ]
+      },
+      {
+        "source": "../core/hash",
+        "target": "src/core/hash.ts",
+        "specifiers": [
+          "hashStep"
+        ]
       }
     ],
     "classes": [],
@@ -2385,6 +2408,7 @@
     "enums": [],
     "typeAliases": [],
     "functions": [
+      "rematchGameUuid",
       "shouldArchiveBeforeNetStart",
       "shouldPromptRematch"
     ]
@@ -2518,8 +2542,8 @@
           "Peer",
           "Proposal",
           "acceptsGame",
-          "electInitiator",
-          "reconcile"
+          "decideAdmission",
+          "electInitiator"
         ]
       },
       {
@@ -2543,6 +2567,13 @@
           "receiveProposal",
           "receiveResponse",
           "respond"
+        ]
+      },
+      {
+        "source": "./rematch",
+        "target": "src/net/rematch.ts",
+        "specifiers": [
+          "rematchGameUuid"
         ]
       },
       {
@@ -2576,6 +2607,7 @@
           "SyncMessage",
           "parseSyncMessage",
           "toAdmitMessage",
+          "toAdoptAdmitMessage",
           "toHelloMessage",
           "toRejectMessage",
           "toSyncMessage"
@@ -2687,6 +2719,7 @@
       "AdmissionMessage",
       "AdmissionReject",
       "AdmitMessage",
+      "AdmittedGame",
       "GameMessage",
       "HelloMessage",
       "MetaProvider",
@@ -2708,6 +2741,7 @@
       "parseGameMessage",
       "parseSyncMessage",
       "toAdmitMessage",
+      "toAdoptAdmitMessage",
       "toHelloMessage",
       "toRejectMessage",
       "toSyncMessage"
@@ -2769,7 +2803,18 @@
         "source": "./admission",
         "target": "src/net/admission.ts",
         "specifiers": [
-          "Proposal"
+          "GameGate",
+          "OfferedGame",
+          "Proposal",
+          "ReconcileReject",
+          "acceptsCrossing"
+        ]
+      },
+      {
+        "source": "./rematch",
+        "target": "src/net/rematch.ts",
+        "specifiers": [
+          "rematchGameUuid"
         ]
       },
       {
@@ -2813,6 +2858,7 @@
         "extends": null,
         "implements": [],
         "methods": [
+          "agreeOn(uuid: string): void",
           "applyAgreedUndo(): void",
           "attach(): void",
           "conflictForks(): { readonly mine: EventLog; readonly theirs: EventLog } | null",
@@ -2828,6 +2874,8 @@
           "publishState(): void",
           "receive(msg: SyncMessage): void",
           "redo(): void",
+          "refusedGame(): { readonly uuid: string; readonly reason: ReconcileReject } | null",
+          "reseat(color: Player): void",
           "resetGame(newGame: Game, newMyColor: Player): void",
           "status(): SyncStatus",
           "undo(): void",
@@ -2880,7 +2928,8 @@
           "readonly id: string",
           "readonly kind: 'hello'",
           "readonly playerId: string",
-          "readonly proposal: Proposal"
+          "readonly proposal: Proposal",
+          "readonly seats: SeatMap"
         ]
       },
       {
@@ -2888,7 +2937,7 @@
         "extends": [],
         "methods": [],
         "properties": [
-          "readonly game: { readonly kind: 'sync' } & SyncMessage",
+          "readonly agreed: AdmittedGame",
           "readonly id: string",
           "readonly kind: 'admit'",
           "readonly seats: SeatMap"
@@ -2907,6 +2956,10 @@
     ],
     "enums": [],
     "typeAliases": [
+      {
+        "name": "AdmittedGame",
+        "type": "| { readonly source: 'arbiter'; readonly game: { readonly kind: 'sync' } & SyncMessage }\n  | { readonly source: 'newcomer'; readonly uuid: string }"
+      },
       {
         "name": "AdmissionReject",
         "type": "| 'room-full'\n  | 'seat-reserved'\n  | 'game-mismatch'\n  | 'game-divergent'\n  | 'seed-refused'"
@@ -2948,13 +3001,14 @@
       "isAdmissionReject",
       "looksLikeSync",
       "normalizeEpoch",
-      "parseAdmitGame",
+      "parseAdmittedGame",
       "parseGameMessage",
       "parseProposal",
       "parseSeat",
       "parseSeatMap",
       "parseSyncMessage",
       "toAdmitMessage",
+      "toAdoptAdmitMessage",
       "toHelloMessage",
       "toRejectMessage",
       "toSyncMessage"
@@ -6261,6 +6315,7 @@
       "CodeError",
       "CodeValidation",
       "HOST_GAME_COMMAND",
+      "JOIN_ERROR_REASONS",
       "JOIN_GAME_COMMAND",
       "JoinErrorReason",
       "NetModel",
@@ -6313,7 +6368,7 @@
       },
       {
         "name": "JoinErrorReason",
-        "type": "| 'room-full'\n  /** A seat is held for an absent owner and this peer is not that owner (seat manager `seat-reserved`). */\n  | 'seat-reserved'\n  /** The two peers proposed DIFFERENT games — different game uuids (admission `game-mismatch`). */\n  | 'game-mismatch'\n  /** The SAME game uuid but forked histories — divergent headHash (admission `game-divergent`). */\n  | 'game-divergent'\n  /**\n   * The two SEEDS are incompatible: one side chose New Game (empty only) while the other brought a\n   * real game (admission `seed-refused`, design §3). Only Dealer's choice adopts a peer's game.\n   */\n  | 'seed-refused'\n  /** The transport could not connect (relay unreachable / rejected). */\n  | 'connect-failed'\n  /**\n   * The seed's own archived game could NOT be read — the stored log is corrupt/illegal, so folding it\n   * threw (an `ArchiveError`). A LOCAL failure, not a peer's refusal: nothing was published and the\n   * entry never joined the room. It is surfaced with its own label rather than left silent (the V.1\n   * review finding: the session returned to offline with no reason and the player was told nothing).\n   */\n  | 'seed-unreadable'"
+        "type": "| 'room-full'\n  /** A seat is held for an absent owner and this peer is not that owner (seat manager `seat-reserved`). */\n  | 'seat-reserved'\n  /** The two peers proposed DIFFERENT games — different game uuids (admission `game-mismatch`). */\n  | 'game-mismatch'\n  /** The SAME game uuid but forked histories — divergent headHash (admission `game-divergent`). */\n  | 'game-divergent'\n  /**\n   * The two SEEDS are incompatible: one side chose New Game (empty only) while the other brought a\n   * real game (admission `seed-refused`, design §3). Only Dealer's choice adopts a peer's game.\n   */\n  | 'seed-refused'\n  /** The transport could not connect (relay unreachable / rejected). */\n  | 'connect-failed'\n  /**\n   * The seed's own archived game could NOT be read — the stored log is corrupt/illegal, so folding it\n   * threw (an `ArchiveError`). A LOCAL failure, not a peer's refusal: nothing was published and the\n   * entry never joined the room. It is surfaced with its own label rather than left silent (the V.1\n   * review finding: the session returned to offline with no reason and the player was told nothing).\n   */\n  | 'seed-unreadable'\n  /**\n   * The seed named a game this browser does NOT hold, so there was nothing to resume. A LOCAL failure,\n   * not a peer's refusal: nothing was published and the entry never joined the room. It has its own\n   * label because the alternative — entering on a fresh game while announcing the named one — made every\n   * downstream refusal a lie (a peer proposing the SAME game was told the two of you \"brought different\n   * games\").\n   */\n  | 'seed-unavailable'"
       },
       {
         "name": "CodeError",

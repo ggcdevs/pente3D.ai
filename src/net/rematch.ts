@@ -76,8 +76,13 @@ export function shouldPromptRematch(state: GameState): boolean {
  * same property initiator election gives a first game (#42).
  *
  * A staggered rematch (one peer resets, the other adopts that generation before resetting) still
- * converges: the second reset derives from the game it has by then adopted, at a HIGHER epoch, and the
- * cross-generation adopt rule carries the first peer onto it.
+ * converges, and the derivation is what makes that work rather than a coincidence: the second reset
+ * derives from the game it has by then adopted, at a HIGHER generation, and the first peer RE-DERIVES
+ * the same id from the game it is holding and recognises the fresh game as its own next generation
+ * (`SyncEngine.receiveOtherGame`). That recognition is why a rematch crosses the move-sync channel at
+ * all — the fresh game has a different uuid, so without it the pair's own next game is indistinguishable
+ * from a stranger's and every seed that names a concrete game refuses it, leaving the two peers stuck on
+ * two games. Asserted end-to-end in `session.test.ts` ("a rematch converges under EVERY seed").
  *
  * @param priorUuid The uuid of the game the rematch is leaving (both peers are on it).
  * @param epoch The fresh-game generation being entered (the incremented epoch).

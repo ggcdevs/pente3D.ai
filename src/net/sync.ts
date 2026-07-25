@@ -32,16 +32,24 @@
  * archive call, wiring the pure decision to real message exchange. It carries no
  * rules of Pente (that is `src/core`) and imports nothing from three/render/ui.
  *
- * ## The seed gate on this channel (design §3, #46)
+ * ## Which GAME, before which STATE of it (design §3, #46)
  *
- * The prefix/hash decision above answers *"is this a valid continuation of a history"*, and
- * `isPrefix` deliberately treats an EMPTY log as a prefix of any log — so on its own it would let any
- * peer whose log is currently empty adopt a stranger's game wholesale, whatever seed its player chose.
- * That is the #46 rule broken on a channel the admission protocol never sees. So a message about a
- * DIFFERENT game (`uuid` ≠ ours) is judged by the peer's own seed first, with the same pure
- * {@link acceptsGame} the admission gates use ({@link SyncEngine.refusedGame} records a refusal); only
- * then does the prefix/epoch policy run. Same-game traffic is untouched — being ahead of or behind the
- * game you are already on is convergence, not a seed question.
+ * Everything above answers *"is this a valid continuation of a history"* — a question that only means
+ * anything WITHIN one game. Two different games are never each other's prefix, so run unguarded the
+ * same rules would either call a stranger's game a "fork" of ours (stopping our game and archiving two
+ * histories that never forked — a kill switch for any publisher) or, because `isPrefix` treats an EMPTY
+ * log as a prefix of anything, let a peer whose log is momentarily empty adopt a stranger's game
+ * wholesale. That is the #46 rule broken on the one channel the admission protocol never sees.
+ *
+ * So {@link SyncEngine.receive} settles IDENTITY first: a message about a DIFFERENT game never reaches
+ * the prefix/epoch policy. It goes to {@link SyncEngine.receiveOtherGame}, which admits exactly three
+ * things — the game admission AGREED us onto ({@link SyncEngine.agreeOn}), our own next generation (a
+ * rematch, whose uuid is derived from the game we are on), and whatever the pure
+ * {@link acceptsCrossing} allows for our {@link GameGate} (the agreed game once entry has resolved,
+ * else the player's own seed while we still hold no history). Anything else is refused with a typed
+ * reason and the game is left untouched ({@link SyncEngine.refusedGame} records it). Same-game traffic
+ * is untouched — being ahead of or behind the game you are already on is convergence, not a seed
+ * question.
  */
 
 import { Game } from '../core/game';
@@ -59,7 +67,14 @@ import { opponent, type GameState, type Player } from '../core/gameState';
 import { flagConflicted, type ArchivedMeta } from '../persist/archive';
 import { createEmitter, type Emitter } from '../util/emitter';
 import type { Transport, TransportMessage } from './transport';
-import { acceptsGame, type Proposal, type ReconcileReject } from './admission';
+import {
+  acceptsCrossing,
+  type GameGate,
+  type OfferedGame,
+  type Proposal,
+  type ReconcileReject,
+} from './admission';
+import { rematchGameUuid } from './rematch';
 import type { SeatMap } from './seats';
 
 /** The sync wire-format version. Bumped only on a breaking message-shape change. */
@@ -84,6 +99,12 @@ export const SYNC_VERSION = 1 as const;
  * remote epoch is stale (ignore), and only WITHIN the same epoch does the existing
  * prefix/hash decision apply. This makes the seamless in-place reset converge on the
  * same transport and makes any stale prior-epoch replay a no-op by construction.
+ *
+ * The epoch is a bare number any publisher may stamp, so it is NOT on its own a licence to
+ * push a game: it orders GENERATIONS OF ONE GAME. A message naming a different game is
+ * decided on identity first ({@link SyncEngine.receiveOtherGame}), and the only unrelated-uuid
+ * log a higher epoch carries in is the pair's OWN next generation — provable by re-deriving
+ * {@link rematchGameUuid} from the game we are on.
  */
 export interface SyncMessage {
   /** Wire-format version (must equal {@link SYNC_VERSION}). */
@@ -159,9 +180,10 @@ export interface ResponseMessage {
  * accept/decline round-trip — the arbiter answers a `hello` with an `admit` or a `reject`).
  *
  * A **hello**: a peer announces its arrival with its stable `playerId`, its seed
- * {@link Proposal} (what game it brings — new/resume/current/defer), and an `arrivalTag` (its
- * live-presence arrival rank, feeding the initiator election in `admission.ts`). The arbiter
- * (or the elected initiator) reconciles the pair of proposals and answers.
+ * {@link Proposal} (what game it brings — new/resume/current/defer), the identity-owned
+ * {@link SeatMap} of that game, and an `arrivalTag` (its live-presence arrival rank, feeding the
+ * initiator election in `admission.ts`). The arbiter (or the elected initiator) reconciles the pair
+ * of proposals and answers.
  */
 export interface HelloMessage {
   readonly kind: 'hello';
@@ -171,6 +193,19 @@ export interface HelloMessage {
   readonly playerId: string;
   /** The seed proposal this peer brings (design §3/§5; reconciled in `admission.ts`). */
   readonly proposal: Proposal;
+  /**
+   * The identity-owned {@link SeatMap} of the game this peer BRINGS (design §7: "seats stay
+   * identity-owned ON THE GAME"). It travels with the hello because seats belong to the game, not to
+   * the negotiation: when the arbiter DEFERS, the pair plays the newcomer's game, and the arbiter must
+   * seat itself against THAT game's owners — it has never seen them otherwise, and negotiating a fresh
+   * colour on its own provisional map would flip the newcomer off the seat it owns and evict an absent
+   * third owner from the record (the seats.ts contract: "a seat OWNED by a different playerId is never
+   * reassigned"). A peer bringing no concrete game announces its provisional map, which owns only its
+   * own seat. Like every field here it is the SENDER's claim: it is only ever used for a game the
+   * receiver does not hold, and `claimSeat` still refuses to hand out a seat somebody else owns, so a
+   * forged map can refuse its sender entry — never take a seat from a game we hold.
+   */
+  readonly seats: SeatMap;
   /** The peer's live-presence arrival rank — feeds the initiator election (earlier = smaller). */
   readonly arrivalTag: number;
 }
@@ -358,9 +393,12 @@ export function parseGameMessage(msg: unknown): GameMessage {
         throw new SyncError('hello message requires a finite numeric arrivalTag');
       }
       const proposal = parseProposal(rec.proposal);
+      // The seat map of the game this peer brings, validated by the SAME parser an admit's map goes
+      // through (one reading of "what is a seat map" on the wire, so neither can drift).
+      const seats = parseSeatMap(rec.seats);
       // `Number.isFinite` guaranteed a finite number above but does not narrow `unknown`; the cast
       // is sound (the guard threw for anything else).
-      return { kind: 'hello', id: rec.id, playerId: rec.playerId, proposal, arrivalTag: rec.arrivalTag as number };
+      return { kind: 'hello', id: rec.id, playerId: rec.playerId, proposal, seats, arrivalTag: rec.arrivalTag as number };
     }
     case 'admit': {
       if (typeof rec.id !== 'string') {
@@ -468,13 +506,14 @@ function parseAdmittedGame(raw: unknown): AdmittedGame {
 }
 
 /**
- * Validate the `seats` field of an {@link AdmitMessage} into a {@link SeatMap}: each seat is a
- * string playerId or `null` (never a `'host'` sentinel — every owner is a real id). A missing
- * field, a non-object, or a seat that is neither a string nor `null` is rejected.
+ * Validate the `seats` field of an {@link AdmitMessage} or a {@link HelloMessage} into a
+ * {@link SeatMap}: each seat is a string playerId or `null` (never a `'host'` sentinel — every owner
+ * is a real id). A missing field, a non-object, or a seat that is neither a string nor `null` is
+ * rejected. ONE parser for both messages, so the two readings of a seat map cannot drift.
  */
 function parseSeatMap(raw: unknown): SeatMap {
   if (typeof raw !== 'object' || raw === null) {
-    throw new SyncError('admit message requires a seats object');
+    throw new SyncError('admission message requires a seats object');
   }
   const s = raw as Record<string, unknown>;
   return { white: parseSeat(s.white, 'white'), black: parseSeat(s.black, 'black') };
@@ -484,7 +523,7 @@ function parseSeatMap(raw: unknown): SeatMap {
 function parseSeat(raw: unknown, color: 'white' | 'black'): string | null {
   if (raw === null) return null;
   if (typeof raw === 'string') return raw;
-  throw new SyncError(`admit message ${color} seat must be a string playerId or null`);
+  throw new SyncError(`admission message ${color} seat must be a string playerId or null`);
 }
 
 /**
@@ -688,15 +727,19 @@ export function toSyncMessage(
 /**
  * Build a `kind:'hello'` admission message (Task S.4). `id` is the sender-chosen UNIQUE id used
  * to dedup on receive; `playerId` is the announcing peer's stable identity; `proposal` is its
- * seed proposal; `arrivalTag` is its live-presence arrival rank for the initiator election.
+ * seed proposal; `seats` is the identity-owned seat map of the game it BRINGS (see
+ * {@link HelloMessage.seats} — a deferring arbiter seats itself against it rather than inventing a
+ * colour for a game whose owners it has never seen); `arrivalTag` is its live-presence arrival rank
+ * for the initiator election.
  */
 export function toHelloMessage(
   id: string,
   playerId: string,
   proposal: Proposal,
+  seats: SeatMap,
   arrivalTag: number,
 ): HelloMessage {
-  return { kind: 'hello', id, playerId, proposal, arrivalTag };
+  return { kind: 'hello', id, playerId, proposal, seats, arrivalTag };
 }
 
 /**
@@ -852,12 +895,23 @@ export class SyncEngine {
 
   /**
    * The player's own SEED proposal for this session (design §3) — what game they chose to bring. It
-   * gates adopting a log belonging to a DIFFERENT game off this channel (see the module docstring):
-   * `defer` takes anything, `new` takes an empty game only, `resume`/`current` take their own uuid
-   * only. REQUIRED, deliberately: a default would make "no seed supplied" mean "adopt anything", which
-   * is the hole this gate exists to close, and it would close silently.
+   * governs adopting a log belonging to a DIFFERENT game off this channel only while ENTRY IS STILL
+   * OPEN (see {@link gate}): `defer` takes anything, `new` takes an empty game only, `resume`/`current`
+   * take their own uuid only. REQUIRED, deliberately: a default would make "no seed supplied" mean
+   * "adopt anything", which is the hole this gate exists to close, and it would close silently.
    */
   private readonly seed: Proposal;
+
+  /**
+   * The game the ADMISSION protocol agreed this session onto ({@link agreeOn}), or `null` while entry
+   * is still open. Once set, it — not the entry seed — is what the cross-game gate consults, because
+   * the seed's question ("which game do I want to enter on") has by then been answered.
+   *
+   * It is a UUID rather than "the game I hold" on purpose: a DEFERRING ARBITER agrees onto the
+   * newcomer's game before it has the bytes, and adopting them off this channel is exactly how it gets
+   * there (design §3, the dealer's-choice-adopts row with the deferrer as arbiter).
+   */
+  private agreedUuid: string | null = null;
 
   /**
    * The last cross-identity log this engine REFUSED to adopt, and the typed seed reason — the
@@ -898,12 +952,48 @@ export class SyncEngine {
   }
 
   /**
-   * The last log this engine refused to adopt because it belonged to a DIFFERENT game than the one
-   * this player's seed permits, with the typed reason — or `null` if the gate has never bitten. The
-   * observable proof that a foreign game was turned away rather than silently adopted (design §3, #46).
+   * The last log this engine refused to run because it belonged to a DIFFERENT game than this session
+   * may be on, with the typed reason — or `null` if the gate has never bitten. The observable proof
+   * that a foreign game was turned away rather than silently adopted (design §3, #46).
    */
   refusedGame(): { readonly uuid: string; readonly reason: ReconcileReject } | null {
     return this._refusedGame;
+  }
+
+  /**
+   * Record that the ADMISSION protocol has agreed this session onto game `uuid` — the moment the entry
+   * SEED stops governing this channel and the AGREED GAME starts (see {@link agreedUuid},
+   * {@link GameGate}). Called by the session at each point entry resolves: establishing alone or as
+   * initiator, adopting an arbiter's admit, and (with the NEWCOMER's uuid) when a deferring arbiter
+   * agrees to adopt the game its newcomer brought. {@link resetGame} re-points it at the fresh rematch
+   * game, so the agreement follows the pair's generations rather than going stale on the first one.
+   */
+  agreeOn(uuid: string): void {
+    this.agreedUuid = uuid;
+  }
+
+  /**
+   * What game this session may be on right now: the AGREED game once entry has resolved, else the
+   * player's entry seed (see {@link GameGate}). Built at the moment of the decision so it can never
+   * report a stale agreement.
+   */
+  private gate(): GameGate {
+    const agreed = this.agreedUuid;
+    return agreed === null ? { kind: 'entry', seed: this.seed } : { kind: 'agreed', uuid: agreed };
+  }
+
+  /**
+   * Re-base this client's own seat colour WITHOUT a fresh game — used when admission moves this peer
+   * onto a game whose seats are that game's own (a deferring arbiter adopting the newcomer's game:
+   * the colour it owns THERE is decided by that game's identity-owned map, not by the provisional one
+   * it claimed for the game it is leaving). It is the same re-basing {@link resetGame} does for a
+   * rematch's alternated seat, for the case where the GAME is unchanged and only our seat in it is.
+   *
+   * The seat gates the restricted networked undo (only the player who made the last move may undo it),
+   * so leaving it on the abandoned game's colour would let this client undo the OPPONENT's move.
+   */
+  reseat(color: Player): void {
+    this.myColor = color;
   }
 
   /** The live game (its log is the canonical, syncable source of truth). */
@@ -1115,6 +1205,11 @@ export class SyncEngine {
     this._game = newGame;
     this.myColor = newMyColor;
     this._epoch += 1;
+    // A rematch is a game the pair agreed on (the out-of-band handshake resolved `accepted` on BOTH
+    // sides before either reset), so the agreement follows the reset onto the fresh generation. Leaving
+    // it on the finished game would make this channel refuse the very game we just moved to — and
+    // leaving an entry seed governing instead would let anyone push a foreign game onto the new one.
+    this.agreedUuid = newGame.uuid;
     this.publishState();
     this.emitChange();
   }
@@ -1149,10 +1244,11 @@ export class SyncEngine {
    * so the invariant holds for every caller (agent-principles: keep the tripwire;
    * errors/invariants must not be bypassed via a public seam).
    *
-   * A message about a DIFFERENT game than the one we are on additionally passes the design §3 SEED
-   * GATE before it may change anything (see the module docstring): refused, it leaves the game
-   * untouched and is recorded on {@link refusedGame}. Because this guard lives here rather than only at
-   * the pump, it holds for a directly-injected message too.
+   * A message about a DIFFERENT game than the one we are on never reaches the prefix/epoch policy at
+   * all: it is a question about WHICH GAME we are playing, answered by {@link receiveOtherGame} (the
+   * design §3 gate). Refused, it leaves the game untouched and is recorded on {@link refusedGame}.
+   * Because this guard lives here rather than only at the pump, it holds for a directly-injected
+   * message too.
    */
   receive(msg: SyncMessage): void {
     if (this._status.kind === 'conflict') return;
@@ -1161,27 +1257,15 @@ export class SyncEngine {
     // public seam) reads as generation 0 via the SAME normalizer the codec uses, so an un-upgraded
     // peer's first game still converges and the two epoch reads can never disagree.
     const remoteEpoch = normalizeEpoch(msg.epoch);
-    const decision = decideSyncEpoched(this._epoch, this._game.log, remoteEpoch, remote);
-    // SEED GATE (design §3, the user's rule in #46) — this channel's half. A message about a DIFFERENT
-    // game than the one we are on would CHANGE which game we are playing, so it is a seed question, not
-    // a convergence one: only `defer` may take a peer's non-empty game, `new` may take an empty one, and
-    // `resume`/`current` may take their own uuid only. Without this, `isPrefix`'s "an empty log is a
-    // prefix of any log" rule (the same rule that makes ordinary catch-up work) lets ANY peer whose log
-    // is momentarily empty adopt a stranger's game wholesale — the #46 hole, on the one channel
-    // admission never inspects. An `ignore` needs no gate: it changes nothing either way.
-    if (decision.action !== 'ignore' && remote.uuid !== this._game.log.uuid) {
-      const acceptance = acceptsGame(this.seed, {
-        uuid: remote.uuid,
-        empty: remote.entries.length === 0,
-      });
-      if (!acceptance.ok) {
-        // Refuse honestly: leave the game EXACTLY as it was (no adopt, no conflict-stop — a foreign
-        // game is not a fork of ours, and letting it stop our game would hand any publisher a kill
-        // switch) and record the refusal so it is observable rather than a silent drop.
-        this._refusedGame = { uuid: remote.uuid, reason: acceptance.reason };
-        return;
-      }
+    // A different GAME is not a state of our game: the prefix/fork policy below compares HISTORIES and
+    // is only meaningful within one identity (two different games are never each other's prefix, and
+    // calling that a "fork" would archive two games that never forked and stop ours — a kill switch for
+    // any publisher). So identity is settled first, on its own terms.
+    if (remote.uuid !== this._game.log.uuid) {
+      this.receiveOtherGame(remote, remoteEpoch);
+      return;
     }
+    const decision = decideSyncEpoched(this._epoch, this._game.log, remoteEpoch, remote);
     switch (decision.action) {
       case 'ignore':
         // Stale / replay — INCLUDING a message from a SUPERSEDED epoch (a late in-flight publish
@@ -1191,10 +1275,11 @@ export class SyncEngine {
         // resurrecting over the fresh rematch game.
         return;
       case 'adopt':
-        // Adopt the peer's log as the new authoritative game, then notify so the scene re-renders
-        // (the issue #4 resync link). ACROSS a higher remote epoch this adopts the peer's FRESH
-        // rematch game (it reset first) and advances our generation to match, so we never fork on
-        // the non-extending empty log and both sides settle on the same epoch.
+        // Adopt the peer's longer log for the game we are BOTH on, then notify so the scene re-renders
+        // (the issue #4 resync link). A higher remote epoch on the same identity (a peer that reset
+        // in place without re-deriving the uuid) advances our generation to match, so both sides
+        // settle on the same epoch. Our pair's own rematch mints a DERIVED uuid, so it is not this
+        // branch — it crosses identity, and {@link receiveOtherGame} decides it.
         this._epoch = Math.max(this._epoch, remoteEpoch);
         this._game = Game.fromLog(this.size, remote);
         this.emitChange();
@@ -1208,6 +1293,71 @@ export class SyncEngine {
         this.emitChange();
         return;
     }
+  }
+
+  /**
+   * Decide a log belonging to a DIFFERENT game than the one we are running (design §3, the user's rule
+   * in #46) — the only way this channel can change WHICH GAME this client is playing, and the one
+   * channel the admission protocol never inspects. Exactly three logs may cross:
+   *
+   *  1. **The AGREED game** ({@link agreeOn}) — admission already decided it, so it is adopted
+   *     WHOLESALE. Deliberately not run through the prefix policy: the two logs belong to different
+   *     games, so neither is "a valid continuation" of the other and the comparison has no meaning
+   *     here. This is how a deferring ARBITER lands on the newcomer's game (design §3).
+   *  2. **Our own next generation** ({@link isOwnNextGeneration}) — the pair's rematch, whose uuid is
+   *     DERIVED from the game we are on. A peer that reset first is carried onto it whatever seed the
+   *     player entered with; without this, a `resume`/`current` seed refused its own pair's rematch and
+   *     the two peers deadlocked on two different games (each ignoring the other's moves).
+   *  3. **Whatever the {@link GameGate} allows** — the AGREED game only once entry has resolved, else
+   *     the player's own seed, and then only while we hold no history of our own (`acceptsCrossing`).
+   *
+   * Anything else is REFUSED honestly: the game is left EXACTLY as it was (no adopt, no conflict-stop
+   * — a foreign game is not a fork of ours, and letting it stop our game would hand any publisher a
+   * kill switch) and the typed reason is recorded on {@link refusedGame} so the refusal is observable
+   * rather than a silent drop. A message that could not teach us anything anyway — an empty foreign log
+   * at or below our generation — is neither adopted nor recorded as a refusal: ordinary entry traffic
+   * is not a refusal, and reporting it as one would bury a real one in noise.
+   */
+  private receiveOtherGame(remote: EventLog, remoteEpoch: number): void {
+    const offered: OfferedGame = { uuid: remote.uuid, empty: remote.entries.length === 0 };
+    if (remote.uuid !== this.agreedUuid && !this.isOwnNextGeneration(remote.uuid, remoteEpoch)) {
+      // A message from a SUPERSEDED generation is stale whatever game it names — the same rule that
+      // stops a just-finished game resurrecting after a rematch reset, applied before identity so a
+      // stale publisher cannot re-open the question at all.
+      if (remoteEpoch < this._epoch) return;
+      // An EMPTY foreign log from our own generation carries no history to learn from, so taking it or
+      // leaving it changes nothing. Neither of these is a decision: they are ordinary entry/replay
+      // traffic, and recording them as "refusals" would bury a real one in noise.
+      if (offered.empty && remoteEpoch === this._epoch) return;
+      const acceptance = acceptsCrossing(this.gate(), offered, this._game.log.entries.length > 0);
+      if (!acceptance.ok) {
+        this._refusedGame = { uuid: remote.uuid, reason: acceptance.reason };
+        return;
+      }
+    }
+    // Cross onto the other game: its log becomes ours wholesale (its hash chain was re-verified by
+    // `parseSyncMessage` before we got here), and our generation never moves backward.
+    this._epoch = Math.max(this._epoch, remoteEpoch);
+    this._game = Game.fromLog(this.size, remote);
+    this.emitChange();
+  }
+
+  /**
+   * True iff `uuid` is the game OUR game turns into at generation `remoteEpoch` — the pair's own
+   * rematch, {@link rematchGameUuid}-derived from the game we are on right now (N.2: both peers derive
+   * the fresh game from the two facts they share, the prior uuid and the generation being entered).
+   *
+   * A HIGHER generation is required, not merely a derived name: a reset only ever increments, so a
+   * "next generation" stamped with the generation we are already in is not one — accepting it would let
+   * a publisher swap a live board for an empty one at the current epoch.
+   *
+   * This is what makes a staggered rematch converge under EVERY seed (the peer that reset first is
+   * adopted onto the generation the other one derived), and it is strictly narrower than the epoch rule
+   * it guards: only a game derived from the one we hold can cross, never an unrelated game wearing a
+   * high epoch.
+   */
+  private isOwnNextGeneration(uuid: string, remoteEpoch: number): boolean {
+    return remoteEpoch > this._epoch && uuid === rematchGameUuid(this._game.log.uuid, remoteEpoch);
   }
 
   /**

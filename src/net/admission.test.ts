@@ -4,6 +4,7 @@ import {
   reconcile,
   acceptsGame,
   decideAdmission,
+  acceptsCrossing,
   electInitiator,
   deferProposal,
   newProposal,
@@ -12,6 +13,7 @@ import {
   isConcrete,
   type Proposal,
   type AgreedGame,
+  type GameGate,
   type OfferedGame,
   type Reject,
   type ReconcileResult,
@@ -480,6 +482,20 @@ describe('decideAdmission — the deferring ARBITER adopts the newcomer’s game
     ).toEqual({ ok: true, serve: 'theirs', uuid: 'g7' });
   });
 
+  it('a defer arbiter that is MID-GAME keeps its game — `defer` never discards a history we hold', () => {
+    // `join()` sends `defer`, so without this a peer that joined and then played a whole game would
+    // abandon it, mid-play, for any later arrival that named another game. The seed answered "which
+    // game do we start on"; once we have a history the answer is in.
+    expect(
+      decideAdmission(deferProposal(), playedGame('g-live'), resumeProposal('g-other', 'h1')),
+    ).toEqual({ ok: false, reason: 'game-mismatch' });
+    // The same arbiter still adopts while its own game is EMPTY (the row above) — the difference is
+    // what WE hold, not which seed we typed.
+    expect(
+      decideAdmission(deferProposal(), emptyGame('g-fresh'), resumeProposal('g-other', 'h1')),
+    ).toEqual({ ok: true, serve: 'theirs', uuid: 'g-other' });
+  });
+
   it('…but a defer arbiter that ALREADY HOLDS the agreed game serves it itself (it has the bytes)', () => {
     // A returning deferrer re-seeded from its breadcrumb onto the very game the newcomer is resuming:
     // nothing to adopt, and it can serve the history it holds.
@@ -729,6 +745,109 @@ describe('electInitiator — properties (fast-check)', () => {
               (p.arrivalOrder === win.arrivalOrder && p.playerId < win.playerId);
             expect(beatsWinner).toBe(false);
           }
+        },
+      ),
+    );
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// acceptsCrossing — the rule a LIVE session runs under (design §3 applied by the
+// move-sync channel). The seed answers "which game do I want to ENTER on"; that
+// question is answered once. Carrying it for the session's lifetime was wrong in
+// both directions: `defer` (Join, and every auto-reconnect) accepted anything
+// forever, and `resume`/`current` refused the pair's own next generation.
+// ---------------------------------------------------------------------------
+
+describe('acceptsCrossing — an AGREED session admits its agreed game and nothing else', () => {
+  const agreed: GameGate = { kind: 'agreed', uuid: 'g-agreed' };
+
+  it('accepts the agreed game, whatever seed the player entered with and whatever we hold', () => {
+    for (const holdingHistory of [false, true]) {
+      expect(acceptsCrossing(agreed, playedGame('g-agreed'), holdingHistory)).toEqual({ ok: true });
+      expect(acceptsCrossing(agreed, emptyGame('g-agreed'), holdingHistory)).toEqual({ ok: true });
+    }
+  });
+
+  it('refuses a DIFFERENT game with history as `game-mismatch` — we are on different games', () => {
+    expect(expectReject(acceptsCrossing(agreed, playedGame('g-stranger'), true)).reason).toBe(
+      'game-mismatch',
+    );
+  });
+
+  it('refuses a DIFFERENT EMPTY game as `seed-refused` — the mirror of the resume/current row', () => {
+    expect(expectReject(acceptsCrossing(agreed, emptyGame('g-stranger'), false)).reason).toBe(
+      'seed-refused',
+    );
+  });
+
+  it('a `defer` gate that has AGREED no longer accepts everything (the join/reconnect hole)', () => {
+    const entering: GameGate = { kind: 'entry', seed: deferProposal() };
+    // Same seed, same offer — the ONLY difference is whether entry has resolved.
+    expect(acceptsCrossing(entering, playedGame('g-stranger'), false)).toEqual({ ok: true });
+    expect(expectReject(acceptsCrossing(agreed, playedGame('g-stranger'), false)).reason).toBe(
+      'game-mismatch',
+    );
+  });
+});
+
+describe('acceptsCrossing — while ENTRY is open the seed decides, but never discards our history', () => {
+  const seeds: readonly Proposal[] = [
+    deferProposal(),
+    newProposal(),
+    resumeProposal('g-mine', 'h'),
+    currentProposal('g-mine', 'h'),
+  ];
+
+  it('with no history of our own, it is exactly the seed matrix (acceptsGame)', () => {
+    for (const seed of seeds) {
+      for (const offered of [emptyGame('g-other'), playedGame('g-other'), playedGame('g-mine')]) {
+        expect(acceptsCrossing({ kind: 'entry', seed }, offered, false)).toEqual(
+          acceptsGame(seed, offered),
+        );
+      }
+    }
+  });
+
+  it('holding a history, every seed refuses a DIFFERENT game — a seed is not a licence to discard it', () => {
+    for (const seed of seeds) {
+      const verdict = acceptsCrossing({ kind: 'entry', seed }, playedGame('g-other'), true);
+      expect(verdict.ok).toBe(false);
+      // `new` still reports its own seed refusal (empty only); the others report that we are simply on
+      // different games. Either way the game we are playing survives.
+      expect(expectReject(verdict).reason).toBe(seed.kind === 'new' ? 'seed-refused' : 'game-mismatch');
+    }
+  });
+
+  it('holding a history, an EMPTY different game is refused too (a high epoch is not a free wipe)', () => {
+    expect(expectReject(acceptsCrossing({ kind: 'entry', seed: deferProposal() }, emptyGame('g-x'), true)).reason).toBe(
+      'game-mismatch',
+    );
+  });
+
+  it('is TOTAL: every (gate, offer, holding) combination yields ok or a TYPED reject, never a throw', () => {
+    fc.assert(
+      fc.property(
+        fc.oneof(
+          fc.constantFrom<Proposal>(deferProposal(), newProposal()),
+          fc
+            .record({ uuid: fc.string({ minLength: 1 }), headHash: fc.string({ minLength: 1 }) })
+            .map(({ uuid, headHash }): Proposal => resumeProposal(uuid, headHash)),
+        ),
+        fc.string({ minLength: 1 }),
+        fc.string({ minLength: 1 }),
+        fc.boolean(),
+        fc.boolean(),
+        fc.boolean(),
+        (seed, agreedUuid, offeredUuid, useAgreed, offeredEmpty, holdingHistory) => {
+          const gate: GameGate = useAgreed
+            ? { kind: 'agreed', uuid: agreedUuid }
+            : { kind: 'entry', seed };
+          const verdict = acceptsCrossing(gate, { uuid: offeredUuid, empty: offeredEmpty }, holdingHistory);
+          if (verdict.ok) return true;
+          expect(['game-mismatch', 'game-divergent', 'seed-refused']).toContain(verdict.reason);
+          return true;
         },
       ),
     );

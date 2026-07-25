@@ -34,6 +34,7 @@ import {
   type AdmissionReject,
 } from './sync';
 import { emptySeatMap, type SeatMap } from './seats';
+import { rematchGameUuid } from './rematch';
 import type { Proposal } from './admission';
 
 /**
@@ -74,8 +75,14 @@ function emptyGameLog(): EventLog {
  * game likewise passes an explicit shared uuid so both peers' fresh games converge.
  */
 const PAIR_UUID = GAME_UUID;
-/** A second shared uuid for the post-reset (next-generation) game in rematch tests. */
-const RESET_UUID = 'engine-pair-reset-game';
+/**
+ * The uuid of the pair's NEXT generation (the game a rematch from {@link PAIR_UUID} resets into at
+ * epoch 1) — DERIVED exactly as `NetSession.resetForRematch` derives it, not invented here, because
+ * that derivation is what identifies the fresh game as the pair's own rather than a stranger's: the
+ * engine adopts its own next generation off the wire and refuses an unrelated game (see the cross-game
+ * suite at the bottom of this file).
+ */
+const RESET_UUID = rematchGameUuid(PAIR_UUID, 1);
 
 describe('decideSync — pure prefix/hash decision', () => {
   it('ADOPTs when local is a STRICT prefix of remote', () => {
@@ -590,6 +597,7 @@ describe('parseGameMessage — admission messages (Task S.4: hello / admit / rej
       id: 'h-1',
       playerId: 'player-a',
       proposal: { kind: 'defer' },
+      seats: { white: 'player-a', black: null },
       arrivalTag: 0,
     };
 
@@ -847,8 +855,9 @@ describe('parseGameMessage — admission messages (Task S.4: hello / admit / rej
   describe('message builders (toHelloMessage / toAdmitMessage / toRejectMessage)', () => {
     it('toHelloMessage builds a hello that round-trips through parseGameMessage', () => {
       const proposal: Proposal = { kind: 'resume', uuid: 'g-9', headHash: 'hh-9' };
-      const msg = toHelloMessage('h-42', 'player-x', proposal, 3);
-      expect(msg).toEqual({ kind: 'hello', id: 'h-42', playerId: 'player-x', proposal, arrivalTag: 3 });
+      const helloSeats: SeatMap = { white: 'player-x', black: null };
+      const msg = toHelloMessage('h-42', 'player-x', proposal, helloSeats, 3);
+      expect(msg).toEqual({ kind: 'hello', id: 'h-42', playerId: 'player-x', proposal, seats: helloSeats, arrivalTag: 3 });
       expect(parseGameMessage(JSON.parse(JSON.stringify(msg)))).toEqual(msg);
     });
 
@@ -900,7 +909,7 @@ describe('parseGameMessage — admission messages (Task S.4: hello / admit / rej
     it('any hello with a string id/playerId + valid proposal + finite arrivalTag round-trips', () => {
       fc.assert(
         fc.property(fc.string(), fc.string(), arbProposal, fc.integer(), (id, playerId, proposal, arrivalTag) => {
-          const msg = toHelloMessage(id, playerId, proposal, arrivalTag);
+          const msg = toHelloMessage(id, playerId, proposal, { white: playerId, black: null }, arrivalTag);
           expect(parseGameMessage(JSON.parse(JSON.stringify(msg)))).toEqual(msg);
         }),
       );
@@ -1703,7 +1712,7 @@ describe('SyncEngine.onMessage — the pump validates + routes the tagged union'
     const onHs: (ProposalMessage | ResponseMessage)[] = [];
     b.onAdmission((m) => onAdm.push(m));
     b.onMessage((m) => onHs.push(m));
-    const hello = toHelloMessage('h-1', 'player-a', { kind: 'new' }, 0);
+    const hello = toHelloMessage('h-1', 'player-a', { kind: 'new' }, { white: 'player-a', black: null }, 0);
     // A publishes a raw hello over the relay; B's pump validates + routes it by kind.
     ta.publish(hello as unknown as Parameters<typeof ta.publish>[0]);
     // Delivered to B's ADMISSION seam, fields intact…
@@ -1731,7 +1740,7 @@ describe('SyncEngine.onMessage — the pump validates + routes the tagged union'
     const { b, ta } = await pair();
     const onAdm: AdmissionMessage[] = [];
     b.onAdmission((m) => onAdm.push(m));
-    const hello = toHelloMessage('dup-1', 'player-a', { kind: 'defer' }, 0);
+    const hello = toHelloMessage('dup-1', 'player-a', { kind: 'defer' }, { white: null, black: null }, 0);
     ta.publish(hello as unknown as Parameters<typeof ta.publish>[0]); // first: fresh → fires
     ta.publish(hello as unknown as Parameters<typeof ta.publish>[0]); // replay: same id → dropped
     ta.publish({ ...hello } as unknown as Parameters<typeof ta.publish>[0]); // another replay → dropped
@@ -1743,8 +1752,8 @@ describe('SyncEngine.onMessage — the pump validates + routes the tagged union'
     const { b, ta } = await pair();
     const onAdm: AdmissionMessage[] = [];
     b.onAdmission((m) => onAdm.push(m));
-    const first = toHelloMessage('id-1', 'player-a', { kind: 'new' }, 0);
-    const second = toHelloMessage('id-2', 'player-a', { kind: 'new' }, 1);
+    const first = toHelloMessage('id-1', 'player-a', { kind: 'new' }, { white: 'player-a', black: null }, 0);
+    const second = toHelloMessage('id-2', 'player-a', { kind: 'new' }, { white: 'player-a', black: null }, 1);
     ta.publish(first as unknown as Parameters<typeof ta.publish>[0]);
     ta.publish(second as unknown as Parameters<typeof ta.publish>[0]);
     ta.publish(first as unknown as Parameters<typeof ta.publish>[0]); // replay of the first → dropped
@@ -1949,18 +1958,19 @@ describe('SyncEngine — restricted networked undo (Task 3.4)', () => {
 });
 
 /**
- * The design §3 SEED GATE on the move-sync channel (#46). `isPrefix` deliberately treats an empty log
- * as a prefix of ANY log — the rule that makes ordinary catch-up work — so on its own it lets any peer
- * whose log is momentarily empty adopt a stranger's game wholesale, whatever seed its player chose.
+ * WHICH GAME may cross the move-sync channel (design §3, #46). `isPrefix` deliberately treats an empty
+ * log as a prefix of ANY log — the rule that makes ordinary catch-up work — so on its own it lets any
+ * peer whose log is momentarily empty adopt a stranger's game wholesale, whatever its player chose.
  * That is the user's rule broken on the one channel the admission protocol never sees:
  *
  *   *"when selecting 'New Game' … i would expect my phone to reject any non-empty gamestate data. only
  *   'Dealer's Choice' should allow a device to accept non-empty gamestate data from the other device."*
  *
- * So a log belonging to a DIFFERENT game is judged by the peer's own seed before it may change
- * anything. Same-game traffic is untouched (being ahead of or behind the game you are on is
- * convergence, not a seed question) — asserted below, because a gate that also blocked ordinary
- * catch-up would "pass" these tests while breaking every game.
+ * A log belonging to a DIFFERENT game is therefore decided on IDENTITY terms before it may change
+ * anything: the game admission AGREED us onto, or our own next generation, or — while entry is still
+ * open — what the player's seed allows while we hold no history. Same-game traffic is untouched (being
+ * ahead of or behind the game you are on is convergence, not an identity question) — asserted below,
+ * because a gate that also blocked ordinary catch-up would "pass" these tests while breaking every game.
  */
 describe('SyncEngine.receive — the seed gate on a FOREIGN game (design §3, #46)', () => {
   let db: IDBDatabase;
@@ -2038,15 +2048,34 @@ describe('SyncEngine.receive — the seed gate on a FOREIGN game (design §3, #4
     expect(eng.refusedGame()).toBeNull();
   });
 
-  it('a foreign game NEVER stops our game as a "conflict" — it is not a fork of our history', () => {
-    // Without the gate a foreign non-empty log lands as a CONFLICT against our own non-empty log,
-    // archiving both and stopping the game: any publisher would hold a kill switch over any peer.
-    const eng = engineWith({ kind: 'new' }, logFor(MINE, '4,4,4', '5,5,5'));
-    eng.receive(toSyncMessage(logFor(THEIRS, '0,0,0', '1,1,1'), 0));
-    expect(eng.status().kind).toBe('ok');
-    expect(eng.conflictForks()).toBeNull();
-    expect(eng.game().uuid).toBe(MINE);
-    expect(eng.refusedGame()).toEqual({ uuid: THEIRS, reason: 'seed-refused' });
+  it('a foreign game NEVER stops our game as a "conflict" — for EVERY seed, agreed or still entering', () => {
+    // Without this a foreign non-empty log lands as a CONFLICT against our own non-empty log, archiving
+    // both and stopping the game: any publisher would hold a kill switch over any peer. The claim is
+    // universal, so every seed is exercised — including `defer`, which ACCEPTS foreign games and so
+    // used to fall straight into the conflict arm — and a session that has already agreed on its game.
+    const seeds: Proposal[] = [
+      { kind: 'new' },
+      { kind: 'defer' },
+      { kind: 'resume', uuid: MINE, headHash: 'hh' },
+      { kind: 'current', uuid: MINE, headHash: 'hh' },
+    ];
+    for (const seed of seeds) {
+      for (const agreed of [false, true]) {
+        const eng = engineWith(seed, logFor(MINE, '4,4,4', '5,5,5'));
+        if (agreed) eng.agreeOn(MINE);
+        eng.receive(toSyncMessage(logFor(THEIRS, '0,0,0', '1,1,1'), 0));
+        expect(eng.status().kind).toBe('ok');
+        expect(eng.conflictForks()).toBeNull();
+        expect(eng.game().uuid).toBe(MINE);
+        expect(eng.game().ply()).toBe(2);
+        // `new` refuses on its seed (empty only); everything else refuses because we are simply on a
+        // different game from that publisher — either way a TYPED refusal, never a stopped game.
+        expect(eng.refusedGame()).toEqual({
+          uuid: THEIRS,
+          reason: seed.kind === 'new' && !agreed ? 'seed-refused' : 'game-mismatch',
+        });
+      }
+    }
   });
 
   it('SAME-game traffic is untouched by the gate: a strict extension is adopted under ANY seed', () => {
@@ -2077,11 +2106,26 @@ describe('SyncEngine.receive — the seed gate on a FOREIGN game (design §3, #4
 
   it('the gate applies ACROSS generations too — a higher epoch is not a licence to push a game', () => {
     // `decideSyncEpoched` adopts a higher-epoch log outright, so without the gate stamping any epoch on
-    // a payload would bypass the seed entirely.
-    const eng = engineWith({ kind: 'new' });
-    eng.receive(toSyncMessage(logFor(THEIRS, '0,0,0', '1,1,1'), 99));
-    expect(eng.game().uuid).toBe(MINE);
-    expect(eng.refusedGame()).toEqual({ uuid: THEIRS, reason: 'seed-refused' });
+    // a payload would bypass every rule. Both shapes are covered, because an EMPTY foreign log at a
+    // high epoch is the one that slips past a seed check (`new` and `defer` both accept empty games):
+    // it silently replaced a live board until the rule stopped asking only about the seed.
+    for (const seed of [{ kind: 'new' } as Proposal, { kind: 'defer' } as Proposal]) {
+      const withHistory = engineWith(seed, logFor(MINE, '4,4,4', '5,5,5'));
+      withHistory.receive(toSyncMessage(logFor(THEIRS), 99)); // an EMPTY stranger game at generation 99
+      expect(withHistory.game().uuid).toBe(MINE);
+      expect(withHistory.game().ply()).toBe(2);
+      expect(withHistory.refusedGame()).toEqual({ uuid: THEIRS, reason: 'game-mismatch' });
+
+      const nonEmpty = engineWith(seed);
+      nonEmpty.receive(toSyncMessage(logFor(THEIRS, '0,0,0', '1,1,1'), 99));
+      expect(nonEmpty.game().uuid).toBe(seed.kind === 'new' ? MINE : THEIRS);
+    }
+    // …and an AGREED session refuses the high-epoch empty game whatever its board holds.
+    const agreed = engineWith({ kind: 'defer' });
+    agreed.agreeOn(MINE);
+    agreed.receive(toSyncMessage(logFor(THEIRS), 99));
+    expect(agreed.game().uuid).toBe(MINE);
+    expect(agreed.refusedGame()).toEqual({ uuid: THEIRS, reason: 'seed-refused' });
   });
 
   it('refusedGame reports the LATEST refusal and starts as null', () => {
@@ -2091,5 +2135,197 @@ describe('SyncEngine.receive — the seed gate on a FOREIGN game (design §3, #4
     expect(eng.refusedGame()).toEqual({ uuid: 'game-x', reason: 'seed-refused' });
     eng.receive(toSyncMessage(logFor('game-y', '1,1,1'), 0));
     expect(eng.refusedGame()).toEqual({ uuid: 'game-y', reason: 'seed-refused' });
+  });
+});
+
+/**
+ * The gate a LIVE session actually runs under: the game the pair AGREED on, and the pair's own next
+ * generation — the two things the entry seed alone could not express, and the two holes that made it
+ * wrong in both directions.
+ *
+ *  - A seed that accepts everything (`defer` — what Join and every auto-reconnect send) went on
+ *    accepting everything for the whole session, so any publisher could move an agreed pair off its
+ *    game at any time.
+ *  - A seed that accepts one uuid (`resume`/`current`) refused the pair's OWN rematch — whose uuid is
+ *    derived, so it is a different one — and the two peers deadlocked on two games, each ignoring the
+ *    other's moves. That is the bricked-game class this epic exists to remove.
+ */
+describe('SyncEngine.receive — the AGREED game and our own next generation (design §3, N.2)', () => {
+  let db: IDBDatabase;
+  const meta = { players: { white: 'w', black: 'b' }, startedAt: 1000 };
+  const MINE = 'settled-game';
+  const THEIRS = 'stranger-game';
+
+  beforeEach(async () => {
+    db = await openDatabase(`agreed-${Math.random().toString(36).slice(2)}`);
+  });
+
+  function logFor(uuid: string, ...nodes: string[]): EventLog {
+    let log = emptyLog(uuid);
+    for (const node of nodes) log = append(log, { type: 'place', node });
+    return log;
+  }
+
+  function engineWith(seed: Proposal, mine: EventLog = emptyLog(MINE)): SyncEngine {
+    const hub = new MockRelayHub();
+    const t = new MockTransport(hub, 'peer-self');
+    return new SyncEngine(Game.fromLog(9, mine), t, db, () => meta, 'white', seed);
+  }
+
+  /** The same engine with its transport CONNECTED — needed by anything that publishes (reset/undo). */
+  async function connectedEngineWith(seed: Proposal, mine: EventLog = emptyLog(MINE)): Promise<SyncEngine> {
+    const eng = engineWith(seed, mine);
+    await eng.connect(`agreed-room-${Math.random().toString(36).slice(2)}`);
+    return eng;
+  }
+
+  it('a `resume`/`current` seed ADOPTS the pair’s own next generation (the rematch it used to refuse)', () => {
+    for (const kind of ['resume', 'current'] as const) {
+      const eng = engineWith({ kind, uuid: MINE, headHash: 'hh' }, logFor(MINE, '4,4,4'));
+      eng.agreeOn(MINE);
+      const next = rematchGameUuid(MINE, 1); // exactly what `resetForRematch` derives at generation 1
+      let changes = 0;
+      eng.onChange(() => changes++);
+
+      eng.receive(toSyncMessage(emptyLog(next), 1));
+
+      expect(eng.game().uuid).toBe(next);
+      expect(eng.game().ply()).toBe(0);
+      expect(eng.epoch()).toBe(1);
+      expect(eng.refusedGame()).toBeNull();
+      expect(changes).toBe(1);
+    }
+  });
+
+  it('a next generation that ALREADY HAS a move is adopted too (we may hear about it late)', () => {
+    // The peer that reset first can move before we have caught up; refusing a non-empty next
+    // generation would strand us on the finished game with no way back.
+    const eng = engineWith({ kind: 'resume', uuid: MINE, headHash: 'hh' }, logFor(MINE, '4,4,4'));
+    eng.agreeOn(MINE);
+    const next = rematchGameUuid(MINE, 1);
+    eng.receive(toSyncMessage(logFor(next, '0,0,0'), 1));
+    expect(eng.game().uuid).toBe(next);
+    expect(eng.game().ply()).toBe(1);
+    expect(eng.refusedGame()).toBeNull();
+  });
+
+  it('…and the NEXT rematch derives from the game we adopted, so a staggered pair keeps converging', () => {
+    const eng = engineWith({ kind: 'resume', uuid: MINE, headHash: 'hh' }, logFor(MINE, '4,4,4'));
+    eng.agreeOn(MINE);
+    const gen1 = rematchGameUuid(MINE, 1);
+    eng.receive(toSyncMessage(emptyLog(gen1), 1));
+    const gen2 = rematchGameUuid(gen1, 2); // derived from the game we are on NOW, not from MINE
+    eng.receive(toSyncMessage(emptyLog(gen2), 2));
+    expect(eng.game().uuid).toBe(gen2);
+    expect(eng.epoch()).toBe(2);
+    expect(eng.refusedGame()).toBeNull();
+  });
+
+  it('a game claiming our derivation at our CURRENT generation is NOT a next generation — refused', () => {
+    // A reset only ever INCREMENTS the generation, so "derived, at the epoch we are already in" is not
+    // our next game. Without the higher-generation requirement it would be a free board wipe.
+    const eng = engineWith({ kind: 'resume', uuid: MINE, headHash: 'hh' }, logFor(MINE, '4,4,4'));
+    eng.agreeOn(MINE);
+    const forged = rematchGameUuid(MINE, 0);
+    eng.receive(toSyncMessage(logFor(forged, '0,0,0'), 0));
+    expect(eng.game().uuid).toBe(MINE);
+    expect(eng.game().ply()).toBe(1);
+    expect(eng.refusedGame()).toEqual({ uuid: forged, reason: 'game-mismatch' });
+  });
+
+  it('an UNRELATED empty game at a higher generation is refused — only OUR derivation may use that road', () => {
+    const eng = engineWith({ kind: 'defer' }, logFor(MINE, '4,4,4'));
+    eng.agreeOn(MINE);
+    eng.receive(toSyncMessage(emptyLog(THEIRS), 7));
+    expect(eng.game().uuid).toBe(MINE);
+    expect(eng.game().ply()).toBe(1);
+    expect(eng.refusedGame()).toEqual({ uuid: THEIRS, reason: 'seed-refused' });
+  });
+
+  it('the AGREED game is adopted WHOLESALE — the deferring arbiter lands on the newcomer’s game', () => {
+    // The arbiter agreed onto a game it does NOT hold (design §3, the dealer's-choice row with the
+    // deferrer arbitrating), so the prefix policy has nothing to say: the two logs belong to different
+    // games. Agreeing is the decision; the bytes just arrive.
+    const eng = engineWith({ kind: 'defer' });
+    eng.agreeOn(THEIRS);
+    eng.receive(toSyncMessage(logFor(THEIRS, '0,0,0', '1,1,1'), 0));
+    expect(eng.game().uuid).toBe(THEIRS);
+    expect(eng.game().ply()).toBe(2);
+    expect(eng.refusedGame()).toBeNull();
+    // …and having landed on it, a THIRD game is still refused: agreeing is not "adopt anything once".
+    eng.receive(toSyncMessage(logFor('third-game', '2,2,2'), 0));
+    expect(eng.game().uuid).toBe(THEIRS);
+    expect(eng.refusedGame()).toEqual({ uuid: 'third-game', reason: 'game-mismatch' });
+  });
+
+  it('the AGREED game is adopted even EMPTY at our own generation — convergence never waits for a move', () => {
+    // The pair agreed on a game with no moves in it yet (a `resume` of a game whose log is still
+    // empty). Nothing about the LOGS can tell the two apart — an empty log teaches nothing — so only
+    // the agreement can put us on it. Waiting for somebody to move instead is the #42 class of bug the
+    // derived/agreed identity exists to kill: until then the two peers sit on two different games.
+    const eng = engineWith({ kind: 'defer' }); // our own fresh empty game, generation 0
+    eng.agreeOn(THEIRS);
+    eng.receive(toSyncMessage(emptyLog(THEIRS), 0));
+    expect(eng.game().uuid).toBe(THEIRS);
+    expect(eng.refusedGame()).toBeNull();
+  });
+
+  it('an ENTRY seed still adopts a foreign game only while we hold NO history of our own', () => {
+    // `defer` says "I'll take whichever game we start on" — never "throw away the moves I have". The
+    // empty-board case is the dealer's-choice row and still adopts; the mid-game case is refused.
+    const empty = engineWith({ kind: 'defer' });
+    empty.receive(toSyncMessage(logFor(THEIRS, '0,0,0'), 0));
+    expect(empty.game().uuid).toBe(THEIRS);
+    expect(empty.refusedGame()).toBeNull();
+
+    const played = engineWith({ kind: 'defer' }, logFor(MINE, '4,4,4'));
+    played.receive(toSyncMessage(logFor(THEIRS, '0,0,0'), 5));
+    expect(played.game().uuid).toBe(MINE);
+    expect(played.game().ply()).toBe(1);
+    expect(played.refusedGame()).toEqual({ uuid: THEIRS, reason: 'game-mismatch' });
+  });
+
+  it('a foreign log from a SUPERSEDED generation is ignored outright — not adopted, not a refusal', () => {
+    // Stale traffic changes nothing either way, so recording it as a refusal would be noise on the
+    // diagnostic; adopting it would let a lagging publisher drag us backwards onto its game.
+    const eng = engineWith({ kind: 'defer' });
+    eng.agreeOn(MINE);
+    eng.receive(toSyncMessage(emptyLog(rematchGameUuid(MINE, 1)), 1)); // → generation 1
+    expect(eng.epoch()).toBe(1);
+    eng.receive(toSyncMessage(logFor(THEIRS, '0,0,0', '1,1,1'), 0)); // an older generation
+    expect(eng.game().uuid).toBe(rematchGameUuid(MINE, 1));
+    expect(eng.refusedGame()).toBeNull();
+  });
+
+  it('resetGame re-points the agreement at the fresh generation (a stranger cannot follow us there)', async () => {
+    const eng = await connectedEngineWith({ kind: 'defer' }, logFor(MINE, '4,4,4'));
+    eng.agreeOn(MINE);
+    const next = rematchGameUuid(MINE, 1);
+    eng.resetGame(new Game(9, next), 'black');
+    expect(eng.game().uuid).toBe(next);
+    // The stranger's game is refused against the game we are on NOW…
+    eng.receive(toSyncMessage(logFor(THEIRS, '0,0,0'), 1));
+    expect(eng.game().uuid).toBe(next);
+    expect(eng.refusedGame()).toEqual({ uuid: THEIRS, reason: 'game-mismatch' });
+    // …while the fresh generation's own traffic flows normally (same game → ordinary convergence).
+    eng.receive(toSyncMessage(logFor(next, '0,0,0'), 1));
+    expect(eng.game().ply()).toBe(1);
+  });
+
+  it('reseat re-bases the restricted undo on the seat we own in the game we moved onto', async () => {
+    // An admission that moves us onto a peer's game gives us THAT game's colour. Left on the abandoned
+    // game's colour, the undo rule would let this client undo the OPPONENT's move.
+    const eng = await connectedEngineWith({ kind: 'defer' });
+    eng.agreeOn(THEIRS);
+    eng.receive(toSyncMessage(logFor(THEIRS, '0,0,0'), 0)); // one WHITE move on the adopted game
+    // Constructed as 'white', so before re-seating this engine believes the last move was its own.
+    expect(() => eng.undo()).not.toThrow();
+    expect(eng.game().ply()).toBe(0);
+
+    const black = await connectedEngineWith({ kind: 'defer' });
+    black.agreeOn(THEIRS);
+    black.receive(toSyncMessage(logFor(THEIRS, '0,0,0'), 0));
+    black.reseat('black');
+    expect(() => black.undo()).toThrow(/not-your-move/);
   });
 });

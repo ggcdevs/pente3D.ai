@@ -199,6 +199,7 @@ graph LR
     src_net_notifyGlue_ts --> src_net_notify_ts
     src_net_notifyGlue_ts --> src_ui_widgets_netModel_ts
     src_net_rematch_ts --> src_core_gameState_ts
+    src_net_rematch_ts --> src_core_hash_ts
     src_net_session_ts --> src_core_coords_ts
     src_net_session_ts --> src_core_game_ts
     src_net_session_ts --> src_core_gameState_ts
@@ -206,6 +207,7 @@ graph LR
     src_net_session_ts --> src_net_admission_ts
     src_net_session_ts --> src_net_endState_ts
     src_net_session_ts --> src_net_handshake_ts
+    src_net_session_ts --> src_net_rematch_ts
     src_net_session_ts --> src_net_seats_ts
     src_net_session_ts --> src_net_sync_ts
     src_net_session_ts --> src_net_transport_ts
@@ -219,6 +221,7 @@ graph LR
     src_net_sync_ts --> src_core_game_ts
     src_net_sync_ts --> src_core_gameState_ts
     src_net_sync_ts --> src_net_admission_ts
+    src_net_sync_ts --> src_net_rematch_ts
     src_net_sync_ts --> src_net_seats_ts
     src_net_sync_ts --> src_net_transport_ts
     src_net_sync_ts --> src_persist_archive_ts

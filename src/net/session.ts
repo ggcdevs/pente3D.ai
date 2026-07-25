@@ -446,9 +446,17 @@ export class NetSession {
 
     // Announce our arrival so a resident/co-arriver reconciles against our proposal. The hello
     // carries the SAME `myArrivalTag` we stamped above (not a fresh `now()`), so the value a co-
-    // arriver ranks us by in its election is IDENTICAL to the value we rank ourselves by in ours.
+    // arriver ranks us by in its election is IDENTICAL to the value we rank ourselves by in ours, and
+    // the identity-owned seat map of the game we BRING (design §7 — a deferring arbiter seats itself
+    // against that map instead of inventing a colour for a game whose owners it has never seen).
     this.publishAdmission(
-      toHelloMessage(this.deps.newMessageId(), this.deps.playerId, proposal, myArrivalTag),
+      toHelloMessage(
+        this.deps.newMessageId(),
+        this.deps.playerId,
+        proposal,
+        provisional.seatMap,
+        myArrivalTag,
+      ),
     );
 
     // Wait for presence + hellos to settle, then branch (resident-admit / alone-establish / elect).
@@ -494,8 +502,18 @@ export class NetSession {
    * It re-enters with a `defer` proposal: the returning owner reclaims its seat by IDENTITY (design
    * §2.3 reclaim-by-identity — the seat map remembers who it is), so it does not need to re-propose a
    * concrete game; the resident (if any) admits it back onto its reserved seat, and if it is truly
-   * alone it re-establishes from a fresh game. A no-op returning `false` when there is no remembered
-   * room or a session is already live (the defensive backstop for the `shouldReconnect` gate).
+   * alone it re-establishes from the game its breadcrumb names (`buildProvisionalSeat`). A no-op
+   * returning `false` when there is no remembered room or a session is already live (the defensive
+   * backstop for the `shouldReconnect` gate).
+   *
+   * WHY `defer` and not the game we were on: while we were away the pair may legitimately have moved
+   * on — the peer played its turn (design §5's one-move auto fast-forward: *"they should be able to at
+   * least reasonably play their turn while you step away"*), or started a new game. Naming our own
+   * stale head as a `current` seed would turn those ordinary cases into `game-divergent` /
+   * `seed-refused` refusals of our own room. So the RETURN is deliberately permissive — and that
+   * permissiveness is bounded to the entry itself: the moment the entry resolves, the session gates on
+   * the AGREED game ({@link SyncEngine.agreeOn}), so a reconnected peer is no more adoptable by a
+   * passing publisher than any other (the seed does not stay a licence for the session's lifetime).
    *
    * @returns `true` if a reconnect was attempted, `false` if there was nothing to reconnect to.
    */
@@ -961,6 +979,10 @@ export class NetSession {
    */
   private establishAlone(): void {
     this.established = true;
+    // Entry is resolved: this game is the one this session is on, so the move-sync channel gates on IT
+    // from here rather than on the entry seed (see {@link SyncEngine.agreeOn} / `GameGate` — without
+    // this a `defer`/reconnect entry would keep accepting ANY game a publisher offered, forever).
+    this.agreeOnLiveGame();
     this.reflectEngineStatus();
     if (this.phase === 'connecting') this.phase = 'connected';
     // Persist the game (by uuid) + record the breadcrumb, so a later return into an empty room re-seeds
@@ -992,6 +1014,12 @@ export class NetSession {
     if (seatMap === null || this.seat === null || seatOf(seatMap, this.deps.playerId) === null) {
       throw new Error('initiator must already own a seat in its provisional map');
     }
+
+    // Entry is resolved on OUR game before we answer anybody, so the move-sync channel gates on it
+    // rather than on the entry seed. Arbitration may still move us onto a co-arriver's game (the
+    // deferring-arbiter row), and `admitOntoNewcomerGame` re-points the agreement at THAT game itself —
+    // which is why this runs first and is not re-derived afterwards.
+    this.agreeOnLiveGame();
 
     // Arbitrate every co-arriver against ours; a divergent/mismatched pair is a typed reject to THAT
     // peer (design §5). We keep the game our engine holds — `arbitrate` judges the newcomer's seed
@@ -1028,7 +1056,8 @@ export class NetSession {
     //
     // Decided BEFORE `claimSeat` so a refused newcomer never occupies a seat in our durable map for a
     // game it is never going to play (the reject is about the GAME, and it settles the entry).
-    const payload = this.currentSyncPayload();
+    const engine = this.requireEngine();
+    const payload = toSyncMessage(engine.game().log, engine.epoch());
     const decision = decideAdmission(
       this.myProposal ?? { kind: 'new' },
       offeredGameOf(payload),
@@ -1037,6 +1066,11 @@ export class NetSession {
     if (!decision.ok) {
       this.publishAdmission(toRejectMessage(this.deps.newMessageId(), decision.reason));
       return seatMap;
+    }
+    if (decision.serve === 'theirs') {
+      // DEALER'S CHOICE ADOPTS with US as the arbiter (design §3): the agreed game is the NEWCOMER's,
+      // and so are its seats — a different map, decided against different owners (see below).
+      return this.admitOntoNewcomerGame(engine, hello, decision.uuid, seatMap);
     }
     // Reconciled + serveable → seat the newcomer (identity-reclaim or first-available on the map).
     // The present-set decides the REFUSAL reason when both seats are owned: `room-full` if every
@@ -1049,22 +1083,63 @@ export class NetSession {
       this.publishAdmission(toRejectMessage(this.deps.newMessageId(), claim.reason));
       return seatMap;
     }
-    if (decision.serve === 'theirs') {
-      // DEALER'S CHOICE ADOPTS (design §3), with US as the arbiter: we brought nothing, so the agreed
-      // game is the newcomer's own. Admit it naming that uuid and carrying NO payload — we have none to
-      // give — and it keeps the game it brought. We then adopt that game off the move-sync channel when
-      // it publishes (its `admit` triggers a publish, and our `defer` seed is exactly the one the
-      // channel's seed gate lets a peer's non-empty game through). Nothing is persisted or seeded here:
-      // the adoption goes through the SAME engine-change seam every other adopted move does, so the
-      // archive record + breadcrumb follow from the game we actually end up on, not from a guess.
-      this.publishAdmission(
-        toAdoptAdmitMessage(this.deps.newMessageId(), decision.uuid, claim.seatMap),
-      );
-      return claim.seatMap;
-    }
     // Admit with the very payload the acceptance was judged against — so what we CHECKED and what we
     // SEND can never be two different games.
     this.publishAdmission(toAdmitMessage(this.deps.newMessageId(), payload, claim.seatMap));
+    return claim.seatMap;
+  }
+
+  /**
+   * Admit a newcomer onto the game IT brought — design §3's dealer's-choice row in the direction where
+   * the DEFERRER is the arbiter. We hold nothing worth keeping (`decideAdmission` only reaches here for
+   * a `defer` seed whose own game is still EMPTY), so the pair plays the newcomer's game and WE move.
+   *
+   * Moving means the SEATS move too. Seats are identity-owned ON THE GAME (design §7), and the game we
+   * are moving onto already has owners — possibly including an ABSENT third player whose seat is
+   * reserved (design §2.3: "absence never vacates ownership"). Our own provisional map describes a
+   * different game entirely and has no authority over this one, so we claim OUR seat against the map
+   * the hello carried FOR THAT GAME:
+   *
+   *  - the newcomer keeps the colour it owns there (it is not re-negotiated onto ours);
+   *  - an absent third owner keeps its seat, and if that leaves nothing for us the entry is REFUSED
+   *    with the seat manager's own typed reason (`seat-reserved` / `room-full`) — we do not get to
+   *    evict an owner by being the arbiter;
+   *  - both peers then persist THAT game's own map under THAT game's uuid, so a later reclaim/resume
+   *    reads the ownership the game always had.
+   *
+   * We agree onto the game BEFORE publishing the admit, so the newcomer's answering publish is one this
+   * channel accepts ({@link SyncEngine.agreeOn}) however fast it arrives, and we re-seat the engine on
+   * the claimed colour so the turn gate and the restricted-undo rule read the seat we actually own
+   * there. The game itself is adopted through the ORDINARY move-sync seam when the newcomer publishes
+   * it, so the archive record + breadcrumb follow the game we really end up on rather than a guess.
+   */
+  private admitOntoNewcomerGame(
+    engine: SyncEngine,
+    hello: HelloMessage,
+    uuid: string,
+    seatMap: SeatMap,
+  ): SeatMap {
+    const claim = claimSeat(hello.seats, this.deps.playerId, this.presentPeers);
+    if (!claim.ok) {
+      this.publishAdmission(toRejectMessage(this.deps.newMessageId(), claim.reason));
+      return seatMap;
+    }
+    if (seatOf(claim.seatMap, hello.playerId) === null) {
+      // The newcomer announced a map for its own game that seats SOMEBODY ELSE in both seats and not
+      // itself — a map no honest client produces (a peer always claims its seat before it announces).
+      // Admitting it would durably record a game whose two owners are absent strangers, so refuse with
+      // the same reason a full room gives rather than persist a seating nobody present owns.
+      this.publishAdmission(toRejectMessage(this.deps.newMessageId(), 'room-full'));
+      return seatMap;
+    }
+    // Take the seat we own in THEIR game, and agree onto that game BEFORE the admit goes out: the
+    // newcomer publishes its log the moment it handles the admit, and this is what makes that log one
+    // we accept (the move-sync gate) instead of a foreign game.
+    this.seat = claim.color;
+    this.seatMap = claim.seatMap;
+    engine.reseat(claim.color as Player);
+    engine.agreeOn(uuid);
+    this.publishAdmission(toAdoptAdmitMessage(this.deps.newMessageId(), uuid, claim.seatMap));
     return claim.seatMap;
   }
 
@@ -1184,6 +1259,10 @@ export class NetSession {
     // engine (the old provisional engine registered it on connect; "latest registration wins"), so a
     // subsequent move is delivered to THIS engine and renders — then publishes our adopted state.
     const admitted = this.wireEngine(transport, game, mySeat, admit.seats);
+    // Entry is resolved: THIS is the game the pair agreed on, so the move-sync channel gates on it from
+    // here rather than on our entry seed — otherwise a `defer` entry (every Join, every reconnect)
+    // would go on accepting any game any publisher offered for the rest of the session.
+    admitted.agreeOn(game.uuid);
     admitted.attach();
     this.reflectEngineStatus();
     if (this.phase === 'connecting') this.phase = 'connected';
@@ -1209,13 +1288,6 @@ export class NetSession {
     this.lastReject = reject.reason;
     this.tearDownToOffline(reject.reason);
     this.finishEnter();
-  }
-
-  /** The current authoritative game as a `kind:'sync'` payload (for an admit). */
-  private currentSyncPayload(): ReturnType<typeof toSyncMessage> {
-    const engine = this.engine;
-    if (engine === null) throw new Error('cannot build sync payload without a live engine');
-    return toSyncMessage(engine.game().log, engine.epoch());
   }
 
   /**
@@ -1568,6 +1640,18 @@ export class NetSession {
     return this.lastReject;
   }
 
+  /**
+   * Tell the engine that the game it is running is the one this session has SETTLED on
+   * ({@link SyncEngine.agreeOn}) — called at each point entry resolves (establish alone / as
+   * initiator). From that moment the move-sync channel gates cross-game traffic on the AGREED GAME
+   * instead of the entry seed, which is what stops a `defer` entry (Join, and every auto-reconnect)
+   * from accepting a stranger's game for the rest of the session. A no-op offline (nothing to agree).
+   */
+  private agreeOnLiveGame(): void {
+    const engine = this.engine;
+    if (engine !== null) engine.agreeOn(engine.game().uuid);
+  }
+
   /** Publish an admission message (hello/admit/reject) over the room transport — never onto the log. */
   private publishAdmission(msg: AdmissionMessage): void {
     if (this.transport === null) return;
@@ -1617,7 +1701,15 @@ export class NetSession {
     // by is unchanged, so the election outcome is stable no matter how many times it is re-heard).
     if (present && !this.peerPresent && this.phase === 'connecting' && this.myProposal !== null && this.myArrivalTag !== null) {
       this.publishAdmission(
-        toHelloMessage(this.deps.newMessageId(), this.deps.playerId, this.myProposal, this.myArrivalTag),
+        toHelloMessage(
+          this.deps.newMessageId(),
+          this.deps.playerId,
+          this.myProposal,
+          // The SAME provisional map the first hello carried (our seat in the game we brought) — a
+          // re-announce must be identical in substance or the two hellos would describe two games.
+          this.seatMap ?? emptySeatMap(),
+          this.myArrivalTag,
+        ),
       );
     }
     if (present === this.peerPresent) return;

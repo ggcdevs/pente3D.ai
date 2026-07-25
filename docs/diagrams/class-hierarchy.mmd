@@ -8,7 +8,7 @@ classDiagram
     note for ActiveNetworkedGame "src/net/activeGame.ts"
     class AdmitMessage {
         <<interface>>
-        +readonly game: Object & SyncMessage
+        +readonly agreed: AdmittedGame
         +readonly id: string
         +readonly kind: 'admit'
         +readonly seats: SeatMap
@@ -369,6 +369,7 @@ classDiagram
         +readonly kind: 'hello'
         +readonly playerId: string
         +readonly proposal: Proposal
+        +readonly seats: SeatMap
     }
     note for HelloMessage "src/net/sync.ts"
     class HelpDeps {
@@ -1707,6 +1708,7 @@ classDiagram
     }
     note for PresenceTracker "src/net/presence.ts"
     class SyncEngine {
+        +agreeOn(uuid: string): void
         +applyAgreedUndo(): void
         +attach(): void
         +conflictForks(): Object | null
@@ -1722,6 +1724,8 @@ classDiagram
         +publishState(): void
         +receive(msg: SyncMessage): void
         +redo(): void
+        +refusedGame(): Object | null
+        +reseat(color: Player): void
         +resetGame(newGame: Game, newMyColor: Player): void
         +status(): SyncStatus
         +undo(): void

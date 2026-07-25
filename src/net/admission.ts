@@ -46,12 +46,19 @@
  * into the single verdict an arbiter acts on, so the matrix has ONE implementation rather than a pure
  * rule plus a hand-rolled copy in the glue.
  *
- * {@link acceptsGame} is applied at every point a game can cross into a peer — the arbiter before it
- * publishes an `admit`, the newcomer again on receipt, AND the move-sync channel before it adopts a log
- * belonging to a DIFFERENT game (`SyncEngine.receive`) — so a peer that does not enforce it cannot
+ * A game can cross into a peer at exactly three points, and each one asks this module before it may:
+ * the arbiter before it publishes an `admit` ({@link decideAdmission}), the newcomer again on receipt
+ * ({@link acceptsGame}), and the move-sync channel before it runs a log belonging to a DIFFERENT game
+ * ({@link acceptsCrossing} in `SyncEngine.receive`). So a peer that does not enforce the rule cannot
  * silently push a game onto one that does, by any channel (design §5: "the opponent's client is the
  * validator"). Same-game convergence (an extension of the log we are already on) is NOT a seed question
- * and is left to the sync policy; the seed only ever governs adopting a game you are not already on.
+ * and is left to the sync policy; these rules only ever govern moving onto a game you are not on.
+ *
+ * The seed is the ENTRY question, and the wire says so: the two admission gates run at entry, while the
+ * long-lived sync channel gates on {@link GameGate} — the seed only until the pair agrees on a game,
+ * and that AGREED game from then on. Carrying the entry seed for the whole session instead was a hole
+ * in both directions (a `defer` peer could be moved off its agreed game by anyone, forever; a
+ * `resume` peer refused its own pair's next generation) — see {@link GameGate}.
  *
  * It also decides **initiator election** (design §4 Case 2): when two peers arrive together,
  * a deterministic order — **earlier live-presence `arrivalOrder`, then lower `playerId`** —
@@ -311,8 +318,86 @@ export function acceptsGame(mine: Proposal, offered: OfferedGame): SeedAcceptanc
       return offered.empty ? ACCEPTED : reject('seed-refused');
     case 'resume':
     case 'current':
-      if (offered.uuid === mine.uuid) return ACCEPTED;
-      return offered.empty ? reject('seed-refused') : reject('game-mismatch');
+      return acceptsOnlyGame(mine.uuid, offered);
+  }
+}
+
+/**
+ * The "**this game only**" rule, in ONE place: `uuid` is accepted, anything else is refused with the
+ * reason that honestly names WHY — a different game with history is `game-mismatch` (the two peers are
+ * on different games), a different EMPTY game is `seed-refused` (the other side brought nothing / asked
+ * to start over while we are on a specific game).
+ *
+ * Shared by the `resume`/`current` row of {@link acceptsGame} and by the AGREED row of
+ * {@link acceptsCrossing}, because they are the same rule stated about two different reference points
+ * (the game my seed named vs the game the pair actually agreed on) — one implementation, so the two can
+ * never drift into disagreeing about the same refusal.
+ */
+function acceptsOnlyGame(uuid: string, offered: OfferedGame): SeedAcceptance {
+  if (offered.uuid === uuid) return ACCEPTED;
+  return offered.empty ? reject('seed-refused') : reject('game-mismatch');
+}
+
+/**
+ * WHICH game a live session may be on — the question the move-sync channel actually has to answer, and
+ * the thing a raw {@link Proposal} cannot express on its own.
+ *
+ * A seed answers *"what game do I want to enter on"*. That question is answered ONCE, at entry: after
+ * the admission protocol resolves, the pair is on a concrete AGREED game and the seed has no further
+ * say. Keeping the entry seed as the lifetime rule was a real hole in both directions:
+ *
+ *   - a `defer` seed (what {@link import('./session').NetSession.join} and every reconnect send) accepts
+ *     ANY game FOREVER, so a stranger — or a stale third device — could move an already-agreed pair off
+ *     its game through the plain sync channel;
+ *   - a `resume`/`current` seed accepts its OWN uuid only, forever — so the pair's own next generation
+ *     (a rematch, whose uuid is DERIVED, {@link import('./rematch').rematchGameUuid}) was refused and
+ *     the two peers deadlocked on two different games.
+ *
+ * So the gate is stated as the session's actual situation:
+ *
+ *   - `entry` — entry has not resolved yet (we are `connecting`, running on a provisional game): the
+ *     player's own SEED decides, exactly as design §3 says.
+ *   - `agreed` — the admission protocol put this session on game `uuid`: that game, and nothing else,
+ *     may cross onto this connection. (A deferring ARBITER agrees onto a game it does not hold yet —
+ *     the newcomer's own — so this deliberately names a uuid rather than "the game I am on".)
+ */
+export type GameGate =
+  | { readonly kind: 'entry'; readonly seed: Proposal }
+  | { readonly kind: 'agreed'; readonly uuid: string };
+
+/**
+ * Decide whether a session may CROSS ONTO a DIFFERENT game than the one it is running — the design §3
+ * matrix as a live session (rather than a bare seed) applies it. Total and pure.
+ *
+ *   - **`agreed`** → the agreed game only ({@link acceptsOnlyGame}). This is what closes the
+ *     "`defer` accepts anything forever" hole: once the pair has agreed, dealer's choice has already
+ *     been made, and a foreign game is refused whatever seed was typed at entry.
+ *   - **`entry`** → the player's own seed ({@link acceptsGame}) — AND, additionally, only while we hold
+ *     no history of our own (`holdingHistory === false`). A seed says which game we are willing to
+ *     START on; it never says "throw away the moves I already have". A peer that is mid-game and hears
+ *     about a different game is simply on a different game from that publisher (`game-mismatch`) — the
+ *     admission protocol, not the move-sync channel, is where a peer changes which game it is playing.
+ *
+ * Refusals are TYPED and the caller leaves the game untouched, so no publisher can push OR stop another
+ * peer's game (the kill-switch this gate exists to deny).
+ *
+ * @param gate What game this session may be on (agreed, or the not-yet-resolved entry seed).
+ * @param offered The DIFFERENT game we are being offered (uuid + whether it carries any history).
+ * @param holdingHistory Whether the game we are running has any entries of its own to lose.
+ */
+export function acceptsCrossing(
+  gate: GameGate,
+  offered: OfferedGame,
+  holdingHistory: boolean,
+): SeedAcceptance {
+  switch (gate.kind) {
+    case 'agreed':
+      return acceptsOnlyGame(gate.uuid, offered);
+    case 'entry': {
+      const acceptance = acceptsGame(gate.seed, offered);
+      if (!acceptance.ok) return acceptance;
+      return holdingHistory ? reject('game-mismatch') : ACCEPTED;
+    }
   }
 }
 
@@ -347,8 +432,10 @@ export type AdmissionDecision =
  *
  *  1. **Reconcile the proposals** ({@link reconcile}). A typed reject settles it.
  *  2. **Do WE hold the agreed game?** If reconciliation agreed on a concrete game that is not
- *     `myGame`, we cannot serve it — but if OUR seed is `defer` we do not want to: dealer's choice
- *     brings nothing, so the agreed game is the newcomer's own and we ADOPT it (`serve: 'theirs'`).
+ *     `myGame`, we cannot serve it — but if OUR seed is `defer` AND our own game is still empty we do
+ *     not want to: dealer's choice brings nothing, so the agreed game is the newcomer's own and we
+ *     ADOPT it (`serve: 'theirs'`). A deferrer whose engine has since acquired a history is on a real
+ *     game and keeps it: `game-mismatch`.
  *  3. **Otherwise serve our own engine**, judged by the NEWCOMER's seed against the bytes it would
  *     actually receive ({@link acceptsGame}) — the byte-level half. This is where a `new` newcomer is
  *     refused a game in progress (#46/#43), and where an arbiter whose proposal named a game its
@@ -369,6 +456,13 @@ export function decideAdmission(
   // concrete game our engine does not hold — which, with a `defer` on our side, is by construction the
   // NEWCOMER's own game (reconcile only ever chooses one of the two proposals, and ours named none).
   if (mine.kind === 'defer' && agreed.game.kind === 'existing' && agreed.game.uuid !== myGame.uuid) {
+    // …but only while we hold NO history of our own. `defer` says "I'll take whichever game we start
+    // on"; it never says "discard the game I am playing". Our seed was answered the moment our engine
+    // acquired a history — by then we ARE on a game, and a newcomer naming a different one is simply on
+    // a different game from us (`game-mismatch`), which is what that reason says. Without this, a peer
+    // that JOINED (join sends `defer`) and then played a whole game would abandon it, mid-play, for any
+    // later arrival that named another game.
+    if (!myGame.empty) return reject('game-mismatch');
     return { ok: true, serve: 'theirs', uuid: agreed.game.uuid };
   }
   // We can only ever serve the game our engine actually holds, so that is what the newcomer's seed is
