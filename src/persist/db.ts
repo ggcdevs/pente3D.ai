@@ -68,6 +68,18 @@ export interface GameMeta {
   /** Epoch millis when the game began. */
   readonly startedAt: number;
   /**
+   * Epoch millis when this RECORD was last written — a fact about the record, not about the game
+   * (`startedAt` is the game's birthday and never moves once established, so it cannot answer "has
+   * anything touched this row lately").
+   *
+   * Stamped by `archive.ts`'s `saveGame`, which is the one path both writers take. Its consumer is
+   * the empty-shell collector (`purgeEmptyShellRecords`): a SEATED husk is exempt from collection
+   * while it might be another TAB's live room, and this is what bounds that exemption in time
+   * instead of forever. Optional: a record written before this field carries none, and is judged as
+   * having been written by an earlier page load (see the collector).
+   */
+  readonly updatedAt?: number;
+  /**
    * The game's UUID — its stable identity, minted at genesis and part of the
    * hashed history (S.1). Stored in the metadata so the archive browser and the
    * networked-resume flow can identify a game (and match it against a peer's

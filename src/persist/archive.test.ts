@@ -18,8 +18,9 @@ import 'fake-indexeddb/auto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import fc from 'fast-check';
 import { Game } from '../core/game';
-import { headHash } from '../core/eventLog';
+import { firstDivergence, headHash } from '../core/eventLog';
 import * as serialize from '../core/serialize';
+import * as dbModule from './db';
 import {
   openDatabase,
   getGame,
@@ -36,6 +37,7 @@ import {
   isEmptyShell,
   archivedIdentity,
   purgeEmptyShellRecords,
+  SEATED_SHELL_MAX_AGE_MS,
   purgeLegacyNetRoomRecords,
   rekeyArchiveRecordsByGameUuid,
   StartedAtLedger,
@@ -152,6 +154,23 @@ describe('game archive', () => {
       expect(record!.meta.uuid).toBe(game.uuid);
       expect(typeof record!.meta.uuid).toBe('string');
       expect(record!.meta.uuid.length).toBeGreaterThan(0);
+    });
+
+    it('stamps meta.updatedAt with WHEN THE RECORD WAS WRITTEN — the caller’s clock, or ours', async () => {
+      const { db } = await open();
+      // A fact about the record, not the game: `startedAt` is the game's birthday and does not move
+      // when it is re-saved, so the shell collector cannot read "has anything touched this row lately"
+      // from it. A caller that owns a clock (the net session) supplies it; otherwise we read one.
+      await saveGame(db, 'g1', sampleGame(), sampleMeta, 1_700_000_009_999);
+      expect((await getGame(db, 'g1'))!.meta.updatedAt).toBe(1_700_000_009_999);
+      expect((await getGame(db, 'g1'))!.meta.startedAt).toBe(1_700_000_000_000);
+
+      // Re-saving the SAME game later moves the stamp — that is the whole point of it.
+      const before = Date.now();
+      await saveGame(db, 'g1', sampleGame(), sampleMeta);
+      const stamped = (await getGame(db, 'g1'))!.meta.updatedAt!;
+      expect(stamped).toBeGreaterThanOrEqual(before);
+      expect(stamped).toBeLessThanOrEqual(Date.now());
     });
 
     it('loadGame lazily mints a uuid for a LEGACY record with no meta.uuid (pre-S.1)', async () => {
@@ -725,20 +744,121 @@ describe('game archive', () => {
       expect((await listArchivedGames(db))[0]!.events).toBe(sampleGame().log.entries.length);
     });
 
-    it('never collects a SEATED record, even one the caller did not name (another tab’s live room)', async () => {
+    it('never collects a RECENTLY-WRITTEN seated record, even one the caller did not name (another tab’s live room)', async () => {
       const { db } = await open();
       // A room entered but not yet played on: no events, no outcome — a husk by shape, a seated game in
       // fact. Its record is what the empty-room reclaim (design §6.4) re-seeds from, and the store is
       // shared by every tab of the origin, so the caller's `keep` cannot name another tab's room.
-      await saveGame(db, 'seated-room-game', new Game(9, 'seated-room-game'), {
-        ...sampleMeta,
-        seats: { white: 'player-a', black: null },
-      });
-      await saveGame(db, 'plain-husk', new Game(9, 'plain-husk'), sampleMeta);
+      const now = 1_800_000_000_000;
+      await saveGame(
+        db,
+        'seated-room-game',
+        new Game(9, 'seated-room-game'),
+        { ...sampleMeta, seats: { white: 'player-a', black: null } },
+        now - 60_000, // written a minute ago: a live room
+      );
+      await saveGame(db, 'plain-husk', new Game(9, 'plain-husk'), sampleMeta, now);
 
-      expect(await purgeEmptyShellRecords(db)).toEqual(['plain-husk']);
+      expect(await purgeEmptyShellRecords(db, new Set(), now)).toEqual(['plain-husk']);
 
       expect((await loadNetGame(db, 'seated-room-game'))?.seats).toEqual({
+        white: 'player-a',
+        black: null,
+      });
+    });
+
+    it('DOES collect a seated husk nothing has written to since the horizon (the abandoned-room leak)', async () => {
+      const { db } = await open();
+      // Every room entry writes its seat map before a single move, so a room entered and abandoned
+      // leaves a `{events: 0, in-progress, seats}` row — invisible in the games list and, while the
+      // seat exemption was unbounded, permanent. One per abandoned room, forever.
+      const now = 1_800_000_000_000;
+      for (const [i, id] of ['room-1', 'room-2', 'room-3'].entries()) {
+        await saveGame(
+          db,
+          id,
+          new Game(9, id),
+          { ...sampleMeta, seats: { white: 'player-a', black: null } },
+          now - SEATED_SHELL_MAX_AGE_MS - (i + 1) * 60_000,
+        );
+      }
+      // …and a seated game that was actually PLAYED, however old: history is never collected.
+      await saveGame(
+        db,
+        SAMPLE_UUID,
+        sampleGame(),
+        { ...sampleMeta, seats: { white: 'player-a', black: 'player-b' } },
+        now - 10 * SEATED_SHELL_MAX_AGE_MS,
+      );
+
+      expect([...(await purgeEmptyShellRecords(db, new Set(), now))].sort()).toEqual([
+        'room-1',
+        'room-2',
+        'room-3',
+      ]);
+      expect((await listArchivedGames(db)).map((l) => l.id)).toEqual([SAMPLE_UUID]);
+      expect((await loadNetGame(db, SAMPLE_UUID))?.seats).toEqual({
+        white: 'player-a',
+        black: 'player-b',
+      });
+    });
+
+    it('judges a seated husk at the EXACT horizon: still recent AT it, collectable one ms past it', async () => {
+      const { db } = await open();
+      const now = 1_800_000_000_000;
+      const seated = (id: string, writtenAt: number) =>
+        saveGame(
+          db,
+          id,
+          new Game(9, id),
+          { ...sampleMeta, seats: { white: 'player-a', black: null } },
+          writtenAt,
+        );
+      await seated('at-horizon', now - SEATED_SHELL_MAX_AGE_MS);
+      await seated('past-horizon', now - SEATED_SHELL_MAX_AGE_MS - 1);
+
+      expect(await purgeEmptyShellRecords(db, new Set(), now)).toEqual(['past-horizon']);
+      expect((await listArchivedGames(db)).map((l) => l.id)).toEqual(['at-horizon']);
+    });
+
+    it('collects a seated husk with NO updatedAt stamp — it was written by an earlier page load', async () => {
+      const { db } = await open();
+      // Every write of this build stamps `updatedAt`, so a seated record without one predates it: it
+      // cannot be a session that is still going, and it is exactly the husk pile an earlier build left.
+      await putGame(db, {
+        id: 'old-build-room',
+        log: [],
+        meta: {
+          players: { white: 'player-a' },
+          result: 'in-progress',
+          startedAt: 1,
+          uuid: 'old-build-room',
+          headHash: 'whatever',
+          seats: { white: 'player-a', black: null },
+        },
+      } as unknown as GameRecord);
+
+      expect(await purgeEmptyShellRecords(db, new Set(), 1_800_000_000_000)).toEqual([
+        'old-build-room',
+      ]);
+      expect(await listArchivedGames(db)).toEqual([]);
+    });
+
+    it('KEEPS a long-abandoned seated husk the caller still names (our own live session’s game)', async () => {
+      const { db } = await open();
+      // The age rule never overrides the caller: a session of OURS may sit in a room for days without a
+      // move, and its record is what the empty-room reclaim re-seeds from (design §6.4).
+      const now = 1_800_000_000_000;
+      await saveGame(
+        db,
+        'record-id',
+        new Game(9, 'ours-live-uuid'),
+        { ...sampleMeta, seats: { white: 'player-a', black: null } },
+        now - 10 * SEATED_SHELL_MAX_AGE_MS,
+      );
+
+      expect(await purgeEmptyShellRecords(db, new Set(['ours-live-uuid']), now)).toEqual([]);
+      expect((await loadNetGame(db, 'record-id'))?.seats).toEqual({
         white: 'player-a',
         black: null,
       });
@@ -1150,6 +1270,147 @@ describe('game archive', () => {
         expect(headHash((await loadGame(db, SAMPLE_UUID))!.log)).toBe(headHash(sampleGame().log));
         expect(headHash((await loadGame(db, 'zzz-divergent'))!.log)).toBe(headHash(other.log));
       });
+
+      it('keeps a SHORTER but DIVERGENT record — fewer events is NOT proof the survivor contains it', async () => {
+        const { db } = await open();
+        // The dangerous shape: one record holds FEWER events than the other, but on a completely
+        // different line of play (resume + undo + a different continuation leaves exactly this). A
+        // length says nothing about a hash chain, so the short record is a history no other record
+        // holds — deleting it would destroy the player's only copy of it.
+        const shortDivergent = new Game(9, SAMPLE_UUID);
+        shortDivergent.place([0, 0, 0]);
+        shortDivergent.place([1, 1, 1]);
+        expect(shortDivergent.log.entries.length).toBeLessThan(sampleGame().log.entries.length);
+        // They part company at the very first move: neither chain contains the other.
+        expect(firstDivergence(shortDivergent.log, sampleGame().log)).toBe(0);
+        await saveGame(db, 'aaa-short-divergent', shortDivergent, sampleMeta);
+        await saveGame(db, 'zzz-longer', sampleGame(), sampleMeta);
+
+        // Only the LONGER record moves; the short divergent one is not reported, because it did not
+        // leave its key.
+        expect(await rekeyArchiveRecordsByGameUuid(db)).toEqual(['zzz-longer']);
+
+        const list = await listArchivedGames(db);
+        expect(list.map((l) => l.id).sort()).toEqual(['aaa-short-divergent', SAMPLE_UUID]);
+        expect(headHash((await loadGame(db, SAMPLE_UUID))!.log)).toBe(headHash(sampleGame().log));
+        // The 2-move line is still there, move for move — not merely "a record still exists".
+        const kept = (await loadGame(db, 'aaa-short-divergent'))!;
+        expect(headHash(kept.log)).toBe(headHash(shortDivergent.log));
+        expect(Object.keys(kept.state().pieces).sort()).toEqual(['0,0,0', '1,1,1']);
+      });
+    });
+
+    it('a SHORTER DIVERGENT record ON the uuid key is neither deleted nor overwritten by the re-key', async () => {
+      const { db } = await open();
+      // The same divergence, with the short record sitting on the DESTINATION key. `rekeyGame`
+      // overwrites its destination, so moving the longer record onto the uuid would destroy the short
+      // history just as surely as deleting it. Both records stay exactly where they are.
+      const shortDivergent = new Game(9, SAMPLE_UUID);
+      shortDivergent.place([0, 0, 0]);
+      shortDivergent.place([1, 1, 1]);
+      await saveGame(db, SAMPLE_UUID, shortDivergent, sampleMeta);
+      await saveGame(db, 'legacy-id', sampleGame(), sampleMeta);
+
+      expect(await rekeyArchiveRecordsByGameUuid(db)).toEqual([]);
+      // Idempotent in this shape too: a second run still refuses to trade either history away.
+      expect(await rekeyArchiveRecordsByGameUuid(db)).toEqual([]);
+
+      expect(headHash((await loadGame(db, SAMPLE_UUID))!.log)).toBe(headHash(shortDivergent.log));
+      expect(headHash((await loadGame(db, 'legacy-id'))!.log)).toBe(headHash(sampleGame().log));
+    });
+
+    it('keeps a shorter record whose log will NOT REPLAY — a corrupt log proves nothing either', async () => {
+      const { db } = await open();
+      // A record the survivor cannot be shown to contain, because it cannot be folded at all. The
+      // honest answer to "is it contained?" is no, so it survives — and the migration does not throw
+      // on it (a boot-time scan must not be sunk by one bad row).
+      await saveGame(db, 'zzz-longer', sampleGame(), sampleMeta);
+      await putGame(db, {
+        id: 'aaa-corrupt',
+        log: [{ type: 'place', node: 'not-a-coord' }],
+        meta: { ...sampleMeta, uuid: SAMPLE_UUID, headHash: 'stale' },
+      } as unknown as GameRecord);
+
+      expect(await rekeyArchiveRecordsByGameUuid(db)).toEqual(['zzz-longer']);
+
+      expect((await listArchivedGames(db)).map((l) => l.id).sort()).toEqual([
+        'aaa-corrupt',
+        SAMPLE_UUID,
+      ]);
+      await expect(loadGame(db, 'aaa-corrupt')).rejects.toBeInstanceOf(ArchiveError);
+    });
+
+    it('keeps every loser when the SURVIVOR will not replay — nothing can be proven against it', async () => {
+      const { db } = await open();
+      // The record with the most events is the corrupt one. It still moves onto the uuid (relocating a
+      // record does not judge its bytes), but it can prove nothing about anybody, so the shorter — and
+      // here genuinely contained — record is kept rather than dropped on a length.
+      const short = new Game(9, SAMPLE_UUID);
+      short.place([4, 4, 4]);
+      await saveGame(db, 'aaa-short', short, sampleMeta);
+      await putGame(db, {
+        id: 'zzz-corrupt',
+        log: [
+          { type: 'place', node: '4,4,4' },
+          { type: 'place', node: 'not-a-coord' },
+        ],
+        meta: { ...sampleMeta, uuid: SAMPLE_UUID, headHash: 'stale' },
+      } as unknown as GameRecord);
+
+      expect(await rekeyArchiveRecordsByGameUuid(db)).toEqual(['zzz-corrupt']);
+
+      expect((await listArchivedGames(db)).map((l) => l.id).sort()).toEqual([
+        'aaa-short',
+        SAMPLE_UUID,
+      ]);
+      expect(headHash((await loadGame(db, 'aaa-short'))!.log)).toBe(headHash(short.log));
+    });
+
+    it('keeps a record that VANISHES mid-migration — an absent log proves nothing either', async () => {
+      const { db } = await open();
+      // The store is shared by every tab of the origin, so a record listed a moment ago can be gone by
+      // the time this reads its log (another tab's purge). Fault-injected because the race cannot be
+      // timed deterministically; the behavior asserted is real: nothing is proven, so nothing is
+      // deleted, and the migration still completes.
+      const short = new Game(9, SAMPLE_UUID);
+      short.place([4, 4, 4]);
+      await saveGame(db, 'aaa-vanishes', short, sampleMeta);
+      await saveGame(db, 'zzz-longer', sampleGame(), sampleMeta);
+      const real = dbModule.getGame;
+      const spy = vi
+        .spyOn(dbModule, 'getGame')
+        .mockImplementation((handle: IDBDatabase, id: string) =>
+          id === 'aaa-vanishes' ? Promise.resolve(undefined) : real(handle, id),
+        );
+      try {
+        expect(await rekeyArchiveRecordsByGameUuid(db)).toEqual(['zzz-longer']);
+      } finally {
+        spy.mockRestore();
+      }
+      // The record the migration could not read was not deleted on the strength of its length.
+      expect(headHash((await loadGame(db, 'aaa-vanishes'))!.log)).toBe(headHash(short.log));
+      expect(headHash((await loadGame(db, SAMPLE_UUID))!.log)).toBe(headHash(sampleGame().log));
+    });
+
+    it('propagates a STORE failure instead of mistaking it for an unreadable log (negative case)', async () => {
+      const { db } = await open();
+      // Fault-injection to separate the two failures the containment check can meet: a corrupt LOG is
+      // this module's own verdict (above — the record is kept), while a failing IndexedDB read is a
+      // different fact entirely and must reach the caller verbatim, never be read as "not contained".
+      await saveGame(db, 'aaa-short', new Game(9, SAMPLE_UUID), sampleMeta);
+      await saveGame(db, 'zzz-longer', sampleGame(), sampleMeta);
+      const fault = new DOMException('store is on fire', 'UnknownError');
+      const spy = vi.spyOn(dbModule, 'getGame').mockRejectedValue(fault);
+      try {
+        await expect(rekeyArchiveRecordsByGameUuid(db)).rejects.toBe(fault);
+      } finally {
+        spy.mockRestore();
+      }
+      // Nothing was deleted or moved on the way to that failure.
+      expect((await listArchivedGames(db)).map((l) => l.id).sort()).toEqual([
+        'aaa-short',
+        'zzz-longer',
+      ]);
     });
 
     it('…and the tie goes to the canonical record whichever way the store orders the two', async () => {

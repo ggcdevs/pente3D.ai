@@ -863,13 +863,23 @@ export class NetSession {
     if (engine === null || this.seatMap === null) return Promise.resolve();
     const game = engine.game();
     const winner = game.state().winner;
-    const write = saveGame(this.deps.db, game.uuid, game, {
-      // The seat OWNERS are the honest "players" of a networked game (real playerIds, no sentinel).
-      players: playersFromSeats(this.seatMap),
-      result: winner === null ? 'in-progress' : `${winner}-wins`,
-      startedAt: this.startedAts.stampFor(game.uuid, this.deps.now()),
-      seats: this.seatMap,
-    });
+    const write = saveGame(
+      this.deps.db,
+      game.uuid,
+      game,
+      {
+        // The seat OWNERS are the honest "players" of a networked game (real playerIds, no sentinel).
+        players: playersFromSeats(this.seatMap),
+        result: winner === null ? 'in-progress' : `${winner}-wins`,
+        startedAt: this.startedAts.stampFor(game.uuid, this.deps.now()),
+        seats: this.seatMap,
+      },
+      // The session owns a clock, so its record's "last written" stamp comes from the SAME source as
+      // its other timestamps rather than from a second, unmockable one. That stamp is what keeps this
+      // seated record (written before a single move) out of the empty-shell collector while the room
+      // is live — and lets it be collected once it is not.
+      this.deps.now(),
+    );
     this.pendingPersist = write;
     return write;
   }

@@ -24,7 +24,7 @@
  */
 
 import { Game } from '../core/game';
-import { headHash, type Event, type EventLog } from '../core/eventLog';
+import { headHash, isPrefix, type Event, type EventLog } from '../core/eventLog';
 import { importGame, type GameExport } from '../core/serialize';
 import {
   getGame,
@@ -194,12 +194,18 @@ function gameFromStoredLog(
  * board size, not just the default. The `headHash` is derived from the game and
  * stored in the metadata for O(1) identity in the listing. Overwriting the same id
  * is how autosave keeps the archive current as a game grows.
+ *
+ * `now` stamps `meta.updatedAt` — WHEN THIS RECORD WAS WRITTEN, which is a different fact from the
+ * game's `startedAt` and the one {@link purgeEmptyShellRecords} needs to tell an abandoned seated husk
+ * from another tab's live room. It defaults to the clock, and a caller that owns one (the net session
+ * injects its own) passes it so its writes are deterministic.
  */
 export async function saveGame(
   db: IDBDatabase,
   id: string,
   game: Game,
   meta: ArchivedMeta,
+  now: number = Date.now(),
 ): Promise<void> {
   const record: GameRecord & { readonly size: number } = {
     id,
@@ -209,6 +215,7 @@ export async function saveGame(
       players: meta.players,
       result: meta.result,
       startedAt: meta.startedAt,
+      updatedAt: now,
       uuid: game.uuid,
       headHash: headHash(game.log),
       // Persist the identity-owned seat map WITH the game (design §2.3) when the caller
@@ -453,11 +460,16 @@ export class StartedAtLedger {
  * WHEN SEVERAL RECORDS CLAIM ONE UUID, the destination holds exactly one of them, so the survivor is
  * decided ONCE — over ALL of that game's records together — before anything is written: the record with
  * MORE events wins, and a tie is broken in favour of the record already under the uuid (it is the
- * canonical one, carrying the seat map). A LOSER is deleted only when it is provably contained by the
- * survivor — fewer events, or the identical `headHash`. A same-length record with a DIFFERENT head is a
- * divergent history nothing here can prove stale, so it is left exactly where it is: a duplicate row in
- * the games list is recoverable, a deleted history is not (this migration must never trade history for
- * tidiness).
+ * canonical one, carrying the seat map). A LOSER is deleted only when the survivor provably CONTAINS
+ * it — its log is a hash-chain PREFIX of the survivor's ({@link survivorContains}), which is the only
+ * proof there is. Any other record — a divergent line of play, whatever its length, and any record
+ * whose log will not replay — is left exactly where it is: a duplicate row in the games list is
+ * recoverable, a deleted history is not (this migration must never trade history for tidiness).
+ *
+ * A kept record sitting ON the destination key also CANCELS the re-key, because {@link rekeyGame}
+ * overwrites its destination: moving the survivor onto a divergent record we just refused to delete
+ * would destroy it by the back door. Both records then stay where they are, exactly as two divergent
+ * records elsewhere do.
  *
  * Deciding per-uuid rather than per-record is what makes the outcome independent of STORE ORDER. Moving
  * records one at a time against a snapshot of the listing let a second claimant overwrite the first at
@@ -490,21 +502,71 @@ export async function rekeyArchiveRecordsByGameUuid(
     // ordinary record can stand in for it. Every claimant stays where it is.
     if (byId.get(uuid)?.meta.result === 'conflicted') continue;
     const survivor = group.reduce((best, l) => (beatsForUuid(l, best, uuid) ? l : best));
+    // Set once a record we could NOT prove stale is holding the destination key itself (see the
+    // re-key below).
+    let destinationKept = false;
     for (const loser of group) {
       if (loser.id === survivor.id) continue;
-      // Only a record the survivor provably CONTAINS is dropped: a shorter history of the same game, or
-      // a byte-identical one. Anything else keeps its own record.
-      if (loser.events < survivor.events || loser.meta.headHash === survivor.meta.headHash) {
+      // Only a record whose history the survivor provably CONTAINS is dropped — proven against the
+      // hash chain, never inferred from a length.
+      if (await survivorContains(db, survivor.id, loser.id)) {
         await deleteGame(db, loser.id);
         moved.push(loser.id);
+      } else if (loser.id === uuid) {
+        destinationKept = true;
       }
     }
-    if (survivor.id !== uuid) {
+    if (survivor.id !== uuid && !destinationKept) {
       await rekeyGame(db, survivor.id, uuid);
       moved.push(survivor.id);
     }
   }
   return moved;
+}
+
+/**
+ * Whether the record stored under `survivorId` provably CONTAINS the history stored under `loserId` —
+ * the only licence {@link rekeyArchiveRecordsByGameUuid} has to delete a record.
+ *
+ * The proof is the HASH CHAIN and nothing else: both logs are folded and the loser's must be a
+ * {@link isPrefix} of the survivor's, i.e. every entry hash matches at the same ply — and a cumulative
+ * entry hash matching means the ENTIRE history up to that ply matches, so containment is established
+ * for the whole log, not sampled. An identical pair passes it too (a log is a prefix of itself).
+ *
+ * A LENGTH proves nothing and is deliberately not consulted: a shorter log can be a completely
+ * different line of play (resume + undo + a different continuation leaves exactly that beside the
+ * original in a pre-V.5 store), and dropping it would destroy the only copy of that history — the
+ * failure this migration exists to prevent.
+ *
+ * A record that cannot be FOLDED — absent, or a corrupt/illegal log ({@link ArchiveError}) — is
+ * reported as NOT contained, so it survives. That is not an error being swallowed: the question asked
+ * here is "is this provably contained?", and a log that will not replay answers it with a definite no.
+ * Any other failure (a store error) propagates untouched.
+ */
+async function survivorContains(
+  db: IDBDatabase,
+  survivorId: string,
+  loserId: string,
+): Promise<boolean> {
+  const survivor = await foldStoredLog(db, survivorId);
+  const loser = await foldStoredLog(db, loserId);
+  return survivor !== null && loser !== null && isPrefix(loser, survivor);
+}
+
+/**
+ * The stored record's event log WITH its hash chain (folded through the rules engine by
+ * {@link loadGame}), or `null` when no such record is stored or its log does not replay. See
+ * {@link survivorContains} for why an unreadable log is a `null` rather than a throw — and note that
+ * only {@link ArchiveError} (this module's own "that log is corrupt or illegal" verdict) is turned
+ * into one: an IndexedDB failure is a different fact and propagates.
+ */
+async function foldStoredLog(db: IDBDatabase, id: string): Promise<EventLog | null> {
+  try {
+    return (await loadGame(db, id))?.log ?? null;
+  } catch (e) {
+    if (e instanceof ArchiveError) return null;
+    throw e;
+  }
 }
 
 /**
@@ -554,17 +616,31 @@ export function isEmptyShell(listing: Pick<GameListing, 'events' | 'meta'>): boo
  * negotiated, and the empty-room reclaim (design §6.4) re-seeds an unplayed game (a post-rematch board)
  * from it by uuid, so deleting that one would un-seat a returning owner.
  *
- * A record carrying a SEAT MAP is kept whatever the caller says: it is a seated game, not "a board on
- * which nothing happened", and the store is shared by every tab of the origin — so the one caller's
- * `keep` cannot see is another TAB's live room. (An unplayed LOCAL board of another tab can still be
- * collected; it holds no history, and that tab rewrites its record on its next change. This is the
- * one deliberate cross-tab effect, stated rather than discovered.)
+ * A record carrying a SEAT MAP is kept BEYOND that list while it is still RECENT — younger than
+ * {@link SEATED_SHELL_MAX_AGE_MS} by its `meta.updatedAt` — because the store is shared by every tab of
+ * the origin and the one live room the caller's `keep` cannot see is another TAB's. That exemption is
+ * bounded in TIME rather than granted forever, because forever leaks: `NetSession.persistGame` writes
+ * seats from the moment seats are negotiated, so every room entered and left without a single move
+ * would otherwise leave one permanent, invisible `{events: 0, in-progress, seats}` row — the very
+ * accumulation this collector exists to stop, re-created for networked boards. Past the horizon the
+ * seated husk is collected like any other: it holds no history and no outcome, and a room nothing has
+ * written to for that long is not live. A seated record with NO `updatedAt` is likewise collectable —
+ * every write of this build stamps one, so its absence means the record was written by an earlier page
+ * load, not by a session that is still going.
  *
- * Idempotent: a second run finds nothing. Errors propagate.
+ * (An unplayed LOCAL board of another tab can still be collected at any age; it holds no history, and
+ * that tab rewrites its record on its next change. This is the one deliberate cross-tab effect, stated
+ * rather than discovered.)
+ *
+ * `now` is the clock the age is measured against (injected, so the rule is testable at its exact
+ * boundary); it defaults to `Date.now()`.
+ *
+ * Idempotent: a second run finds nothing new. Errors propagate.
  */
 export function purgeEmptyShellRecords(
   db: IDBDatabase,
   keep: ReadonlySet<string> = new Set(),
+  now: number = Date.now(),
 ): Promise<readonly string[]> {
   // ONE transaction, judging each record as the cursor finds it ({@link purgeGames}): the store is
   // shared by every tab of the origin, so a husk can become a played game between a scan and a
@@ -573,10 +649,35 @@ export function purgeEmptyShellRecords(
     db,
     (record) =>
       isEmptyShell({ events: record.log.length, meta: record.meta }) &&
-      record.meta.seats === undefined &&
+      !isRecentlyWrittenSeat(record.meta, now) &&
       !keep.has(record.id) &&
       !keep.has(record.meta.uuid),
   );
+}
+
+/**
+ * How long a SEATED empty shell is presumed to belong to a live room this caller cannot see (another
+ * tab's): 24h, the same horizon the `activeNetworkedGame` breadcrumb is believed for
+ * (`net/activeGame.ts` — design §6, "a stale `updatedAt` expires quietly"). The two agree on purpose:
+ * past a day the app itself stops offering the room back, so a seated husk nothing has written to since
+ * then is protecting nothing.
+ */
+export const SEATED_SHELL_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Whether `meta` describes a SEATED record written recently enough to still be somebody's live room
+ * (see {@link purgeEmptyShellRecords}). Seat-less records are never exempt; a seated record with no
+ * `updatedAt` stamp is not either (it predates this build's writes). The boundary is INCLUSIVE —
+ * exactly {@link SEATED_SHELL_MAX_AGE_MS} old still counts as recent — mirroring `isActiveGameStale`.
+ */
+function isRecentlyWrittenSeat(meta: GameRecord['meta'], now: number): boolean {
+  if (meta.seats === undefined) return false;
+  // An absent stamp is read as the EPOCH — "written before this build ever stamped a record", which is
+  // older than any horizon. That is the answer its absence deserves, and reading it this way rather
+  // than as its own `if` keeps the rule to one comparison (a branch whose outcome no input could
+  // distinguish from this one would be untestable padding).
+  const writtenAt = meta.updatedAt ?? 0;
+  return now - writtenAt <= SEATED_SHELL_MAX_AGE_MS;
 }
 
 /**

@@ -258,6 +258,32 @@ function noteSessionOwnedGame(): void {
 }
 
 /**
+ * Hand the player a FRESH local board when the board they are about to play on belongs to a session
+ * that is no longer running it — and report whether one was handed over.
+ *
+ * Ownership of a record is permanent ({@link sessionOwnedGames}), so once a session has run a game the
+ * app will never write that record again. Normally the scene's local board is a different game
+ * entirely; it is the SAME game when a room was entered on the "Current local board" seed from a
+ * pristine board, and from the moment the session stops being authoritative
+ * (`netRouting.placementRoute` sends placements back to the scene-local game) that board is one NOBODY
+ * writes: the session no longer persists it and the app must not. Every move on it would be silently
+ * lost. So the board is replaced by a fresh game with its own uuid, which the autosave owns and saves
+ * normally. Nothing is lost: the board was pristine (a PLAYED board is left behind before a net start,
+ * `shouldArchiveBeforeNetStart`), and the networked game itself is durable under its own uuid — listed,
+ * and offered back by the rejoin prompt.
+ *
+ * Driven from EVERY route out of a live session, not just the explicit one: leaving the room
+ * (`leaveNet`), and any involuntary stop — a refused/failed entry, or a fork that stops the game
+ * (`conflict`) — via the session-change hook below. Idempotent (the fresh board is not session-owned,
+ * so a second call does nothing).
+ */
+function handOverSessionOwnedBoard(): boolean {
+  if (!sessionOwnedGames.has(scene.getGame().uuid)) return false;
+  scene.dispatch('reset');
+  return true;
+}
+
+/**
  * Autosave the scene's LOCAL board under its own game uuid (Task 5.8, re-keyed by V.5).
  *
  * There is no boundary decision left to make: a new game carries a new uuid, so it lands in its own
@@ -275,8 +301,9 @@ async function autosaveTick(): Promise<void> {
   // identity-owned seat map with it), so the app never writes one of those records — while the session
   // is live AND after it has gone. Normally the scene's local board is a different game entirely; it is
   // the SAME game when a room was entered on the "Current local board" seed, which is exactly when this
-  // guard is load-bearing. Leaving a room hands the player a fresh local board (the `leaveNet` hook), so
-  // this never leaves them playing on a board nothing will save.
+  // guard is load-bearing. A board this refuses to write is never one the player is left playing on:
+  // every route out of a live session hands them a fresh local board first
+  // ({@link handOverSessionOwnedBoard}) — the explicit Leave AND an involuntary stop.
   noteSessionOwnedGame();
   if (sessionOwnedGames.has(game.uuid)) return;
   const target = autosaveTarget(game, await archivedIdentity(archiveDb, game.uuid));
@@ -738,12 +765,11 @@ void createAppNetSession(scene.getState().size)
       leaveNet: () => {
         session.disconnect();
         // The game played in that room belongs to the SESSION's record (design §2/§7), so the app will
-        // never write it again. When the scene's local board IS that game — the "Current local board"
-        // seed entered from a pristine board, the one case where the two share a uuid — leaving hands
-        // the player a FRESH local board to play on, rather than one whose every move would go
-        // unsaved (or, worse, overwrite the networked record from a stale local log). The board was
-        // empty either way (a played board is left behind before a net start), so nothing is lost.
-        if (sessionOwnedGames.has(scene.getGame().uuid)) scene.dispatch('reset');
+        // never write it again — which is why leaving hands the player a fresh local board when the
+        // scene's board IS that game ({@link handOverSessionOwnedBoard}). The same handover runs on the
+        // session-change hook for every INVOLUNTARY stop, so this call is the explicit path, not the
+        // only one; it is idempotent either way.
+        handOverSessionOwnedBoard();
         refreshUi();
       },
       // Out-of-band ask/accept handshake (N.1, issues #12/#18): the shared primitive #12 rematch and
@@ -853,6 +879,11 @@ void createAppNetSession(scene.getState().size)
       reconnect: () => driveEntry(session.reconnect()),
     });
 
+    // Was the session AUTHORITATIVE at the previous change? Read through the SAME pure predicate the
+    // scene routes placements and rendering by (`netRouting`), so "the session is running the game" is
+    // one rule with one answer — a second, hand-rolled phase list here could drift from the one that
+    // decides where a placement actually goes.
+    let sessionWasAuthoritative = shouldRenderSessionGame(session.state());
     // On EVERY session-state change — a local move, a REMOTE move adopted by the transport pump
     // (the resync link), presence, or a conflict — adopt the session's authoritative game into the
     // scene (re-rendering a remote move) and repaint the widgets. This is the render half of "ONE
@@ -864,6 +895,20 @@ void createAppNetSession(scene.getState().size)
       // Remember the game the session is running BEFORE anything else reacts: from here on its record
       // is the session's to write, and stays so after the session goes offline (`sessionOwnedGames`).
       noteSessionOwnedGame();
+      // THE SESSION JUST STOPPED RUNNING THE GAME — by a refused/failed entry, a fork that stopped it
+      // (`conflict`), or a disconnect. Placements now go to the scene-LOCAL game, so if that game is
+      // one a session owns the player would be moving on a board nothing saves: hand them a fresh one,
+      // exactly as leaving the room does (`handOverSessionOwnedBoard` — it is the same fact, so it is
+      // the same remedy on every path that reaches it, not only the one the player chose).
+      const authoritative = shouldRenderSessionGame(session.state());
+      if (sessionWasAuthoritative && !authoritative && handOverSessionOwnedBoard()) {
+        log.info('local board handed over after the session stopped', {
+          phase: session.state().phase,
+          // The board the player is on NOW — the fresh one this just swapped in.
+          freshBoard: scene.getGame().uuid,
+        });
+      }
+      sessionWasAuthoritative = authoritative;
       scene.adoptNetState();
       notifyGlue?.onSessionChange();
       refreshUi();
