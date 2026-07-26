@@ -1,7 +1,7 @@
 {
-  "version": "v3.0.0-120-gfbad84a6",
-  "describe": "v3.0.0-120-gfbad84a6",
+  "version": "v3.0.0-124-g641dc9c7",
+  "describe": "v3.0.0-124-g641dc9c7",
   "branch": "feat/net-model-v3.1",
-  "sha": "fbad84a6",
-  "builtAt": "2026-07-26T08:45:51.825Z"
+  "sha": "641dc9c7",
+  "builtAt": "2026-07-26T22:14:45.827Z"
 }
