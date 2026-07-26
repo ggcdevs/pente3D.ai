@@ -21,6 +21,7 @@ import {
   listGames,
   deleteGame,
   rekeyGame,
+  purgeGames,
   GAMES_STORE,
   DEFAULT_DB_NAME,
   resolveDbName,
@@ -311,6 +312,77 @@ describe('IndexedDB games store wrapper', () => {
    * copied: the assertions below check both halves of that (it arrives whole under the new key AND is
    * gone from the old one), plus the two edge behaviours a migration relies on.
    */
+  /**
+   * `purgeGames` — a predicate-driven delete pass in ONE transaction. Its reason for existing is the
+   * guarantee in the last test: the store is shared by every tab of the origin (and by the app's own
+   * concurrent writes), so a delete decided from a SNAPSHOT can remove a record that has meanwhile
+   * become something the predicate would have spared. Deciding inside the transaction cannot.
+   */
+  describe('purgeGames', () => {
+    it('deletes exactly what the predicate accepts and reports those ids', async () => {
+      const { db } = await open();
+      await putGame(db, { ...sampleRecord('empty-a'), log: [] });
+      await putGame(db, sampleRecord('played'));
+      await putGame(db, { ...sampleRecord('empty-b'), log: [] });
+
+      const removed = await purgeGames(db, (record) => record.log.length === 0);
+
+      expect([...removed].sort()).toEqual(['empty-a', 'empty-b']);
+      expect((await listGames(db)).map((l) => l.id)).toEqual(['played']);
+    });
+
+    it('deletes nothing (and reports nothing) when the predicate accepts nothing', async () => {
+      const { db } = await open();
+      await putGame(db, sampleRecord('kept'));
+
+      expect(await purgeGames(db, () => false)).toEqual([]);
+      expect((await listGames(db)).map((l) => l.id)).toEqual(['kept']);
+    });
+
+    it('is a no-op on an EMPTY store (negative case)', async () => {
+      const { db } = await open();
+      expect(await purgeGames(db, () => true)).toEqual([]);
+    });
+
+    it('rejects — and deletes NOTHING — when the predicate throws (the transaction aborts)', async () => {
+      const { db } = await open();
+      await putGame(db, { ...sampleRecord('empty'), log: [] });
+      const boom = new Error('predicate blew up');
+
+      await expect(
+        purgeGames(db, () => {
+          throw boom;
+        }),
+      ).rejects.toBeInstanceOf(Error);
+      // The record survives: an aborted transaction leaves the store exactly as it was, so a failure
+      // is never a partial purge reported as a success.
+      expect(await getGame(db, 'empty')).toBeDefined();
+    });
+
+    it('rejects against a closed database (never a silent no-op)', async () => {
+      const name = freshDbName();
+      const db = await openDatabase(name);
+      db.close();
+      await expect(purgeGames(db, () => true)).rejects.toBeInstanceOf(Error);
+    });
+
+    it('judges the record it FINDS, so a concurrent write is never deleted on a stale reading', async () => {
+      const { db } = await open();
+      await putGame(db, { ...sampleRecord('board'), log: [] }); // an empty board: the predicate's target
+
+      // A write to that very record races the purge — the shape a second tab (or this app's own
+      // autosave) really produces. Both are started before either is awaited.
+      const purge = purgeGames(db, (record) => record.log.length === 0);
+      const write = putGame(db, sampleRecord('board')); // …now a real game with 3 events
+      const [removed] = await Promise.all([purge, write]);
+
+      // The purge removed the EMPTY board it actually saw, and the played game that landed after it is
+      // intact. A scan-then-delete-by-id would have deleted the 3-event record it never inspected.
+      expect(removed).toEqual(['board']);
+      expect((await getGame(db, 'board'))?.log).toHaveLength(3);
+    });
+  });
+
   describe('rekeyGame', () => {
     it('MOVES the whole record to the new key — content unchanged except the id', async () => {
       const { db } = await open();
@@ -461,6 +533,78 @@ describe('IndexedDB games store wrapper', () => {
       await expect(listGames(fakeDb)).rejects.toBe(failure);
       await expect(putGame(fakeDb, sampleRecord('x'))).rejects.toBe(failure);
       await expect(deleteGame(fakeDb, 'x')).rejects.toBe(failure);
+    });
+
+    it('purgeGames surfaces a CURSOR error, a TRANSACTION error and an ABORT — each verbatim', async () => {
+      // Fault injection for the three ways a purge pass can fail, one at a time so each handler is
+      // proven on its own (a stub that fires two of them at once would let a dead handler hide behind
+      // its neighbour). Every case must reject with the SAME error object the store produced: a purge
+      // that swallowed one would report "nothing to collect" for a store it never managed to read.
+      const cursorFailure = new DOMException('injected cursor failure', 'DataError');
+      const txFailure = new DOMException('injected transaction failure', 'UnknownError');
+      const abortFailure = new DOMException('injected transaction abort', 'AbortError');
+      const silentRequest = { set onerror(_f: () => void) {}, set onsuccess(_f: () => void) {} };
+      /** A request that fires `onerror` as soon as the wrapper attaches its handler. */
+      const failingCursor = (error: DOMException) => ({
+        error,
+        set onerror(fn: () => void) {
+          queueMicrotask(() => fn());
+        },
+        set onsuccess(_f: () => void) {},
+      });
+      /** A db whose one transaction behaves exactly as `tx` describes. */
+      const dbWith = (tx: Record<string, unknown>): IDBDatabase =>
+        ({ transaction: () => tx }) as unknown as IDBDatabase;
+      const quiet = {
+        set oncomplete(_f: () => void) {},
+        set onerror(_f: () => void) {},
+        set onabort(_f: () => void) {},
+      };
+      const fires = (fn: () => void): void => {
+        queueMicrotask(() => fn());
+      };
+
+      // (a) the CURSOR request errors; the transaction itself says nothing.
+      await expect(
+        purgeGames(
+          dbWith({
+            ...quiet,
+            objectStore: () => ({ openCursor: () => failingCursor(cursorFailure) }),
+            error: cursorFailure,
+          }),
+          () => true,
+        ),
+      ).rejects.toBe(cursorFailure);
+
+      // (b) the TRANSACTION errors while the cursor request is silent.
+      await expect(
+        purgeGames(
+          dbWith({
+            ...quiet,
+            objectStore: () => ({ openCursor: () => silentRequest }),
+            set onerror(fn: () => void) {
+              fires(fn);
+            },
+            error: txFailure,
+          }),
+          () => true,
+        ),
+      ).rejects.toBe(txFailure);
+
+      // (c) the transaction ABORTS (quota, a forced abort) with neither of the above firing.
+      await expect(
+        purgeGames(
+          dbWith({
+            ...quiet,
+            objectStore: () => ({ openCursor: () => silentRequest }),
+            set onabort(fn: () => void) {
+              fires(fn);
+            },
+            error: abortFailure,
+          }),
+          () => true,
+        ),
+      ).rejects.toBe(abortFailure);
     });
 
     it('write ops reject via the transaction ABORT path with its error verbatim', async () => {

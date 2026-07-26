@@ -32,6 +32,7 @@ import {
   listGames,
   deleteGame,
   rekeyGame,
+  purgeGames,
   type GameListing,
   type GameRecord,
 } from './db';
@@ -46,9 +47,12 @@ export interface PersistedSeats {
  * The archive record's human `players` map for a NETWORKED game: the REAL seat owners (playerIds),
  * omitting a seat nobody owns yet rather than recording a `null`/sentinel "player".
  *
- * Written by the ONE writer of a networked game's record, `NetSession.persistGame` (the same session
- * code in the browser AND the CLI) — since V.5 the app's autosave writes only the LOCAL board it owns,
- * so no second writer can disagree with this projection.
+ * Written by `NetSession.persistGame` (the same session code in the browser AND the CLI), which is the
+ * only writer that ever ESTABLISHES it. The app's autosave writes the local board it is playing on, and
+ * a game that has been in a room can end up being that board (it is resumed from the games list, or the
+ * room was entered on the "Current local board" seed) — so the app never writes this projection itself
+ * and never replaces a stored one: it carries an existing seat map + players forward untouched
+ * ({@link archivedIdentity}). The identity belongs to the game; only the board is the app's to update.
  */
 export function playersFromSeats(seats: PersistedSeats): Record<string, string> {
   const players: Record<string, string> = {};
@@ -309,6 +313,27 @@ export async function loadNetGameByUuid(
 }
 
 /**
+ * The IDENTITY a stored record already carries — its `players` map and its identity-owned `seats`
+ * (design §2.3) — or `undefined` when no record is stored under `id`, and `null` seats when the record
+ * has none (an ordinary local game).
+ *
+ * Read by the app's autosave before it rewrites the board it is playing on, so a game that HAS been in
+ * a room keeps who owned its seats even when the local board becomes the thing being written (a game
+ * resumed from the games list, or a room entered on the "Current local board" seed). Establishing the
+ * seat map is `NetSession`'s alone; preserving it is everybody's (design §6.4 — the empty-room reclaim
+ * and the rejoin prompt's colour are derived from it, so dropping it silently un-seats a returning
+ * owner). Metadata only: no log is folded.
+ */
+export async function archivedIdentity(
+  db: IDBDatabase,
+  id: string,
+): Promise<{ players: Readonly<Record<string, string>>; seats: PersistedSeats | null } | undefined> {
+  const record = await getGame(db, id);
+  if (record === undefined) return undefined;
+  return { players: record.meta.players, seats: record.meta.seats ?? null };
+}
+
+/**
  * List every archived GAME as `{ id, meta, events }` (no logs), sorted by `startedAt` descending so
  * the most recently started game is first — the natural order for an archive browser (Stage 5).
  *
@@ -406,8 +431,9 @@ export class StartedAtLedger {
 
 /**
  * MIGRATION (Task V.5, epic #47) — re-key every record an older build stored under something other
- * than its game's `uuid`, resolving with the OLD ids that were moved (empty when there was nothing to
- * do, so a caller logs an observed fact).
+ * than its game's `uuid`, resolving with the ids that are no longer under the key they were stored at:
+ * every record MOVED, plus every duplicate DROPPED because the surviving record provably contains it
+ * (empty when there was nothing to do, so a caller logs an observed fact).
  *
  * Before V.5 the app autosaved the current game under a localStorage-persisted "autosave id" of its
  * own; V.5 keys every record by `game.uuid` so one game has exactly one record (design §2 "games keyed
@@ -424,35 +450,76 @@ export class StartedAtLedger {
  *    other record holds — so moving it onto the game's uuid would overwrite the game with one of its
  *    forks. It stays its own artifact (as it was before V.5, when the listing exempted it too).
  *
- * When both a legacy record and a record already under the game's uuid exist, the one with MORE events
- * wins: the loser is a stale snapshot of the same game, and this migration must never trade history for
- * tidiness. Idempotent — a second run finds nothing left to move. Errors propagate.
+ * WHEN SEVERAL RECORDS CLAIM ONE UUID, the destination holds exactly one of them, so the survivor is
+ * decided ONCE — over ALL of that game's records together — before anything is written: the record with
+ * MORE events wins, and a tie is broken in favour of the record already under the uuid (it is the
+ * canonical one, carrying the seat map). A LOSER is deleted only when it is provably contained by the
+ * survivor — fewer events, or the identical `headHash`. A same-length record with a DIFFERENT head is a
+ * divergent history nothing here can prove stale, so it is left exactly where it is: a duplicate row in
+ * the games list is recoverable, a deleted history is not (this migration must never trade history for
+ * tidiness).
+ *
+ * Deciding per-uuid rather than per-record is what makes the outcome independent of STORE ORDER. Moving
+ * records one at a time against a snapshot of the listing let a second claimant overwrite the first at
+ * the destination ({@link rekeyGame} overwrites), so whichever record came last in key order won — and a
+ * pre-V.5 store really did hold two records per game (a resume continued an archived game under a fresh
+ * autosave id, both carrying its uuid), which is exactly how history got destroyed.
+ *
+ * Idempotent — a second run finds nothing left to move. Errors propagate.
  */
 export async function rekeyArchiveRecordsByGameUuid(
   db: IDBDatabase,
 ): Promise<readonly string[]> {
   const listings = await listGames(db);
   const byId = new Map(listings.map((listing) => [listing.id, listing]));
-  const moved: string[] = [];
+  // Every record that COULD move onto a given uuid, grouped by that uuid. A record with no `meta.uuid`
+  // (pre-uuid) has no destination, and a CONFLICTED record stores both forks — information no other
+  // record holds — so neither is a claimant; both stay where they are.
+  const claimants = new Map<string, GameListing[]>();
   for (const listing of listings) {
     const uuid = listing.meta.uuid;
-    if (uuid === undefined || uuid === listing.id) continue; // already canonical, or unkeyable
-    if (listing.meta.result === 'conflicted') continue; // its forks are not a view of one game
-    const sitting = byId.get(uuid);
-    // Never overwrite a CONFLICTED record sitting on the game's uuid — it holds both forks, so neither
-    // record can stand in for the other. Both stay.
-    if (sitting?.meta.result === 'conflicted') continue;
-    // A record already under the game's uuid holding AT LEAST as much history is the one to keep; the
-    // legacy record is then a stale snapshot of the same game, and dropping it loses no history.
-    if (sitting !== undefined && sitting.events >= listing.events) {
-      await deleteGame(db, listing.id);
-      moved.push(listing.id);
-      continue;
+    if (uuid === undefined) continue;
+    if (listing.meta.result === 'conflicted') continue;
+    const group = claimants.get(uuid);
+    if (group === undefined) claimants.set(uuid, [listing]);
+    else group.push(listing);
+  }
+  const moved: string[] = [];
+  for (const [uuid, group] of claimants) {
+    // Never overwrite a CONFLICTED record sitting on the game's uuid — it holds both forks, so no
+    // ordinary record can stand in for it. Every claimant stays where it is.
+    if (byId.get(uuid)?.meta.result === 'conflicted') continue;
+    const survivor = group.reduce((best, l) => (beatsForUuid(l, best, uuid) ? l : best));
+    for (const loser of group) {
+      if (loser.id === survivor.id) continue;
+      // Only a record the survivor provably CONTAINS is dropped: a shorter history of the same game, or
+      // a byte-identical one. Anything else keeps its own record.
+      if (loser.events < survivor.events || loser.meta.headHash === survivor.meta.headHash) {
+        await deleteGame(db, loser.id);
+        moved.push(loser.id);
+      }
     }
-    await rekeyGame(db, listing.id, uuid);
-    moved.push(listing.id);
+    if (survivor.id !== uuid) {
+      await rekeyGame(db, survivor.id, uuid);
+      moved.push(survivor.id);
+    }
   }
   return moved;
+}
+
+/**
+ * Whether `candidate` should displace `best` as the record that ends up under `uuid`: MORE history
+ * wins, and on a tie the record already keyed by the uuid does (it is the canonical one — the live net
+ * writer's record, carrying the identity-owned seat map — so an equal-length copy must not replace it).
+ * A tie between two non-canonical records leaves the incumbent, which the caller's fold seeds from the
+ * listing in key order, so the choice is deterministic rather than store-order-dependent luck.
+ */
+function beatsForUuid(candidate: GameListing, best: GameListing, uuid: string): boolean {
+  if (candidate.events > best.events) return true;
+  if (candidate.events < best.events) return false;
+  // Equal histories: only the canonical record displaces the incumbent. A record id is unique, so
+  // `candidate.id === uuid` already says the incumbent is not the canonical one.
+  return candidate.id === uuid;
 }
 
 /**
@@ -466,8 +533,50 @@ export async function rekeyArchiveRecordsByGameUuid(
  * The app applies this to what it SHOWS (`main.ts`), keeping the store honest and complete while the
  * archive browser + resume list agree with the local rule that a never-played board is not a game.
  */
-export function isEmptyShell(listing: GameListing): boolean {
+export function isEmptyShell(listing: Pick<GameListing, 'events' | 'meta'>): boolean {
   return listing.events === 0 && listing.meta.result === 'in-progress';
+}
+
+/**
+ * Delete every {@link isEmptyShell} record the caller does not ask to KEEP, resolving with the ids
+ * removed (empty when there were none, so a caller logs an observed fact).
+ *
+ * A husk is written by construction, not by accident: since V.5 a record is keyed by its game's uuid
+ * and the app persists the board the moment it exists, so every boot and every reset leaves behind a
+ * board on which nothing ever happened. They are invisible (the app's games list drops shells) but they
+ * are REAL rows — the store grew by a couple of records per page load forever, and every boot scan
+ * (purge, re-key, `archivedStartedAts`) got slower with them. Nothing is lost by dropping one: an
+ * `events === 0`, still-`in-progress` record holds no history and no outcome, and "New game" gives the
+ * player an identical board.
+ *
+ * `keep` is the caller's list of shells that are NOT abandoned and must survive: the board currently
+ * loaded, and any game a live session owns — a net session writes its record the moment seats are
+ * negotiated, and the empty-room reclaim (design §6.4) re-seeds an unplayed game (a post-rematch board)
+ * from it by uuid, so deleting that one would un-seat a returning owner.
+ *
+ * A record carrying a SEAT MAP is kept whatever the caller says: it is a seated game, not "a board on
+ * which nothing happened", and the store is shared by every tab of the origin — so the one caller's
+ * `keep` cannot see is another TAB's live room. (An unplayed LOCAL board of another tab can still be
+ * collected; it holds no history, and that tab rewrites its record on its next change. This is the
+ * one deliberate cross-tab effect, stated rather than discovered.)
+ *
+ * Idempotent: a second run finds nothing. Errors propagate.
+ */
+export function purgeEmptyShellRecords(
+  db: IDBDatabase,
+  keep: ReadonlySet<string> = new Set(),
+): Promise<readonly string[]> {
+  // ONE transaction, judging each record as the cursor finds it ({@link purgeGames}): the store is
+  // shared by every tab of the origin, so a husk can become a played game between a scan and a
+  // delete-by-id — and deleting it then would destroy exactly the history this rule exists to spare.
+  return purgeGames(
+    db,
+    (record) =>
+      isEmptyShell({ events: record.log.length, meta: record.meta }) &&
+      record.meta.seats === undefined &&
+      !keep.has(record.id) &&
+      !keep.has(record.meta.uuid),
+  );
 }
 
 /**

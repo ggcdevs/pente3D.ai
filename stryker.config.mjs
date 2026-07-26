@@ -227,6 +227,12 @@ export default {
     // the IO boundary, and is covered by the mock-transport tests + `npm run scenario:issue45`.
     'src/net/reconcile.ts',
     'src/net/logDiff.ts',
+    // Pure boot-ROOM-PROBE reading (Task V.5, epic #47, design §6): which game (if any) an overheard
+    // room message names — a `sync`'s own uuid, a `hello`'s resume/current seed, and the honest `null`
+    // for a seed that names none / protocol traffic / junk on the publicly-writable relay. A total
+    // function from a wire record to a uuid, so it lives outside the `NetSession.probeRoom` IO glue
+    // (transport + listening window) and is mutation-gated like the other pure net logic.
+    'src/net/roomProbe.ts',
     // Pure v3.1 RESOLUTION vocabulary (Task V.4b, epic #47 — absorbs #38): how the two players NAME
     // the history they agree to continue from (`resolve:<headHash>` — absolute, so a responder can
     // neither invert it wrongly nor be pushed onto a history it does not hold), and what each side

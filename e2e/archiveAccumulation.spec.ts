@@ -48,7 +48,7 @@ type Pente = {
 };
 
 /** Give this test its OWN archive DB + a clean localStorage before boot (mirrors archive.spec.ts). */
-async function isolate(page: import('@playwright/test').Page): Promise<void> {
+async function isolate(page: import('@playwright/test').Page): Promise<string> {
   const dbName = `pente3d-e2e-${crypto.randomUUID()}`;
   await page.addInitScript((name: string) => {
     (window as unknown as { __penteDbName: string }).__penteDbName = name;
@@ -57,6 +57,35 @@ async function isolate(page: import('@playwright/test').Page): Promise<void> {
       window.localStorage.setItem('__e2e_booted', '1');
     }
   }, dbName);
+  return dbName;
+}
+
+/**
+ * How many records the `games` object store REALLY holds — read straight out of IndexedDB, bypassing
+ * `getArchive()` (which is the app's user-facing PROJECTION and hides empty shells). Store growth is
+ * invisible to every projected assertion, so it has to be measured here or not at all.
+ */
+async function rawRecordCount(
+  page: import('@playwright/test').Page,
+  dbName: string,
+): Promise<number> {
+  return page.evaluate(
+    (name: string) =>
+      new Promise<number>((resolve, reject) => {
+        const open = indexedDB.open(name);
+        open.onerror = () => reject(open.error ?? new Error('open failed'));
+        open.onsuccess = () => {
+          const db = open.result;
+          const count = db.transaction('games', 'readonly').objectStore('games').count();
+          count.onerror = () => reject(count.error ?? new Error('count failed'));
+          count.onsuccess = () => {
+            resolve(count.result);
+            db.close();
+          };
+        };
+      }),
+    dbName,
+  );
 }
 
 async function ready(page: import('@playwright/test').Page): Promise<void> {
@@ -162,13 +191,15 @@ test('a RESET after playing keeps the played game and starts a fresh record (bot
 test('an idle reset of a NEVER-PLAYED board mints NOTHING (archive not littered)', async ({
   page,
 }) => {
-  await isolate(page);
+  const dbName = await isolate(page);
   await ready(page);
   // The pristine board is autosaved at boot (one record). Each reset starts a new board, but a
   // never-played board is an EMPTY SHELL and the games list drops every shell except the one currently
   // loaded (`main.ts` `userFacingGames`) — so what the player sees stays at exactly one.
+  await waitForAutosaved(page); // this boot's own board is durable (see the reload test's note)
   const initial = await getAsync(page, (p) => p.getArchive());
   expect(initial).toHaveLength(1);
+  expect(await rawRecordCount(page, dbName)).toBe(1);
   await get(page, (p) => p.dispatch('reset'));
   await get(page, (p) => p.dispatch('reset'));
   await get(page, (p) => p.dispatch('reset'));
@@ -176,6 +207,47 @@ test('an idle reset of a NEVER-PLAYED board mints NOTHING (archive not littered)
   await page.waitForTimeout(200);
   const after = await getAsync(page, (p) => p.getArchive());
   expect(after).toHaveLength(1);
+  // …and the STORE says the same thing: the boards those resets abandoned were collected, they are not
+  // merely hidden by the games-list projection. (`getArchive()` alone would read identically whether
+  // the store held one record or four, which is exactly how unbounded growth stayed invisible.)
+  expect(await rawRecordCount(page, dbName)).toBe(1);
+});
+
+test('RELOADING does not grow the store: every boot collects the board the last one abandoned', async ({
+  page,
+}) => {
+  // The store, not the projection. One record per game means a board is persisted the moment it
+  // exists, so a boot that plays nothing still writes one — and left uncollected that is a couple of
+  // rows per page load, forever, with every boot scan (purge, re-key, startedAt) paying for them.
+  const dbName = await isolate(page);
+  await ready(page);
+  // Count only once THIS boot's own board is durable. Boot collects the previous husk BEFORE writing
+  // its own board, so between those two steps the store is legitimately empty — counting there would
+  // read a moment the app is passing through, not the state it settles on.
+  await waitForAutosaved(page);
+  expect(await rawRecordCount(page, dbName)).toBe(1);
+
+  for (let i = 0; i < 3; i++) {
+    await page.reload();
+    await ready(page);
+    await waitForAutosaved(page);
+    // Boot writes THIS board and drops the husk the previous boot left: one board in, one board out.
+    expect(await rawRecordCount(page, dbName)).toBe(1);
+  }
+
+  // A game with real history is NOT a husk — it survives every later boot, which is the whole point of
+  // the archive (the games list is the only route back to it, #37).
+  await get(page, (p) => p.place([0, 0, 0]));
+  await waitForAutosaved(page);
+  const playedHead = await get(page, (p) => p.getHeadHash()!);
+  await page.reload();
+  await ready(page);
+  await waitForAutosaved(page);
+
+  // The played game plus the fresh boot board — and nothing else accumulated across four reloads.
+  expect(await rawRecordCount(page, dbName)).toBe(2);
+  const archive = await getAsync(page, (p) => p.getArchive());
+  expect(archive.map((g) => g.meta.headHash)).toContain(playedHead);
 });
 
 test('a WIN finalizes the won game as its own record, and the next game accumulates alongside it', async ({

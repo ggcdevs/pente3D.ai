@@ -1549,13 +1549,16 @@
         "target": "src/persist/archive.ts",
         "specifiers": [
           "ArchivedMeta",
+          "PersistedSeats",
           "StartedAtLedger",
+          "archivedIdentity",
           "archivedStartedAts",
           "isEmptyShell",
           "listArchivedGames",
           "loadConflicted",
           "loadGame",
           "loadNetGameByUuid",
+          "purgeEmptyShellRecords",
           "purgeLegacyNetRoomRecords",
           "rekeyArchiveRecordsByGameUuid",
           "saveGame"
@@ -1647,7 +1650,9 @@
       "listArchive",
       "loadArchivedIntoScene",
       "loadConflictedIfAny",
+      "noteSessionOwnedGame",
       "probeForRejoin",
+      "purgeAbandonedBoards",
       "refreshSeedGames",
       "refreshUi",
       "resumeArchived",
@@ -2761,6 +2766,35 @@
       "targetFor"
     ]
   },
+  "src/net/roomProbe.ts": {
+    "exports": [
+      "probedGameUuid"
+    ],
+    "imports": [
+      {
+        "source": "./sync",
+        "target": "src/net/sync.ts",
+        "specifiers": [
+          "GameMessage",
+          "parseGameMessage"
+        ]
+      },
+      {
+        "source": "./transport",
+        "target": "src/net/transport.ts",
+        "specifiers": [
+          "TransportMessage"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "probedGameUuid"
+    ]
+  },
   "src/net/seats.ts": {
     "exports": [
       "ClaimRejection",
@@ -2962,6 +2996,13 @@
         ]
       },
       {
+        "source": "./roomProbe",
+        "target": "src/net/roomProbe.ts",
+        "specifiers": [
+          "probedGameUuid"
+        ]
+      },
+      {
         "source": "./seats",
         "target": "src/net/seats.ts",
         "specifiers": [
@@ -2987,11 +3028,9 @@
           "AdmissionMessage",
           "AdmissionReject",
           "AdmitMessage",
-          "GameMessage",
           "HelloMessage",
           "RejectMessage",
           "SyncMessage",
-          "parseGameMessage",
           "parseSyncMessage",
           "toAdmitMessage",
           "toAdoptAdmitMessage",
@@ -3004,8 +3043,7 @@
         "source": "./transport",
         "target": "src/net/transport.ts",
         "specifiers": [
-          "Transport",
-          "TransportMessage"
+          "Transport"
         ]
       },
       {
@@ -3112,8 +3150,7 @@
       }
     ],
     "functions": [
-      "offeredGameOf",
-      "probedGameUuid"
+      "offeredGameOf"
     ]
   },
   "src/net/sync.ts": {
@@ -3662,6 +3699,7 @@
       "LEGACY_NET_ROOM_RESULT",
       "PersistedSeats",
       "StartedAtLedger",
+      "archivedIdentity",
       "archivedStartedAts",
       "flagConflicted",
       "isEmptyShell",
@@ -3671,6 +3709,7 @@
       "loadNetGame",
       "loadNetGameByUuid",
       "playersFromSeats",
+      "purgeEmptyShellRecords",
       "purgeLegacyNetRoomRecords",
       "rekeyArchiveRecordsByGameUuid",
       "saveGame"
@@ -3709,6 +3748,7 @@
           "deleteGame",
           "getGame",
           "listGames",
+          "purgeGames",
           "putGame",
           "rekeyGame"
         ]
@@ -3797,7 +3837,9 @@
       }
     ],
     "functions": [
+      "archivedIdentity",
       "archivedStartedAts",
+      "beatsForUuid",
       "flagConflicted",
       "gameFromStoredLog",
       "isEmptyShell",
@@ -3807,6 +3849,7 @@
       "loadNetGame",
       "loadNetGameByUuid",
       "playersFromSeats",
+      "purgeEmptyShellRecords",
       "purgeLegacyNetRoomRecords",
       "rekeyArchiveRecordsByGameUuid",
       "saveGame",
@@ -3825,6 +3868,7 @@
       "getGame",
       "listGames",
       "openDatabase",
+      "purgeGames",
       "putGame",
       "rekeyGame",
       "resolveDbName"
@@ -3881,6 +3925,7 @@
       "getGame",
       "listGames",
       "openDatabase",
+      "purgeGames",
       "putGame",
       "rekeyGame",
       "requestToPromise",

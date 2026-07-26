@@ -349,7 +349,24 @@ test('selecting Resume reveals a games list once a finished game exists; picking
   await page.evaluate(() =>
     (window as unknown as { __pente: { dispatch(id: string): unknown } }).__pente.dispatch('reset'),
   );
-  // Wait until the archive holds the finalized game (the seed-games cache refreshes off autosave).
+  // Wait until THIS page's post-reset autosave has landed — the fresh board durable at its own head —
+  // before opening the panel. The panel reads the seed-games cache ONCE, when it opens, and that cache
+  // is refreshed off the autosave write: open it any earlier and the resume list is empty for as long
+  // as the panel stays open. (A record COUNT is not the fact to wait on: this spec shares the default
+  // archive DB with the file's other tests, so a count is already satisfied by their games.)
+  await page.waitForFunction(async () => {
+    const p = (
+      window as unknown as {
+        __pente?: {
+          getArchive(): Promise<{ meta: { headHash: string } }[]>;
+          getHeadHash(): string | null;
+        };
+      }
+    ).__pente;
+    if (!p) return false;
+    const head = p.getHeadHash();
+    return head !== null && (await p.getArchive()).some((g) => g.meta.headHash === head);
+  });
   await openNetPanel(page);
   await pt(page, 'netpanel-seed-resume').click();
   await expect(pt(page, 'netpanel-games')).toBeVisible();

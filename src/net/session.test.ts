@@ -3283,3 +3283,230 @@ describe('NetSession — resolving a divergence (Task V.4b, epic #47, absorbs #3
     expect(a.syncEngine()!.status()).toEqual({ kind: 'ok' });
   });
 });
+
+/**
+ * `NetSession.probeRoom` (Task V.5, epic #47, design §6) — the NON-COMMITTAL look a boot takes at the
+ * room the `activeNetworkedGame` breadcrumb names, before offering anything.
+ *
+ * The probe is the ONLY source of the two facts the §6 offer is derived from (`rejoinPromptModel`), so
+ * each of its arms is load-bearing in a different direction and each is driven here over the real
+ * {@link MockTransport} + {@link MockRelayHub}:
+ *
+ *  - a RESIDENT answers the probe's arrival by republishing its state (design §4, V.3), so the room's
+ *    game identity arrives with no probe-specific protocol — and the probe stops listening the moment
+ *    it has both facts rather than serving out its deadline;
+ *  - a peer MID-ENTRY has no log yet, so its `hello`'s resume/current seed is what names its game;
+ *  - a peer that names NOTHING is the honest `peer-silent` arm, never a guess;
+ *  - an EMPTY room is empty even though our own presence is in the room's presence set;
+ *  - the probe CLAIMS nothing: no `hello`, no seat, no session state — a resident sees no admission
+ *    traffic at all, and the probing session stays exactly as it was;
+ *  - a connect FAILURE rejects (nothing was learned, which is not "the room is empty") and still lets
+ *    go of the transport.
+ *
+ * Every assertion is on the returned {@link RoomProbe} / the resident's observed wire traffic / the
+ * session's own readouts — never a log line (agent-principles #3).
+ */
+describe('NetSession.probeRoom — a look that claims nothing (V.5, design §6)', () => {
+  const PROBE_ROOM = 'RMPROB';
+  /** A deadline far longer than any of these tests may take, so serving it out would time the test out. */
+  const LONG_WINDOW_MS = 30_000;
+
+  /** A bare transport that sits in a room as a peer, so a probe meets real presence + real traffic. */
+  function lurker(hub: MockRelayHub, id: string): MockTransport {
+    const t = new MockTransport(hub, id);
+    t.onMessage(() => {});
+    t.onPresence(() => {});
+    t.onPeerLive(() => {});
+    return t;
+  }
+
+  it("hears a RESIDENT's republished state and reports its game — without waiting out the deadline", async () => {
+    const hub = new MockRelayHub();
+    const resident = makeSession(hub, 'player-a');
+    await resident.enter(PROBE_ROOM, NEW);
+    resident.place(coordsOf('0,0,0'));
+    await flush();
+
+    const prober = makeSession(hub, 'player-b');
+    const startedAt = Date.now();
+    const probe = await prober.probeRoom(PROBE_ROOM, LONG_WINDOW_MS);
+    const elapsed = Date.now() - startedAt;
+
+    expect(probe).toEqual({
+      code: PROBE_ROOM,
+      peerPresent: true,
+      peerGameUuid: resident.gameUuid(),
+    });
+    // The answer ENDED the listening window: it returned in a fraction of the deadline (observable, and
+    // the whole point of the deadline being a deadline rather than a fixed cost).
+    expect(elapsed).toBeLessThan(LONG_WINDOW_MS / 2);
+  });
+
+  it('reads a peer MID-ENTRY off its `hello` seed — the game it brought, before any log exists', async () => {
+    const hub = new MockRelayHub();
+    const entering = lurker(hub, 'player-a');
+    await entering.connect(PROBE_ROOM);
+
+    const prober = makeSession(hub, 'player-b');
+    const probePromise = prober.probeRoom(PROBE_ROOM, LONG_WINDOW_MS);
+    // The mid-entry peer announces itself the way `enter` does: a hello naming the game it seeds with.
+    const brought = new Game(SIZE, 'the-game-it-brought');
+    brought.place(coordsOf('0,0,0'));
+    entering.publish(
+      toHelloMessage(
+        'hello-1',
+        'player-a',
+        { kind: 'resume', uuid: brought.uuid, headHash: headHash(brought.log) },
+        { white: 'player-a', black: null },
+        0,
+      ),
+    );
+
+    expect(await probePromise).toEqual({
+      code: PROBE_ROOM,
+      peerPresent: true,
+      peerGameUuid: 'the-game-it-brought',
+    });
+  });
+
+  it('a peer that names NO game is present-and-silent, never a guessed identity (negative case)', async () => {
+    const hub = new MockRelayHub();
+    const quiet = lurker(hub, 'player-a');
+    await quiet.connect(PROBE_ROOM);
+    // Real traffic that names no game: a dealer's-choice hello, and junk from the publicly-writable relay.
+    quiet.publish(
+      toHelloMessage('hello-q', 'player-a', { kind: 'defer' }, { white: null, black: null }, 0),
+    );
+    quiet.publish({ not: 'a game message' } as unknown as TransportMessage);
+
+    const prober = makeSession(hub, 'player-b');
+    expect(await prober.probeRoom(PROBE_ROOM, 5)).toEqual({
+      code: PROBE_ROOM,
+      peerPresent: true,
+      peerGameUuid: null,
+    });
+  });
+
+  it('an EMPTY room is empty — OUR OWN presence is not a peer (negative case)', async () => {
+    // The broker announces every member of the room, OURSELVES INCLUDED, so a probe that took the
+    // presence set at face value would report a peer in every empty room it looked at — and the §6
+    // offer would describe someone waiting there who does not exist. Driven at the transport seam so
+    // the assertion is about the FILTER, with no dependence on how quickly a mock joins a room.
+    let announce: (peers: readonly string[]) => void = () => {};
+    let disconnected = 0;
+    const solo = {
+      connect: () => {
+        announce(['player-b']);
+        return Promise.resolve();
+      },
+      publish: () => {
+        throw new Error('a probe publishes nothing');
+      },
+      onMessage: () => {},
+      onPresence: (cb: (peers: readonly string[]) => void) => {
+        announce = cb;
+      },
+      onPeerLive: () => {},
+      disconnect: () => {
+        disconnected += 1;
+      },
+    } satisfies Transport;
+    const prober = makeSession(new MockRelayHub(), 'player-b', {
+      createTransport: (): Transport => solo,
+    });
+
+    expect(await prober.probeRoom(PROBE_ROOM, 5)).toEqual({
+      code: PROBE_ROOM,
+      peerPresent: false,
+      peerGameUuid: null,
+    });
+    expect(disconnected).toBe(1); // the look let go of the room again
+
+    // …and the SAME presence announce with one more id in it IS a peer — the filter drops our own id,
+    // not the whole set.
+    const withPeer = makeSession(new MockRelayHub(), 'player-b', {
+      createTransport: (): Transport => ({
+        ...solo,
+        connect: () => {
+          announce(['player-b', 'player-a']);
+          return Promise.resolve();
+        },
+      }),
+    });
+    expect((await withPeer.probeRoom(PROBE_ROOM, 5)).peerPresent).toBe(true);
+  });
+
+  it('CLAIMS nothing: no admission traffic reaches the resident, and the session is untouched', async () => {
+    const hub = new MockRelayHub();
+    const resident = makeSession(hub, 'player-a');
+    await resident.enter(PROBE_ROOM, NEW);
+    await flush();
+    // Watch the resident's wire from here on: a probe must put NO admission message on it.
+    const heard: TransportMessage[] = [];
+    const watcher = new MockTransport(hub, 'watcher');
+    watcher.onMessage((m) => heard.push(m));
+    watcher.onPresence(() => {});
+    watcher.onPeerLive(() => {});
+    await watcher.connect(PROBE_ROOM);
+
+    const prober = makeSession(hub, 'player-b');
+    const before = prober.state();
+    await prober.probeRoom(PROBE_ROOM, 5);
+    await flush();
+
+    expect(heard.filter((m) => (m as { kind?: string }).kind === 'hello')).toEqual([]);
+    // Nothing about the probing session changed: still offline, no seat, no game, no room.
+    expect(prober.state().phase).toBe('offline');
+    expect(prober.state().phase).toBe(before.phase);
+    expect(prober.state().seat).toBeNull();
+    expect(prober.gameUuid()).toBeNull();
+    // …and the resident's own seating is untouched: black is still UNOWNED (no probe took a seat).
+    expect(resident.seatOwners()).toEqual({ white: 'player-a', black: null });
+    watcher.disconnect();
+  });
+
+  it('a CONNECT FAILURE rejects with the real error and still lets go of the transport (negative case)', async () => {
+    // Fault-injected at the transport seam (the only way to reach an unreachable relay): the failure
+    // must propagate VERBATIM — "we learned nothing" is not the same as "the room is empty", and a
+    // caller that mistook one for the other would offer a rejoin into a room it never saw.
+    const boom = new Error('relay unreachable');
+    let disconnected = 0;
+    const failing = {
+      connect: () => Promise.reject(boom),
+      publish: () => {
+        throw new Error('publish: not connected');
+      },
+      onMessage: () => {},
+      onPresence: () => {},
+      onPeerLive: () => {},
+      disconnect: () => {
+        disconnected += 1;
+      },
+    } satisfies Transport;
+    const prober = makeSession(new MockRelayHub(), 'player-b', {
+      createTransport: (): Transport => failing,
+    });
+
+    await expect(prober.probeRoom(PROBE_ROOM, LONG_WINDOW_MS)).rejects.toBe(boom);
+    expect(disconnected).toBe(1); // no socket (and no retained presence) left behind
+    expect(prober.state().phase).toBe('offline');
+  });
+
+  it('can be taken while a session of our own is LIVE, and leaves that session alone', async () => {
+    const hub = new MockRelayHub();
+    const live = makeSession(hub, 'player-a');
+    await live.enter(ROOM, NEW);
+    live.place(coordsOf('0,0,0'));
+    await flush();
+    const uuidBefore = live.gameUuid();
+    const headBefore = headHash(live.syncEngine()!.game().log);
+
+    const probe = await live.probeRoom(PROBE_ROOM, 5);
+
+    expect(probe.peerPresent).toBe(false);
+    expect(live.state().phase).toBe('connected');
+    expect(live.state().code).toBe(ROOM);
+    expect(live.gameUuid()).toBe(uuidBefore);
+    expect(headHash(live.syncEngine()!.game().log)).toBe(headBefore);
+  });
+});

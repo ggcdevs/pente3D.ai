@@ -13,15 +13,17 @@ import { ACTIVE_GAME_KEY } from '../src/net/activeGame.ts';
  * `window.__pente` real values — the board, the offer, the localStorage breadcrumb — never a log line
  * (agent-principles #3).
  *
- * The three §6 outcomes, one test each, all produced by the OTHER context actually being (or not being)
- * in the room:
+ * ALL FOUR §6 outcomes, one test each, produced by what is really in the room:
  *
  *  1. the peer is there on the SAME game → "Rejoin DUDEEE as Black?", and confirming really does put B
  *     back on A's game, on the colour the seat map owns for it (DISPLAYED, never negotiated — §7);
  *  2. the peer LEFT → "no one is there anymore. Rejoin as Black anyway?";
  *  3. the peer is there on a DIFFERENT game (it re-hosted at the same code) → a warning that offers a
- *     NEW CODE and no rejoin at all (never hijack someone else's game);
- *  4. plus the lifecycle rule: DECLINING clears the breadcrumb, so a further reload asks nothing —
+ *     NEW CODE and no rejoin at all (never hijack someone else's game) — and CONFIRMING that offer
+ *     carries B's own game into a fresh room while the occupied one is left untouched;
+ *  4. a peer is there but has NAMED no game → the honest `peer-silent` arm: the same rejoin, claiming
+ *     nothing about which game the room is on;
+ *  5. plus the lifecycle rule: DECLINING clears the breadcrumb, so a further reload asks nothing —
  *     asserted against the raw localStorage record, and the game is still in the archive.
  *
  * ## How the peer's game identity reaches the probe (no probe-specific protocol)
@@ -47,8 +49,14 @@ const PLAYER_ID_KEY = 'pente:playerId';
  * here crosses page → Node hub → page through `evaluate`, so the room's answer legitimately takes longer
  * than it does over a socket. It is a DEADLINE, not a gate — the answer must still arrive for the
  * same-game outcome to be derived, so widening it cannot turn a failure into a pass (#7).
+ *
+ * It was 4s, and that was too tight to be honest: under load the resident's answer landed just after
+ * the deadline and the probe reported `peer-silent` — a legitimate-looking outcome (it is exactly what
+ * a lost QoS-0 answer produces) standing in for "this harness was slow", i.e. a flaky headline test.
+ * The window only costs time when the room does NOT answer, because `probeRoom` stops listening the
+ * moment it has both facts, so a deadline this wide leaves the answering cases as fast as before.
  */
-const PROBE_WINDOW_MS = 4_000;
+const PROBE_WINDOW_MS = 15_000;
 
 /** The subset of `window.__pente` these scenarios read. */
 type Pente = {
@@ -91,10 +99,20 @@ const pente = <T,>(page: Page, fn: (p: Pente) => T): Promise<T> =>
  * which is the signal resident-peer republish (design §4) stands on.
  */
 class NodeRelayHub {
-  private readonly peers = new Map<string, { page: Page; room: string | null }>();
+  private readonly peers = new Map<string, { page: Page | null; room: string | null }>();
 
   register(peerId: string, page: Page): void {
     this.peers.set(peerId, { page, room: null });
+  }
+
+  /**
+   * A peer with NO app behind it, sitting in `room` from the moment it is registered: it shows up in
+   * presence and answers nothing. That is the fourth §6 outcome (`peer-silent`) as a real room state —
+   * a peer mid-entry, or one whose non-retained QoS-0 answer was lost — rather than a timing accident.
+   */
+  registerSilent(peerId: string, room: string): void {
+    this.peers.set(peerId, { page: null, room });
+    void this.broadcastPresence(room);
   }
 
   /** `peerId` joins `room`: membership, then presence room-wide, then the two-way live-presence pings. */
@@ -119,7 +137,7 @@ class NodeRelayHub {
     if (sender === undefined || sender.room === null) return;
     const wire = JSON.parse(JSON.stringify(body)) as unknown;
     for (const [id, peer] of this.peers) {
-      if (id === peerId || peer.room !== sender.room) continue;
+      if (id === peerId || peer.room !== sender.room || peer.page === null) continue;
       void peer.page
         .evaluate(
           (b) => (window as unknown as { __relayDeliver(x: unknown): void }).__relayDeliver(b),
@@ -139,7 +157,7 @@ class NodeRelayHub {
 
   private async peerLive(toPeer: string, livePeer: string): Promise<void> {
     const target = this.peers.get(toPeer);
-    if (target === undefined) return;
+    if (target === undefined || target.page === null) return;
     await target.page
       .evaluate(
         (id) => (window as unknown as { __relayPeerLive(x: string): void }).__relayPeerLive(id),
@@ -152,9 +170,9 @@ class NodeRelayHub {
     const present = [...this.peers.entries()].filter(([, p]) => p.room === room).map(([id]) => id);
     await Promise.all(
       [...this.peers.values()]
-        .filter((p) => p.room === room)
+        .filter((p) => p.room === room && p.page !== null)
         .map((p) =>
-          p.page
+          p.page!
             .evaluate(
               (peers) =>
                 (
@@ -290,12 +308,19 @@ async function waitGameDurable(page: Page): Promise<void> {
   });
 }
 
-/** Wait until the rejoin prompt is showing, and return it. */
+/**
+ * Wait until the rejoin prompt is showing, and return it.
+ *
+ * The predicate tolerates an ABSENT `__pente` (exactly as `ready` does): a poll re-runs in whatever
+ * document the page currently has, and a document where the app module has not finished executing is a
+ * "not yet", not a failure. Throwing there ends the wait on the spot — which is how a slow, fully
+ * parallel run turned a still-booting page into a red test that had nothing to do with the prompt.
+ */
 async function waitPrompt(page: Page): Promise<ReturnType<Pente['getRejoinPrompt']>> {
   await page.waitForFunction(
-    () => (window as unknown as { __pente: Pente }).__pente.getRejoinPrompt().show,
+    () => (window as unknown as { __pente?: Pente }).__pente?.getRejoinPrompt().show === true,
     undefined,
-    { timeout: 30_000 },
+    { timeout: 40_000 },
   );
   return pente(page, (p) => p.getRejoinPrompt());
 }
@@ -475,6 +500,63 @@ test('the peer re-hosted a DIFFERENT game at the same code: warn, offer a new co
   expect(await pente(b.page, (p) => p.getNet()!.phase)).toBe('offline');
   expect(await pente(b.page, (p) => p.getNetGameUuid())).toBeNull();
   await shoot(b.page, 'rejoin-prompt-other-game');
+
+  // CONFIRM "Use a new code" through the real button — the half of this row that actually does
+  // something: B's own game is carried into a FRESH room by a `resume` seed (uuid + head), which the
+  // V.2 seed matrix has to accept, and the occupied room is left exactly as it was.
+  const aHeadBefore = await pente(a.page, (p) => p.getHeadHash());
+  await b.page.locator('[data-testid="rejoin-confirm"]').click();
+  await waitConnected(b.page);
+
+  // A NEW room (never the occupied one), running OUR game — not a fresh one, and not theirs.
+  const newCode = (await pente(b.page, (p) => p.getNet()!.code))!;
+  expect(newCode).not.toBe(code);
+  expect(newCode.length).toBeGreaterThan(0);
+  expect(await pente(b.page, (p) => p.getNetGameUuid())).toBe(uuid);
+  // The seed really carried the GAME, not just its name: A's move is on B's board again, and the
+  // colour is the one that game's own seat map owns for B (design §6.4 reclaim by identity).
+  expect(Object.keys((await pente(b.page, (p) => p.getState()!)).pieces)).toEqual(['0,0,0']);
+  expect(await pente(b.page, (p) => p.getNet()!.seat)).toBe('black');
+  // The breadcrumb now names where B actually is, so a further reload asks about the NEW room.
+  expect(await breadcrumb(b.page)).toMatchObject({ code: newCode, gameUuid: uuid });
+
+  // …and the room B refused to hijack is UNTOUCHED: A is still connected there, on its own game, at
+  // the same head — nothing B did reached it.
+  expect(await pente(a.page, (p) => p.getNet()!.phase)).toBe('connected');
+  expect(await pente(a.page, (p) => p.getNet()!.code)).toBe(code);
+  expect(await pente(a.page, (p) => p.getNetGameUuid())).toBe(theirGame);
+  expect(await pente(a.page, (p) => p.getHeadHash())).toBe(aHeadBefore);
+
+  await a.context.close();
+  await b.context.close();
+});
+
+test('a peer is there but has NAMED no game: the offer says so and claims nothing (peer-silent)', async ({
+  browser,
+}) => {
+  test.slow();
+  const hub = new NodeRelayHub();
+  const { a, b, code } = await playedGame(browser, hub);
+
+  // A leaves, and a peer with nothing to say takes its place: present in the room, answering nothing.
+  // That is the real shape of the fourth §6 arm — a peer mid-entry, or one whose non-retained answer
+  // was lost — and it is produced here by the ROOM's state, not by a deadline expiring.
+  await pente(a.page, (p) => p.leaveNet());
+  hub.registerSilent('silent-lurker', code);
+  await reloadOntoEmptySlate(b.page, hub);
+
+  const view = await waitPrompt(b.page);
+  // Someone IS there, so this is not the empty room — but nobody said which game, so the copy claims
+  // no shared game while still offering the rejoin (admission decides the rest, as it always does).
+  expect(view.outcome).toBe('peer-silent');
+  expect(view.action).toBe('rejoin');
+  expect(view.headline).toBe(`Rejoin ${code} as Black?`);
+  expect(view.detail).toBe('Someone is in that room, but has not said which game they are playing.');
+  await expect(b.page.locator('[data-testid="rejoin-prompt"]')).toHaveAttribute(
+    'data-outcome',
+    'peer-silent',
+  );
+  await shoot(b.page, 'rejoin-prompt-peer-silent');
 
   await a.context.close();
   await b.context.close();

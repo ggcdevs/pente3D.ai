@@ -77,7 +77,7 @@ import {
   isActiveGameStale,
   type ActiveNetworkedGame,
 } from './activeGame';
-import type { Transport, TransportMessage } from './transport';
+import type { Transport } from './transport';
 import { SyncEngine } from './sync';
 import { RepublishLimiter } from './republish';
 import { headHash } from '../core/eventLog';
@@ -116,13 +116,11 @@ import {
   toRejectMessage,
   toSyncMessage,
   parseSyncMessage,
-  parseGameMessage,
   type HelloMessage,
   type AdmitMessage,
   type RejectMessage,
   type AdmissionMessage,
   type AdmissionReject,
-  type GameMessage,
   type SyncMessage,
 } from './sync';
 import { randomId } from '../util/randomId';
@@ -136,6 +134,7 @@ import {
   type UndoRedoPrompt,
 } from './undoRedo';
 import { canPlaceForSeat } from './turnGate';
+import { probedGameUuid } from './roomProbe';
 import { rematchGameUuid } from './rematch';
 import {
   effectOf,
@@ -229,31 +228,6 @@ export interface RoomProbe {
   readonly peerPresent: boolean;
   /** The game UUID a present peer named, or `null` when none did (see {@link NetSession.probeRoom}). */
   readonly peerGameUuid: string | null;
-}
-
-/**
- * The game UUID an overheard room message names, or `null` when it names none. Used ONLY by
- * {@link NetSession.probeRoom}, which is listening rather than participating.
- *
- * Two messages carry a game identity a probe can trust as "the game someone in this room is on": a
- * `sync` (the whole log, so its `uuid` IS the game being played — this is what a resident republishes in
- * answer to our presence) and a `hello` whose seed NAMES a concrete game (`resume`/`current`). A
- * `new`/`defer` hello names no game, and an unparseable publish tells us nothing — both are `null`, the
- * prompt's honest "someone is there but has not said which game" arm.
- */
-function probedGameUuid(msg: TransportMessage): string | null {
-  let parsed: GameMessage;
-  try {
-    parsed = parseGameMessage(msg);
-  } catch {
-    // A malformed or unknown-kind publish on a PUBLICLY WRITABLE relay is not an error for a probe: it
-    // simply carries no game identity. (An entering session validates the same traffic strictly.)
-    return null;
-  }
-  if (parsed.kind === 'sync') return parsed.uuid;
-  if (parsed.kind !== 'hello') return null;
-  const seed = parsed.proposal;
-  return seed.kind === 'resume' || seed.kind === 'current' ? seed.uuid : null;
 }
 
 /** Notified after every session-state change, so the UI shell can repaint the widget. */
@@ -630,28 +604,54 @@ export class NetSession {
    * REJECTS (the caller shows no prompt and keeps the breadcrumb — nothing was learned, which is not
    * the same as an empty room).
    *
+   * `windowMs` is a DEADLINE, not a fixed cost: the moment the room has ANSWERED — a peer is present
+   * AND has named its game — there is nothing left to wait for, so the probe stops listening and the
+   * offer appears at once. Only an UNANSWERED question is worth the whole window (nobody there, or a
+   * present peer that has said nothing yet), because absence and silence can only be concluded by
+   * waiting. Stopping early can never manufacture an answer — it happens strictly after one arrived —
+   * so it cannot turn a would-be failure into a pass (agent-principles #7).
+   *
    * @param code The room to look at (the breadcrumb's canonical code).
-   * @param windowMs How long to listen; defaults to the same presence SETTLE window `enter` waits
-   *   ({@link NetSessionDeps.settleMs}) — the interval this protocol already treats as "long enough
-   *   for the room to answer".
+   * @param windowMs How long to listen AT MOST; defaults to the same presence SETTLE window `enter`
+   *   waits ({@link NetSessionDeps.settleMs}) — the interval this protocol already treats as "long
+   *   enough for the room to answer".
    */
   async probeRoom(code: string, windowMs: number = this.deps.settleMs): Promise<RoomProbe> {
     const transport = this.deps.createTransport();
     let others: readonly string[] = [];
     let peerGameUuid: string | null = null;
+    // Set while the listening window is open; called whenever a new fact lands, it ends the window as
+    // soon as BOTH facts are known.
+    let stopListening: (() => void) | null = null;
+    const answered = (): void => {
+      if (others.length > 0 && peerGameUuid !== null) stopListening?.();
+    };
     transport.onPresence((peers) => {
       others = peers.filter((id) => id !== this.deps.playerId);
+      answered();
     });
     // A probe ANSWERS nothing: it holds no game, so it has no state to serve a peer. (The handler is
     // registered because the seam requires one — an unregistered signal would be dropped silently.)
     transport.onPeerLive(() => {});
     transport.onMessage((msg) => {
       peerGameUuid ??= probedGameUuid(msg);
+      answered();
     });
     try {
       await transport.connect(code);
-      await new Promise<void>((resolve) => setTimeout(resolve, windowMs));
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, windowMs);
+        stopListening = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+        // The room may have answered DURING the connect (a mock/relay that delivers synchronously),
+        // in which case no further signal is coming and the window would run to its deadline for
+        // nothing.
+        answered();
+      });
     } finally {
+      stopListening = null;
       // Always let go of the room, including when the connect itself failed — a probe that left a
       // socket (or a retained presence) behind would look like a player sitting in the room.
       transport.disconnect();

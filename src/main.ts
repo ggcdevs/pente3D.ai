@@ -20,12 +20,15 @@ import {
   loadConflicted,
   listArchivedGames,
   loadNetGameByUuid,
+  archivedIdentity,
   archivedStartedAts,
   isEmptyShell,
   purgeLegacyNetRoomRecords,
+  purgeEmptyShellRecords,
   rekeyArchiveRecordsByGameUuid,
   StartedAtLedger,
   type ArchivedMeta,
+  type PersistedSeats,
 } from './persist/archive.ts';
 import type { Game } from './core/game.ts';
 import type { ArchiveListing } from './ui/widgets/archiveModel.ts';
@@ -192,19 +195,29 @@ function getNotifyReadout(): NotifyReadout {
 /**
  * The record this autosave writes for `game`: the app's LOCAL board, keyed by the game's own uuid.
  *
- * `players` is the local placeholder because this is a board one person is playing on both sides; a
- * NETWORKED game's record is written by the session instead, with the real seat owners (design §2/§7).
- * `startedAt` comes from the ledger, so re-saving a game keeps the date it began rather than being
- * re-stamped on every move (which would shuffle it up the newest-first games list).
+ * `players` is the local placeholder because this is a board one person is playing on both sides —
+ * UNLESS the stored record already carries an identity-owned seat map (`stored`, read from the archive
+ * by {@link archivedIdentity}): that game has been in a room, its seats belong to real playerIds
+ * (design §2.3), and the empty-room reclaim + the rejoin prompt's colour are derived from them. The app
+ * updates the BOARD; it never establishes or replaces that identity, so both fields are carried forward
+ * verbatim. `startedAt` comes from the ledger, so re-saving a game keeps the date it began rather than
+ * being re-stamped on every move (which would shuffle it up the newest-first games list).
  */
-function autosaveTarget(game: Game): { readonly recordId: string; readonly meta: ArchivedMeta } {
+function autosaveTarget(
+  game: Game,
+  stored?: { players: Readonly<Record<string, string>>; seats: PersistedSeats | null },
+): { readonly recordId: string; readonly meta: ArchivedMeta } {
   const winner = game.state().winner;
+  // The stored identity, only when the record really carries one (a game that has been in a room).
+  const seats = stored?.seats ?? null;
+  const identity = seats === null ? null : { players: stored!.players, seats };
   return {
     recordId: game.uuid,
     meta: {
-      players: { white: 'You', black: 'You' },
+      players: identity === null ? { white: 'You', black: 'You' } : identity.players,
       result: winner === null ? 'in-progress' : `${winner}-wins`,
       startedAt: startedAts.stampFor(game.uuid, Date.now()),
+      ...(identity === null ? {} : { seats: identity.seats }),
     },
   };
 }
@@ -223,6 +236,28 @@ let archiveDb: IDBDatabase | null = null;
 let autosaveSuspended = false;
 
 /**
+ * The games whose archive record belongs to the SESSION (Task V.5, epic #47, design §2/§7): every game
+ * this browser has run in a room. `NetSession.persistGame` writes those records — with the
+ * identity-owned seat map the empty-room reclaim (design §6.4) and the rejoin prompt's colour both read
+ * — and the app must never write one, because two writers of one record is what made a game's
+ * players/seats/history depend on which of them wrote last.
+ *
+ * Ownership is a property of the RECORD, so it is remembered rather than re-derived from the live
+ * session. Keying the guard on `getNetGameUuid()` alone was a data-loss bug: `session.gameUuid()` goes
+ * `null` the instant the session disconnects, so leaving a room the scene had entered on the "Current
+ * local board" seed (the one case where the scene's local game and the session's game are ONE uuid)
+ * let the very next scene change overwrite the session's record from the stale local board —
+ * destroying the seat map and replacing the networked log, silently.
+ */
+const sessionOwnedGames = new Set<string>();
+
+/** Remember the game the session is running, if any (see {@link sessionOwnedGames}). */
+function noteSessionOwnedGame(): void {
+  const uuid = getNetGameUuid();
+  if (uuid !== null) sessionOwnedGames.add(uuid);
+}
+
+/**
  * Autosave the scene's LOCAL board under its own game uuid (Task 5.8, re-keyed by V.5).
  *
  * There is no boundary decision left to make: a new game carries a new uuid, so it lands in its own
@@ -236,17 +271,48 @@ async function autosaveTick(): Promise<void> {
   // the suspension before starting a real game, so accumulation continues normally after.
   if (autosaveSuspended) return;
   const game = scene.getGame();
-  // ONE WRITER PER RECORD: the SESSION owns the record of the game it is playing (it writes the
-  // identity-owned seat map with it), so the app never writes that same record. Normally the scene's
-  // local board is a different game entirely; it is the SAME game when a room was entered on the
-  // "Current local board" seed, which is exactly when this guard is load-bearing.
-  if (getNetGameUuid() === game.uuid) return;
-  const target = autosaveTarget(game);
+  // ONE WRITER PER RECORD: the SESSION owns the record of every game it has run (it writes the
+  // identity-owned seat map with it), so the app never writes one of those records — while the session
+  // is live AND after it has gone. Normally the scene's local board is a different game entirely; it is
+  // the SAME game when a room was entered on the "Current local board" seed, which is exactly when this
+  // guard is load-bearing. Leaving a room hands the player a fresh local board (the `leaveNet` hook), so
+  // this never leaves them playing on a board nothing will save.
+  noteSessionOwnedGame();
+  if (sessionOwnedGames.has(game.uuid)) return;
+  const target = autosaveTarget(game, await archivedIdentity(archiveDb, game.uuid));
   await saveGame(archiveDb, target.recordId, game, target.meta);
   // The archive just changed — refresh the seed-games cache so the Network-Game panel's Resume list
   // reflects it on the next open. Best-effort: a refresh failure only leaves a stale list, never a
   // broken save.
   await refreshSeedGames().catch((err: unknown) => log.error('seed-games refresh failed', err));
+}
+
+/**
+ * Drop the EMPTY SHELLS nothing is using any more (`persist/archive.ts` `purgeEmptyShellRecords`).
+ *
+ * One record per game means a board is persisted the moment it exists, so a boot and every reset leave
+ * behind a board on which nothing ever happened. Unbounded, that is a store that grows a couple of rows
+ * per page load and a boot whose every scan gets slower — invisible in the games list (which hides
+ * shells) but real. Run at boot and at every LOCAL game boundary, so the husk count stays bounded by
+ * what is actually in use rather than by how long the tab has been open.
+ *
+ * KEPT: the board currently loaded (legitimately empty, and about to be played on), every game a
+ * session of ours owns (a net session writes its record the moment seats are negotiated, and the
+ * empty-room reclaim re-seeds an unplayed game from it by uuid — design §6.4), and the game the
+ * `activeNetworkedGame` breadcrumb names (the rejoin prompt has to be able to load it).
+ */
+async function purgeAbandonedBoards(): Promise<void> {
+  if (archiveDb === null) return;
+  // A REVIEW leaves the archive EXACTLY as it found it (Task 6.6) — that guarantee is about the whole
+  // store, not just the browsed game, so a read-only browse collects nothing either. The next real
+  // boundary (resume / reset / host) runs this again.
+  if (autosaveSuspended) return;
+  const keep = new Set(sessionOwnedGames);
+  keep.add(scene.getGame().uuid);
+  const crumb = readActiveGame()?.gameUuid;
+  if (crumb !== undefined) keep.add(crumb);
+  const husks = await purgeEmptyShellRecords(archiveDb, keep);
+  if (husks.length > 0) log.info('purged empty-board records', { ids: husks });
 }
 
 /**
@@ -272,6 +338,9 @@ const persistenceReady: Promise<IDBDatabase | null> = openDatabase(resolveDbName
     //    OBSERVED facts, not claims.
     const rekeyed = await rekeyArchiveRecordsByGameUuid(db);
     if (rekeyed.length > 0) log.info('re-keyed archive records by game uuid', { ids: rekeyed });
+    // 3. (V.5, epic #47) drop the EMPTY SHELLS earlier sessions abandoned, so the store does not grow
+    //    by a couple of rows per page load forever (see `purgeAbandonedBoards` for what is kept).
+    await purgeAbandonedBoards();
     // Learn when every game this browser already holds BEGAN, before anything is written, so a game we
     // resume is re-persisted with its original date instead of being re-stamped "now".
     startedAts.adopt(await archivedStartedAts(db));
@@ -280,6 +349,14 @@ const persistenceReady: Promise<IDBDatabase | null> = openDatabase(resolveDbName
     // it was being played in a room.
     scene.onStateChange(() => {
       void autosaveTick().catch((err: unknown) => log.error('autosave failed', err));
+    });
+    // A LOCAL game boundary (a reset, or an archived game loaded into the scene) abandons the board
+    // that was loaded. If nothing ever happened on it, its record is a husk from this moment on — so
+    // collect it here rather than letting a long session accumulate one per reset.
+    scene.onNewGame(() => {
+      void purgeAbandonedBoards().catch((err: unknown) =>
+        log.error('empty-board purge failed', err),
+      );
     });
     // Persist the initial state immediately so a fresh board is browsable even before the first move.
     const bootGame = scene.getGame();
@@ -660,6 +737,13 @@ void createAppNetSession(scene.getState().size)
       // offline; idempotent. `refreshUi` repaints the now-offline net widget.
       leaveNet: () => {
         session.disconnect();
+        // The game played in that room belongs to the SESSION's record (design §2/§7), so the app will
+        // never write it again. When the scene's local board IS that game — the "Current local board"
+        // seed entered from a pristine board, the one case where the two share a uuid — leaving hands
+        // the player a FRESH local board to play on, rather than one whose every move would go
+        // unsaved (or, worse, overwrite the networked record from a stale local log). The board was
+        // empty either way (a played board is left behind before a net start), so nothing is lost.
+        if (sessionOwnedGames.has(scene.getGame().uuid)) scene.dispatch('reset');
         refreshUi();
       },
       // Out-of-band ask/accept handshake (N.1, issues #12/#18): the shared primitive #12 rematch and
@@ -777,6 +861,9 @@ void createAppNetSession(scene.getState().size)
     // The notify glue also observes the change to fire the your-turn tab-title flash / browser
     // Notification when the ADOPTED change was an opponent move that made it this client's turn (#20).
     session.onChange(() => {
+      // Remember the game the session is running BEFORE anything else reacts: from here on its record
+      // is the session's to write, and stays so after the session goes offline (`sessionOwnedGames`).
+      noteSessionOwnedGame();
       scene.adoptNetState();
       notifyGlue?.onSessionChange();
       refreshUi();

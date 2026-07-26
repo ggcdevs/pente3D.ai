@@ -263,6 +263,47 @@ export async function rekeyGame(db: IDBDatabase, from: string, to: string): Prom
 }
 
 /**
+ * Delete every stored record `shouldDelete` accepts, in ONE `readwrite` cursor pass, resolving with
+ * the ids removed (empty when nothing matched).
+ *
+ * ATOMIC BY CONSTRUCTION, and that is the whole point: the decision and the delete happen inside one
+ * transaction, over the record the cursor is actually holding. A scan-then-delete-by-id built from two
+ * transactions decides on a SNAPSHOT — and IndexedDB is shared by every tab of the origin, so between
+ * the two a record can gain the very history that would have spared it. This shape cannot delete a
+ * record it did not just inspect.
+ *
+ * The predicate must be a pure, synchronous read of the record: it runs inside the transaction, so an
+ * `await` in it would let the transaction auto-close before the pass finished. Errors (including one
+ * thrown by the predicate, which aborts the transaction) propagate as a rejection.
+ */
+export function purgeGames(
+  db: IDBDatabase,
+  shouldDelete: (record: GameRecord) => boolean,
+): Promise<readonly string[]> {
+  return new Promise<readonly string[]>((resolve, reject) => {
+    const tx = db.transaction(GAMES_STORE, 'readwrite');
+    const request = tx.objectStore(GAMES_STORE).openCursor();
+    const removed: string[] = [];
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (cursor === null) return; // the pass is over; `tx.oncomplete` resolves once it is durable
+      const record = cursor.value as GameRecord;
+      if (shouldDelete(record)) {
+        cursor.delete();
+        removed.push(record.id);
+      }
+      cursor.continue();
+    };
+    request.onerror = () => reject(request.error);
+    // Resolve only when the transaction COMMITS, so a caller that is told "these ids are gone" is told
+    // it about durable state, never about a delete that was still in flight (or later aborted).
+    tx.oncomplete = () => resolve(removed);
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+}
+
+/**
  * Delete a game record by id. Deleting a missing key is a no-op that still resolves
  * (IndexedDB's `delete` does not error on an absent key).
  */

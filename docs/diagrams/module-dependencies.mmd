@@ -45,6 +45,7 @@ graph LR
         src_net_rematch_ts["rematch.ts"]
         src_net_republish_ts["republish.ts"]
         src_net_resolution_ts["resolution.ts"]
+        src_net_roomProbe_ts["roomProbe.ts"]
         src_net_seats_ts["seats.ts"]
         src_net_session_ts["session.ts"]
         src_net_sync_ts["sync.ts"]
@@ -221,6 +222,8 @@ graph LR
     src_net_reconcile_ts --> src_net_logDiff_ts
     src_net_rematch_ts --> src_core_gameState_ts
     src_net_rematch_ts --> src_core_hash_ts
+    src_net_roomProbe_ts --> src_net_sync_ts
+    src_net_roomProbe_ts --> src_net_transport_ts
     src_net_session_ts --> src_core_coords_ts
     src_net_session_ts --> src_core_eventLog_ts
     src_net_session_ts --> src_core_game_ts
@@ -232,6 +235,7 @@ graph LR
     src_net_session_ts --> src_net_rematch_ts
     src_net_session_ts --> src_net_republish_ts
     src_net_session_ts --> src_net_resolution_ts
+    src_net_session_ts --> src_net_roomProbe_ts
     src_net_session_ts --> src_net_seats_ts
     src_net_session_ts --> src_net_sync_ts
     src_net_session_ts --> src_net_transport_ts

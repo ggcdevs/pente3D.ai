@@ -34,6 +34,8 @@ import {
   listArchivedGames,
   archivedStartedAts,
   isEmptyShell,
+  archivedIdentity,
+  purgeEmptyShellRecords,
   purgeLegacyNetRoomRecords,
   rekeyArchiveRecordsByGameUuid,
   StartedAtLedger,
@@ -651,6 +653,148 @@ describe('game archive', () => {
   });
 
   /**
+   * `purgeEmptyShellRecords` — the bound on husk growth. Every boot and every reset writes a record for
+   * a board that may never be played, so without this the STORE (not the filtered games list) grows by
+   * a couple of rows per page load forever, and every boot scan gets slower with it. The tests assert
+   * on the store itself: what is gone, what survived, and that nothing with history is ever touched.
+   */
+  describe('purgeEmptyShellRecords', () => {
+    it('deletes abandoned husks, keeps every game with history, and reports the ids removed', async () => {
+      const { db } = await open();
+      await saveGame(db, 'husk-1', new Game(9, 'husk-1'), sampleMeta);
+      await saveGame(db, 'husk-2', new Game(9, 'husk-2'), sampleMeta);
+      await saveGame(db, SAMPLE_UUID, sampleGame(), sampleMeta);
+      await saveGame(db, 'decided', new Game(9, 'decided'), { ...sampleMeta, result: 'white-wins' });
+
+      const purged = await purgeEmptyShellRecords(db);
+
+      expect([...purged].sort()).toEqual(['husk-1', 'husk-2']);
+      // GONE from the store, not filtered out of a view…
+      expect(await getGame(db, 'husk-1')).toBeUndefined();
+      expect(await getGame(db, 'husk-2')).toBeUndefined();
+      // …and the real games are untouched: the played one keeps its history, the decided one its result.
+      expect((await loadGame(db, SAMPLE_UUID))!.ply()).toBe(sampleGame().ply());
+      expect((await listArchivedGames(db)).map((l) => l.id).sort()).toEqual([
+        'decided',
+        SAMPLE_UUID,
+      ]);
+    });
+
+    it('KEEPS the shells the caller names — by record id or by game uuid (the live board, a live session)', async () => {
+      const { db } = await open();
+      // The board currently loaded is legitimately empty; a net session's unplayed record is the one
+      // the empty-room reclaim re-seeds from by uuid (design §6.4). Neither is abandoned.
+      await saveGame(db, 'live-board', new Game(9, 'live-board'), sampleMeta);
+      await saveGame(db, 'net-record-id', new Game(9, 'net-game-uuid'), sampleMeta);
+      await saveGame(db, 'abandoned', new Game(9, 'abandoned'), sampleMeta);
+
+      const purged = await purgeEmptyShellRecords(db, new Set(['live-board', 'net-game-uuid']));
+
+      expect(purged).toEqual(['abandoned']);
+      expect((await listArchivedGames(db)).map((l) => l.id).sort()).toEqual([
+        'live-board',
+        'net-record-id',
+      ]);
+    });
+
+    it('is idempotent, and a no-op when every record has history (negative cases)', async () => {
+      const { db } = await open();
+      await saveGame(db, 'husk', new Game(9, 'husk'), sampleMeta);
+      await saveGame(db, SAMPLE_UUID, sampleGame(), sampleMeta);
+
+      expect(await purgeEmptyShellRecords(db)).toEqual(['husk']);
+      expect(await purgeEmptyShellRecords(db)).toEqual([]);
+      expect(await purgeEmptyShellRecords(db, new Set(['whatever']))).toEqual([]);
+      expect((await listArchivedGames(db)).map((l) => l.id)).toEqual([SAMPLE_UUID]);
+    });
+
+    it('never collects a board that is PLAYED while the purge runs (one transaction, no snapshot)', async () => {
+      const { db } = await open();
+      // The empty board a purge is about to collect… and a move landing on that very board at the same
+      // moment — the app's own autosave, or another TAB of this origin (the store is per-origin). A
+      // purge that decided from a scan and then deleted by id would destroy the game that arrived in
+      // between; deciding inside the transaction judges the record it actually holds.
+      await saveGame(db, SAMPLE_UUID, new Game(9, SAMPLE_UUID), sampleMeta);
+      const purge = purgeEmptyShellRecords(db);
+      const write = saveGame(db, SAMPLE_UUID, sampleGame(), sampleMeta);
+      const [purged] = await Promise.all([purge, write]);
+
+      expect(purged).toEqual([SAMPLE_UUID]); // the EMPTY board it saw really was collected…
+      // …and the played game that landed a moment later is intact, with its full history.
+      expect(headHash((await loadGame(db, SAMPLE_UUID))!.log)).toBe(headHash(sampleGame().log));
+      expect((await listArchivedGames(db))[0]!.events).toBe(sampleGame().log.entries.length);
+    });
+
+    it('never collects a SEATED record, even one the caller did not name (another tab’s live room)', async () => {
+      const { db } = await open();
+      // A room entered but not yet played on: no events, no outcome — a husk by shape, a seated game in
+      // fact. Its record is what the empty-room reclaim (design §6.4) re-seeds from, and the store is
+      // shared by every tab of the origin, so the caller's `keep` cannot name another tab's room.
+      await saveGame(db, 'seated-room-game', new Game(9, 'seated-room-game'), {
+        ...sampleMeta,
+        seats: { white: 'player-a', black: null },
+      });
+      await saveGame(db, 'plain-husk', new Game(9, 'plain-husk'), sampleMeta);
+
+      expect(await purgeEmptyShellRecords(db)).toEqual(['plain-husk']);
+
+      expect((await loadNetGame(db, 'seated-room-game'))?.seats).toEqual({
+        white: 'player-a',
+        black: null,
+      });
+    });
+
+    it('never touches a CONFLICTED record, even though its board is empty', async () => {
+      const { db } = await open();
+      // Both forks are empty boards, so only the `result` marker distinguishes it from a husk — and it
+      // holds information no other record does.
+      await flagConflicted(db, 'forked', {
+        mineLog: new Game(9, 'fork-a').log,
+        theirsLog: new Game(9, 'fork-b').log,
+        meta: sampleMeta,
+      });
+
+      expect(await purgeEmptyShellRecords(db)).toEqual([]);
+      expect((await loadConflicted(db, 'forked'))!.theirs.uuid).toBe('fork-b');
+    });
+  });
+
+  /**
+   * `archivedIdentity` — the players + identity-owned seat map a stored record already carries. The
+   * app's autosave reads it so rewriting the BOARD of a game that has been in a room never un-seats its
+   * owners (design §2.3/§6.4).
+   */
+  describe('archivedIdentity', () => {
+    it('reports the stored players + seats of a networked record', async () => {
+      const { db } = await open();
+      await saveGame(db, SAMPLE_UUID, sampleGame(), {
+        ...sampleMeta,
+        players: { white: 'player-a', black: 'player-b' },
+        seats: { white: 'player-a', black: 'player-b' },
+      });
+
+      expect(await archivedIdentity(db, SAMPLE_UUID)).toEqual({
+        players: { white: 'player-a', black: 'player-b' },
+        seats: { white: 'player-a', black: 'player-b' },
+      });
+    });
+
+    it('reports `seats: null` for a LOCAL record and `undefined` for no record at all (negative cases)', async () => {
+      const { db } = await open();
+      await saveGame(db, 'local', sampleGame(), {
+        ...sampleMeta,
+        players: { white: 'You', black: 'You' },
+      });
+
+      expect(await archivedIdentity(db, 'local')).toEqual({
+        players: { white: 'You', black: 'You' },
+        seats: null,
+      });
+      expect(await archivedIdentity(db, 'no-such-record')).toBeUndefined();
+    });
+  });
+
+  /**
    * `archivedStartedAts` — when each archived GAME began, keyed by its portable uuid. The durable
    * answer a re-persisting writer (`NetSession`) reads instead of minting a fresh stamp, so returning
    * to a game never re-dates it in the (startedAt-sorted) games list.
@@ -870,7 +1014,13 @@ describe('game archive', () => {
       await saveGame(db, SAMPLE_UUID, short, { ...sampleMeta, startedAt: 2 });
       await saveGame(db, 'legacy-id', sampleGame(), { ...sampleMeta, startedAt: 1 });
 
-      expect(await rekeyArchiveRecordsByGameUuid(db)).toEqual(['legacy-id']);
+      // Both ids are reported: the 1-move snapshot is DROPPED (the survivor contains it) and the
+      // 3-move record is MOVED onto the uuid. The snapshot used to be overwritten in place, i.e.
+      // removed without being reported — the report now names every record that left its key.
+      expect([...(await rekeyArchiveRecordsByGameUuid(db))].sort()).toEqual([
+        'legacy-id',
+        SAMPLE_UUID,
+      ]);
 
       const list = await listArchivedGames(db);
       expect(list.map((l) => l.id)).toEqual([SAMPLE_UUID]);
@@ -907,6 +1057,114 @@ describe('game archive', () => {
       await saveGame(db, 'legacy-id', sampleGame(), sampleMeta);
 
       expect(await rekeyArchiveRecordsByGameUuid(db)).toEqual(['legacy-id']);
+
+      const list = await listArchivedGames(db);
+      expect(list.map((l) => l.id)).toEqual([SAMPLE_UUID]);
+      expect(list[0]!.meta.seats).toEqual({ white: 'player-a', black: 'player-b' });
+    });
+
+    /**
+     * TWO legacy records of ONE game and NOTHING on its uuid key — the shape a pre-V.5 build really
+     * produced (review + RESUME continued an archived game under a FRESH autosave id while the
+     * original record stayed put, so both carried the same `meta.uuid`). The destination key is free,
+     * so BOTH records "can" move there and only one can survive: the migration must land the one with
+     * MORE history, whatever order the store hands them over in.
+     */
+    describe('TWO records of one game with NOTHING on the uuid key (the pre-V.5 resume shape)', () => {
+      /** The same game at 1 move — a stale prefix of {@link sampleGame} (3 moves), same uuid. */
+      function shortSample(): Game {
+        const g = new Game(9, SAMPLE_UUID);
+        g.place([4, 4, 4]);
+        return g;
+      }
+
+      it('keeps the LONGER history when it is stored FIRST (store order must not decide)', async () => {
+        const { db } = await open();
+        // Store order is key order, so 'aaa-…' is listed before 'zzz-…': the longer record comes first.
+        await saveGame(db, 'aaa-original', sampleGame(), { ...sampleMeta, startedAt: 1 });
+        await saveGame(db, 'zzz-continued', shortSample(), { ...sampleMeta, startedAt: 2 });
+
+        expect([...(await rekeyArchiveRecordsByGameUuid(db))].sort()).toEqual([
+          'aaa-original',
+          'zzz-continued',
+        ]);
+
+        // ONE record, under the uuid, holding the FULL 3-move history — not the 1-move snapshot that
+        // happened to be re-keyed last.
+        const list = await listArchivedGames(db);
+        expect(list.map((l) => l.id)).toEqual([SAMPLE_UUID]);
+        expect(list[0]!.events).toBe(sampleGame().log.entries.length);
+        expect(headHash((await loadGame(db, SAMPLE_UUID))!.log)).toBe(headHash(sampleGame().log));
+        expect(await getGame(db, 'aaa-original')).toBeUndefined();
+        expect(await getGame(db, 'zzz-continued')).toBeUndefined();
+      });
+
+      it('keeps the LONGER history when it is stored LAST (the mirror case)', async () => {
+        const { db } = await open();
+        await saveGame(db, 'aaa-snapshot', shortSample(), { ...sampleMeta, startedAt: 1 });
+        await saveGame(db, 'zzz-continued', sampleGame(), { ...sampleMeta, startedAt: 2 });
+
+        await rekeyArchiveRecordsByGameUuid(db);
+
+        const list = await listArchivedGames(db);
+        expect(list.map((l) => l.id)).toEqual([SAMPLE_UUID]);
+        expect(list[0]!.events).toBe(sampleGame().log.entries.length);
+        expect(headHash((await loadGame(db, SAMPLE_UUID))!.log)).toBe(headHash(sampleGame().log));
+      });
+
+      it('is idempotent and keeps the winner across a THREE-record pile-up (negative case)', async () => {
+        const { db } = await open();
+        const two = new Game(9, SAMPLE_UUID);
+        two.place([4, 4, 4]);
+        two.place([4, 4, 5]);
+        await saveGame(db, 'aaa-one', shortSample(), sampleMeta);
+        await saveGame(db, 'mmm-three', sampleGame(), sampleMeta);
+        await saveGame(db, 'zzz-two', two, sampleMeta);
+
+        expect(await rekeyArchiveRecordsByGameUuid(db)).toHaveLength(3);
+        // A second run finds one canonical record and nothing left to move.
+        expect(await rekeyArchiveRecordsByGameUuid(db)).toEqual([]);
+        const list = await listArchivedGames(db);
+        expect(list.map((l) => l.id)).toEqual([SAMPLE_UUID]);
+        expect(list[0]!.events).toBe(sampleGame().log.entries.length);
+      });
+
+      it('keeps a DIVERGENT same-length record where it is rather than dropping a history it cannot prove stale', async () => {
+        const { db } = await open();
+        // Two records of one game, equal length but DIFFERENT histories (the pre-V.5 resume could
+        // continue an archived game two different ways). Neither holds more, and neither contains the
+        // other, so the migration keys one by the uuid and LEAVES the other alone — a duplicate row in
+        // the games list is recoverable; a deleted fork is not.
+        const other = new Game(9, SAMPLE_UUID);
+        other.place([0, 0, 0]);
+        other.place([1, 1, 1]);
+        other.place([2, 2, 2]);
+        expect(headHash(other.log)).not.toBe(headHash(sampleGame().log));
+        await saveGame(db, 'aaa-mine', sampleGame(), sampleMeta);
+        await saveGame(db, 'zzz-divergent', other, sampleMeta);
+
+        expect(await rekeyArchiveRecordsByGameUuid(db)).toEqual(['aaa-mine']);
+
+        const list = await listArchivedGames(db);
+        expect(list.map((l) => l.id).sort()).toEqual([SAMPLE_UUID, 'zzz-divergent']);
+        expect(headHash((await loadGame(db, SAMPLE_UUID))!.log)).toBe(headHash(sampleGame().log));
+        expect(headHash((await loadGame(db, 'zzz-divergent'))!.log)).toBe(headHash(other.log));
+      });
+    });
+
+    it('…and the tie goes to the canonical record whichever way the store orders the two', async () => {
+      const { db } = await open();
+      // The mirror of the test above: the canonical record is listed FIRST (ids are the store's key
+      // order), so the legacy copy is the one being considered against it. Equal history still means
+      // the seat-carrying canonical record survives — the winner is decided by what the records ARE,
+      // never by which one the cursor happened to hand over first.
+      await saveGame(db, SAMPLE_UUID, sampleGame(), {
+        ...sampleMeta,
+        seats: { white: 'player-a', black: 'player-b' },
+      });
+      await saveGame(db, 'zzz-legacy-id', sampleGame(), sampleMeta);
+
+      expect(await rekeyArchiveRecordsByGameUuid(db)).toEqual(['zzz-legacy-id']);
 
       const list = await listArchivedGames(db);
       expect(list.map((l) => l.id)).toEqual([SAMPLE_UUID]);
