@@ -13,8 +13,11 @@
  *      logs reach an identical `headHash`.
  *   2. **Replay idempotency** — re-publishing an older/equal full-state message is a
  *      no-op (the receiver does not move backward).
- *   3. **Out-of-order tolerance** — the engine converges to the longest valid log
- *      regardless of message order.
+ *   3. **The NARROW fast-forward** (v3.1, design §5) — on ONE game, a peer that is
+ *      exactly ONE move behind catches up automatically, whatever order the messages
+ *      arrive in, while a LONGER lead is never adopted: it is reported as a divergence
+ *      for the players to resolve. (Until v3.1 this guarantee read "converges to the
+ *      longest valid log regardless of order" — the blanket adopt the remodel removed.)
  *   4. **Conflict detection** — two forked histories are detected as a conflict and
  *      stop the game.
  *
@@ -279,45 +282,48 @@ describe.skipIf(!reachable)('real relay: two SyncEngines over the LIVE MQTT brok
   );
 
   it(
-    'tolerates OUT-OF-ORDER live delivery: converges to the longest valid log',
+    'the NARROW fast-forward over the live relay: ONE move behind catches up, TWO does not',
     async () => {
-      const room = `it-ooo-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const a = makeEngine('rr-a3');
-      const b = makeEngine('rr-b3');
+      const room = `it-ff-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      // ONE game, two seats — the only situation the reconciliation policy speaks about. (The
+      // pre-v3.1 version of this test left both engines on their OWN games, so what it actually
+      // exercised was the cross-game crossing path in `receiveOtherGame`, not the policy in its
+      // title. With a shared uuid, as here, that old claim is simply false: a 3-move lead is a
+      // divergence now, not something to adopt.)
+      const shared = `rr-ff-${Date.now()}`;
+      const a = makeEngine('rr-a3', 'white', 9, shared);
+      const b = makeEngine('rr-b3', 'black', 9, shared);
       await a.connect(room);
       await b.connect(room);
 
-      // A builds a 3-move log locally, then publishes snapshots OUT OF ORDER:
-      // full(3) first, then a stale mid(2), then a stale one(1). B must end at 3.
+      // A is ONE move ahead, and the missing entry is WHITE's — not B's to add. B fast-forwards.
       a.placeLocalOnly([0, 0, 0]);
-      a.placeLocalOnly([1, 1, 1]);
-      a.placeLocalOnly([2, 2, 2]);
-      const full = a.game().log;
-
-      const mid = new Game(9);
-      mid.place([0, 0, 0]);
-      mid.place([1, 1, 1]);
-      const one = new Game(9);
-      one.place([0, 0, 0]);
-
-      const transportA = (a as unknown as { transport: { publish(m: unknown): void } })
-        .transport;
-      transportA.publish(toSyncMessage(full));
-      await delay(400);
-      transportA.publish(toSyncMessage(mid.log));
-      await delay(400);
-      transportA.publish(toSyncMessage(one.log));
-
-      // The three sends above exercise out-of-order delivery; re-publish A's full
-      // (longest) log on each tick so a first publish dropped in B's subscription
-      // gap can't produce a false red. B still has to ADOPT the 3-move log over
-      // the real relay — the genuine proof (#3) — and IGNORE the stale snapshots.
-      const converged = await waitForWithRepublish(
+      const one = a.game().log;
+      const caughtUp = await waitForWithRepublish(
         a,
-        () => b.game().ply() === 3 && headHash(b.game().log) === headHash(full),
+        () => b.game().ply() === 1 && headHash(b.game().log) === headHash(one),
         PROPAGATE_MS,
       );
-      expect(converged).toBe(true);
+      expect(caughtUp).toBe(true);
+
+      // A REPLAY of what B already holds moves nothing (guarantee #2, re-proven on one game).
+      a.publishState();
+      await delay(400);
+      expect(b.game().ply()).toBe(1);
+
+      // Now A runs TWO moves ahead. B's log is still a prefix of A's, but the gap is beyond the one
+      // move the turn gate can legitimately produce, so B must NOT adopt: it records a divergence
+      // and waits for the players (design §5 — never auto-adopt beyond one move).
+      a.placeLocalOnly([1, 1, 1]);
+      a.placeLocalOnly([2, 2, 2]);
+      a.publishState();
+      await delay(PROPAGATE_MS / 2);
+      a.publishState();
+      await delay(PROPAGATE_MS / 2);
+
+      expect(b.game().ply()).toBe(1);
+      expect(headHash(b.game().log)).toBe(headHash(one));
+      expect(b.needsResolution()).not.toBeNull();
     },
     (CONNECT_PROBE_MS + PROPAGATE_MS) * 3,
   );

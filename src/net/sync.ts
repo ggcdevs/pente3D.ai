@@ -107,11 +107,14 @@ export const SYNC_VERSION = 1 as const;
  * convergence would either fork (conflict) or, worse, a late in-flight message from
  * the just-finished game would re-adopt the old board (empty is a prefix of the full
  * log). The `epoch` is the fresh-game GENERATION: it increments on every in-place
- * reset ({@link SyncEngine.resetGame}). Convergence is epoch-lexicographic — a HIGHER
- * remote epoch wins outright (the peer reset first; adopt its fresh game), a LOWER
- * remote epoch is stale (ignore), and only WITHIN the same epoch does the existing
- * prefix/hash decision apply. This makes the seamless in-place reset converge on the
- * same transport and makes any stale prior-epoch replay a no-op by construction.
+ * reset ({@link SyncEngine.resetGame}). A LOWER remote epoch is stale — ignored, and answered
+ * with our own state so the sender catches up. A HIGHER one does NOT win outright: v3.1 makes
+ * IDENTITY the gate, so an epoch counter is never a licence to overwrite a live board (a bare
+ * number any publisher may stamp cannot be). The pair's own next generation is recognised by its
+ * DERIVED uuid ({@link SyncEngine.isOwnNextGeneration}) at any epoch above 0, and everything else
+ * falls through to the ordinary same-generation policy in {@link reconcileEpoched}. That is what
+ * makes the seamless in-place reset converge on the same transport while a stale prior-epoch
+ * replay stays a no-op by construction.
  *
  * The epoch is a bare number any publisher may stamp, so it is NOT on its own a licence to
  * push a game: it orders GENERATIONS OF ONE GAME. A message naming a different game is
@@ -1252,12 +1255,13 @@ export class SyncEngine {
    * epoch so the peer adopts the fresh generation, and notifies change subscribers so
    * the scene re-renders the empty board.
    *
-   * The epoch bump is what makes this converge without a disconnect: the peer — which
-   * either reset independently on the same accepted rematch (also bumping to the same
-   * epoch) or is still on the old game — sees a HIGHER-or-equal epoch and adopts the
-   * fresh game rather than forking on the non-extending empty log. Any late in-flight
-   * message from the just-finished (lower-epoch) game is ignored by the same rule, so
-   * the finished board can never resurrect over the reset.
+   * What makes this converge without a disconnect is the fresh game's DERIVED uuid, not the epoch
+   * number: the peer recognises it as the pair's own next generation
+   * ({@link SyncEngine.isOwnNextGeneration}) and crosses onto it rather than forking on the
+   * non-extending empty log. The epoch orders the generations (a late in-flight message from the
+   * just-finished, lower-epoch game is stale, so the finished board cannot resurrect) but it is not
+   * on its own a licence to replace a live board — a peer cannot hand us a fresh game merely by
+   * stamping a higher number on it.
    *
    * @param newGame The fresh game to run the rematch in (its log becomes canonical).
    * @param newMyColor This client's seat color in the fresh game — colors ALTERNATE on
