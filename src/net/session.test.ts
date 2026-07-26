@@ -26,7 +26,7 @@ import { headHash } from '../core/eventLog';
 import { coordsOf } from '../core/coords';
 import { MockRelayHub, MockTransport, type Transport, type TransportMessage } from './transport';
 import { toAdmitMessage, toAdoptAdmitMessage, toHelloMessage, toRejectMessage, toSyncMessage } from './sync';
-import { NetSession, type NetSessionDeps } from './session';
+import { NetSession, PROBE_ATTEMPTS, PROBE_WINDOW_MS, type NetSessionDeps } from './session';
 import { incomingPending } from './handshake';
 import { rematchGameUuid } from './rematch';
 import { REMATCH_ACTION } from './endState';
@@ -3420,7 +3420,17 @@ describe('NetSession.probeRoom — a look that claims nothing (V.5, design §6)'
       peerPresent: false,
       peerGameUuid: null,
     });
-    expect(disconnected).toBe(1); // the look let go of the room again
+    // Every ATTEMPT lets go of the room again, and an unanswered question is asked the full
+    // PROBE_ATTEMPTS times: the resident's answer is one unacknowledged publish, so a single lost
+    // packet must not be allowed to report an occupied room as empty (design §6's forbidden arm).
+    expect(disconnected).toBe(PROBE_ATTEMPTS);
+
+    // The SHIPPED default is exercised here, not just the injected windows every other test passes.
+    // `probeRoom`'s default used to be `settleMs` (400 ms, mock-sized), and because every unit test
+    // passed 5 or 30_000 and every e2e injected 15_000, the number real players got was the one
+    // number nothing ran. It is now a stated production value.
+    expect(PROBE_WINDOW_MS).toBeGreaterThanOrEqual(3_000);
+    expect(PROBE_ATTEMPTS).toBeGreaterThan(1);
 
     // …and the SAME presence announce with one more id in it IS a peer — the filter drops our own id,
     // not the whole set.

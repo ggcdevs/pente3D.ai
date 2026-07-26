@@ -1028,6 +1028,45 @@ describe('game archive', () => {
    * must not turn into a second record the first time it is played again.
    */
   describe('rekeyArchiveRecordsByGameUuid', () => {
+    it('REFUSES to move onto a destination key held by a DIFFERENT game it cannot contain', async () => {
+      const { db } = await open();
+      // The destination key is occupied by a record that is not a claimant for this uuid at all: its
+      // own `meta.uuid` names ANOTHER game, its id merely collides. The loser loop never judges it,
+      // so without an explicit guard the re-key overwrites a history nothing proved anything about —
+      // the exact deletion this migration exists to avoid.
+      const other = new Game(9, 'zzz-other');
+      other.place([0, 0, 0]);
+      other.place([1, 1, 1]);
+      await saveGame(db, SAMPLE_UUID, other, { ...sampleMeta, startedAt: 1 });
+      await saveGame(db, 'aaa-legacy', sampleGame(), { ...sampleMeta, startedAt: 2 });
+
+      await rekeyArchiveRecordsByGameUuid(db);
+
+      // NEITHER history is lost — the only invariant that matters here. (The occupant is itself a
+      // valid game, so the pass relocates IT onto its own uuid; the legacy record is left where it
+      // is rather than overwriting anything, and a later boot completes its move.)
+      const list = await listArchivedGames(db);
+      expect(list).toHaveLength(2);
+      const heads = await Promise.all(list.map(async (l) => headHash((await loadGame(db, l.id))!.log)));
+      expect(heads.sort()).toEqual([headHash(other.log), headHash(sampleGame().log)].sort());
+    });
+
+    it('DOES move onto a colliding destination whose history the survivor provably contains', async () => {
+      const { db } = await open();
+      // The mirror case, so the guard is a containment check and not a blanket refusal: the occupant
+      // is a PREFIX of the survivor, so nothing is lost by moving onto it.
+      const prefix = new Game(9, SAMPLE_UUID);
+      prefix.place([4, 4, 4]);
+      await saveGame(db, SAMPLE_UUID, prefix, { ...sampleMeta, startedAt: 1 });
+      await saveGame(db, 'bbb-legacy', sampleGame(), { ...sampleMeta, startedAt: 2 });
+
+      expect(await rekeyArchiveRecordsByGameUuid(db)).toContain('bbb-legacy');
+
+      const list = await listArchivedGames(db);
+      expect(list.map((l) => l.id)).toEqual([SAMPLE_UUID]);
+      expect(headHash((await loadGame(db, SAMPLE_UUID))!.log)).toBe(headHash(sampleGame().log));
+    });
+
     it('MOVES a legacy autosave-id record onto the game uuid — same game, one record', async () => {
       const { db } = await open();
       await saveGame(db, 'pente-autosave-42', sampleGame(), { ...sampleMeta, startedAt: 7 });

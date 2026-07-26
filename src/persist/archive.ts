@@ -505,18 +505,39 @@ export async function rekeyArchiveRecordsByGameUuid(
     // Set once a record we could NOT prove stale is holding the destination key itself (see the
     // re-key below).
     let destinationKept = false;
+    /** Records this pass deleted (their history provably contained by the survivor). */
+    const dropped = new Set<string>();
     for (const loser of group) {
       if (loser.id === survivor.id) continue;
       // Only a record whose history the survivor provably CONTAINS is dropped — proven against the
       // hash chain, never inferred from a length.
       if (await survivorContains(db, survivor.id, loser.id)) {
         await deleteGame(db, loser.id);
+        dropped.add(loser.id);
         moved.push(loser.id);
       } else if (loser.id === uuid) {
         destinationKept = true;
       }
     }
     if (survivor.id !== uuid && !destinationKept) {
+      // The destination key may be held by a record that is not a CLAIMANT for this uuid at all —
+      // one whose id merely collides with it, while its own `meta.uuid` names a different game (or it
+      // predates uuids entirely). Such a record is never in `group`, so the loser loop above cannot
+      // have judged it, and re-keying onto it would overwrite a history nothing proved anything
+      // about: precisely the deletion this migration exists to avoid. It earns the same licence as a
+      // claimant — move onto it only if the survivor provably CONTAINS it — and otherwise the game
+      // stays where it is, still listed and still resumable under its old key.
+      // …but an occupant this very pass already DELETED (its history proven contained by the
+      // survivor, above) is no obstacle — the key is free, and re-checking containment against a
+      // record that no longer exists would refuse a move that is provably safe.
+      const occupant = byId.get(uuid);
+      if (
+        occupant !== undefined &&
+        !dropped.has(occupant.id) &&
+        !(await survivorContains(db, survivor.id, occupant.id))
+      ) {
+        continue;
+      }
       await rekeyGame(db, survivor.id, uuid);
       moved.push(survivor.id);
     }

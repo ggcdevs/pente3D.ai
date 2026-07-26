@@ -124,6 +124,27 @@ const rawGet = (page: Page, dbName: string, id: string): Promise<RawRecord | nul
     [dbName, GAMES_STORE, id] as const,
   );
 
+/** Delete a record straight out of the app's object store (to simulate a store an older build left). */
+const rawDelete = (page: Page, dbName: string, id: string): Promise<void> =>
+  page.evaluate(
+    ([name, store, key]) =>
+      new Promise<void>((resolve, reject) => {
+        const open = indexedDB.open(name);
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+          const db = open.result;
+          const tx = db.transaction(store, 'readwrite');
+          tx.objectStore(store).delete(key);
+          tx.onerror = () => reject(tx.error);
+          tx.oncomplete = () => {
+            db.close();
+            resolve();
+          };
+        };
+      }),
+    [dbName, GAMES_STORE, id] as const,
+  );
+
 /** Write a record straight into the app's object store (simulating what a v3 build left behind). */
 const rawPut = (page: Page, dbName: string, record: RawRecord): Promise<void> =>
   page.evaluate(
@@ -207,4 +228,56 @@ test('a v3 net-room shard present at boot is PURGED from the real store (the boo
     () => (window as unknown as { __pente: Pente }).__pente.getHistory()!.maxPly,
   );
   expect(boardAfterBoot).toBe(0);
+});
+
+test('a record keyed by an OLD autosave id is RE-KEYED onto its game uuid at boot (the call is wired)', async ({
+  page,
+}) => {
+  // The sibling of the purge above, for V.5's migration. It exists because `src/main.ts` is excluded
+  // from vitest coverage AND from the Stryker mutate scope, and nothing else calls
+  // `rekeyArchiveRecordsByGameUuid` — so replacing the boot call with a no-op left the ENTIRE gate
+  // green (observed in review). The migration's own rules are unit-tested; what only a booted app can
+  // show is that it RUNS.
+  const dbName = await isolate(page);
+  await ready(page);
+
+  await page.evaluate(() => {
+    const p = (window as unknown as { __pente: Pente }).__pente;
+    p.place([0, 0, 0]);
+    p.place([4, 4, 4]);
+  });
+  await waitForAutosaved(page);
+
+  // Rewrite the store into the shape a PRE-V.5 build left: the same game, keyed by an app autosave
+  // id instead of by its own uuid.
+  const listed = (await archive(page))[0]!;
+  const record = await rawGet(page, dbName, listed.id);
+  expect(record, 'the autosaved game must be readable straight from the store').not.toBeNull();
+  const gameUuid = record!.meta.uuid;
+  expect(gameUuid, 'the record must carry its game uuid for the migration to have a destination').toBeTruthy();
+  const LEGACY_ID = 'pente-autosave-legacy-id';
+  await rawPut(page, dbName, { ...record!, id: LEGACY_ID });
+  await rawDelete(page, dbName, listed.id);
+  expect(await rawGet(page, dbName, LEGACY_ID)).not.toBeNull();
+  expect(await rawGet(page, dbName, gameUuid!)).toBeNull();
+
+  // BOOT AGAIN — the only thing that runs the migration.
+  await page.reload();
+  await ready(page);
+
+  // The game now lives under its OWN uuid, with its history intact, and the old key is gone. Asserted
+  // against the STORE, not a listing: a record merely hidden from a view would still be a second
+  // record the next time this game was played.
+  expect(await rawGet(page, dbName, LEGACY_ID)).toBeNull();
+  const moved = await rawGet(page, dbName, gameUuid!);
+  expect(moved, 'the game must be readable under its own uuid after the migration').not.toBeNull();
+  expect(moved!.meta.headHash).toBe(record!.meta.headHash);
+  expect(moved!.log).toEqual(record!.log);
+  // …and it appears ONCE, moved rather than duplicated. (The boot also lists the fresh board the
+  // reload started — `main.ts` keeps the LIVE board in the list even though it is an empty shell — so
+  // the assertion is about this game's entries, not the list's length.)
+  const after = await archive(page);
+  expect(after.filter((g) => g.id === gameUuid)).toHaveLength(1);
+  expect(after.filter((g) => g.meta.headHash === record!.meta.headHash)).toHaveLength(1);
+  expect(after.map((g) => g.id)).not.toContain(LEGACY_ID);
 });

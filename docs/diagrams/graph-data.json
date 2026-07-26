@@ -1647,6 +1647,7 @@
       "autosaveTick",
       "currentGame",
       "getNotifyReadout",
+      "handOverSessionOwnedBoard",
       "listArchive",
       "loadArchivedIntoScene",
       "loadConflictedIfAny",
@@ -2851,6 +2852,8 @@
       "NetChangeListener",
       "NetSession",
       "NetSessionDeps",
+      "PROBE_ATTEMPTS",
+      "PROBE_WINDOW_MS",
       "RoomProbe"
     ],
     "imports": [
@@ -3698,6 +3701,7 @@
       "ConflictedGame",
       "LEGACY_NET_ROOM_RESULT",
       "PersistedSeats",
+      "SEATED_SHELL_MAX_AGE_MS",
       "StartedAtLedger",
       "archivedIdentity",
       "archivedStartedAts",
@@ -3721,7 +3725,8 @@
         "specifiers": [
           "Event",
           "EventLog",
-          "headHash"
+          "headHash",
+          "isPrefix"
         ]
       },
       {
@@ -3841,8 +3846,10 @@
       "archivedStartedAts",
       "beatsForUuid",
       "flagConflicted",
+      "foldStoredLog",
       "gameFromStoredLog",
       "isEmptyShell",
+      "isRecentlyWrittenSeat",
       "listArchivedGames",
       "loadConflicted",
       "loadGame",
@@ -3853,6 +3860,7 @@
       "purgeLegacyNetRoomRecords",
       "rekeyArchiveRecordsByGameUuid",
       "saveGame",
+      "survivorContains",
       "toPlainLog"
     ]
   },
@@ -3894,6 +3902,7 @@
           "readonly result: string",
           "readonly seats: {\n    readonly white: string | null;\n    readonly black: string | null;\n  }",
           "readonly startedAt: number",
+          "readonly updatedAt: number",
           "readonly uuid: string"
         ]
       },

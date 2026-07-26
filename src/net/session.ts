@@ -230,6 +230,17 @@ export interface RoomProbe {
   readonly peerGameUuid: string | null;
 }
 
+/**
+ * How long {@link NetSession.probeRoom} listens for a room to answer, in total across its attempts.
+ * A deliberate PRODUCTION value sized for a real relay round-trip — not `settleMs`, which is the
+ * mock-sized presence window (400 ms) the probe used to default to while every test overrode it, so
+ * the shipped number was the one number nothing exercised.
+ */
+export const PROBE_WINDOW_MS = 4_500;
+
+/** How many times {@link NetSession.probeRoom} asks before concluding silence (see its doc). */
+export const PROBE_ATTEMPTS = 3;
+
 /** Notified after every session-state change, so the UI shell can repaint the widget. */
 export type NetChangeListener = (state: NetSessionState) => void;
 
@@ -611,12 +622,33 @@ export class NetSession {
    * waiting. Stopping early can never manufacture an answer — it happens strictly after one arrived —
    * so it cannot turn a would-be failure into a pass (agent-principles #7).
    *
+   * The question is asked in SEVERAL ATTEMPTS, not once. The resident's answer is a single
+   * unacknowledged QoS-0 publish, triggered by the live presence our connect announces — so one lost
+   * packet used to turn a room with somebody in it into `peer-silent`, the one outcome design §6
+   * forbids ("no one is there anymore" said to a player whose opponent is sitting right there). It
+   * was measured failing about one run in eleven. Each attempt builds its own transport and connects,
+   * which re-announces our presence and makes the resident republish again (`republish.ts` treats an
+   * observed absence as a reset, so the repeat is not suppressed); attempts stop the moment the room
+   * answers. That is the same lesson as the mirror deadlock: convergence must not rest on one packet.
+   *
    * @param code The room to look at (the breadcrumb's canonical code).
-   * @param windowMs How long to listen AT MOST; defaults to the same presence SETTLE window `enter`
-   *   waits ({@link NetSessionDeps.settleMs}) — the interval this protocol already treats as "long
-   *   enough for the room to answer".
+   * @param windowMs How long to listen AT MOST, across all attempts. Defaults to
+   *   {@link PROBE_WINDOW_MS} — a REAL relay round-trip, deliberately not the mock-sized
+   *   `settleMs`, which shipped at 400 ms and no test ever exercised.
    */
-  async probeRoom(code: string, windowMs: number = this.deps.settleMs): Promise<RoomProbe> {
+  async probeRoom(code: string, windowMs: number = PROBE_WINDOW_MS): Promise<RoomProbe> {
+    const perAttempt = Math.max(1, Math.floor(windowMs / PROBE_ATTEMPTS));
+    let result: RoomProbe = { code, peerPresent: false, peerGameUuid: null };
+    for (let attempt = 0; attempt < PROBE_ATTEMPTS; attempt += 1) {
+      result = await this.probeOnce(code, perAttempt);
+      // Answered — a peer is there AND has named its game. Nothing further can be learned.
+      if (result.peerPresent && result.peerGameUuid !== null) return result;
+    }
+    return result;
+  }
+
+  /** ONE attempt of {@link probeRoom}: connect, listen up to `windowMs`, let go of the room. */
+  private async probeOnce(code: string, windowMs: number): Promise<RoomProbe> {
     const transport = this.deps.createTransport();
     let others: readonly string[] = [];
     let peerGameUuid: string | null = null;
