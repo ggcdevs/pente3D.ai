@@ -125,6 +125,15 @@ npm test        # unit
 npm run e2e     # Playwright (add --workers=1 when debugging two-context networked specs)
 ```
 
+**Do not edit `src/**` while `npm run e2e` is running.** Playwright drives the **Vite dev server**, so
+saving a file in the app's module graph sends an HMR full-reload to every open page. Mid-test that
+wipes `window.__pente` and boots a fresh app with no net session, and the failure then looks like
+anything but its cause — a missing panel, a collapsed layout, `Cannot read properties of undefined`.
+It cost two separate investigations (5 failures in 17 runs, all while files were being saved; 10/10
+green with the tree untouched). `e2e/divergence.spec.ts` now asserts against a mid-test reload and
+names the real reason, but the other specs do not — so let a run finish, or run it against a built
+preview.
+
 **Regenerate diagrams before pushing to `test` or `main`** — CI staleness-checks them there (and
 only there, so `dev` won't warn you):
 

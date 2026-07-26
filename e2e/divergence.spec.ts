@@ -77,8 +77,10 @@ type MockControls = {
 const pente = (page: Page) =>
   page.evaluate(() => (window as unknown as { __pente: Pente }).__pente);
 
-const headOf = (page: Page) =>
-  page.evaluate(() => (window as unknown as { __pente: Pente }).__pente.getHeadHash());
+const headOf = (page: Page) => {
+  assertNoReload(page, 'headOf');
+  return page.evaluate(() => (window as unknown as { __pente: Pente }).__pente.getHeadHash());
+};
 const divergence = (page: Page) =>
   page.evaluate(() => (window as unknown as { __pente: Pente }).__pente.getDivergence());
 const net = (page: Page) =>
@@ -158,8 +160,41 @@ async function installMock(page: Page, senderId: string): Promise<void> {
 }
 
 /** Boot a page against the real app and wait until the net session is wired. */
+/**
+ * Navigations observed on a page AFTER its initial load. Non-zero means something reloaded the page
+ * out from under the test — see {@link assertNoReload}.
+ */
+const reloads = new WeakMap<Page, number>();
+
+/**
+ * Fail with the REAL reason when a page reloads mid-test.
+ *
+ * This spec runs against the **Vite dev server**, so saving any file in the app's module graph sends
+ * an HMR full-reload to every open page. Mid-test that wipes `window.__pente` and boots a fresh app
+ * with no session — which then surfaces as one of three unrelated-looking failures: "Cannot read
+ * properties of undefined (reading getHeadHash)", a `.pente-divergence-card` that is `hidden`, or a
+ * card measured at a collapsed width. All three were observed (5 failures in 17 runs) while source
+ * files were being edited during the run, and none of them is a fault in the code under test.
+ *
+ * So the reload is asserted against directly, at the points where a stale page would otherwise lie.
+ * If this fires: something wrote to `src/**` while the suite was running (an editor save, an agent, a
+ * `git checkout`). Re-run with the tree untouched — or run against a built preview instead of `dev`.
+ */
+function assertNoReload(page: Page, where: string): void {
+  expect(
+    reloads.get(page) ?? 0,
+    `${where}: the page RELOADED mid-test (${reloads.get(page) ?? 0}x) — almost certainly a Vite HMR ` +
+      `full-reload from a file being saved while the suite ran, not a fault in the app`,
+  ).toBe(0);
+}
+
 async function ready(page: Page): Promise<void> {
   await page.goto('/');
+  // Count only what happens AFTER this initial navigation.
+  reloads.set(page, 0);
+  page.on('framenavigated', (frame) => {
+    if (frame === page.mainFrame()) reloads.set(page, (reloads.get(page) ?? 0) + 1);
+  });
   await page.waitForFunction(() => {
     const p = (window as unknown as { __pente?: Record<string, unknown> }).__pente;
     return !!p && typeof p.getDivergence === 'function' && p.getNet !== undefined;
@@ -520,6 +555,9 @@ async function assertReadable(page: Page, name: string): Promise<{
   x: number; y: number; width: number; height: number;
 }> {
   const viewport = page.viewportSize()!;
+  // Before measuring anything: a reloaded page has no card and no session, and every assertion below
+  // would then blame the layout for a missing app.
+  assertNoReload(page, `assertReadable(${name})`);
   const card = page.locator('.pente-divergence-card');
   await expect(card).toBeVisible();
   const box = (await card.boundingBox())!;

@@ -27,7 +27,9 @@ import { coordsOf } from '../core/coords';
 import { MockRelayHub, MockTransport, type Transport, type TransportMessage } from './transport';
 import { toAdmitMessage, toAdoptAdmitMessage, toHelloMessage, toRejectMessage, toSyncMessage } from './sync';
 import { NetSession, type NetSessionDeps } from './session';
+import { incomingPending } from './handshake';
 import { rematchGameUuid } from './rematch';
+import { REMATCH_ACTION } from './endState';
 import type { Proposal } from './admission';
 import type { NetSeat } from '../ui/widgets/netModel';
 
@@ -3042,6 +3044,111 @@ describe('NetSession — resolving a divergence (Task V.4b, epic #47, absorbs #3
     expect(a.divergenceView().ui).toBe('declined');
     expect(a.divergenceView().options.length).toBeGreaterThan(0);
     expect(b.divergenceView().ui).toBe('declined');
+  });
+
+  it('every guard on the resolution API refuses honestly when there is nothing to resolve', async () => {
+    // Two guards are NOT reachable through the public API and are kept as tripwires rather than
+    // removed: `hsRespond` cannot return a null message for an id just read off the pending slot, and
+    // `targetFor` always resolves one of the three candidate hashes. The rest are exercised below —
+    // verified by instrumenting each branch and reading which fired, not by inspection.
+    // These branches are the whole safety net of the V.4b session API, and `session.ts` sits
+    // outside BOTH mechanical gates (it is not in the 100% coverage floor and not in mutateScope), so
+    // a hand-written test is the only thing that can hold them. Review verified they were completely
+    // unexercised: replacing each `return false` with a throw ran the entire suite green.
+    const hub = new MockRelayHub();
+    const a = makeSession(hub, 'grd-a');
+    await a.enter('RMGRDS', NEW);
+    const b = makeSession(hub, 'grd-b');
+    await b.enter('RMGRDS', DEFER);
+    await flush();
+
+    // CONNECTED, but with NO divergence open: `resolutionCandidates()` is null, so there is no target
+    // to name and nothing to propose or apply. (Distinct from the offline case above, which never
+    // reaches these guards — it stops at the missing engine.)
+    expect(a.syncEngine()!.resolutionCandidates()).toBeNull();
+    expect(a.proposeResolution('take-mine')).toBe(false);
+    expect(a.proposeResolution('take-theirs')).toBe(false);
+    expect(a.proposeResolution('rewind')).toBe(false);
+    // Nothing pending to answer, and nothing accepted to apply.
+    expect(a.respondResolution(true)).toBe(false);
+    expect(a.respondResolution(false)).toBe(false);
+    expect(a.applyAcceptedResolution()).toBe(false);
+    // …and none of the refusals invented a handshake or moved the game.
+    expect(a.getHandshake().pending).toBeNull();
+    expect(a.getHandshake().resolution).toBeNull();
+    expect(a.divergenceView().show).toBe(false);
+
+    // An incoming ask that is NOT a resolution (a rematch) must not be answered as one: the
+    // `resolutionTarget` guard refuses it rather than accepting a proposal it cannot read.
+    b.propose(REMATCH_ACTION);
+    await flush();
+    expect(incomingPending(a.getHandshake())?.action).toBe(REMATCH_ACTION);
+    expect(a.respondResolution(true)).toBe(false);
+    // The rematch ask is untouched — refusing to read it as a resolution is not consuming it.
+    expect(incomingPending(a.getHandshake())?.action).toBe(REMATCH_ACTION);
+
+    // An accepted ask that is NOT a resolution (the rematch above, accepted) is not applied as one:
+    // `applyAcceptedResolution` reads the action and declines rather than acting on a tag it cannot
+    // parse — the mirror of the respond guard, on the apply side.
+    expect(a.respond(true)).toBe(true);
+    await flush();
+    expect(a.getHandshake().resolution?.outcome).toBe('accepted');
+    expect(a.applyAcceptedResolution()).toBe(false);
+
+    // An ACCEPTED resolution whose divergence has since closed (the peer republished and the two
+    // agreed again) applies nothing — and still clears, so it cannot re-fire.
+    const { a: c, b: d } = await divergedPair('RMCLSD');
+    expect(c.proposeResolution('take-mine')).toBe(true);
+    await flush();
+    expect(d.respondResolution(true)).toBe(true);
+    await flush();
+    expect(c.getHandshake().resolution?.outcome).toBe('accepted');
+    // Close the divergence underneath the accepted ask: c adopts d's history wholesale, so the two
+    // heads agree and `resolutionCandidates()` goes null before the apply runs.
+    c.syncEngine()!.applyResolution('adopt-theirs');
+    await flush();
+    expect(c.syncEngine()!.resolutionCandidates()).toBeNull();
+    expect(c.applyAcceptedResolution()).toBe(false);
+    expect(c.getHandshake().resolution).toBeNull();
+  });
+
+  it('a routine peer RE-ANNOUNCE does not cancel the pending ask (only a real move does)', async () => {
+    // The resolution ask rides the N.1 handshake, whose guardrail cancels a pending proposal when the
+    // game ADVANCES. V.4b made the engine emit for things that are not advances — a divergence being
+    // detected, an answer to a peer that is behind, a divergence settling — so a bare `publishState()`
+    // used to cancel the ask on BOTH sides and leave two players looking at panels whose buttons did
+    // nothing. And `publishState()` is not exotic: it is exactly what V.3's presence republish,
+    // `resync()` and `reconnect()` send.
+    const { a, b } = await divergedPair('RMANNC');
+    expect(a.proposeResolution('take-mine')).toBe(true);
+    await flush();
+    expect(a.divergenceView().ui).toBe('waiting');
+    expect(b.divergenceView().incomingText).not.toBeNull();
+
+    // B re-announces its (unchanged) state — the routine republish.
+    b.syncEngine()!.publishState();
+    await flush();
+    await flush();
+
+    // The ask is still live on both sides, and it still resolves.
+    expect(a.getHandshake().pending).not.toBeNull();
+    expect(a.divergenceView().ui).toBe('waiting');
+    expect(b.divergenceView().incomingText).not.toBeNull();
+    expect(b.respondResolution(true)).toBe(true);
+    await flush();
+    expect(b.applyAcceptedResolution()).toBe(true);
+    await flush();
+    expect(headHash(b.syncEngine()!.game().log)).toBe(headHash(a.syncEngine()!.game().log));
+
+    // …and a REAL advance still cancels, which is the guardrail this must not have broken.
+    const { a: c, b: d } = await divergedPair('RMADVN');
+    expect(c.proposeResolution('take-mine')).toBe(true);
+    expect(c.getHandshake().pending).not.toBeNull();
+    d.syncEngine()!.placeLocalOnly(coordsOf('4,4,4'));
+    d.syncEngine()!.publishState();
+    await flush();
+    await flush();
+    expect(c.getHandshake().pending).toBeNull();
   });
 
   it('a peer that DROPS auto-cancels the ask — nothing lands, and the card can be used again', async () => {

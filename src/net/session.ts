@@ -324,6 +324,19 @@ export class NetSession {
    */
   private lastCode: string | null = null;
 
+  /**
+   * The `<ourHead>|<theirHead>` pair as of the last engine change we treated as an ADVANCE. Held so
+   * the N.1 auto-cancel fires when the SITUATION a pending proposal was raised against changes, and
+   * not on the engine's other notifications (a divergence detected or settled, an answer sent to a
+   * peer that is behind) — see the `onChange` wiring in {@link wireEngine}.
+   *
+   * BOTH heads matter. Our own is obvious (a move of ours makes a stale ask meaningless). Theirs is
+   * the case a local-only check misses: while we are diverged their move does NOT change our game,
+   * but a `resolve:<headHash>` ask naming the history they have just left is one they can no longer
+   * accept — so it must not sit there looking live.
+   */
+  private lastSeenHead: string | null = null;
+
   private engine: SyncEngine | null = null;
   private transport: Transport | null = null;
 
@@ -920,14 +933,30 @@ export class NetSession {
       this.myProposal ?? { kind: 'new' },
     );
     this.engine = engine;
+    // Baseline for the advance check below: the situation we are wiring, not `null` — otherwise the
+    // first notification of any kind would read as an advance and cancel a proposal that survived a swap.
+    this.lastSeenHead = this.headPairOf(engine);
     // Reset the handshake for the new session — a fresh room has no pending proposal from a prior one.
     this.handshake = initialHandshake();
     // Re-emit on EVERY engine game change — crucially including a REMOTE move adopted by the
     // transport pump (which mutates the engine's game silently). This is the resync link that makes
     // a peer's move re-render the scene (issue #4). A conflict also folds the engine status into the
-    // phase here. AUTO-CANCEL on GAME-ADVANCED (N.1 guardrail): a landed move drops any stale proposal.
+    // phase here.
+    //
+    // AUTO-CANCEL on GAME-ADVANCED (N.1 guardrail): a landed move drops any stale proposal — but only
+    // when the GAME actually changed. The engine now emits for things that are not moves at all: a
+    // divergence being detected, an answer to a peer that is behind, a divergence settling. Treating
+    // those as "the game advanced" meant ONE routine peer re-announce — exactly what V.3's
+    // presence republish, `resync()` and `reconnect()` all send — silently cancelled the pending
+    // RESOLUTION ask on both sides, leaving two players staring at panels whose buttons no longer did
+    // anything. Compare the head hash: any real advance (a move, an adopted log, an agreed undo)
+    // changes it, and nothing else does.
     engine.onChange(() => {
-      this.setHandshake(onGameAdvanced(this.handshake));
+      const situation = this.headPairOf(engine);
+      if (situation !== this.lastSeenHead) {
+        this.lastSeenHead = situation;
+        this.setHandshake(onGameAdvanced(this.handshake));
+      }
       // Keep the durable, uuid-keyed archive record and the breadcrumb CURRENT with every accepted
       // move (local or adopted): the archive is the source of truth a returning peer re-seeds from
       // (design §2), so persisting only at entry would hand a returner a snapshot from before the
@@ -1830,6 +1859,7 @@ export class NetSession {
     }
     this.transport = null;
     this.engine = null;
+    this.lastSeenHead = null;
     this.seat = null;
     this.seatMap = null;
     this.code = null;
@@ -1950,6 +1980,16 @@ export class NetSession {
     if (!decision.publish) return;
     if (engine === null) throw new Error('republish decided to publish with no engine');
     engine.publishState();
+  }
+
+  /**
+   * The `<ourHead>|<theirHead>` situation key — our own log's head plus the head of the peer history
+   * of any OPEN divergence (`-` when there is none). See {@link lastSeenHead} for why both halves
+   * are needed.
+   */
+  private headPairOf(engine: SyncEngine): string {
+    const theirs = engine.needsResolution();
+    return `${headHash(engine.game().log)}|${theirs === null ? '-' : headHash(theirs.theirs)}`;
   }
 
   /**
