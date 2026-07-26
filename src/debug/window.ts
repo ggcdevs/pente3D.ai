@@ -250,6 +250,13 @@ export interface PenteInspect {
    */
   getArchive(): Promise<readonly ArchiveListing[]>;
   /**
+   * The LOADED board's game UUID (Task V.6, epic #47 / #37) — the portable identity of the game on
+   * screen (design §2.2), minted at genesis and part of its hash chain. Lets the games-list e2e assert
+   * that RESUMING the row whose `data-game-uuid` is X actually made game X the live board — identity,
+   * not a board that merely has the right pieces on it (agent-principles #3).
+   */
+  getGameUuid(): string | null;
+  /**
    * The live canonical game's `headHash` — the whole-history fingerprint of the event log the app
    * autosaves (GLOSSARY "Hash chain"). Lets Playwright wait DETERMINISTICALLY for an autosave to
    * become durable: an archive record whose `meta.headHash` equals this value IS the current game
@@ -365,6 +372,13 @@ export interface ArchiveInspect {
   /** List every archived game as `{ id, meta }` (no logs) — the browser's live data source. */
   listArchive(): Promise<readonly ArchiveListing[]>;
   /**
+   * The LOADED board's game UUID (Task V.6, epic #47 / #37) — the app's `scene.getGame().uuid`. Rides
+   * here beside `listArchive` because it answers an ARCHIVE question: which listed game is the one on
+   * screen. Lets the games-list e2e prove a Resume landed on the game whose `uuid` the row named,
+   * rather than inferring identity from a board that merely looks right (agent-principles #3).
+   */
+  getGameUuid(): string;
+  /**
    * The live networked END-STATE view-model (Task N.2.2) — the app's `getNetEndState` (`main.ts`),
    * exposed here because the end-state is derived in the app (over the net session + seat), not in the
    * scene. Wired onto `window.__pente.getEndState` for the two-context rematch e2e.
@@ -466,6 +480,8 @@ export function installInspectApi(
     setPendingJoinCode: (code: string) => scene.setPendingJoinCode(code),
     getHelpSources: () => scene.getHelpSources(),
     getArchive: () => archive.listArchive(),
+    // The loaded board's game uuid (Task V.6) — the identity assertion the games-list e2e resumes on.
+    getGameUuid: () => archive.getGameUuid(),
     // The AUTHORITATIVE game's head hash (Task 6.1, issue #4): the networked session's game when a
     // net game is live, else the local game — so a two-client test proves convergence to one head.
     getHeadHash: () => scene.getHeadHash(),

@@ -31,7 +31,12 @@ import {
   type PersistedSeats,
 } from './persist/archive.ts';
 import type { Game } from './core/game.ts';
-import type { ArchiveListing } from './ui/widgets/archiveModel.ts';
+import {
+  deriveArchive,
+  deriveSeedGames,
+  selectResumeTarget,
+  type ArchiveListing,
+} from './ui/widgets/archiveModel.ts';
 import type { SeedGame, SeedSources } from './ui/widgets/netPanelModel.ts';
 import type { Proposal } from './net/admission.ts';
 import type { NetSession } from './net/session.ts';
@@ -542,31 +547,31 @@ async function listArchive(): Promise<readonly ArchiveListing[]> {
 /**
  * The resume-able persisted games the Network-Game panel offers as seeds (Task S.6, design §3 "Resume
  * — pick from your games list"). A SYNCHRONOUS cache the panel reads on open (it can't await IndexedDB
- * mid-open), refreshed off the archive at boot and after every autosave ({@link refreshSeedGames}). The
- * rich games list is #37; here it is a simple newest-first projection. The CURRENT autosave record is
- * excluded — resuming the game you already have loaded is the separate "Current local board" seed, and
- * offering it under both would be a confusing duplicate. Each row carries the game's `uuid` + `headHash`
- * so the panel's `resolveProposal` builds a `resume(uuid, headHash)` proposal with no second DB read.
+ * mid-open), refreshed off the archive at boot and after every autosave ({@link refreshSeedGames}).
+ * Since Task V.6 it is the archive browser's OWN derivation (`deriveSeedGames`) — the same games list,
+ * the same resumable rule — rather than a parallel projection. The CURRENT board is excluded: resuming
+ * the game you already have loaded is the separate "Current local board" seed, and offering it under
+ * both would be a confusing duplicate. Each row carries the game's `uuid` + `headHash` so the panel's
+ * `resolveProposal` builds a `resume(uuid, headHash)` proposal with no second DB read.
  */
 let seedGamesCache: readonly SeedGame[] = [];
 
-/** Rebuild {@link seedGamesCache} from the archive (async; called at boot + after each autosave). */
+/**
+ * Rebuild {@link seedGamesCache} from the archive (async; called at boot + after each autosave).
+ *
+ * The projection is the PURE `deriveSeedGames` over the SAME `userFacingGames` listing the browser
+ * paints (Task V.6, ticket #37), so the two lists can never disagree about what a game is or which
+ * games can be continued — one rule, one derivation, instead of the ad-hoc label + filter this used
+ * to build inline. The exclusions are the game already loaded (that is the "Current local board"
+ * seed) and, while one is live, the networked game itself.
+ */
 async function refreshSeedGames(): Promise<void> {
   if (archiveDb === null) return;
   const listings = await listArchivedGames(archiveDb);
-  seedGamesCache = userFacingGames(listings)
-    // Exclude the CURRENT game — the local autosave record (that is the "Current local board" seed),
-    // and, while a networked game is live, its own uuid-keyed record: offering to "resume" the game
-    // you are already playing is a confusing self-reference, not a seed.
-    .filter((l) => l.id !== scene.getGame().uuid && l.meta.uuid !== getNetGameUuid())
-    .map((l) => ({
-      id: l.id,
-      // A human, deterministic label — the seat players + outcome the archive round-trips. Rendered
-      // via textContent in the panel (never eval'd), so opaque strings are safe.
-      label: `${l.meta.players.white ?? '?'} vs ${l.meta.players.black ?? '?'} · ${l.meta.result}`,
-      uuid: l.meta.uuid,
-      headHash: l.meta.headHash,
-    }));
+  seedGamesCache = deriveSeedGames(userFacingGames(listings), [
+    scene.getGame().uuid,
+    getNetGameUuid(),
+  ]);
 }
 
 /**
@@ -605,9 +610,18 @@ async function loadArchivedIntoScene(id: string): Promise<Game | undefined> {
     log.error('archive load: no such game', { id });
     return undefined;
   }
+  swapGameIntoScene(game);
+  return game;
+}
+
+/**
+ * Make `game` the board on screen: swap it into the scene and repaint the UI off it. The one place
+ * an archive load lands (REVIEW by record id, RESUME by game uuid), so the two paths can never drift
+ * on what "loaded" means.
+ */
+function swapGameIntoScene(game: Game): void {
   scene.loadGame(game);
   refreshUi();
-  return game;
 }
 
 /**
@@ -631,23 +645,47 @@ async function reviewArchived(id: string): Promise<void> {
 }
 
 /**
- * RESUME an archived game (Task 6.6): load it and make it the live CONTINUABLE game. Same swap as
- * review, but autosave stays ACTIVE — so continued play is written back to THE SAME record the game was
- * loaded from (V.5: records are keyed by the game's uuid, so a game has one record whether it is being
- * played for the first time or picked up again, and its `startedAt` is preserved by the ledger). The
- * board just abandoned keeps its own record, as every past game does. A networked game is resumed the
- * same way: the user then enters a room from the resumed board (the "Current local board" seed).
+ * RESUME an archived game BY ITS GAME UUID (Task 6.6; re-keyed to the uuid by Task V.6, ticket #37):
+ * load it and make it the live CONTINUABLE game. Same swap as review, but autosave stays ACTIVE — so
+ * continued play is written back to THE SAME record the game was loaded from (V.5: records are keyed
+ * by the game's uuid, so a game has one record whether it is being played for the first time or picked
+ * up again, and its `startedAt` is preserved by the ledger). The board just abandoned keeps its own
+ * record, as every past game does. A networked game is resumed the same way: the user then enters a
+ * room from the resumed board (the "Current local board" seed).
+ *
+ * The `uuid` — not the record key — is the handle because that is the identity a game keeps across
+ * records: `loadNetGameByUuid` resolves the uuid-keyed record OR, failing that, a record an older
+ * build wrote under its retired autosave id. The PURE `selectResumeTarget` gates the load against the
+ * CURRENT listing first, so a row that went stale while the modal was open (the game finished in
+ * another tab, or its record was collected) is refused with its typed reason instead of quietly
+ * loading something the player can no longer continue.
  */
-async function resumeArchived(id: string): Promise<void> {
+async function resumeArchived(uuid: string): Promise<void> {
   if (archiveDb === null) return;
   try {
+    const selection = selectResumeTarget(
+      deriveArchive(userFacingGames(await listArchivedGames(archiveDb))),
+      uuid,
+    );
+    if (!selection.ok) {
+      log.error('archive resume refused', { uuid, reason: selection.reason });
+      return;
+    }
     // Ensure autosave is active (a prior review may have suspended it) so continued play is written.
     autosaveSuspended = false;
-    const game = await loadArchivedIntoScene(id);
-    if (game === undefined) return;
-    log.info('archived game resumed (continues under its own record)', { id, ply: game.ply() });
+    const resumed = await loadNetGameByUuid(archiveDb, uuid);
+    if (resumed === undefined) {
+      log.error('archive resume: no game under that uuid', { uuid, id: selection.id });
+      return;
+    }
+    swapGameIntoScene(resumed.game);
+    log.info('archived game resumed (continues under its own record)', {
+      uuid,
+      id: selection.id,
+      ply: resumed.game.ply(),
+    });
   } catch (err: unknown) {
-    log.error('archive resume failed', { id, err });
+    log.error('archive resume failed', { uuid, err });
   }
 }
 
@@ -1078,6 +1116,9 @@ onConfigChange((section) => {
 // Kept unconditional for the v1 walking skeleton; a prod gate lands with the real build.
 installInspectApi(scene, ui, {
   listArchive: () => listArchive(),
+  // The LOADED board's game uuid (Task V.6, epic #47 / #37) — so the games-list e2e can prove a
+  // Resume landed on the game the row named, by identity rather than by the pieces on the board.
+  getGameUuid: () => scene.getGame().uuid,
   // The networked end-state view-model (Task N.2.2, issue #12) — derived in the app over the net
   // session + seat, so it is supplied here (not from the scene) for `window.__pente.getEndState`.
   getEndState: () => getNetEndState(),

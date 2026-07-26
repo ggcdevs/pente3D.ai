@@ -288,6 +288,12 @@ const UI_STYLESHEET = `
 .pente-archive-body { display: flex; flex-direction: column; gap: 6px; }
 .pente-archive-empty[hidden] { display: none; }
 .pente-archive-empty { opacity: 0.7; font-size: 14px; padding: 8px 0; }
+/* Task V.6 / #37: the browser is SECTIONED by status (Unfinished first — the games list is the only
+   route back to a game, so "what can I get back into" leads). The Unfinished section is rendered even
+   when empty, with an explicit note, so an empty answer is stated rather than implied. */
+.pente-archive-group { display: flex; flex-direction: column; gap: 6px; }
+.pente-archive-group-title { font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.65; margin-top: 8px; }
+.pente-archive-group-empty { opacity: 0.7; font-size: 13px; padding: 4px 0; }
 .pente-archive-row { display: flex; flex-direction: column; gap: 4px; text-align: left; padding: 10px 12px; border-radius: 6px; background: rgba(255,255,255,0.06); color: #e6e6ea; font-size: 14px; }
 .pente-archive-row[data-conflicted="true"] { background: rgba(255,80,80,0.16); }
 .pente-archive-players { font-weight: 600; }

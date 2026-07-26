@@ -16,11 +16,21 @@
  * newest-first rows. Each row offers up to two actions (Task 6.6, review vs resume), driven by the pure
  * model's `canReview`/`canResume` flags: REVIEW (`deps.reviewArchived(id)`) reconstructs the stored game
  * and swaps it into the scene READ-ONLY (browse via the history slider), and RESUME
- * (`deps.resumeArchived(id)`) swaps it in and makes it the live CONTINUABLE game (a fresh autosave record
- * accumulates so the original stays intact). Resume is offered ONLY for a resumable (in-progress) game;
- * a finished or conflicted row shows Review only — both observable via `window.__pente` getState/getHistory
- * + the rendered buttons (agent-principles #3: behavior, not a log line). A conflicted row is marked
- * (GLOSSARY "conflict") so the user sees a forked game is special.
+ * (`deps.resumeArchived(uuid)`) swaps it in and makes it the live CONTINUABLE game. Resume is offered
+ * ONLY for a resumable (unfinished) game; a finished or conflicted row shows Review only — both
+ * observable via `window.__pente` getState/getHistory + the rendered buttons (agent-principles #3:
+ * behavior, not a log line). A conflicted row is marked (GLOSSARY "conflict") so the user sees a forked
+ * game is special.
+ *
+ * **Task V.6 (epic #47, ticket #37).** v3.1 deletes the code→game mapping and lands every reload on an
+ * empty slate, so this browser is the ONLY route back to a game (design §6/§10). Two extensions follow,
+ * both decided in the pure model and merely painted here:
+ *   - the rows are SECTIONED by status — `Unfinished` first (rendered even when empty, with the model's
+ *     note, so "nothing to resume" is stated), then `Finished`, then `Conflicted`;
+ *   - RESUME is keyed by the GAME's portable `uuid` (design §2.2), not the record id — a record key is
+ *     not always its game's identity (a conflicted record, a pre-V.5 record awaiting the boot re-key).
+ *     Each row publishes its `data-game-uuid` so a test can prove the row and the loaded game are the
+ *     same GAME.
  *
  * The open modal is a MODE change in the input layer: opening PUSHES a `blocking` scope
  * (GLOSSARY "Blocking scope") and closing POPS it — every close path (Escape, outside-click, the ✕
@@ -31,7 +41,7 @@
  */
 
 import type { Widget, WidgetFactory } from '../registry.ts';
-import { deriveArchive, type ArchiveListing } from './archiveModel.ts';
+import { deriveArchive, type ArchiveItem, type ArchiveListing } from './archiveModel.ts';
 
 /** The stable widget id — matches the `archiveBrowser` entry in the tracked `layout` default. */
 export const ARCHIVE_WIDGET_ID = 'archiveBrowser';
@@ -53,9 +63,9 @@ export interface ArchiveScope {
  * `registerOpenArchive` (the widget hands its `open()` back so the `loadGame` command can call it),
  * and the archive IO seams the app supplies (so the widget never opens IndexedDB itself):
  * `listArchive()` (the app's `listArchivedGames`) plus the two DISTINCT load paths (Task 6.6):
- * `reviewArchived(id)` loads a game read-only (browse via the history slider) and `resumeArchived(id)`
- * loads it to CONTINUE PLAYING (a fresh record accumulates so the original stays intact). All async —
- * reading/loading an archive is a promise (IndexedDB).
+ * `reviewArchived(id)` loads a game read-only by its RECORD id (browse via the history slider) and
+ * `resumeArchived(uuid)` loads it by the GAME's uuid to CONTINUE PLAYING (Task V.6 — the two keys are
+ * not always the same). All async — reading/loading an archive is a promise (IndexedDB).
  */
 export interface ArchiveDeps {
   readonly doc: Document;
@@ -74,11 +84,13 @@ export interface ArchiveDeps {
    */
   reviewArchived(id: string): Promise<void>;
   /**
-   * RESUME (Task 6.6): reconstruct the archived game `id`, swap it into the scene, and make it the
-   * live continuable game — a fresh autosave record is minted so continued play accumulates as its own
-   * game and the original archived record stays intact. Only offered for a resumable (in-progress) row.
+   * RESUME (Task 6.6; keyed by GAME UUID since Task V.6): reconstruct the game whose portable
+   * `uuid` this is (design §2.2 — NOT the record id, which a conflicted or pre-V.5 record does not
+   * share with its game), swap it into the scene, and make it the live continuable game. Since V.5 a
+   * game has ONE record keyed by its uuid, so continued play advances that same record. Only offered
+   * for a resumable (unfinished) row.
    */
-  resumeArchived(id: string): Promise<void>;
+  resumeArchived(uuid: string): Promise<void>;
 }
 
 /** Build the blocking `archive` scope the open modal pushes (id `archive`, no bindings). */
@@ -140,6 +152,82 @@ export function archiveWidget(): WidgetFactory {
 
       let open = false;
 
+      /** Build one game row (Task 5.8 / 6.6 / V.6) from a resolved model item. */
+      function buildRow(item: ArchiveItem): HTMLElement {
+        const row = doc.createElement('div');
+        row.className = 'pente-archive-row';
+        row.setAttribute('data-testid', `archive-row-${item.id}`);
+        row.setAttribute('data-id', item.id);
+        // The GAME's portable identity (Task V.6, design §2.2) — what RESUME is keyed by, and what a
+        // test reads to prove the row and the loaded game are the same GAME, not merely the same key.
+        row.setAttribute('data-game-uuid', item.uuid);
+        row.setAttribute('data-status', item.status);
+        row.setAttribute('data-conflicted', String(item.conflicted));
+        row.setAttribute('data-result', item.result);
+        row.setAttribute('data-head-hash', item.headHash);
+        row.setAttribute('data-started-at', String(item.startedAt));
+        // Expose the action affordances so Playwright can prove a finished/conflicted row offers
+        // NO resume (observable, not a log line — agent-principles #3), from the pure model flags.
+        row.setAttribute('data-can-review', String(item.canReview));
+        row.setAttribute('data-can-resume', String(item.canResume));
+
+        const players = doc.createElement('span');
+        players.className = 'pente-archive-players';
+        players.textContent = item.playersLabel;
+        row.appendChild(players);
+
+        const meta = doc.createElement('span');
+        meta.className = 'pente-archive-meta';
+        // The row states its STATUS in words (Task V.6 — the browse axis #37 asks for), and a
+        // FINISHED game additionally names its outcome (which side won). The date is formatted from
+        // the epoch millis for the human.
+        meta.textContent =
+          item.status === 'finished'
+            ? `${item.statusLabel} · ${item.result} · ${formatDate(item.startedAt)}`
+            : `${item.statusLabel} · ${formatDate(item.startedAt)}`;
+        row.appendChild(meta);
+
+        const actions = doc.createElement('span');
+        actions.className = 'pente-archive-actions';
+
+        // REVIEW (Task 6.6): load the game read-only to browse via the history slider. Always
+        // offered (`item.canReview` is always true). Keyed by the RECORD id — a conflicted record is
+        // reachable only by its own key. We close FIRST so the blocking archive scope is popped
+        // before the async load resolves — the review happens against the game/camera scopes, not
+        // under a stale modal scope.
+        if (item.canReview) {
+          const reviewButton = doc.createElement('button');
+          reviewButton.className = 'pente-archive-review';
+          reviewButton.setAttribute('data-testid', `archive-review-${item.id}`);
+          reviewButton.textContent = 'Review';
+          reviewButton.addEventListener('click', () => {
+            close();
+            void deps.reviewArchived(item.id);
+          });
+          actions.appendChild(reviewButton);
+        }
+
+        // RESUME (Task 6.6): load the game and CONTINUE PLAYING. Offered only for a resumable
+        // (unfinished) game — a finished or conflicted row has no Resume button, so the DOM itself
+        // proves review-vs-resume from the pure `canResume` flag (never a hardcoded per-result rule).
+        // Keyed by the GAME UUID (Task V.6): the game is what is being continued, and its record key
+        // is not always its identity (a pre-V.5 record, a conflicted record).
+        if (item.canResume) {
+          const resumeButton = doc.createElement('button');
+          resumeButton.className = 'pente-archive-resume';
+          resumeButton.setAttribute('data-testid', `archive-resume-${item.id}`);
+          resumeButton.textContent = 'Resume';
+          resumeButton.addEventListener('click', () => {
+            close();
+            void deps.resumeArchived(item.uuid);
+          });
+          actions.appendChild(resumeButton);
+        }
+
+        row.appendChild(actions);
+        return row;
+      }
+
       /** Rebuild the game rows from the pure model derived off the archive listings. */
       async function renderRows(): Promise<void> {
         const listings = await deps.listArchive();
@@ -149,70 +237,31 @@ export function archiveWidget(): WidgetFactory {
         element.setAttribute('data-empty', String(model.isEmpty));
         element.setAttribute('data-count', String(model.items.length));
 
-        for (const item of model.items) {
-          const row = doc.createElement('div');
-          row.className = 'pente-archive-row';
-          row.setAttribute('data-testid', `archive-row-${item.id}`);
-          row.setAttribute('data-id', item.id);
-          row.setAttribute('data-conflicted', String(item.conflicted));
-          row.setAttribute('data-result', item.result);
-          row.setAttribute('data-head-hash', item.headHash);
-          row.setAttribute('data-started-at', String(item.startedAt));
-          // Expose the action affordances so Playwright can prove a finished/conflicted row offers
-          // NO resume (observable, not a log line — agent-principles #3), from the pure model flags.
-          row.setAttribute('data-can-review', String(item.canReview));
-          row.setAttribute('data-can-resume', String(item.canResume));
+        // One SECTION per status the model emitted (Task V.6, ticket #37): unfinished games lead,
+        // and their section is rendered even when it holds nothing — the model decides which
+        // sections exist and what an empty one says, so this loop makes no judgement of its own.
+        for (const group of model.groups) {
+          const section = doc.createElement('div');
+          section.className = 'pente-archive-group';
+          section.setAttribute('data-testid', `archive-group-${group.status}`);
+          section.setAttribute('data-status', group.status);
+          section.setAttribute('data-count', String(group.items.length));
 
-          const players = doc.createElement('span');
-          players.className = 'pente-archive-players';
-          players.textContent = item.playersLabel;
-          row.appendChild(players);
+          const heading = doc.createElement('div');
+          heading.className = 'pente-archive-group-title';
+          heading.textContent = group.label;
+          section.appendChild(heading);
 
-          const meta = doc.createElement('span');
-          meta.className = 'pente-archive-meta';
-          // A conflicted game is called out explicitly (GLOSSARY "conflict"); otherwise the raw
-          // result marker is shown. The date is formatted from the epoch millis for the human.
-          meta.textContent = item.conflicted
-            ? `Conflicted · ${formatDate(item.startedAt)}`
-            : `${item.result} · ${formatDate(item.startedAt)}`;
-          row.appendChild(meta);
-
-          const actions = doc.createElement('span');
-          actions.className = 'pente-archive-actions';
-
-          // REVIEW (Task 6.6): load the game read-only to browse via the history slider. Always
-          // offered (`item.canReview` is always true). We close FIRST so the blocking archive scope
-          // is popped before the async load resolves — the review happens against the game/camera
-          // scopes, not under a stale modal scope.
-          if (item.canReview) {
-            const reviewButton = doc.createElement('button');
-            reviewButton.className = 'pente-archive-review';
-            reviewButton.setAttribute('data-testid', `archive-review-${item.id}`);
-            reviewButton.textContent = 'Review';
-            reviewButton.addEventListener('click', () => {
-              close();
-              void deps.reviewArchived(item.id);
-            });
-            actions.appendChild(reviewButton);
+          if (group.isEmpty) {
+            const note = doc.createElement('div');
+            note.className = 'pente-archive-group-empty';
+            note.setAttribute('data-testid', `archive-group-empty-${group.status}`);
+            note.textContent = group.emptyText;
+            section.appendChild(note);
           }
 
-          // RESUME (Task 6.6): load the game and CONTINUE PLAYING. Offered only for a resumable
-          // (in-progress) game — a finished or conflicted row has no Resume button, so the DOM itself
-          // proves review-vs-resume from the pure `canResume` flag (never a hardcoded per-result rule).
-          if (item.canResume) {
-            const resumeButton = doc.createElement('button');
-            resumeButton.className = 'pente-archive-resume';
-            resumeButton.setAttribute('data-testid', `archive-resume-${item.id}`);
-            resumeButton.textContent = 'Resume';
-            resumeButton.addEventListener('click', () => {
-              close();
-              void deps.resumeArchived(item.id);
-            });
-            actions.appendChild(resumeButton);
-          }
-
-          row.appendChild(actions);
-          body.appendChild(row);
+          for (const item of group.items) section.appendChild(buildRow(item));
+          body.appendChild(section);
         }
       }
 
