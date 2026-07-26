@@ -338,6 +338,12 @@ export default {
     // and drops, and the choose/waiting/incoming/declined sub-state). THREE-free / DOM-free — the DOM
     // glue (`widgets/divergencePanel.ts`) is the Playwright-verified IO boundary, NOT mutated.
     'src/ui/widgets/divergenceModel.ts',
+    // Pure REJOIN-PROMPT view-model (Task V.5, epic #47, design §6): the breadcrumb + a room PROBE →
+    // the offer a player answers after an empty-slate reload (which of the three §6 outcomes, what YES
+    // does, and whether a colour may be named at all). THREE-free / DOM-free — the DOM glue
+    // (`widgets/rejoinPrompt.ts`) and the probe itself (`net/session.ts`) are the Playwright-verified
+    // IO boundary, NOT mutated.
+    'src/ui/widgets/rejoinPromptModel.ts',
     '!src/ui/**/*.test.ts',
     // Pure version-bump logic (issue #22): the commit-prefix + ticket-label signals → the
     // minor/patch/no-release decision, the disagreement report, and the semver arithmetic.

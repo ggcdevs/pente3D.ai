@@ -49,12 +49,14 @@ classDiagram
     note for ArchivedMeta "src/persist/archive.ts"
     class ArchiveInspect {
         <<interface>>
+        +answerRejoin(confirmed: boolean): boolean
         +getDivergence(): DivergenceView
         +getEndState(): EndState
         +getNetGameUuid(): string | null
         +getNetLastReject(): AdmissionReject | null
         +getNetSeatOwners(): SeatMap | null
         +getNotify(): NotifyReadout
+        +getRejoinPrompt(): RejoinPromptView
         +listArchive(): Promise~readonly ArchiveListing[]~
         +proposeResolution(choice: ResolutionChoice): boolean
         +respondResolution(accepted: boolean): boolean
@@ -576,27 +578,6 @@ classDiagram
         +zones: Record~string, string[]~
     }
     note for LayoutReadout "src/ui/container.ts"
-    class LifecycleObservation {
-        <<interface>>
-        +readonly generation: number
-        +readonly hasWinner: boolean
-        +readonly ply: number
-    }
-    note for LifecycleObservation "src/persist/gameLifecycle.ts"
-    class LifecycleState {
-        <<interface>>
-        +readonly finalized: boolean
-        +readonly generation: number
-        +readonly ply: number
-    }
-    note for LifecycleState "src/persist/gameLifecycle.ts"
-    class LifecycleTransition {
-        <<interface>>
-        +readonly finalizeCurrent: boolean
-        +readonly mintFresh: boolean
-        +readonly next: LifecycleState
-    }
-    note for LifecycleTransition "src/persist/gameLifecycle.ts"
     class LightingConfig {
         <<interface>>
         +ambient: Object
@@ -1040,6 +1021,7 @@ classDiagram
     note for PendingProposal "src/net/handshake.ts"
     class PenteInspect {
         <<interface>>
+        +answerRejoin(confirmed: boolean): boolean
         +applyConfig(section: ConfigSection): void
         +clickAt(ndcX: number, ndcY: number): GameState | null
         +dispatch(id: string): boolean | null
@@ -1066,6 +1048,7 @@ classDiagram
         +getNetSeatOwners(): SeatMap | null
         +getNotify(): NotifyReadout
         +getPieces(): PieceReadout[] | null
+        +getRejoinPrompt(): RejoinPromptView
         +getState(): GameState | null
         +getTemp(): TempReadout | null
         +getTurnGate(): TurnGateReadout | null
@@ -1255,6 +1238,36 @@ classDiagram
         +readonly to: string
     }
     note for RejectMessage "src/net/sync.ts"
+    class RejoinProbe {
+        <<interface>>
+        +readonly crumb: Object | null
+        +readonly haveGame: boolean
+        +readonly myColour: RejoinColour | null
+        +readonly peerGameUuid: string | null
+        +readonly peerPresent: boolean
+        +readonly stale: boolean
+    }
+    note for RejoinProbe "src/ui/widgets/rejoinPromptModel.ts"
+    class RejoinPromptDeps {
+        <<interface>>
+        +readonly doc: Document
+        +answerRejoin(confirmed: boolean): boolean
+        +getRejoinPrompt(): RejoinPromptView
+    }
+    note for RejoinPromptDeps "src/ui/widgets/rejoinPrompt.ts"
+    class RejoinPromptView {
+        <<interface>>
+        +readonly action: RejoinAction | null
+        +readonly code: string
+        +readonly colour: RejoinColour | null
+        +readonly confirmLabel: string
+        +readonly declineLabel: string
+        +readonly detail: string
+        +readonly headline: string
+        +readonly outcome: RejoinOutcome | null
+        +readonly show: boolean
+    }
+    note for RejoinPromptView "src/ui/widgets/rejoinPromptModel.ts"
     class RelayConfig {
         <<interface>>
         +readonly password: string
@@ -1322,6 +1335,13 @@ classDiagram
         +readonly proposalId: string
     }
     note for ResponseMessage "src/net/sync.ts"
+    class RoomProbe {
+        <<interface>>
+        +readonly code: string
+        +readonly peerGameUuid: string | null
+        +readonly peerPresent: boolean
+    }
+    note for RoomProbe "src/net/session.ts"
     class SceneColorsConfig {
         <<interface>>
         +background: string
@@ -1548,6 +1568,7 @@ classDiagram
     note for UiContainerHandle "src/ui/container.ts"
     class UiDeps {
         <<interface>>
+        +answerRejoin(confirmed: boolean): boolean
         +copyToClipboard(text: string): Promise~void~
         +currentGame(): Object | null
         +dispatch(commandId: string): boolean
@@ -1557,6 +1578,7 @@ classDiagram
         +getHelpSources(): HelpSources
         +getHistory(): HistoryFacts
         +getNet(): NetSessionState
+        +getRejoinPrompt(): RejoinPromptView
         +listArchive(): Promise~readonly ArchiveListing[]~
         +popScope(): void
         +proposeRematch(): boolean
@@ -1645,6 +1667,7 @@ classDiagram
     class Window {
         <<interface>>
         +__penteNotifyNotificationCtor: NotificationApi
+        +__penteRejoinProbeMs: number
         +__penteVersion: string
     }
     note for Window "src/main.ts"
@@ -1772,7 +1795,6 @@ classDiagram
         +divergenceFacts(): DivergenceFacts | null
         +divergenceView(): DivergenceView
         +enter(rawCode: string, proposal: Proposal): Promise~void~
-        +gameStartedAt(): number | null
         +gameState(): GameState | null
         +gameUuid(): string | null
         +getHandshake(): HandshakeState
@@ -1783,6 +1805,7 @@ classDiagram
         +onHandshakeChange(listener: HandshakeChangeListener): () =~ void
         +place(coords: Coord): void
         +ply(): number
+        +probeRoom(code: string, windowMs: number): Promise~RoomProbe~
         +propose(action: string): boolean
         +proposeResolution(choice: ResolutionChoice): boolean
         +reconnect(): Promise~boolean~
@@ -1817,6 +1840,11 @@ classDiagram
         +onPeerLive(signal: RepublishSignal): RepublishDecision
     }
     note for RepublishLimiter "src/net/republish.ts"
+    class StartedAtLedger {
+        +adopt(known: ReadonlyMap~string, number~): void
+        +stampFor(uuid: string, now: number): number
+    }
+    note for StartedAtLedger "src/persist/archive.ts"
     class SyncEngine {
         +agreeOn(uuid: string): void
         +applyAgreedUndo(): void

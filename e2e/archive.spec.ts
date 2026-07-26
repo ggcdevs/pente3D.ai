@@ -13,9 +13,9 @@ import { DEFAULT_MENU_ENTRIES } from '../src/ui/widgets/menuModel.ts';
  * (`archiveModel.ts`) is mutation-gated in Vitest; here we prove the WIRING:
  *   - AUTOSAVE: placing pieces persists the current game to the archive — `getArchive()` returns a
  *     record whose `headHash` equals the live game's, and whose ply matches (a real IndexedDB write);
- *   - RESTORE ON LOAD: reloading the page reconstructs the autosaved game — `getState().pieces` and
- *     `getHistory().maxPly` come back exactly, proving the fold-on-boot resumed the game (NOT a
- *     fresh board);
+ *   - EMPTY SLATE ON LOAD (Task V.5, epic #47, design §6): reloading the page restores NOTHING —
+ *     `getState().pieces` is empty and `getHistory().maxPly` is 0 — while the played game is still in
+ *     the archive at the head it reached, so the slate is a decision and not data loss;
  *   - the archive browser mounts in its configured zone (`bottom-right` per the tracked layout) and
  *     is opened by the `loadGame` COMMAND (design Principle 3 — the same id the menu "Load" entry
  *     fires), pushing a BLOCKING scope (getInput() top-of-stack is the `archive` scope);
@@ -71,8 +71,8 @@ type Pente = {
  * name is unique per test (a random id, stable for the life of the test so a `page.reload()` in the
  * restore test re-opens the SAME store) and is injected via the `__penteDbName` seam that `main.ts` /
  * `appSession.ts` route through. localStorage is cleared only on the very first navigation (a counter
- * flag persisted in localStorage itself) so the RESTORE test's reload keeps the autosave id it wrote
- * — clearing on every nav would wipe the id and defeat restore-on-load. Mirrors settings/net which
+ * flag persisted in localStorage itself) so a reload keeps whatever the page wrote — clearing on every
+ * nav would hide a real restore if one happened. Mirrors settings/net which
  * already clean localStorage per test (agent-principles #3: a deterministic, isolated observable).
  */
 async function isolate(page: import('@playwright/test').Page): Promise<void> {
@@ -207,7 +207,9 @@ test('placing pieces AUTOSAVES the current game (a record with the live headHash
   expect(games[0]!.meta.headHash.length).toBeGreaterThan(0);
 });
 
-test('reloading the page RESTORES the autosaved game (pieces + ply come back)', async ({ page }) => {
+test('reloading the page lands on an EMPTY SLATE — and the game is still in the archive', async ({
+  page,
+}) => {
   await isolate(page);
   await ready(page);
   await placeThree(page);
@@ -215,23 +217,30 @@ test('reloading the page RESTORES the autosaved game (pieces + ply come back)', 
   expect(Object.keys(before.pieces).length).toBe(3);
   expect(before.pieces['0,0,0']).toBe('white');
 
-  // Wait until the ply-3 game is DURABLY autosaved (record head == live head), then RELOAD — the app
-  // restores it on boot. Reloading before the ply-3 write commits would restore an earlier ply.
+  // Wait until the ply-3 game is DURABLY autosaved (record head == live head) before reloading, so the
+  // assertion below is about the boot behaviour and not about a write that had not landed yet.
   await waitForAutosaved(page);
+  const savedHead = await get(page, (p) => p.getHeadHash()!);
   await page.reload();
   await ready(page);
 
-  // Proof-by-state (agent-principles #3): after a real reload the SAME three pieces are on the board
-  // and the head is ply 3 — the game resumed from the archive, NOT a fresh board.
+  // A reload ALWAYS lands on an EMPTY SLATE (Task V.5, epic #47, design §6 — the user's words: "if you
+  // restart (i.e.: reload the tab), you should always get dropped back to the main page with an empty
+  // slate/board"). Nothing is auto-restored: no pieces, no history, and the live head is NOT the head
+  // that was saved.
   const after = await get(page, (p) => p.getState()!);
-  expect(Object.keys(after.pieces).length).toBe(3);
-  expect(after.pieces['0,0,0']).toBe('white');
-  expect(after.pieces['4,4,4']).toBe('black');
-  expect(after.pieces['0,4,0']).toBe('white');
+  expect(Object.keys(after.pieces)).toEqual([]);
   const hist = await get(page, (p) => p.getHistory()!);
-  expect(hist.maxPly).toBe(3);
+  expect(hist.maxPly).toBe(0);
+  expect(await get(page, (p) => p.getHeadHash()!)).not.toBe(savedHead);
 
-  const shot = resolve('e2e/artifacts/archive-restored.png');
+  // …and the game is NOT LOST: its record is still in the archive at the ply it reached, which is the
+  // route back to it (the games list, #37). This is the pairing that makes "empty slate" a design
+  // decision rather than data loss.
+  const games = await getAsync(page, (p) => p.getArchive());
+  expect(games.some((g) => g.meta.headHash === savedHead)).toBe(true);
+
+  const shot = resolve('e2e/artifacts/archive-empty-slate-reload.png');
   mkdirSync(dirname(shot), { recursive: true });
   await page.screenshot({ path: shot });
 });

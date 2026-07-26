@@ -31,6 +31,7 @@ import {
   putGame,
   listGames,
   deleteGame,
+  rekeyGame,
   type GameListing,
   type GameRecord,
 } from './db';
@@ -45,10 +46,9 @@ export interface PersistedSeats {
  * The archive record's human `players` map for a NETWORKED game: the REAL seat owners (playerIds),
  * omitting a seat nobody owns yet rather than recording a `null`/sentinel "player".
  *
- * Shared by the two writers of a networked game's record — `NetSession.persistGame` (which owns it in
- * the browser AND the CLI) and the app's autosave (`main.ts`, which writes the same uuid-keyed record
- * while a net game is authoritative) — so the projection lives in ONE place and the two can never
- * disagree about it.
+ * Written by the ONE writer of a networked game's record, `NetSession.persistGame` (the same session
+ * code in the browser AND the CLI) — since V.5 the app's autosave writes only the LOCAL board it owns,
+ * so no second writer can disagree with this projection.
  */
 export function playersFromSeats(seats: PersistedSeats): Record<string, string> {
   const players: Record<string, string> = {};
@@ -271,8 +271,11 @@ export async function loadNetGame(
  *     IS the game uuid), which is also the one carrying the identity-owned seat map the empty-room
  *     reclaim needs. Its stored game must actually BEAR that uuid: a record id that merely collides
  *     with another game's uuid is not that game, and serving it would be a silent mis-resolution.
- *  2. otherwise a scan of the listing by `meta.uuid` — a game archived under a DIFFERENT record id,
- *     e.g. the app's local autosave record that a `resume`/`current` proposal names.
+ *  2. otherwise a scan of the listing by `meta.uuid` — a game archived under a DIFFERENT record id.
+ *     Since V.5 every writer keys a record by the game's uuid, so this finds the records that key
+ *     cannot reach: a conflicted record (keyed by its conflict id), and any record an older build wrote
+ *     under its retired autosave id that the boot re-key
+ *     ({@link rekeyArchiveRecordsByGameUuid}) has not run over yet.
  *
  * @throws {ArchiveError} if the matched record's log is corrupt or describes an illegal game.
  */
@@ -309,45 +312,22 @@ export async function loadNetGameByUuid(
  * List every archived GAME as `{ id, meta, events }` (no logs), sorted by `startedAt` descending so
  * the most recently started game is first — the natural order for an archive browser (Stage 5).
  *
- * Every game appears, and each appears **once**. There is no marker-based exclusion any more (the v3
- * `net-room:{code}` shard + its filter died with the coupling that created them — V.1, epic #47; the
- * shards a v3 build left behind are DELETED by {@link purgeLegacyNetRoomRecords}, not hidden): a
- * networked game is an ordinary record keyed by its own UUID, and with reload → empty slate the games
- * list is the ONLY route back to it (design §10, #37), so hiding a real game would lose it.
+ * **Every record appears, unfiltered.** There is no marker-based exclusion (the v3 `net-room:{code}`
+ * shard + its filter died with the coupling that created them — V.1, epic #47; the shards a v3 build
+ * left behind are DELETED by {@link purgeLegacyNetRoomRecords}, not hidden) and no de-duplication
+ * either: since V.5 every writer keys a record by the GAME's own uuid — the app's autosave for a local
+ * board and {@link loadNetGameByUuid}'s counterpart `NetSession.persistGame` for a networked one — so
+ * one game IS one record by construction, and a records-to-games heuristic here would have nothing
+ * left to collapse. With reload → empty slate this listing is the ONLY route back to a game
+ * (design §6/§10, #37), so it hides nothing.
  *
- * What IS collapsed is a **shadow** of a game already stored canonically. One game legitimately ends
- * up in two records: the app's autosave record (a local board, keyed by the app's autosave id) and —
- * once that same game is carried into a room — the canonical record the net session keeps under the
- * game's OWN uuid (design §2: "games keyed by UUID" are the source of truth). Listing both would show
- * ONE game twice, and picking the shadow would open a stale fork of it and silently drop the
- * identity-owned seat map the empty-room reclaim needs. So a record whose `meta.uuid` is the id of
- * ANOTHER record — i.e. that game is canonically archived under its uuid — is dropped in favour of
- * the canonical one.
- *
- * Two records are NEVER collapsed: a CONFLICTED record (it stores both forks — information no other
- * record holds, so it is its own artifact rather than a duplicate view of one game), and a shadow that
- * holds MORE events than the canonical record (two records for one game where the canonical one has
- * LESS history is anomalous; this listing never hides history — it shows both and lets the player
- * choose rather than silently serving the shorter one).
+ * (Records an older build keyed by its retired autosave id are re-keyed once, at boot, by
+ * {@link rekeyArchiveRecordsByGameUuid} — a migration, so a game archived before V.5 stays listed and
+ * resumable rather than being hidden by a listing rule.)
  */
 export async function listArchivedGames(db: IDBDatabase): Promise<GameListing[]> {
   const listings = await listGames(db);
-  // The canonical record of a game is the one whose primary key IS the game's uuid.
-  const canonical = new Map<string, GameListing>();
-  for (const listing of listings) {
-    if (listing.id === listing.meta.uuid) canonical.set(listing.meta.uuid, listing);
-  }
-  return listings
-    .filter((listing) => {
-      if (listing.id === listing.meta.uuid) return true; // the canonical record itself
-      // A conflicted record carries BOTH forks (see `flagConflicted`); the canonical record of the
-      // same uuid carries neither, so it can never stand in for it.
-      if (listing.meta.result === 'conflicted') return true;
-      const owner = canonical.get(listing.meta.uuid);
-      if (owner === undefined) return true; // no canonical copy → this IS the game's only record
-      return listing.events > owner.events; // never hide MORE history than the canonical holds
-    })
-    .sort((a, b) => b.meta.startedAt - a.meta.startedAt);
+  return listings.sort((a, b) => b.meta.startedAt - a.meta.startedAt);
 }
 
 /**
@@ -357,15 +337,16 @@ export async function listArchivedGames(db: IDBDatabase): Promise<GameListing[]>
  * `startedAt` is a durable property of the GAME, not of whichever session last wrote its record: the
  * listing is sorted by it and the archive browser renders it as the game's date, and since the games
  * list is the only route back to a game (design §10, #37) re-dating a game the player returns to is a
- * user-visible loss. A writer that re-persists a game it did not start reads its stamp from here
- * instead of minting one (`NetSession.primeStartedAts`).
+ * user-visible loss. A writer that re-persists a game it did not start ADOPTS its stamp from here
+ * instead of minting one — see {@link StartedAtLedger}, which both writers hold one of.
  *
  * Read over the LISTING (metadata only, via the store's cursor — no event logs are folded), so one
  * pass answers the question for every archived game at once.
  *
- * One game legitimately occupies two records (the app's autosave shadow plus the canonical uuid-keyed
- * record — see {@link listArchivedGames}); the EARLIEST stamp wins, since the game began once and the
- * shadow is the record that existed first. That also makes the result independent of store order.
+ * The EARLIEST stamp wins if two records still claim one uuid (a conflicted record archives the same
+ * game's local fork under its own key, and a pre-V.5 store holds an un-migrated duplicate until the
+ * boot re-key runs): the game began once, so the oldest claim about when is the right one — and taking
+ * the minimum also makes the result independent of store order.
  */
 export async function archivedStartedAts(db: IDBDatabase): Promise<ReadonlyMap<string, number>> {
   const stamps = new Map<string, number>();
@@ -375,6 +356,103 @@ export async function archivedStartedAts(db: IDBDatabase): Promise<ReadonlyMap<s
     stamps.set(listing.meta.uuid, known === undefined ? began : Math.min(known, began));
   }
   return stamps;
+}
+
+/**
+ * The `startedAt` a writer stamps each game's archive record with — established ONCE per game uuid and
+ * then reused (Task V.5, epic #47). Held by BOTH writers of the archive (the app's autosave in
+ * `main.ts` for a local board, `NetSession` for a networked game), because both face the same question
+ * about a game they did not start: a returned-to game must keep the date it BEGAN.
+ *
+ * Two sources, in this order:
+ *
+ *  - **ADOPTED** from the archive via {@link adopt} ({@link archivedStartedAts}) — a game this browser
+ *    already holds began when it began, so re-persisting it (a breadcrumb return, a `resume` seed, an
+ *    adopted peer log we happen to hold, a resumed local board) must write that same date back;
+ *  - **MINTED** from the clock in {@link stampFor}, for a game being persisted for the first time.
+ *
+ * Reuse is what keeps a per-change autosave from re-stamping the record on every move and shuffling the
+ * game to the top of the (startedAt-sorted) listing.
+ *
+ * A plain in-memory map, so a lookup is SYNCHRONOUS: a writer decides a record's id and its whole
+ * metadata in one synchronous step, and an async read per write would let two consecutive writes of
+ * one record disagree about its date.
+ */
+export class StartedAtLedger {
+  private readonly stamps = new Map<string, number>();
+
+  /**
+   * Adopt the dates the archive already holds ({@link archivedStartedAts}), overwriting nothing this
+   * ledger has established itself — a stamp we minted for a game IS its start, and the archive's copy
+   * of it is the same value written back.
+   */
+  adopt(known: ReadonlyMap<string, number>): void {
+    for (const [uuid, startedAt] of known) {
+      if (!this.stamps.has(uuid)) this.stamps.set(uuid, startedAt);
+    }
+  }
+
+  /**
+   * The stamp for `uuid` — the established one, or `now` minted and remembered on genuinely first use.
+   * Idempotent: called again for the same game it returns the same value, whatever the clock says.
+   */
+  stampFor(uuid: string, now: number): number {
+    const known = this.stamps.get(uuid);
+    if (known !== undefined) return known;
+    this.stamps.set(uuid, now);
+    return now;
+  }
+}
+
+/**
+ * MIGRATION (Task V.5, epic #47) — re-key every record an older build stored under something other
+ * than its game's `uuid`, resolving with the OLD ids that were moved (empty when there was nothing to
+ * do, so a caller logs an observed fact).
+ *
+ * Before V.5 the app autosaved the current game under a localStorage-persisted "autosave id" of its
+ * own; V.5 keys every record by `game.uuid` so one game has exactly one record (design §2 "games keyed
+ * by UUID"). Without this migration a game archived by an older build would keep its old key, and
+ * playing it again (resume) would write a SECOND record under the game's uuid — one game, two records,
+ * the exact duplication the re-keying exists to abolish. Re-keying is the honest fix: the record moves
+ * whole ({@link rekeyGame}, one transaction), so nobody loses a game to the change.
+ *
+ * Two records are deliberately left where they are:
+ *
+ *  - a record with no `meta.uuid` (written before games carried one): there is no key to move it to.
+ *    It stays listed and resumable under its own id, exactly as it was.
+ *  - a CONFLICTED record: it is keyed by its own conflict id and stores BOTH forks — information no
+ *    other record holds — so moving it onto the game's uuid would overwrite the game with one of its
+ *    forks. It stays its own artifact (as it was before V.5, when the listing exempted it too).
+ *
+ * When both a legacy record and a record already under the game's uuid exist, the one with MORE events
+ * wins: the loser is a stale snapshot of the same game, and this migration must never trade history for
+ * tidiness. Idempotent — a second run finds nothing left to move. Errors propagate.
+ */
+export async function rekeyArchiveRecordsByGameUuid(
+  db: IDBDatabase,
+): Promise<readonly string[]> {
+  const listings = await listGames(db);
+  const byId = new Map(listings.map((listing) => [listing.id, listing]));
+  const moved: string[] = [];
+  for (const listing of listings) {
+    const uuid = listing.meta.uuid;
+    if (uuid === undefined || uuid === listing.id) continue; // already canonical, or unkeyable
+    if (listing.meta.result === 'conflicted') continue; // its forks are not a view of one game
+    const sitting = byId.get(uuid);
+    // Never overwrite a CONFLICTED record sitting on the game's uuid — it holds both forks, so neither
+    // record can stand in for the other. Both stay.
+    if (sitting?.meta.result === 'conflicted') continue;
+    // A record already under the game's uuid holding AT LEAST as much history is the one to keep; the
+    // legacy record is then a stale snapshot of the same game, and dropping it loses no history.
+    if (sitting !== undefined && sitting.events >= listing.events) {
+      await deleteGame(db, listing.id);
+      moved.push(listing.id);
+      continue;
+    }
+    await rekeyGame(db, listing.id, uuid);
+    moved.push(listing.id);
+  }
+  return moved;
 }
 
 /**

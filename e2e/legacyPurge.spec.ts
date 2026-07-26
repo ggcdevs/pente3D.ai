@@ -194,14 +194,17 @@ test('a v3 net-room shard present at boot is PURGED from the real store (the boo
   // …and gone from the STORE itself: permanently deleted, not merely hidden from a view.
   expect(await rawGet(page, dbName, LEGACY_SHARD_ID)).toBeNull();
 
-  // The real game is untouched — same record, same history — and it is still what the app restores:
-  // the migration deletes room-keyed shards, never a game (its ply comes back after the reload).
+  // The real game is untouched — same record, same history, still listed: the migration deletes
+  // room-keyed shards, never a game.
   expect(afterIds).toContain(realGame.id);
   const survived = await rawGet(page, dbName, realGame.id);
   expect(survived?.log).toEqual(realRecord!.log);
   expect(survived?.meta.headHash).toBe(realGame.meta.headHash);
-  const restored = await page.evaluate(
+  // …and the boot it survived landed on an EMPTY SLATE, as every boot now does (Task V.5, epic #47,
+  // design §6). The game living on as a RECORD — not on the board — is the whole point: the archive is
+  // where a game survives, the games list is the route back to it.
+  const boardAfterBoot = await page.evaluate(
     () => (window as unknown as { __pente: Pente }).__pente.getHistory()!.maxPly,
   );
-  expect(restored).toBe(3);
+  expect(boardAfterBoot).toBe(0);
 });

@@ -321,6 +321,21 @@ const UI_STYLESHEET = `
 .pente-endstate-rematch:hover, .pente-endstate-accept:hover { background: rgba(74,144,217,0.7); }
 .pente-endstate-decline { background: rgba(255,80,80,0.24); color: #ffb0b0; }
 .pente-endstate-decline:hover { background: rgba(255,80,80,0.38); }
+.pente-rejoin[hidden] { display: none; }
+/* Same shape + viewport guards as the end-state / divergence cards: a fixed, click-THROUGH overlay
+   whose card re-enables pointer events, so the empty board stays visible and orbitable underneath.
+   Below the divergence panel in the stack (a fork must be settled before anything else matters) and
+   above the end-state card (a rejoin offer is about a game that is not on screen yet). */
+.pente-rejoin { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; z-index: 40; }
+.pente-rejoin-card { display: flex; flex-direction: column; gap: 10px; box-sizing: border-box; min-width: min(300px, 100%); max-width: min(460px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow-y: auto; padding: 20px 24px; border-radius: 10px; background: rgba(20,20,26,0.94); backdrop-filter: blur(4px); color: #e6e6ea; font-family: system-ui, sans-serif; box-shadow: 0 8px 32px rgba(0,0,0,0.5); pointer-events: auto; }
+.pente-rejoin-headline { font-size: 17px; font-weight: 600; }
+.pente-rejoin-detail { font-size: 13px; opacity: 0.85; line-height: 1.45; }
+.pente-rejoin-actions { display: flex; gap: 8px; }
+.pente-rejoin-actions button { cursor: pointer; padding: 8px 16px; border-radius: 6px; border: none; color: #e6e6ea; font-size: 14px; }
+.pente-rejoin-confirm { background: rgba(74,144,217,0.5); }
+.pente-rejoin-confirm:hover { background: rgba(74,144,217,0.7); }
+.pente-rejoin-decline { background: rgba(255,255,255,0.12); }
+.pente-rejoin-decline:hover { background: rgba(255,255,255,0.2); }
 .pente-divergence[hidden] { display: none; }
 .pente-divergence { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; z-index: 45; }
 /* The card sizes itself between a floor and the viewport: min-width keeps it from collapsing to a

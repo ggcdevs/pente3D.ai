@@ -945,6 +945,13 @@
         ]
       },
       {
+        "source": "../ui/widgets/rejoinPromptModel.ts",
+        "target": "src/ui/widgets/rejoinPromptModel.ts",
+        "specifiers": [
+          "RejoinPromptView"
+        ]
+      },
+      {
         "source": "./log.ts",
         "target": "src/debug/log.ts",
         "specifiers": [
@@ -958,6 +965,7 @@
         "name": "PenteInspect",
         "extends": [],
         "methods": [
+          "answerRejoin(confirmed: boolean): boolean",
           "applyConfig(section: ConfigSection): void",
           "clickAt(ndcX: number, ndcY: number): GameState | null",
           "dispatch(id: string): boolean | null",
@@ -984,6 +992,7 @@
           "getNetSeatOwners(): SeatMap | null",
           "getNotify(): NotifyReadout",
           "getPieces(): PieceReadout[] | null",
+          "getRejoinPrompt(): RejoinPromptView",
           "getState(): GameState | null",
           "getTemp(): TempReadout | null",
           "getTurnGate(): TurnGateReadout | null",
@@ -1014,12 +1023,14 @@
         "name": "ArchiveInspect",
         "extends": [],
         "methods": [
+          "answerRejoin(confirmed: boolean): boolean",
           "getDivergence(): DivergenceView",
           "getEndState(): EndState",
           "getNetGameUuid(): string | null",
           "getNetLastReject(): AdmissionReject | null",
           "getNetSeatOwners(): SeatMap | null",
           "getNotify(): NotifyReadout",
+          "getRejoinPrompt(): RejoinPromptView",
           "listArchive(): Promise<readonly ArchiveListing[]>",
           "proposeResolution(choice: ResolutionChoice): boolean",
           "respondResolution(accepted: boolean): boolean"
@@ -1437,6 +1448,15 @@
         ]
       },
       {
+        "source": "./net/activeGame.ts",
+        "target": "src/net/activeGame.ts",
+        "specifiers": [
+          "clearActiveGame",
+          "isActiveGameStale",
+          "readActiveGame"
+        ]
+      },
+      {
         "source": "./net/admission.ts",
         "target": "src/net/admission.ts",
         "specifiers": [
@@ -1448,6 +1468,13 @@
         "target": "src/net/appSession.ts",
         "specifiers": [
           "createAppNetSession"
+        ]
+      },
+      {
+        "source": "./net/appSession.ts",
+        "target": "src/net/appSession.ts",
+        "specifiers": [
+          "resolvePlayerId"
         ]
       },
       {
@@ -1497,6 +1524,20 @@
         ]
       },
       {
+        "source": "./net/seats.ts",
+        "target": "src/net/seats.ts",
+        "specifiers": [
+          "seatOf"
+        ]
+      },
+      {
+        "source": "./net/session.ts",
+        "target": "src/net/session.ts",
+        "specifiers": [
+          "NetSession"
+        ]
+      },
+      {
         "source": "./net/sync.ts",
         "target": "src/net/sync.ts",
         "specifiers": [
@@ -1508,12 +1549,15 @@
         "target": "src/persist/archive.ts",
         "specifiers": [
           "ArchivedMeta",
+          "StartedAtLedger",
+          "archivedStartedAts",
           "isEmptyShell",
           "listArchivedGames",
           "loadConflicted",
           "loadGame",
-          "playersFromSeats",
+          "loadNetGameByUuid",
           "purgeLegacyNetRoomRecords",
+          "rekeyArchiveRecordsByGameUuid",
           "saveGame"
         ]
       },
@@ -1524,16 +1568,6 @@
           "GameListing",
           "openDatabase",
           "resolveDbName"
-        ]
-      },
-      {
-        "source": "./persist/gameLifecycle.ts",
-        "target": "src/persist/gameLifecycle.ts",
-        "specifiers": [
-          "LifecycleState",
-          "initialLifecycle",
-          "nextLifecycle",
-          "observeLifecycle"
         ]
       },
       {
@@ -1565,6 +1599,13 @@
         ]
       },
       {
+        "source": "./ui/widgets/netModel.ts",
+        "target": "src/ui/widgets/netModel.ts",
+        "specifiers": [
+          "generateGameCode"
+        ]
+      },
+      {
         "source": "./ui/widgets/netPanelModel.ts",
         "target": "src/ui/widgets/netPanelModel.ts",
         "specifiers": [
@@ -1573,10 +1614,12 @@
         ]
       },
       {
-        "source": "./util/randomId.ts",
-        "target": "src/util/randomId.ts",
+        "source": "./ui/widgets/rejoinPromptModel.ts",
+        "target": "src/ui/widgets/rejoinPromptModel.ts",
         "specifiers": [
-          "randomId"
+          "HIDDEN_REJOIN_PROMPT",
+          "RejoinPromptView",
+          "deriveRejoinPrompt"
         ]
       }
     ],
@@ -1588,6 +1631,7 @@
         "methods": [],
         "properties": [
           "__penteNotifyNotificationCtor: NotificationApi",
+          "__penteRejoinProbeMs: number",
           "__penteVersion: string"
         ]
       }
@@ -1595,19 +1639,17 @@
     "enums": [],
     "typeAliases": [],
     "functions": [
-      "authoritativeGame",
+      "answerRejoin",
       "autosaveTarget",
       "autosaveTick",
-      "bumpGeneration",
       "currentGame",
-      "currentGeneration",
       "getNotifyReadout",
       "listArchive",
       "loadArchivedIntoScene",
       "loadConflictedIfAny",
+      "probeForRejoin",
       "refreshSeedGames",
       "refreshUi",
-      "resolveAutosaveId",
       "resumeArchived",
       "reviewArchived",
       "seedSources",
@@ -2774,7 +2816,8 @@
       "HandshakeChangeListener",
       "NetChangeListener",
       "NetSession",
-      "NetSessionDeps"
+      "NetSessionDeps",
+      "RoomProbe"
     ],
     "imports": [
       {
@@ -2811,6 +2854,7 @@
         "target": "src/persist/archive.ts",
         "specifiers": [
           "ArchivedMeta",
+          "StartedAtLedger",
           "archivedStartedAts",
           "loadNetGameByUuid",
           "playersFromSeats",
@@ -2943,9 +2987,11 @@
           "AdmissionMessage",
           "AdmissionReject",
           "AdmitMessage",
+          "GameMessage",
           "HelloMessage",
           "RejectMessage",
           "SyncMessage",
+          "parseGameMessage",
           "parseSyncMessage",
           "toAdmitMessage",
           "toAdoptAdmitMessage",
@@ -2958,7 +3004,8 @@
         "source": "./transport",
         "target": "src/net/transport.ts",
         "specifiers": [
-          "Transport"
+          "Transport",
+          "TransportMessage"
         ]
       },
       {
@@ -2994,7 +3041,6 @@
           "divergenceFacts(): DivergenceFacts | null",
           "divergenceView(): DivergenceView",
           "enter(rawCode: string, proposal: Proposal): Promise<void>",
-          "gameStartedAt(): number | null",
           "gameState(): GameState | null",
           "gameUuid(): string | null",
           "getHandshake(): HandshakeState",
@@ -3005,6 +3051,7 @@
           "onHandshakeChange(listener: HandshakeChangeListener): () => void",
           "place(coords: Coord): void",
           "ply(): number",
+          "probeRoom(code: string, windowMs: number): Promise<RoomProbe>",
           "propose(action: string): boolean",
           "proposeResolution(choice: ResolutionChoice): boolean",
           "reconnect(): Promise<boolean>",
@@ -3041,6 +3088,16 @@
           "readonly storage: Storage | null",
           "settleMs: number"
         ]
+      },
+      {
+        "name": "RoomProbe",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly code: string",
+          "readonly peerGameUuid: string | null",
+          "readonly peerPresent: boolean"
+        ]
       }
     ],
     "enums": [],
@@ -3055,7 +3112,8 @@
       }
     ],
     "functions": [
-      "offeredGameOf"
+      "offeredGameOf",
+      "probedGameUuid"
     ]
   },
   "src/net/sync.ts": {
@@ -3603,6 +3661,7 @@
       "ConflictedGame",
       "LEGACY_NET_ROOM_RESULT",
       "PersistedSeats",
+      "StartedAtLedger",
       "archivedStartedAts",
       "flagConflicted",
       "isEmptyShell",
@@ -3613,6 +3672,7 @@
       "loadNetGameByUuid",
       "playersFromSeats",
       "purgeLegacyNetRoomRecords",
+      "rekeyArchiveRecordsByGameUuid",
       "saveGame"
     ],
     "imports": [
@@ -3649,7 +3709,8 @@
           "deleteGame",
           "getGame",
           "listGames",
-          "putGame"
+          "putGame",
+          "rekeyGame"
         ]
       }
     ],
@@ -3659,6 +3720,17 @@
         "extends": "Error",
         "implements": [],
         "methods": [],
+        "properties": [],
+        "isAbstract": false
+      },
+      {
+        "name": "StartedAtLedger",
+        "extends": null,
+        "implements": [],
+        "methods": [
+          "adopt(known: ReadonlyMap<string, number>): void",
+          "stampFor(uuid: string, now: number): number"
+        ],
         "properties": [],
         "isAbstract": false
       }
@@ -3736,6 +3808,7 @@
       "loadNetGameByUuid",
       "playersFromSeats",
       "purgeLegacyNetRoomRecords",
+      "rekeyArchiveRecordsByGameUuid",
       "saveGame",
       "toPlainLog"
     ]
@@ -3753,6 +3826,7 @@
       "listGames",
       "openDatabase",
       "putGame",
+      "rekeyGame",
       "resolveDbName"
     ],
     "imports": [],
@@ -3808,68 +3882,10 @@
       "listGames",
       "openDatabase",
       "putGame",
+      "rekeyGame",
       "requestToPromise",
       "resolveDbName",
       "transactionToPromise"
-    ]
-  },
-  "src/persist/gameLifecycle.ts": {
-    "exports": [
-      "LifecycleObservation",
-      "LifecycleState",
-      "LifecycleTransition",
-      "initialLifecycle",
-      "nextLifecycle",
-      "observeLifecycle"
-    ],
-    "imports": [
-      {
-        "source": "../core/gameState",
-        "target": "src/core/gameState.ts",
-        "specifiers": [
-          "GameState"
-        ]
-      }
-    ],
-    "classes": [],
-    "interfaces": [
-      {
-        "name": "LifecycleObservation",
-        "extends": [],
-        "methods": [],
-        "properties": [
-          "readonly generation: number",
-          "readonly hasWinner: boolean",
-          "readonly ply: number"
-        ]
-      },
-      {
-        "name": "LifecycleState",
-        "extends": [],
-        "methods": [],
-        "properties": [
-          "readonly finalized: boolean",
-          "readonly generation: number",
-          "readonly ply: number"
-        ]
-      },
-      {
-        "name": "LifecycleTransition",
-        "extends": [],
-        "methods": [],
-        "properties": [
-          "readonly finalizeCurrent: boolean",
-          "readonly mintFresh: boolean",
-          "readonly next: LifecycleState"
-        ]
-      }
-    ],
-    "enums": [],
-    "typeAliases": [],
-    "functions": [
-      "initialLifecycle",
-      "nextLifecycle",
-      "observeLifecycle"
     ]
   },
   "src/render/cameraControls.ts": {
@@ -6015,6 +6031,20 @@
         ]
       },
       {
+        "source": "./widgets/rejoinPrompt.ts",
+        "target": "src/ui/widgets/rejoinPrompt.ts",
+        "specifiers": [
+          "rejoinPromptWidget"
+        ]
+      },
+      {
+        "source": "./widgets/rejoinPromptModel.ts",
+        "target": "src/ui/widgets/rejoinPromptModel.ts",
+        "specifiers": [
+          "RejoinPromptView"
+        ]
+      },
+      {
         "source": "./widgets/settings.ts",
         "target": "src/ui/widgets/settings.ts",
         "specifiers": [
@@ -6036,6 +6066,7 @@
         "name": "UiDeps",
         "extends": [],
         "methods": [
+          "answerRejoin(confirmed: boolean): boolean",
           "copyToClipboard(text: string): Promise<void>",
           "currentGame(): { readonly uuid: string; readonly headHash: string } | null",
           "dispatch(commandId: string): boolean",
@@ -6045,6 +6076,7 @@
           "getHelpSources(): HelpSources",
           "getHistory(): HistoryFacts",
           "getNet(): NetSessionState",
+          "getRejoinPrompt(): RejoinPromptView",
           "listArchive(): Promise<readonly ArchiveListing[]>",
           "popScope(): void",
           "proposeRematch(): boolean",
@@ -7256,6 +7288,114 @@
       "recordRecentCode",
       "removeRecentCode",
       "resolveStorage"
+    ]
+  },
+  "src/ui/widgets/rejoinPrompt.ts": {
+    "exports": [
+      "REJOIN_PROMPT_ID",
+      "RejoinPromptDeps",
+      "rejoinPromptWidget"
+    ],
+    "imports": [
+      {
+        "source": "../registry.ts",
+        "target": "src/ui/registry.ts",
+        "specifiers": [
+          "Widget",
+          "WidgetFactory"
+        ]
+      },
+      {
+        "source": "./rejoinPromptModel.ts",
+        "target": "src/ui/widgets/rejoinPromptModel.ts",
+        "specifiers": [
+          "HIDDEN_REJOIN_PROMPT",
+          "RejoinPromptView"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "RejoinPromptDeps",
+        "extends": [],
+        "methods": [
+          "answerRejoin(confirmed: boolean): boolean",
+          "getRejoinPrompt(): RejoinPromptView"
+        ],
+        "properties": [
+          "readonly doc: Document"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "rejoinPromptWidget",
+      "render"
+    ]
+  },
+  "src/ui/widgets/rejoinPromptModel.ts": {
+    "exports": [
+      "HIDDEN_REJOIN_PROMPT",
+      "RejoinAction",
+      "RejoinColour",
+      "RejoinOutcome",
+      "RejoinProbe",
+      "RejoinPromptView",
+      "deriveRejoinPrompt"
+    ],
+    "imports": [],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "RejoinProbe",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly crumb: { readonly code: string; readonly gameUuid: string } | null",
+          "readonly haveGame: boolean",
+          "readonly myColour: RejoinColour | null",
+          "readonly peerGameUuid: string | null",
+          "readonly peerPresent: boolean",
+          "readonly stale: boolean"
+        ]
+      },
+      {
+        "name": "RejoinPromptView",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly action: RejoinAction | null",
+          "readonly code: string",
+          "readonly colour: RejoinColour | null",
+          "readonly confirmLabel: string",
+          "readonly declineLabel: string",
+          "readonly detail: string",
+          "readonly headline: string",
+          "readonly outcome: RejoinOutcome | null",
+          "readonly show: boolean"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [
+      {
+        "name": "RejoinColour",
+        "type": "'white' | 'black'"
+      },
+      {
+        "name": "RejoinOutcome",
+        "type": "'same-game' | 'other-game' | 'empty-room' | 'peer-silent'"
+      },
+      {
+        "name": "RejoinAction",
+        "type": "| 'rejoin'\n  /** Restart the breadcrumb's game in a FRESH room, leaving the occupied one alone. */\n  | 'new-code'"
+      }
+    ],
+    "functions": [
+      "deriveRejoinPrompt",
+      "named"
     ]
   },
   "src/ui/widgets/settings.ts": {

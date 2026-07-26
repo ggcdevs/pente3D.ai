@@ -20,6 +20,7 @@ import {
   getGame,
   listGames,
   deleteGame,
+  rekeyGame,
   GAMES_STORE,
   DEFAULT_DB_NAME,
   resolveDbName,
@@ -302,6 +303,59 @@ describe('IndexedDB games store wrapper', () => {
       ),
       { numRuns: 25 },
     );
+  });
+
+  /**
+   * `rekeyGame` — moving a record to a new primary key (Task V.5, epic #47). The archive keys every
+   * record by the GAME's uuid, so a record an older build wrote under a different id is MOVED, not
+   * copied: the assertions below check both halves of that (it arrives whole under the new key AND is
+   * gone from the old one), plus the two edge behaviours a migration relies on.
+   */
+  describe('rekeyGame', () => {
+    it('MOVES the whole record to the new key — content unchanged except the id', async () => {
+      const { db } = await open();
+      const original = sampleRecord('old-autosave-id');
+      await putGame(db, original);
+
+      await rekeyGame(db, 'old-autosave-id', original.meta.uuid);
+
+      const moved = await getGame(db, original.meta.uuid);
+      expect(moved).toEqual({ ...original, id: original.meta.uuid });
+      // …and it is GONE from the old key: one game, one record (not a copy).
+      expect(await getGame(db, 'old-autosave-id')).toBeUndefined();
+      expect(await listGames(db)).toHaveLength(1);
+    });
+
+    it('OVERWRITES a record already sitting under the destination key', async () => {
+      const { db } = await open();
+      await putGame(db, { ...sampleRecord('target'), log: [] });
+      await putGame(db, sampleRecord('source'));
+
+      await rekeyGame(db, 'source', 'target');
+
+      // The mover won: the destination now holds the source's 3-event log, not the empty one.
+      expect((await getGame(db, 'target'))?.log).toHaveLength(3);
+      expect(await getGame(db, 'source')).toBeUndefined();
+    });
+
+    it('writes NOTHING when the source key holds nothing (an already-migrated store)', async () => {
+      const { db } = await open();
+      await putGame(db, sampleRecord('kept'));
+
+      await rekeyGame(db, 'not-here', 'destination');
+
+      // No phantom record is invented at the destination, and nothing else is touched — which is what
+      // makes re-running a completed migration harmless.
+      expect(await getGame(db, 'destination')).toBeUndefined();
+      expect((await listGames(db)).map((l) => l.id)).toEqual(['kept']);
+    });
+
+    it('rejects against a closed database (never a silent no-op)', async () => {
+      const name = freshDbName();
+      const db = await openDatabase(name);
+      db.close();
+      await expect(rekeyGame(db, 'a', 'b')).rejects.toBeInstanceOf(Error);
+    });
   });
 
   describe('error paths propagate honestly (never swallowed)', () => {

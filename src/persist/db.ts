@@ -239,6 +239,30 @@ export function listGames(db: IDBDatabase): Promise<GameListing[]> {
 }
 
 /**
+ * Move the record stored under `from` to the key `to`, in ONE transaction (Task V.5, epic #47).
+ *
+ * The archive's records are keyed by the GAME's own uuid (design §2 "games keyed by UUID"), so a
+ * record an older build wrote under some other id — the app's retired autosave id — is re-keyed by
+ * `archive.ts`'s migration rather than left as a second record for one game. The whole content moves
+ * unchanged except `id`, so nothing about the game is rewritten by relocating it.
+ *
+ * ATOMIC, deliberately: the put and the delete share one `readwrite` transaction, so a failure
+ * anywhere aborts BOTH and the record stays where it was — a half-applied move would either duplicate
+ * the game or lose it. Errors propagate as a rejection (never a silent success).
+ *
+ * A `from` that holds nothing writes nothing (there is no record to move); the `delete` still runs and
+ * is a no-op on an absent key, which makes a re-run of a completed migration harmless.
+ */
+export async function rekeyGame(db: IDBDatabase, from: string, to: string): Promise<void> {
+  const tx = db.transaction(GAMES_STORE, 'readwrite');
+  const store = tx.objectStore(GAMES_STORE);
+  const record = await requestToPromise<GameRecord | undefined>(store.get(from));
+  if (record !== undefined) store.put({ ...record, id: to });
+  store.delete(from);
+  await transactionToPromise(tx);
+}
+
+/**
  * Delete a game record by id. Deleting a missing key is a no-op that still resolves
  * (IndexedDB's `delete` does not error on an absent key).
  */

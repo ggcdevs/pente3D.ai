@@ -19,22 +19,32 @@ import {
   loadGame as loadArchivedGame,
   loadConflicted,
   listArchivedGames,
-  playersFromSeats,
+  loadNetGameByUuid,
+  archivedStartedAts,
   isEmptyShell,
   purgeLegacyNetRoomRecords,
+  rekeyArchiveRecordsByGameUuid,
+  StartedAtLedger,
   type ArchivedMeta,
 } from './persist/archive.ts';
-import {
-  initialLifecycle,
-  nextLifecycle,
-  observeLifecycle,
-  type LifecycleState,
-} from './persist/gameLifecycle.ts';
 import type { Game } from './core/game.ts';
 import type { ArchiveListing } from './ui/widgets/archiveModel.ts';
 import type { SeedGame, SeedSources } from './ui/widgets/netPanelModel.ts';
 import type { Proposal } from './net/admission.ts';
-import { randomId } from './util/randomId.ts';
+import type { NetSession } from './net/session.ts';
+import {
+  readActiveGame,
+  clearActiveGame,
+  isActiveGameStale,
+} from './net/activeGame.ts';
+import { seatOf } from './net/seats.ts';
+import { resolvePlayerId } from './net/appSession.ts';
+import { generateGameCode } from './ui/widgets/netModel.ts';
+import {
+  deriveRejoinPrompt,
+  HIDDEN_REJOIN_PROMPT,
+  type RejoinPromptView,
+} from './ui/widgets/rejoinPromptModel.ts';
 
 const log = createLogger('app:boot');
 
@@ -47,6 +57,13 @@ const log = createLogger('app:boot');
 declare global {
   interface Window {
     __penteNotifyNotificationCtor?: NotificationApi;
+    /**
+     * Test-only seam (Task V.5): how long the boot rejoin PROBE listens to the room, in ms. A Playwright
+     * spec sets it BEFORE the app boots (via `addInitScript`) so a probe that has to cross a test
+     * harness's process boundary is given a realistic deadline; absent, the session's own presence
+     * settle window is used.
+     */
+    __penteRejoinProbeMs?: number;
     /**
      * The build's version, from git tags (issue #22). Set at boot from the compile-time
      * `__APP_VERSION__` so a browser agent (Playwright / cdp) can read WHICH build a page is
@@ -70,98 +87,35 @@ if (!container) {
 
 const scene = createScene(container);
 
-// --- Persistence UX (Task 5.8): autosave, restore-on-load, archive browser. ---------------------
+// --- Persistence UX (Task 5.8, re-keyed by V.5): autosave + the archive browser. -----------------
 // The app (not the scene/core) owns persistence: it needs an IndexedDB handle, which the scene
-// deliberately does not (src/core stays pure; the scene is render IO). The current local game is
-// AUTOSAVED to the Stage 2 archive as it evolves and RESTORED on the next boot, and the archive
-// browser (a UI widget) reviews + loads any past or conflicted game. All three are IO glue verified
-// by the Task 5.8 Playwright spec (asserting on window.__pente getState/getHistory), not unit-gated.
-
-/** The localStorage key holding the CURRENT game's autosave id (restored on boot; re-minted per game). */
-const AUTOSAVE_ID_KEY = 'pente:autosave:id';
-
-/** Resolve (creating on first run) the archive id the CURRENT game autosaves under. Re-minted at each
- *  game boundary (Task 6.3) so past games accumulate; the current id is persisted so a refresh resumes
- *  the same in-progress game rather than the last-finalized one. */
-function resolveAutosaveId(): string {
-  const existing = window.localStorage.getItem(AUTOSAVE_ID_KEY);
-  if (existing !== null && existing.length > 0) return existing;
-  // `randomId` (not `crypto.randomUUID` directly) so this boot-time mint works over plain http on the
-  // LAN (issue #6): `crypto.randomUUID` is secure-context-only and undefined there.
-  const id = randomId();
-  window.localStorage.setItem(AUTOSAVE_ID_KEY, id);
-  return id;
-}
-
-// --- Archive ACCUMULATION (Task 6.3, issue #4) --------------------------------------------------
-// Stage 5 autosaved under ONE stable id, so every new game OVERWROTE the previous record and the
-// archive could only ever hold the current game. Now a fresh id is minted at each GAME BOUNDARY —
-// game-over, reset, or host/join-onto-a-played-board — and the just-ended game is finalized under its
-// own id, so EVERY game (finished OR abandoned, local OR networked) is kept as its own archive record.
-// The DECISION (is this a boundary?) is the PURE `gameLifecycle` module (strict unit+mutation); this
-// glue only reads the plain facts, mints ids, and writes to the archive.
+// deliberately does not (src/core stays pure; the scene is render IO). The LOCAL board the scene holds
+// is AUTOSAVED to the archive as it evolves, and the archive browser (a UI widget) reviews + loads any
+// past or conflicted game. Both are IO glue verified by Playwright (asserting on window.__pente
+// getState/getHistory/getArchive), not unit-gated.
+//
+// EVERY RECORD IS KEYED BY THE GAME'S OWN `uuid` (Task V.5, epic #47, design §2 "games keyed by
+// UUID"). Two consequences, both deliberate:
+//
+//  - ACCUMULATION IS BY CONSTRUCTION, so the machinery that used to produce it is GONE. A new game is
+//    a new uuid and therefore a new record; there is no autosave id in localStorage to mint at a
+//    "game boundary" and no generation/lifecycle decision about when to mint one. One game has
+//    exactly one record, always — which is what the games list (#37) inherits.
+//  - ONE WRITER PER RECORD. A NETWORKED game's record belongs to `NetSession.persistGame`, which
+//    writes it — with the identity-owned seat map — on every accepted move. The app does not write it
+//    (see `autosaveTick`'s guard): two writers of one record is what made a game's
+//    players/seats/startedAt depend on which of them wrote last.
+//
+// AND A RELOAD RESTORES NOTHING (design §6): boot lands on an EMPTY SLATE. Games are not lost — they
+// are durable here by uuid and reachable from the games list; a game that was live in a ROOM is
+// offered back by the rejoin prompt below.
 
 /**
- * The id the CURRENT game autosaves under. Re-minted (and persisted) at each boundary.
- *
- * BOOT RESILIENCE (issue #6): this runs SYNCHRONOUSLY before the DOM UI overlay mounts (below), so a
- * throw here would abort module evaluation and the UI would never mount — exactly the class of boot
- * crash issue #6 was (an insecure-context `crypto.randomUUID` throw). `randomId` removes the known
- * cause, but we still isolate this risky init so ANY failure (blocked/absent localStorage, a future
- * regression) degrades to an in-memory id and lets the UI mount. Reported honestly — a degraded id
- * means autosave persistence may not survive a refresh, NOT a silent success.
+ * When each game this browser holds BEGAN, so re-persisting one keeps its original date (a resumed
+ * board writes the SAME uuid-keyed record it was loaded from). Primed off the archive at boot; the
+ * session holds its own for the games it persists (`persist/archive.ts` `StartedAtLedger`).
  */
-let autosaveId: string;
-try {
-  autosaveId = resolveAutosaveId();
-} catch (err: unknown) {
-  autosaveId = randomId();
-  log.error('autosave id init failed — using an in-memory id (autosave may not persist)', err);
-}
-
-/** The `startedAt` of the current game's record — reset when a fresh game boundary mints a new id. */
-let autosaveStartedAt = Date.now();
-
-// Generation token the pure boundary detector reads to learn "this is a DIFFERENT game" without
-// diffing logs (`gameLifecycle` design). It is a per-GAME token bumped ONLY on EXPLICIT game-boundary
-// events, NEVER on a `Game` object-identity change (issue #7): a networked session swaps in a NEW
-// `Game` object on EVERY adopted remote move (Task 6.1 `adoptNetState` → `SyncEngine` `Game.fromLog`),
-// so keying "new game" off object identity minted a fresh archive record per ply for networked games
-// (one record per MOVE instead of one per GAME). The real boundaries are: a scene RESET (new local
-// game), an archive LOAD (restore / resume into the scene), and a net SESSION START (host/join begins
-// a networked game — bumped ONCE at start, not per remote move). We subscribe to the scene's
-// `onNewGame` (fires on reset/load only) and bump explicitly in the host/join net hooks, so adopting a
-// remote move within the SAME networked game leaves the generation unchanged and the single
-// current-game record keeps growing until a real boundary mints a fresh one.
-let generation = 0;
-
-/**
- * Bump the per-game generation at an EXPLICIT game boundary (reset / load / net-session-start). The
- * next `autosaveTick` observes the changed generation and — over a game that had been PLAYED — mints a
- * fresh archive record for the new game (the pure `gameLifecycle` rule). Never called for a plain move
- * or a remote-move adoption, so a growing game keeps overwriting its single record (issue #7).
- */
-function bumpGeneration(): void {
-  generation += 1;
-}
-
-/** The lifecycle-tracking cursor threaded through the pure boundary decision (never mutated in place). */
-let lifecycle: LifecycleState = initialLifecycle();
-
-// LOCAL game boundaries (issue #7): the scene fires `onNewGame` exactly when it installs a fresh local
-// `Game` object — a RESET (new local game) or a `loadGame` (boot restore / archive resume). Bump the
-// generation here so the next autosave tick mints a fresh record for the new game. Subscribed BEFORE
-// the boot-restore's `loadGame` runs (that path re-seeds the lifecycle from the post-bump generation,
-// so the restored game resumes its SAME record rather than spuriously minting a new one). NET session
-// starts bump separately in the host/join hooks — a networked game is a boundary at START, and its
-// per-remote-move `Game`-object swaps must NOT bump (the issue #7 fix).
-scene.onNewGame(bumpGeneration);
-
-// The networked session's authoritative game, set once the net session wires up (below). Until then
-// (offline / pre-wiring) there is no net game and the scene's local game is authoritative — the same
-// honest-until-wired pattern the net hooks use. Returns the SESSION engine's live `Game` when a net
-// game is authoritative, else null.
-let netAuthoritativeGame: () => Game | null = () => null;
+const startedAts = new StartedAtLedger();
 
 /** The hidden end-state used before the net session wires up (offline / pre-wiring): the networked
  *  end-state overlay shows nothing until there is a live, finished net game to describe. */
@@ -177,7 +131,7 @@ const HIDDEN_END_STATE: EndState = {
 
 // The live networked END-STATE view-model the overlay renders (Task N.2.2, issue #12), set once the
 // net session wires up (below). Until then (offline / pre-wiring) there is no net game, so the overlay
-// is hidden — the same honest-until-wired pattern `netAuthoritativeGame` uses.
+// is hidden — the same honest-until-wired pattern the other net holders use.
 let getNetEndState: () => EndState = () => HIDDEN_END_STATE;
 
 /** The hidden divergence card used before the net session wires up: there is nothing to resolve. */
@@ -207,9 +161,6 @@ let respondNetResolution: (accepted: boolean) => boolean = () => false;
 // pre-wiring) there is no session, so they report `null` — the same honest-until-wired pattern the
 // other net holders use. Exposed on `window.__pente` for the two-context session-model e2e (S.7).
 let getNetSeatOwners: () => SeatMap | null = () => null;
-// The `startedAt` the live net session stamps its game's archive record with (null offline / pre-wiring),
-// so the app's autosave writes that SAME uuid-keyed record with an identical stamp (see `autosaveMeta`).
-let netGameStartedAt: () => number | null = () => null;
 let getNetGameUuid: () => string | null = () => null;
 let getNetLastReject: () => AdmissionReject | null = () => null;
 
@@ -238,53 +189,22 @@ function getNotifyReadout(): NotifyReadout {
   );
 }
 
-/** The authoritative game to archive: the networked SESSION's game when a net game is live, else the
- *  scene's local game. Both expose the same `Game` shape (log + ply + state) the archive persists. */
-function authoritativeGame(): Game {
-  return netAuthoritativeGame() ?? scene.getGame();
-}
-
-/** The current per-game generation token — bumped ONLY at explicit boundaries (see `bumpGeneration`). */
-function currentGeneration(): number {
-  return generation;
-}
-
 /**
- * The record this autosave writes: its **id and its metadata together**, from ONE predicate.
+ * The record this autosave writes for `game`: the app's LOCAL board, keyed by the game's own uuid.
  *
- * When a NETWORKED game is authoritative the target is the SAME uuid-keyed record the net session
- * maintains ({@link NetSession.persistGame}), and EVERY field comes from the session — the
- * identity-owned SEAT MAP (design §2/§7; dropping it would delete the value a later return reclaims
- * its colour from), the `players` projected from those seats, and the GAME's own `startedAt` — so the
- * two writers of that one record cannot erase each other's fields. Otherwise the target is the app's
- * local autosave record, local in every field.
- *
- * The id and the metadata are produced together, from a single {@link netAuthoritativeGame} read,
- * precisely so they cannot disagree. They used to be decided separately, and drifted: `seats` and the
- * record id asked `netAuthoritativeGame()` (null in the CONFLICT phase, where the scene falls back to
- * its own local game) while `startedAt` asked `session.gameStartedAt()` (non-null whenever an engine
- * exists — and the conflict phase deliberately KEEPS the engine). A move after a sync conflict thus
- * wrote a local, seat-less record stamped with the CONFLICTED NET game's date — the value the archive
- * browser renders and `listArchivedGames` sorts by. One read, one decision, no drift.
+ * `players` is the local placeholder because this is a board one person is playing on both sides; a
+ * NETWORKED game's record is written by the session instead, with the real seat owners (design §2/§7).
+ * `startedAt` comes from the ledger, so re-saving a game keeps the date it began rather than being
+ * re-stamped on every move (which would shuffle it up the newest-first games list).
  */
-function autosaveTarget(): { readonly recordId: string; readonly meta: ArchivedMeta } {
-  const winner = scene.getState().winner;
-  const result: ArchivedMeta['result'] = winner === null ? 'in-progress' : `${winner}-wins`;
-  const netGame = netAuthoritativeGame();
-  if (netGame === null) {
-    return {
-      recordId: autosaveId,
-      meta: { players: { white: 'You', black: 'You' }, result, startedAt: autosaveStartedAt },
-    };
-  }
-  const seats = getNetSeatOwners();
+function autosaveTarget(game: Game): { readonly recordId: string; readonly meta: ArchivedMeta } {
+  const winner = game.state().winner;
   return {
-    recordId: netGame.uuid,
+    recordId: game.uuid,
     meta: {
-      players: seats === null ? { white: 'You', black: 'You' } : playersFromSeats(seats),
-      result,
-      startedAt: netGameStartedAt() ?? autosaveStartedAt,
-      ...(seats === null ? {} : { seats }),
+      players: { white: 'You', black: 'You' },
+      result: winner === null ? 'in-progress' : `${winner}-wins`,
+      startedAt: startedAts.stampFor(game.uuid, Date.now()),
     },
   };
 }
@@ -303,115 +223,207 @@ let archiveDb: IDBDatabase | null = null;
 let autosaveSuspended = false;
 
 /**
- * Autosave the authoritative game so past games ACCUMULATE (Task 6.3, issue #4). Each call asks the
- * PURE `nextLifecycle` — from the game's generation (bumped when a new `Game` is swapped in) + ply +
- * winner — for two independent actions, then does exactly the matching archive write:
- *   - `mintFresh` (a NEW game began over a played one — reset / load / net-start): the game just left
- *     is ALREADY durable under the current id (every in-game autosave kept it current), so we MINT a
- *     fresh id + `startedAt` (persisted) and save the new game under it — the old record stays intact.
- *     This is the accumulation point: one archive id per real game.
- *   - `finalizeCurrent` (the game reached a WINNER): save its terminal state under the CURRENT id.
- *     No mint — the fresh id is minted only when the NEXT game actually begins, so a won game is not
- *     prematurely stamped under a new id and duplicated.
- * A plain in-game move is neither: it just overwrites the current id, keeping the live game current.
- * The current id is persisted so a refresh resumes THIS in-progress game (not the last-finalized one).
- * A write error surfaces honestly (never swallowed as a silent success).
+ * Autosave the scene's LOCAL board under its own game uuid (Task 5.8, re-keyed by V.5).
+ *
+ * There is no boundary decision left to make: a new game carries a new uuid, so it lands in its own
+ * record and every past game keeps its own — accumulation by construction (this is what replaced the
+ * autosave-id + `gameLifecycle` generation machinery, epic #47). A write error surfaces honestly.
  */
 async function autosaveTick(): Promise<void> {
   if (archiveDb === null) return;
   // While a REVIEW is in effect (Task 6.6) autosave is fully suspended: the browsed game is read-only,
-  // so we neither mint nor save — the archive is left exactly as the review found it. Resume/reset/host
-  // clears the suspension before starting a real game, so accumulation continues normally after.
+  // so nothing is written — the archive is left exactly as the review found it. Resume/reset/host clears
+  // the suspension before starting a real game, so accumulation continues normally after.
   if (autosaveSuspended) return;
-  const generation = currentGeneration();
-  const game = authoritativeGame();
-  const decision = nextLifecycle(lifecycle, observeLifecycle(generation, game.ply(), game.state()));
-  lifecycle = decision.next;
-  if (decision.mintFresh) {
-    // A new game began: the game just left is already durable under the OLD id, so mint a fresh id
-    // for the new game (the old record is left untouched — that is how past games accumulate).
-    autosaveId = randomId();
-    autosaveStartedAt = Date.now();
-    window.localStorage.setItem(AUTOSAVE_ID_KEY, autosaveId);
-    log.info('new game — minted fresh archive id', { id: autosaveId, generation });
-  }
-  if (decision.finalizeCurrent) {
-    log.info('game won — finalizing archive record', { id: autosaveId, ply: game.ply() });
-  }
-  // Save the live game. A NETWORKED game is archived under its own game UUID — the v3.1 model's
-  // "games keyed by UUID" (design §2), and the SAME id `NetSession.persistGame` writes — so the app
-  // and the session maintain ONE record per game instead of two copies of it, and that record is the
-  // resumable entry the games list offers (#37). A LOCAL game keeps the app's autosave id (the freshly-
-  // minted one on a mint, the same one otherwise; on a finalize this captures the won terminal state).
-  // Id + metadata come from ONE decision (see `autosaveTarget`) so they can never disagree about
-  // which game is being written.
-  const target = autosaveTarget();
+  const game = scene.getGame();
+  // ONE WRITER PER RECORD: the SESSION owns the record of the game it is playing (it writes the
+  // identity-owned seat map with it), so the app never writes that same record. Normally the scene's
+  // local board is a different game entirely; it is the SAME game when a room was entered on the
+  // "Current local board" seed, which is exactly when this guard is load-bearing.
+  if (getNetGameUuid() === game.uuid) return;
+  const target = autosaveTarget(game);
   await saveGame(archiveDb, target.recordId, game, target.meta);
   // The archive just changed — refresh the seed-games cache so the Network-Game panel's Resume list
-  // reflects it on the next open (a newly-finalized game becomes resume-able; the current game stays
-  // excluded). Best-effort: a refresh failure only leaves a stale list, never a broken save.
+  // reflects it on the next open. Best-effort: a refresh failure only leaves a stale list, never a
+  // broken save.
   await refreshSeedGames().catch((err: unknown) => log.error('seed-games refresh failed', err));
 }
 
-void openDatabase(resolveDbName())
+/**
+ * Resolves with the OPEN, MIGRATED archive once persistence is wired — or `null` if it could not be
+ * opened (honest: persistence stays off, and the rejoin probe below has no game to offer). Awaited by
+ * the boot rejoin probe, which needs the store migrated + the `startedAt` ledger primed before it reads
+ * the game its breadcrumb names.
+ */
+const persistenceReady: Promise<IDBDatabase | null> = openDatabase(resolveDbName())
   .then(async (db) => {
     archiveDb = db;
-    // MIGRATION FIRST (V.1, epic #47): drop any v3 `net-room:{code}` shard this ORIGIN's store still
-    // holds. IndexedDB is per-origin, so a deployed v3 build's coordination records live in the SAME
-    // store this build reads — and v3.1 has no marker filter to hide them, so an un-migrated shard
-    // would render as a bogus user-facing game and be offered as a resume seed. Runs before the
-    // restore/listing below so nothing ever observes one. The count is an OBSERVED fact, not a claim.
+    // MIGRATIONS FIRST, before anything reads or writes the store.
+    //
+    // 1. (V.1, epic #47) drop any v3 `net-room:{code}` shard this ORIGIN's store still holds.
+    //    IndexedDB is per-origin, so a deployed v3 build's coordination records live in the SAME store
+    //    this build reads — and v3.1 has no marker filter to hide them, so an un-migrated shard would
+    //    render as a bogus user-facing game and be offered as a resume seed.
     const purged = await purgeLegacyNetRoomRecords(db);
     if (purged.length > 0) log.info('purged legacy net-room records', { ids: purged });
-    // RESTORE ON LOAD: if the current game was autosaved under our (persisted) id, reconstruct it
-    // (fold its event log) and swap it into the scene, so a refresh resumes exactly where the player
-    // left off — the IN-PROGRESS game, since a finalized game re-minted the id before the refresh. A
-    // corrupt stored log surfaces honestly via the catch below (never a silently-broken board).
-    const restored = await loadArchivedGame(db, autosaveId);
-    if (restored !== undefined) {
-      scene.loadGame(restored);
-      refreshUi();
-      log.info('autosaved game restored', { id: autosaveId, ply: restored.ply() });
-    }
-    // Seed the lifecycle cursor from the game now live (after any restore), so the first tick observes
-    // the SAME generation and does not spuriously treat a restored game as a boundary. A boot restore
-    // fired `onNewGame` → bumped the generation; seeding from that post-bump value here means the first
-    // autosave tick sees `prev.generation === obs.generation` and resumes the restored record (no mint).
-    lifecycle = { generation, ply: authoritativeGame().ply(), finalized: false };
-    // AUTOSAVE + boundary detection on every state change (place/undo/redo/reset/load/net-adopt).
+    // 2. (V.5, epic #47) re-key every record an older build stored under its retired autosave id onto
+    //    the GAME's uuid, so a game archived before this build stays listed and resumable AND does not
+    //    become a second record for one game the first time it is played again. Both counts are
+    //    OBSERVED facts, not claims.
+    const rekeyed = await rekeyArchiveRecordsByGameUuid(db);
+    if (rekeyed.length > 0) log.info('re-keyed archive records by game uuid', { ids: rekeyed });
+    // Learn when every game this browser already holds BEGAN, before anything is written, so a game we
+    // resume is re-persisted with its original date instead of being re-stamped "now".
+    startedAts.adopt(await archivedStartedAts(db));
+    // NOTHING IS RESTORED HERE (design §6): a reload lands on an EMPTY SLATE. The game that was live is
+    // durable above by uuid — reachable from the games list, and offered back by the rejoin prompt when
+    // it was being played in a room.
     scene.onStateChange(() => {
       void autosaveTick().catch((err: unknown) => log.error('autosave failed', err));
     });
-    // Persist the initial state immediately so a fresh game is browsable even before the first move.
-    // Through the same single decision as every later tick (there is no net session yet at boot, so
-    // this resolves to the local autosave record — but it reads the rule rather than restating it).
-    const bootTarget = autosaveTarget();
-    await saveGame(db, bootTarget.recordId, authoritativeGame(), bootTarget.meta);
+    // Persist the initial state immediately so a fresh board is browsable even before the first move.
+    const bootGame = scene.getGame();
+    const bootTarget = autosaveTarget(bootGame);
+    await saveGame(db, bootTarget.recordId, bootGame, bootTarget.meta);
     // Prime the seed-games cache off the now-open archive so the Network-Game panel's Resume list is
     // populated on its first open (before any autosave tick has run).
     await refreshSeedGames();
-    log.info('autosave wired', { id: autosaveId });
+    log.info('autosave wired', { id: bootTarget.recordId });
+    return db;
   })
   .catch((err: unknown) => {
     // Surface an init failure honestly; persistence stays off (never silently "saved").
     log.error('archive init failed', err);
+    return null;
   });
+
+
+// --- REJOIN PROMPT (Task V.5, epic #47, design §6) -----------------------------------------------
+// A reload lands on an EMPTY SLATE, so the ONLY thing that offers a way straight back into a game that
+// was live in a room is this prompt. It is an OFFER: nothing is loaded, entered or published until the
+// player answers, and DECLINING forgets the breadcrumb (design §6) so the next reload is silent.
+//
+// The decision is the PURE `deriveRejoinPrompt`; this glue only supplies the facts (the breadcrumb, the
+// archived game, the colour that game's own seat map owns for us) and performs the answer.
+
+/** The live rejoin card the widget paints — hidden until (and unless) a probe produces an offer. */
+let rejoinPrompt: RejoinPromptView = HIDDEN_REJOIN_PROMPT;
+
+/**
+ * What answering YES acts on, captured with the prompt: the room, and the game identity to carry into a
+ * fresh room if the old one is busy. Kept beside the view so the answer cannot drift from the question
+ * that was asked (e.g. a breadcrumb rewritten meanwhile).
+ */
+let rejoinTarget: { code: string; uuid: string; headHash: string } | null = null;
+
+/**
+ * PROBE for a rejoin offer at boot (design §6): read the breadcrumb, look at the room WITHOUT entering
+ * it, and derive the card.
+ *
+ * The probe is deliberately the LAST thing: it costs a transport connection, so it only happens once
+ * the pure model says an offer is possible at all — the breadcrumb is fresh AND the game it names is
+ * really here. When it is not, the breadcrumb is cleared: a claim nothing can act on would otherwise
+ * re-probe on every reload forever (design §6 "a stale `updatedAt` expires quietly"; the game itself is
+ * untouched and stays reachable from the games list).
+ *
+ * Never throws into the boot path: a failed probe (an unreachable relay) or an unreadable archived game
+ * is surfaced honestly in the log and leaves NO prompt and the breadcrumb INTACT — we learned nothing,
+ * which is not the same as learning the room is empty.
+ */
+async function probeForRejoin(session: NetSession, db: IDBDatabase): Promise<void> {
+  const crumb = readActiveGame();
+  if (crumb === null) return; // no breadcrumb: an ordinary empty-slate boot, nothing to ask
+  const stale = isActiveGameStale(crumb, Date.now());
+  const held = stale ? undefined : await loadNetGameByUuid(db, crumb.gameUuid);
+  const known = {
+    crumb: { code: crumb.code, gameUuid: crumb.gameUuid },
+    stale,
+    haveGame: held !== undefined,
+    // DERIVED from the game's own identity-owned seat map (design §7): the prompt DISPLAYS this colour
+    // and never negotiates one — which is what keeps #31/#40 shut.
+    myColour: held?.seats == null ? null : seatOf(held.seats, resolvePlayerId()),
+  };
+  // Would ANY probe outcome produce an offer? `show` depends only on the three facts above (a property
+  // `rejoinPromptModel.test.ts` pins), so this asks the model rather than restating its rule. The
+  // `held === undefined` half is the same fact as `haveGame`, narrowing it for the load below.
+  if (held === undefined || !deriveRejoinPrompt({ ...known, peerPresent: false, peerGameUuid: null }).show) {
+    clearActiveGame();
+    log.info('rejoin breadcrumb expired', { code: crumb.code, stale, held: held !== undefined });
+    return;
+  }
+  // How long the probe listens. The default is the session's own presence settle window; a Playwright
+  // spec may WIDEN it through the `window.__penteRejoinProbeMs` seam so a cross-process test double's
+  // round-trip is not cut off under load. A deadline, never a gate: the room must still answer for the
+  // "same game" outcome to be derived, so widening it cannot turn a failure into a pass.
+  const probe = await session.probeRoom(crumb.code, window.__penteRejoinProbeMs);
+  rejoinTarget = { code: crumb.code, uuid: crumb.gameUuid, headHash: headHash(held.game.log) };
+  rejoinPrompt = deriveRejoinPrompt({
+    ...known,
+    peerPresent: probe.peerPresent,
+    peerGameUuid: probe.peerGameUuid,
+  });
+  log.info('rejoin probe', {
+    code: probe.code,
+    peerPresent: probe.peerPresent,
+    outcome: rejoinPrompt.outcome,
+  });
+  refreshUi();
+}
+
+/**
+ * ANSWER the rejoin prompt — the one action behind both its buttons (and `window.__pente.answerRejoin`).
+ * The card is dismissed either way: it asked a question, and it has been answered.
+ *
+ *  - **No** → CLEAR the breadcrumb (design §6). The player said they are not going back, so the next
+ *    reload must not ask again. The game itself is untouched, in the archive, in the games list.
+ *  - **Yes**, `rejoin` → re-enter the SAME room with dealer's choice: the breadcrumb re-seeds the game
+ *    by uuid and the seat map reclaims our colour by identity (design §6.4) — no colour is negotiated.
+ *  - **Yes**, `new-code` → someone else's game is in that room, so take OURS to a FRESH room rather than
+ *    hijacking theirs: a `resume` seed naming our game by uuid + head, which the wire's seed matrix
+ *    enforces (V.2).
+ *
+ * @returns `true` if an answer was applied, `false` if there was nothing being asked.
+ */
+function answerRejoin(confirmed: boolean): boolean {
+  const view = rejoinPrompt;
+  const target = rejoinTarget;
+  if (!view.show || target === null) return false;
+  rejoinPrompt = HIDDEN_REJOIN_PROMPT;
+  rejoinTarget = null;
+  if (!confirmed) {
+    clearActiveGame();
+    log.info('rejoin declined — breadcrumb cleared', { code: target.code });
+    refreshUi();
+    return true;
+  }
+  if (view.action === 'rejoin') {
+    enterRoom(target.code, { kind: 'defer' });
+  } else {
+    enterRoom(generateGameCode(Math.random), {
+      kind: 'resume',
+      uuid: target.uuid,
+      headHash: target.headHash,
+    });
+  }
+  refreshUi();
+  return true;
+}
 
 /**
  * The archived records that are GAMES to this app — the ONE rule both the archive browser and the
  * Resume seed list obey, so the two can never disagree about what counts as a game.
  *
- * Drops every {@link isEmptyShell} record (a board with no history and no result) EXCEPT the app's
- * current autosave record, which is the board the player has loaded right now: it is legitimately
- * empty at boot, becomes the played game in place, and is what "Current local board" seeds from — so
- * it is always shown. Every OTHER empty shell is an abandoned husk (a room that was entered and left
- * before a single move; the net session keeps its record for the by-uuid reclaim, design §6.4) and
- * showing one as a game would litter the only route back to real games (#37) with boards that never
- * happened. This mirrors the local rule the lifecycle already enforces — a never-played board is not
- * a game (`gameLifecycle.ts`: an idle reset mints nothing).
+ * Drops every {@link isEmptyShell} record (a board with no history and no result) EXCEPT the board the
+ * player has loaded RIGHT NOW (the scene's live game, keyed by its uuid): it is legitimately empty at
+ * boot, becomes the played game in place, and is what "Current local board" seeds from — so it is
+ * always shown. Every OTHER empty shell is an abandoned husk (a board that was reset before a move, or
+ * a room that was entered and left before one — the net session keeps its record for the by-uuid
+ * reclaim, design §6.4), and showing one as a game would litter the only route back to real games
+ * (#37) with boards that never happened.
  */
 function userFacingGames(listings: readonly GameListing[]): readonly GameListing[] {
-  return listings.filter((l) => l.id === autosaveId || !isEmptyShell(l));
+  const liveBoard = scene.getGame().uuid;
+  return listings.filter((l) => l.id === liveBoard || !isEmptyShell(l));
 }
 
 /**
@@ -442,7 +454,7 @@ async function refreshSeedGames(): Promise<void> {
     // Exclude the CURRENT game — the local autosave record (that is the "Current local board" seed),
     // and, while a networked game is live, its own uuid-keyed record: offering to "resume" the game
     // you are already playing is a confusing self-reference, not a seed.
-    .filter((l) => l.id !== autosaveId && l.meta.uuid !== getNetGameUuid())
+    .filter((l) => l.id !== scene.getGame().uuid && l.meta.uuid !== getNetGameUuid())
     .map((l) => ({
       id: l.id,
       // A human, deterministic label — the seat players + outcome the archive round-trips. Rendered
@@ -516,21 +528,20 @@ async function reviewArchived(id: string): Promise<void> {
 
 /**
  * RESUME an archived game (Task 6.6): load it and make it the live CONTINUABLE game. Same swap as
- * review, but autosave stays ACTIVE — swapping in the loaded `Game` bumps the generation, so the pure
- * Task 6.3 lifecycle detects a boundary over the just-abandoned live game and MINTS A FRESH record for
- * the resumed game (exactly as reset / host do). Continued play then accumulates under that fresh id and
- * the original archived record stays intact — no bespoke minting here (DRY: the one accumulation path in
- * `autosaveTick` owns id-minting). A networked game is resumed the same way: the user then Hosts from
- * the resumed board (reusing 6.4's played-board path), which archives + restarts as a fresh net game.
+ * review, but autosave stays ACTIVE — so continued play is written back to THE SAME record the game was
+ * loaded from (V.5: records are keyed by the game's uuid, so a game has one record whether it is being
+ * played for the first time or picked up again, and its `startedAt` is preserved by the ledger). The
+ * board just abandoned keeps its own record, as every past game does. A networked game is resumed the
+ * same way: the user then enters a room from the resumed board (the "Current local board" seed).
  */
 async function resumeArchived(id: string): Promise<void> {
   if (archiveDb === null) return;
   try {
-    // Ensure autosave is active (a prior review may have suspended it) so the load's boundary mints.
+    // Ensure autosave is active (a prior review may have suspended it) so continued play is written.
     autosaveSuspended = false;
     const game = await loadArchivedIntoScene(id);
     if (game === undefined) return;
-    log.info('archived game resumed (continues under a fresh record)', { id, ply: game.ply() });
+    log.info('archived game resumed (continues under its own record)', { id, ply: game.ply() });
   } catch (err: unknown) {
     log.error('archive resume failed', { id, err });
   }
@@ -567,26 +578,16 @@ void createAppNetSession(scene.getState().size)
     const netGameState = () =>
       shouldRenderSessionGame(session.state()) ? session.gameState() : null;
 
-    // Host/join onto a played board (Task 6.4, issue #4a): before STARTING a networked game, archive
-    // + reset the current LOCAL game iff it has actually been PLAYED — the PURE `shouldArchiveBeforeNetStart`
-    // decides (played → yes, pristine → no) from the scene-local game's ply. The archive falls out of the
-    // Task 6.3 lifecycle: dispatching `reset` swaps in a fresh `Game`, whose generation change finalizes the
-    // just-abandoned local game under its own id. Identical for HOST and JOIN (the task's hard requirement),
-    // so both go through this one seam — a pristine board is left untouched and just started.
-    const archiveResetBeforeStart = (): void => {
+    // Host/join onto a played board (Task 6.4, issue #4a): before STARTING a networked game, leave the
+    // current LOCAL game behind iff it has actually been PLAYED — the PURE `shouldArchiveBeforeNetStart`
+    // decides (played → yes, pristine → no) from the scene-local game's ply. Dispatching `reset` swaps in
+    // a fresh `Game`; the played board it replaces is already durable under its OWN uuid (every autosave
+    // tick kept it current), so nothing has to be finalized here. Identical for HOST and JOIN (the task's
+    // hard requirement), so both go through this one seam — a pristine board is left untouched.
+    const startNetGame = (begin: () => void): void => {
       if (shouldArchiveBeforeNetStart(scene.getGame().ply())) {
         scene.dispatch('reset');
       }
-    };
-    // Starting a networked game is an EXPLICIT game boundary (issue #7): bump the generation ONCE here,
-    // at host/join, NOT per adopted remote move. The session swaps in a fresh `Game` object on every
-    // remote move (`SyncEngine` rebuilds from the peer's log), but adopting a move within the SAME net
-    // game must NOT bump — otherwise a networked game would mint one archive record per PLY. The pure
-    // lifecycle then mints a fresh record only if the local game we are leaving had been PLAYED (a
-    // pristine board is reused, not littered), and the single net-game record grows as moves accumulate.
-    const startNetGame = (begin: () => void): void => {
-      archiveResetBeforeStart();
-      bumpGeneration();
       begin();
     };
     /**
@@ -679,17 +680,6 @@ void createAppNetSession(scene.getState().size)
       getNetUndoRedoAvail: () => session.undoRedoAvail(),
       getUndoRedoPrompt: () => session.undoRedoPrompt(),
     });
-    // Archive ACCUMULATION for NETWORKED games (Task 6.3): the authoritative game to persist while a
-    // net game is live is the SESSION engine's game — its own `Game` object, distinct from the scene's
-    // local one. Exposing it here lets the autosave bump its generation (a fresh net game is a new game
-    // identity) so starting a networked game onto a played local board finalizes that local game and
-    // mints a fresh record for the networked one. Same authoritative condition as `netGameState`, so
-    // the archived game and the rendered game can never drift.
-    netAuthoritativeGame = () => {
-      if (!shouldRenderSessionGame(session.state())) return null;
-      const engine = session.syncEngine();
-      return engine === null ? null : engine.game();
-    };
     // The live networked END-STATE view-model the overlay renders (Task N.2.2, issue #12): fold the
     // AUTHORITATIVE net game state + the N.1 handshake + this client's seat through the PURE
     // `deriveEndState`. Offline / no live net game → there is no net end-state, so the overlay shows
@@ -713,13 +703,12 @@ void createAppNetSession(scene.getState().size)
     proposeNetResolution = (choice) => session.proposeResolution(choice);
     respondNetResolution = (accepted) => session.respondResolution(accepted);
     getNetSeatOwners = () => session.seatOwners();
-    netGameStartedAt = () => session.gameStartedAt();
     getNetGameUuid = () => session.gameUuid();
     getNetLastReject = () => session.lastRejectReason();
 
     // Unified entry (Task S.6, design §3): the Network-Game panel's single Enter button routes HERE with
     // the canonical code + the chosen seed proposal. It goes through the SAME `startNetGame` boundary
-    // the old host/join hooks use (archive+reset a played local board, bump the generation once), then
+    // the old host/join hooks use (leave a played local board behind, durable under its own uuid), then
     // drives `NetSession.enter(code, proposal)` — the S.5 admission protocol seats this peer by identity
     // rather than by which button was pressed (the #31 fix). A `defer`/`new` mirrors the old join/host;
     // `current`/`resume` carry a real game identity the protocol reconciles against the peer's.
@@ -745,10 +734,9 @@ void createAppNetSession(scene.getState().size)
       if (res === null || res.action !== REMATCH_ACTION || res.outcome !== 'accepted') return;
       if (res.id === handledRematchId) return;
       handledRematchId = res.id;
-      // A rematch (game-over → a new game) is an EXPLICIT game boundary (issue #7): bump the generation
-      // ONCE so the just-finished (won) net game is finalized under its own archive id and the fresh
-      // rematch game mints its own record — one-record-per-GAME, not one per remote move of the rematch.
-      bumpGeneration();
+      // A rematch is a NEW game with its own uuid, so it lands in its own archive record and the
+      // just-finished one keeps its own — no boundary bookkeeping here (V.5: records are keyed by the
+      // game, so one-record-per-GAME holds by construction, remote moves included).
       session.resetForRematch();
       refreshUi();
     };
@@ -830,6 +818,15 @@ void createAppNetSession(scene.getState().size)
     });
     refreshUi();
     log.info('net session wired');
+    // BOOT REJOIN PROBE (V.5, design §6): once persistence is migrated and the session exists, look at
+    // the room the breadcrumb names and OFFER a way back. Deliberately after the session is fully wired
+    // (the offer's YES drives `enterRoom`) and never blocking the boot: a failure only means no offer.
+    void persistenceReady.then((db) => {
+      if (db === null) return;
+      return probeForRejoin(session, db).catch((err: unknown) => {
+        log.error('rejoin probe failed — no prompt shown, breadcrumb kept', err);
+      });
+    });
   })
   .catch((err: unknown) => {
     // Surface an init failure honestly; the net widget stays offline (never silently "connected").
@@ -909,6 +906,10 @@ const ui = createUi(container, {
   getDivergence: () => getNetDivergence(),
   proposeResolution: (choice) => proposeNetResolution(choice),
   respondResolution: (accepted) => respondNetResolution(accepted),
+  // REJOIN PROMPT (Task V.5, epic #47, design §6): the card reads the live offer the boot probe
+  // derived, and its two buttons route through the SAME `answerRejoin` seam `window.__pente` uses.
+  getRejoinPrompt: () => rejoinPrompt,
+  answerRejoin: (confirmed) => answerRejoin(confirmed),
 });
 
 /** Repaint every widget from the live state + the banner history context (Task 5.2). */
@@ -962,6 +963,10 @@ installInspectApi(scene, ui, {
   getDivergence: () => getNetDivergence(),
   proposeResolution: (choice) => proposeNetResolution(choice),
   respondResolution: (accepted) => respondNetResolution(accepted),
+  // REJOIN PROMPT (Task V.5, epic #47, design §6): the card reads the live offer the boot probe
+  // derived, and its two buttons route through the SAME `answerRejoin` seam `window.__pente` uses.
+  getRejoinPrompt: () => rejoinPrompt,
+  answerRejoin: (confirmed) => answerRejoin(confirmed),
 });
 
 // Publish the build fingerprint (issue #22). `__APP_VERSION__` is substituted at build time from

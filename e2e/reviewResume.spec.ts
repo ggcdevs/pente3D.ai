@@ -15,8 +15,8 @@ import { DEFAULT_MENU_ENTRIES } from '../src/ui/widgets/menuModel.ts';
  *   - REVIEW loads the archived game read-only (getState reflects it) and the current autosave record
  *     is NOT disturbed (its id/count are unchanged) — reviewing is just looking;
  *   - RESUME loads the archived game AND continues playing: a subsequent move is accepted (the board
- *     advances past the archived ply), and the continued game accumulates as a NEW archive record
- *     while the ORIGINAL record stays intact (its headHash still present, unchanged).
+ *     advances past the archived ply), and the continued play is written back to THAT GAME's OWN record
+ *     — one game, one record (Task V.5, epic #47), so the archive does not grow a second entry for it.
  *
  * The archive is isolated per-test (a fresh IndexedDB via the `__penteDbName` seam) and localStorage
  * is cleared on first load, exactly as `archive.spec.ts` / `archiveAccumulation.spec.ts` do.
@@ -261,7 +261,7 @@ test('REVIEW loads read-only and leaves the current autosave record UNDISTURBED'
   expect(archiveAfter[0]!.meta.headHash).toBe(headBefore);
 });
 
-test('RESUME loads AND continues playing, accumulating a NEW record while the original stays intact', async ({
+test('RESUME loads AND continues playing — in the SAME record, which is the game\'s only one', async ({
   page,
 }) => {
   await isolate(page);
@@ -274,7 +274,7 @@ test('RESUME loads AND continues playing, accumulating a NEW record while the or
   const gameAHead = await get(page, (p) => p.getHeadHash()!);
   const gameAId = (await getAsync(page, (p) => p.getArchive()))[0]!.id;
   await get(page, (p) => p.dispatch('reset'));
-  // Play a piece in the new game so the reset boundary mints game A's sibling (archive grows to 2).
+  // Play a piece in the new game so it becomes a game of its own (the archive grows to 2).
   await get(page, (p) => p.place([2, 2, 2]));
   await waitForArchiveCount(page, 2);
   await waitForAutosaved(page);
@@ -303,19 +303,30 @@ test('RESUME loads AND continues playing, accumulating a NEW record while the or
   const resumedHead = await get(page, (p) => p.getHeadHash()!);
   expect(resumedHead).not.toBe(gameAHead); // a new move → a new head, past the archived ply
 
-  // The resumed play accumulates as a NEW record (archive grows to 3) — the fresh id the resume minted.
-  await waitForArchiveCount(page, 3);
-  await waitForAutosaved(page);
+  // ONE GAME, ONE RECORD (Task V.5, epic #47, design §2 "games keyed by UUID"): continuing game A is
+  // written back to game A's OWN record, so the archive does NOT grow and no second entry for the same
+  // game appears. Before V.5 this minted a fresh record and left the ply-3 snapshot behind as a
+  // second entry for one game — the duplication the re-keying abolished.
+  // Wait for the continued play to be DURABLE in game A's own record (not merely for some record to
+  // change), so the count assertion below cannot pass against a write still in flight.
+  await page.waitForFunction(
+    async (want: { id: string; head: string }) => {
+      const p = (window as unknown as { __pente?: Pente }).__pente;
+      if (!p) return false;
+      const games = await p.getArchive();
+      return games.some((g) => g.id === want.id && g.meta.headHash === want.head);
+    },
+    { id: gameAId, head: resumedHead },
+  );
   const archiveAfter = await getAsync(page, (p) => p.getArchive());
-  expect(archiveAfter.length).toBe(3);
-  const heads = archiveAfter.map((g) => g.meta.headHash);
-  // The ORIGINAL game A record is still present and UNCHANGED (resume did not clobber it).
-  expect(heads).toContain(gameAHead);
-  const originalStill = archiveAfter.find((g) => g.id === gameAId)!;
-  expect(originalStill.meta.headHash).toBe(gameAHead);
-  // ...and the continued game (resumedHead) is its own new record with a distinct head.
-  expect(heads).toContain(resumedHead);
-  expect(resumedHead).not.toBe(gameAHead);
+  expect(archiveAfter.length).toBe(2);
+  const gameARecord = archiveAfter.find((g) => g.id === gameAId)!;
+  // Game A's record is the CONTINUED game — same record, advanced head — and the ply-3 head it used to
+  // hold is nowhere else in the archive (no snapshot was forked off).
+  expect(gameARecord.meta.headHash).toBe(resumedHead);
+  expect(archiveAfter.filter((g) => g.meta.headHash === gameAHead)).toEqual([]);
+  // …and the OTHER game (the board played after the reset) is untouched alongside it.
+  expect(archiveAfter.filter((g) => g.id !== gameAId)).toHaveLength(1);
 
   const shot = resolve('e2e/artifacts/review-resume-continued.png');
   mkdirSync(dirname(shot), { recursive: true });

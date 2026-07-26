@@ -30,6 +30,7 @@ import type { HandshakeState } from '../net/handshake.ts';
 import type { EndState } from '../net/endState.ts';
 import type { NotifyReadout } from '../net/notifyGlue.ts';
 import type { DivergenceView } from '../ui/widgets/divergenceModel.ts';
+import type { RejoinPromptView } from '../ui/widgets/rejoinPromptModel.ts';
 import type { ResolutionChoice } from '../net/resolution.ts';
 import type { UndoRedoPrompt } from '../net/undoRedo.ts';
 import type { HelpSources } from '../ui/widgets/helpModel.ts';
@@ -344,6 +345,19 @@ export interface PenteInspect {
   proposeResolution(choice: ResolutionChoice): boolean;
   /** Agree (`true`) / decline (`false`) the peer's suggested resolution (Task V.4b). */
   respondResolution(accepted: boolean): boolean;
+  /**
+   * The live REJOIN PROMPT (Task V.5, epic #47, design §6): the pure `deriveRejoinPrompt` over the
+   * `activeNetworkedGame` breadcrumb + the boot room PROBE — which of the three §6 outcomes the room
+   * presented, what answering yes would do, and the colour the game's own seat map derived for us. Lets
+   * a Playwright spec prove the empty-slate reload OFFERS the game back (rather than auto-loading it),
+   * and that the offer describes the room the probe really found — observable state, never a log line.
+   */
+  getRejoinPrompt(): RejoinPromptView;
+  /**
+   * Answer the rejoin prompt (Task V.5) — the SAME app seam the card's buttons drive. `false` declines
+   * and CLEARS the breadcrumb (design §6), which a spec asserts against localStorage.
+   */
+  answerRejoin(confirmed: boolean): boolean;
 }
 
 /** The app-level archive readouts wired into the inspect API (Task 5.8; the DB lives in `main.ts`). */
@@ -386,6 +400,13 @@ export interface ArchiveInspect {
   getDivergence(): DivergenceView;
   proposeResolution(choice: ResolutionChoice): boolean;
   respondResolution(accepted: boolean): boolean;
+  /**
+   * The live rejoin offer + its answer action (Task V.5) — the app's boot probe result and
+   * `answerRejoin`, exposed here for the same app-level reason as the other session readouts (the probe
+   * needs the net session's transport and the archive).
+   */
+  getRejoinPrompt(): RejoinPromptView;
+  answerRejoin(confirmed: boolean): boolean;
 }
 
 declare global {
@@ -485,6 +506,11 @@ export function installInspectApi(
     getDivergence: () => archive.getDivergence(),
     proposeResolution: (choice: ResolutionChoice) => archive.proposeResolution(choice),
     respondResolution: (accepted: boolean) => archive.respondResolution(accepted),
+    // Rejoin prompt (Task V.5, epic #47) — the app's boot probe offer + its answer, exposed so an e2e
+    // proves a reload OFFERS the game back instead of auto-loading it, and that declining clears the
+    // breadcrumb. App-level like the other session readouts, so it rides `archive`.
+    getRejoinPrompt: () => archive.getRejoinPrompt(),
+    answerRejoin: (confirmed: boolean) => archive.answerRejoin(confirmed),
   };
   window.__pente = api;
   log.info('window.__pente installed', Object.keys(api));

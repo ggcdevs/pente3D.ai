@@ -140,6 +140,12 @@ export default defineConfig({
         // asserting one converged headHash), not unit coverage. The PURE `divergenceModel.ts` is
         // pinned to the 100% floor below (and in the mutation scope). Excluded file-by-file.
         'src/ui/widgets/divergencePanel.ts',
+        // Task V.5 rejoin-prompt widget: the card DOM glue that paints the PURE `rejoinPromptModel.ts`
+        // view-model and routes both buttons through the app's one `answerRejoin` seam. Touches the DOM
+        // — verified by `e2e/rejoinPrompt.spec.ts` (a real reload landing empty, the three §6 probe
+        // outcomes rendering, and declining clearing the breadcrumb in real localStorage), not unit
+        // coverage. The PURE model is pinned to the 100% floor above. Excluded file-by-file.
+        'src/ui/widgets/rejoinPrompt.ts',
       ],
       // MACHINE-ENFORCED GATE (not documentation): the pure rules engine AND the
       // in-scope config/persist layers are held to a hard 100% floor
@@ -419,6 +425,17 @@ export default defineConfig({
         // boundary, excluded above. In the mutation scope and held to the hard 100% floor. Do not
         // weaken (agent-principles #6).
         'src/ui/widgets/divergenceModel.ts': {
+          statements: 100,
+          branches: 100,
+          functions: 100,
+          lines: 100,
+        },
+        // Pure REJOIN-PROMPT view-model (Task V.5, epic #47, design §6): the `activeNetworkedGame`
+        // breadcrumb + a room probe → the offer a player answers after an empty-slate reload. THREE-free
+        // / DOM-free — the DOM glue (`widgets/rejoinPrompt.ts`) is the Playwright-verified IO boundary,
+        // excluded below. In the mutation scope and held to the hard 100% floor. Do not weaken
+        // (agent-principles #6).
+        'src/ui/widgets/rejoinPromptModel.ts': {
           statements: 100,
           branches: 100,
           functions: 100,

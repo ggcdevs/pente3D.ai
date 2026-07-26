@@ -1585,44 +1585,54 @@ describe('NetSession — a return after a WIN recovers the finished game (design
 });
 
 /**
- * ONE GAME, ONE LISTED RECORD — the reachable `current`-seed path (V.1 review round 4, design §2 "the
- * UUID-keyed archive is the source of truth").
+ * ONE GAME, ONE RECORD — the reachable `current`-seed path (design §2 "the UUID-keyed archive is the
+ * source of truth"; V.5 keyed EVERY writer's record by the game's uuid).
  *
- * Carrying a played local board into a room genuinely writes TWO records: the app already archived
- * that board under its own autosave id, and the session then persists the SAME game under the game's
- * uuid (with the identity-owned seat map). This drives the real seam — a `current` entry over the mock
- * relay — and asserts the games list shows the game ONCE, as the canonical record. Listing both would
- * offer the player two entries for one game, the seat-less one being a stale fork of it.
+ * Carrying a played local board into a room is where the app and the session write the same game: the
+ * app has already archived that board (under the game's OWN uuid since V.5), and the session then
+ * persists it again with the identity-owned seat map. This drives the real seam — a `current` entry over
+ * the mock relay — and asserts the game occupies exactly ONE record afterwards, that the record gained
+ * its seat map, and that it KEPT the date the app archived it with (the session must not re-date a game
+ * it did not start: the games list sorts by that date).
  */
-describe('NetSession — a `current`-seeded game is ONE entry in the games list, not two', () => {
-  it('the played board carried into a room lists once, keyed by its uuid, with its seat map', async () => {
+describe('NetSession — a `current`-seeded game is ONE record, not two', () => {
+  it('the played board carried into a room stays one record: same uuid, seats added, date preserved', async () => {
     const hub = new MockRelayHub();
     const own = await openDatabase(`net-current-listing-${Math.random().toString(36).slice(2)}`);
 
-    // What the app leaves behind for a PLAYED local board before a net start: the game archived under
-    // the app's autosave id (`archiveResetBeforeStart` → the lifecycle's finalize).
+    // What the app leaves behind for a PLAYED local board before a net start: the board archived under
+    // the GAME's own uuid (`main.ts` `autosaveTarget`), dated when it began.
     const local = new Game(SIZE);
     local.place(coordsOf('0,0,0'));
     local.place(coordsOf('1,1,1'));
-    await saveGame(own, 'app-autosave-id', local, {
+    const BEGAN_AT = 1_234_000;
+    await saveGame(own, local.uuid, local, {
       players: { white: 'You', black: 'You' },
       result: 'in-progress',
-      startedAt: 1,
+      startedAt: BEGAN_AT,
     });
 
-    const a = makeSession(hub, 'player-a', { db: own, storage: memoryStorage() });
+    const a = makeSession(hub, 'player-a', {
+      db: own,
+      storage: memoryStorage(),
+      // A clock far past the game's date, so a re-stamping session would be caught rather than
+      // coincidentally agreeing.
+      now: () => BEGAN_AT + 5_000_000,
+    });
     await a.enter(ROOM, { kind: 'current', uuid: local.uuid, headHash: headHash(local.log) });
     await a.whenPersisted();
     await flush();
     expect(a.gameUuid()).toBe(local.uuid); // the session really is running THAT game
 
-    // Both records exist in the store (the session wrote the canonical one)…
-    expect(await getGame(own, 'app-autosave-id')).not.toBeUndefined();
-    expect(await getGame(own, local.uuid)).not.toBeUndefined();
-    // …and the games list shows the game ONCE: the canonical uuid-keyed record, seat map intact.
+    // ONE record for the game, keyed by its uuid — the app's write and the session's write are the same
+    // record now, so there is nothing for a listing rule to collapse.
     const list = await listArchivedGames(own);
-    expect(list.filter((l) => l.meta.uuid === local.uuid).map((l) => l.id)).toEqual([local.uuid]);
+    expect(list.map((l) => l.id)).toEqual([local.uuid]);
+    // It gained the identity-owned seat map (the empty-room reclaim reads it) and kept its history…
     expect(list[0]!.meta.seats).toEqual({ white: 'player-a', black: null });
+    expect(list[0]!.events).toBe(2);
+    // …and its ORIGINAL date: the session adopted the archive's stamp instead of minting one.
+    expect(list[0]!.meta.startedAt).toBe(BEGAN_AT);
   });
 });
 
@@ -1717,7 +1727,6 @@ describe('NetSession — the archived startedAt is the GAME’s date, not the wr
     const uuid = a.gameUuid()!;
     const first = await storedStartedAt(own, uuid);
     expect(first).not.toBeUndefined();
-    expect(a.gameStartedAt()).toBe(first);
 
     // Three real moves, each of which persists the record again (the per-change autosave).
     for (const node of ['0,0,0', '1,1,1', '2,2,2']) {
@@ -1732,7 +1741,6 @@ describe('NetSession — the archived startedAt is the GAME’s date, not the wr
     // …and yet its date is UNCHANGED — the stamp is the game's, not each write's. The clock has moved
     // on by now, so a re-stamping session would fail this.
     expect(await storedStartedAt(own, uuid)).toBe(first);
-    expect(a.gameStartedAt()).toBe(first);
     expect(clock).toBeGreaterThan(first! + 1); // the clock really did advance past the stamp
   });
 
@@ -1787,7 +1795,6 @@ describe('NetSession — the archived startedAt is the GAME’s date, not the wr
     await a.whenPersisted();
     expect((await listArchivedGames(own)).find((l) => l.id === prior.uuid)!.events).toBe(4);
     expect(await storedStartedAt(own, prior.uuid)).toBe(BEGAN_AT);
-    expect(a.gameStartedAt()).toBe(BEGAN_AT);
     // The user-facing consequence: the games list still dates the game when it began, so returning to
     // it does not shuffle it to the top of the newest-first listing.
     expect((await listArchivedGames(own))[0]!.meta.startedAt).toBe(BEGAN_AT);
@@ -1828,10 +1835,8 @@ describe('NetSession — the archived startedAt is the GAME’s date, not the wr
     expect(b.gameUuid()).toBe(shared.uuid);
     expect(b.state().seat).toBe('black');
     expect(await storedStartedAt(dbB, shared.uuid)).toBe(BEGAN_AT);
-    expect(b.gameStartedAt()).toBe(BEGAN_AT);
     // …and so does the arbiter's, via the resume/seed path.
     expect(await storedStartedAt(dbA, shared.uuid)).toBe(BEGAN_AT);
-    expect(a.gameStartedAt()).toBe(BEGAN_AT);
   });
 });
 

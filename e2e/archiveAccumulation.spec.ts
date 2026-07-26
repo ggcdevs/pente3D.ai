@@ -3,20 +3,24 @@ import { test, expect } from '@playwright/test';
 /**
  * Task 6.3 e2e — archive ACCUMULATION (issue #4). Stage 5 autosaved under ONE stable id, so every new
  * game OVERWROTE the previous record and the archive could only ever hold the current game. This spec
- * proves the WIRING of the pure game-lifecycle boundary detection (`persist/gameLifecycle.ts`, mutation-
- * gated in Vitest) end-to-end against the REAL app + IndexedDB, asserting on `window.__pente` real state
+ * proves the WIRING end-to-end against the REAL app + IndexedDB, asserting on `window.__pente` real state
  * (getArchive / getHeadHash / getState) — observable behavior, never a log line (agent-principles #3):
  *
- *   - a game-BOUNDARY (a RESET after pieces were played) FINALIZES the current record AND mints a fresh
- *     one, so BOTH the finished/abandoned game and the new game are in the archive (COUNT grows, and the
- *     first game's headHash is still present) — the core accumulation fix;
- *   - an idle reset of a NEVER-PLAYED board does NOT litter the archive with an empty record (negative);
- *   - a GAME-OVER (a forced win) finalizes the won game as its own record flagged with the winner, and a
+ *   - a game-BOUNDARY (a RESET after pieces were played) leaves the played game in the archive AND the
+ *     new game in its own record, so BOTH are there (COUNT grows, and the first game's headHash is still
+ *     present) — the core accumulation fix;
+ *   - an idle reset of a NEVER-PLAYED board does NOT litter the games list with an empty record (negative);
+ *   - a GAME-OVER (a forced win) keeps the won game as its own record flagged with the winner, and a
  *     subsequent reset-and-play accumulates the next game alongside it.
+ *
+ * WHAT PRODUCES THAT ACCUMULATION CHANGED IN V.5 (epic #47), while every assertion here did not: records
+ * are keyed by the GAME's own uuid, so a new game lands in a new record by construction. The autosave id
+ * in localStorage and the `gameLifecycle` mint/finalize decision this spec used to exercise are gone —
+ * the BEHAVIOUR they existed to produce is what these tests pin, which is why they read the same.
  *
  * The archive is isolated per-test (a fresh IndexedDB via the `__penteDbName` seam) and localStorage is
  * cleared on first load, exactly as `archive.spec.ts` does, so no two workers contend on the shared
- * `pente3d` store and the autosave-id minting is deterministic.
+ * `pente3d` store.
  */
 
 interface GameStateReadout {
@@ -115,7 +119,7 @@ async function waitForArchiveCount(page: import('@playwright/test').Page, n: num
   );
 }
 
-test('a RESET after playing FINALIZES the game and mints a fresh record (both are kept)', async ({
+test('a RESET after playing keeps the played game and starts a fresh record (both are kept)', async ({
   page,
 }) => {
   await isolate(page);
@@ -132,7 +136,7 @@ test('a RESET after playing FINALIZES the game and mints a fresh record (both ar
   expect(before).toHaveLength(1);
   expect(before[0]!.meta.headHash).toBe(gameAHead);
 
-  // RESET → a game boundary: game A is finalized under its id, a fresh id is minted for the new game.
+  // RESET → a NEW game (its own uuid, hence its own record); game A's record is left as it stands.
   await get(page, (p) => p.dispatch('reset'));
   // The board is now empty (the new game).
   expect(Object.keys((await get(page, (p) => p.getState()!)).pieces)).toHaveLength(0);
@@ -151,7 +155,7 @@ test('a RESET after playing FINALIZES the game and mints a fresh record (both ar
   expect(heads).toContain(gameAHead);
   expect(heads).toContain(gameBHead);
   expect(gameAHead).not.toBe(gameBHead);
-  // Distinct archive ids — a genuinely fresh record was minted, not the same id reused.
+  // Distinct archive ids — the new game really is its own record, not the same one overwritten.
   expect(new Set(after.map((g) => g.id)).size).toBe(2);
 });
 
@@ -160,8 +164,9 @@ test('an idle reset of a NEVER-PLAYED board mints NOTHING (archive not littered)
 }) => {
   await isolate(page);
   await ready(page);
-  // The pristine game is autosaved at boot (one record). Resetting a never-played board is a
-  // pristine→pristine swap — the pure boundary logic mints no fresh id, so the archive stays at one.
+  // The pristine board is autosaved at boot (one record). Each reset starts a new board, but a
+  // never-played board is an EMPTY SHELL and the games list drops every shell except the one currently
+  // loaded (`main.ts` `userFacingGames`) — so what the player sees stays at exactly one.
   const initial = await getAsync(page, (p) => p.getArchive());
   expect(initial).toHaveLength(1);
   await get(page, (p) => p.dispatch('reset'));
@@ -438,8 +443,8 @@ test('NETWORKED (issue #7): N moves in ONE net game keep EXACTLY ONE archive rec
   const netRecords = hostArchive.filter((r) => r.meta.uuid === netUuid);
   expect(netRecords).toHaveLength(1);
   // And that record IS the live net game at its final ply (headHash matches) — accumulation, not an
-  // early-ply leftover from a record abandoned by a spurious mint. Since V.1 (epic #47) it is keyed by
-  // the game's own UUID: the app's autosave and the net session maintain that ONE record together.
+  // early-ply leftover from a record abandoned by a spurious mint. It is keyed by the game's own UUID
+  // (V.1, epic #47) and written by the SESSION alone (V.5) — the app autosaves only its local board.
   expect(netRecords[0]!.id).toBe(netUuid);
   expect(netRecords[0]!.meta.headHash).toBe(await get(host, (p) => p.getHeadHash()!));
   // The archive as a whole did not grow with the plies either: the only other record is the pristine

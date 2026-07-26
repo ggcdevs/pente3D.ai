@@ -37,6 +37,8 @@ import { endStateOverlayWidget } from './widgets/endStateOverlay.ts';
 import type { EndState } from '../net/endState.ts';
 import { divergencePanelWidget } from './widgets/divergencePanel.ts';
 import type { DivergenceView } from './widgets/divergenceModel.ts';
+import { rejoinPromptWidget } from './widgets/rejoinPrompt.ts';
+import type { RejoinPromptView } from './widgets/rejoinPromptModel.ts';
 import type { ResolutionChoice } from '../net/resolution.ts';
 import type { LayoutConfig } from './layout.ts';
 
@@ -189,6 +191,17 @@ export interface UiDeps {
    * `session.respondResolution(accepted)`. Nothing lands until BOTH sides agree.
    */
   respondResolution(accepted: boolean): boolean;
+  /**
+   * The live REJOIN-PROMPT view-model (Task V.5, epic #47, design §6) — the app's `deriveRejoinPrompt`
+   * over the `activeNetworkedGame` breadcrumb + the boot room probe. Supplied by the app so the UI shell
+   * never imports `src/net` state; the card only paints it.
+   */
+  getRejoinPrompt(): RejoinPromptView;
+  /**
+   * Answer the rejoin prompt (Task V.5): `true` rejoins (or takes the game to a new code, per the view's
+   * action), `false` declines and clears the breadcrumb. The app's `answerRejoin`.
+   */
+  answerRejoin(confirmed: boolean): boolean;
 }
 
 /** The live UI handle exposed to the app + tests: the container plus its layout readout. */
@@ -220,6 +233,7 @@ export function defaultWidgetFactories(): WidgetFactory[] {
     archiveWidget(),
     endStateOverlayWidget(),
     divergencePanelWidget(),
+    rejoinPromptWidget(),
   ];
 }
 
@@ -266,6 +280,8 @@ export function createUi(container: HTMLElement, deps: UiDeps): UiHandle {
       getDivergence: deps.getDivergence,
       proposeResolution: deps.proposeResolution,
       respondResolution: deps.respondResolution,
+      getRejoinPrompt: deps.getRejoinPrompt,
+      answerRejoin: deps.answerRejoin,
     },
     document,
   );

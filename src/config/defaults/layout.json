@@ -8,6 +8,7 @@
     "helpOverlay": { "zone": "bottom-right", "order": 0, "visible": true },
     "archiveBrowser": { "zone": "bottom-right", "order": 1, "visible": true },
     "endStateOverlay": { "zone": "center", "order": 0, "visible": true },
-    "divergencePanel": { "zone": "center", "order": 1, "visible": true }
+    "divergencePanel": { "zone": "center", "order": 1, "visible": true },
+    "rejoinPrompt": { "zone": "center", "order": 2, "visible": true }
   }
 }

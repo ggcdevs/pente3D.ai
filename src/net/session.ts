@@ -67,6 +67,7 @@ import {
   loadNetGameByUuid,
   archivedStartedAts,
   playersFromSeats,
+  StartedAtLedger,
   type ArchivedMeta,
 } from '../persist/archive';
 import {
@@ -76,7 +77,7 @@ import {
   isActiveGameStale,
   type ActiveNetworkedGame,
 } from './activeGame';
-import type { Transport } from './transport';
+import type { Transport, TransportMessage } from './transport';
 import { SyncEngine } from './sync';
 import { RepublishLimiter } from './republish';
 import { headHash } from '../core/eventLog';
@@ -115,11 +116,13 @@ import {
   toRejectMessage,
   toSyncMessage,
   parseSyncMessage,
+  parseGameMessage,
   type HelloMessage,
   type AdmitMessage,
   type RejectMessage,
   type AdmissionMessage,
   type AdmissionReject,
+  type GameMessage,
   type SyncMessage,
 } from './sync';
 import { randomId } from '../util/randomId';
@@ -212,6 +215,45 @@ export interface NetSessionDeps {
  */
 function offeredGameOf(payload: SyncMessage): OfferedGame {
   return { uuid: payload.uuid, empty: payload.log.length === 0 };
+}
+
+/**
+ * What a non-committal look at a room found (Task V.5, epic #47, design §6) — the raw facts
+ * {@link NetSession.probeRoom} observed, with no decision folded in. The §6 offer is derived from them
+ * by the PURE `deriveRejoinPrompt` (`ui/widgets/rejoinPromptModel.ts`).
+ */
+export interface RoomProbe {
+  /** The room that was looked at. */
+  readonly code: string;
+  /** Whether any OTHER peer was present. */
+  readonly peerPresent: boolean;
+  /** The game UUID a present peer named, or `null` when none did (see {@link NetSession.probeRoom}). */
+  readonly peerGameUuid: string | null;
+}
+
+/**
+ * The game UUID an overheard room message names, or `null` when it names none. Used ONLY by
+ * {@link NetSession.probeRoom}, which is listening rather than participating.
+ *
+ * Two messages carry a game identity a probe can trust as "the game someone in this room is on": a
+ * `sync` (the whole log, so its `uuid` IS the game being played — this is what a resident republishes in
+ * answer to our presence) and a `hello` whose seed NAMES a concrete game (`resume`/`current`). A
+ * `new`/`defer` hello names no game, and an unparseable publish tells us nothing — both are `null`, the
+ * prompt's honest "someone is there but has not said which game" arm.
+ */
+function probedGameUuid(msg: TransportMessage): string | null {
+  let parsed: GameMessage;
+  try {
+    parsed = parseGameMessage(msg);
+  } catch {
+    // A malformed or unknown-kind publish on a PUBLICLY WRITABLE relay is not an error for a probe: it
+    // simply carries no game identity. (An entering session validates the same traffic strictly.)
+    return null;
+  }
+  if (parsed.kind === 'sync') return parsed.uuid;
+  if (parsed.kind !== 'hello') return null;
+  const seed = parsed.proposal;
+  return seed.kind === 'resume' || seed.kind === 'current' ? seed.uuid : null;
 }
 
 /** Notified after every session-state change, so the UI shell can repaint the widget. */
@@ -562,6 +604,62 @@ export class NetSession {
   }
 
   /**
+   * PROBE a room without entering it (Task V.5, epic #47, design §6) — the non-committal look a boot
+   * takes when the `activeNetworkedGame` breadcrumb says we were mid-game somewhere.
+   *
+   * A reload lands on an EMPTY SLATE and the breadcrumb only drives a PROMPT, so before asking the
+   * player anything we need two facts about the room: is anyone there, and which game are they on. This
+   * gets them WITHOUT claiming anything:
+   *
+   *  - it publishes NO admission message. No `hello` means no arbitration, no seat claim, and nothing
+   *    for a resident to admit or reject — so a probe cannot take a seat, cannot start a game, and
+   *    cannot be mistaken for an entry (a player who declines the prompt was never in the room).
+   *  - the only thing it puts on the wire is the transport's own presence announce, which is what a
+   *    resident answers by republishing its state (design §4 resident-peer republish, V.3). That
+   *    published log carries the game's UUID — so the peer's game identity arrives as a side effect of
+   *    a signal that already exists, with no probe-specific protocol.
+   *  - it disconnects when the window closes, clearing its retained presence, so it leaves no trace
+   *    (never a retained message: design §4's guardrail against re-coupling code↔game at the broker).
+   *
+   * `peerGameUuid` is `null` when nobody said — a genuinely reachable answer (a QoS-0 answer can be
+   * lost, and a peer mid-entry has no game yet), which the prompt has its own honest arm for
+   * (`deriveRejoinPrompt`'s `peer-silent`); it is never guessed at.
+   *
+   * Independent of the session's own state: it builds its OWN transport and touches no field, so the
+   * session stays `offline` throughout and a probe can be taken while one is live. A connect failure
+   * REJECTS (the caller shows no prompt and keeps the breadcrumb — nothing was learned, which is not
+   * the same as an empty room).
+   *
+   * @param code The room to look at (the breadcrumb's canonical code).
+   * @param windowMs How long to listen; defaults to the same presence SETTLE window `enter` waits
+   *   ({@link NetSessionDeps.settleMs}) — the interval this protocol already treats as "long enough
+   *   for the room to answer".
+   */
+  async probeRoom(code: string, windowMs: number = this.deps.settleMs): Promise<RoomProbe> {
+    const transport = this.deps.createTransport();
+    let others: readonly string[] = [];
+    let peerGameUuid: string | null = null;
+    transport.onPresence((peers) => {
+      others = peers.filter((id) => id !== this.deps.playerId);
+    });
+    // A probe ANSWERS nothing: it holds no game, so it has no state to serve a peer. (The handler is
+    // registered because the seam requires one — an unregistered signal would be dropped silently.)
+    transport.onPeerLive(() => {});
+    transport.onMessage((msg) => {
+      peerGameUuid ??= probedGameUuid(msg);
+    });
+    try {
+      await transport.connect(code);
+      await new Promise<void>((resolve) => setTimeout(resolve, windowMs));
+    } finally {
+      // Always let go of the room, including when the connect itself failed — a probe that left a
+      // socket (or a retained presence) behind would look like a player sitting in the room.
+      transport.disconnect();
+    }
+    return { code, peerPresent: others.length > 0, peerGameUuid };
+  }
+
+  /**
    * Build the PROVISIONAL game + seat this peer runs on until the settle window finalizes it. There
    * are exactly TWO sources — a game named by a UUID, or a genuinely fresh empty game. A room CODE is
    * never one of them (V.1, epic #47: the `net-room:{code}` game-per-code record is deleted; a code
@@ -712,49 +810,29 @@ export class NetSession {
   }
 
   /**
-   * The `startedAt` stamp this session archives a given game uuid with. Established ONCE per game and
-   * then reused, from one of two sources:
-   *
-   *  - ADOPTED from the archive by {@link primeStartedAts} — a game this browser already holds began
-   *    when it began, so a return/resume/adopt must write that same date back;
-   *  - MINTED from the clock in {@link startedAtFor} for a game we are persisting for the first time
-   *    (a genuinely new game, or one adopted from a peer that this browser has never archived).
-   *
-   * Reuse is what keeps the per-change autosave from re-stamping the record on every move and
-   * shuffling it to the top of the (startedAt-sorted) archive listing. Both halves are asserted in
-   * `session.test.ts` ("stamped ONCE per game", "a return PRESERVES the archived startedAt").
+   * The `startedAt` stamp this session archives each game uuid with — the shared
+   * {@link StartedAtLedger} (`persist/archive.ts`), which establishes a stamp ONCE per game and then
+   * reuses it. Held here because a session persists games it did NOT start (a breadcrumb return, a
+   * `resume`/`current` seed, an arbiter's game we adopt and happen to hold archived): each must be
+   * re-persisted with the date it BEGAN, not re-dated to now. Primed by {@link primeStartedAts}.
    */
-  private readonly startedAts = new Map<string, number>();
+  private readonly startedAts = new StartedAtLedger();
 
   /**
    * Prime {@link startedAts} from the archive so every game this browser ALREADY HOLDS keeps the date
    * it began on when we re-persist it.
    *
-   * Without this, `startedAtFor` mints a fresh stamp for any uuid this JS session has not persisted
-   * yet — which silently REWRITES the archived `startedAt` of every game we return to (a breadcrumb
-   * return, a `resume`/`current` seed, or an arbiter's game we adopt over the wire and happen to hold
-   * archived). That is user-visible: {@link listArchivedGames} sorts by `startedAt` and the games list
-   * renders it as the game's date, and that list is the only route back to a game (design §10, #37).
+   * Without this the ledger mints a fresh stamp for any uuid this JS session has not persisted yet —
+   * which silently REWRITES the archived `startedAt` of every game we return to. That is user-visible:
+   * {@link listArchivedGames} sorts by `startedAt` and the games list renders it as the game's date,
+   * and that list is the only route back to a game (design §6/§10, #37).
    *
    * Runs once per {@link enter}, BEFORE any game is seeded or adopted, over the archive's metadata
-   * cursor (no logs are folded). Doing it here — rather than at each persist — keeps the stamp lookup
-   * SYNCHRONOUS afterwards, which the design requires: the app's autosave reads {@link gameStartedAt}
-   * synchronously on the same state change the session persists on, so an async read per write would
-   * let the two writers of one record disagree about its date.
+   * cursor (no logs are folded) — so the per-write stamp lookup stays SYNCHRONOUS and two consecutive
+   * writes of one record can never disagree about its date.
    */
   private async primeStartedAts(): Promise<void> {
-    for (const [uuid, startedAt] of await archivedStartedAts(this.deps.db)) {
-      this.startedAts.set(uuid, startedAt);
-    }
-  }
-
-  /** The `startedAt` for `uuid` — the stamp established for it (minted here on genuinely first use). */
-  private startedAtFor(uuid: string): number {
-    const known = this.startedAts.get(uuid);
-    if (known !== undefined) return known;
-    const stamp = this.deps.now();
-    this.startedAts.set(uuid, stamp);
-    return stamp;
+    this.startedAts.adopt(await archivedStartedAts(this.deps.db));
   }
 
   /**
@@ -789,7 +867,7 @@ export class NetSession {
       // The seat OWNERS are the honest "players" of a networked game (real playerIds, no sentinel).
       players: playersFromSeats(this.seatMap),
       result: winner === null ? 'in-progress' : `${winner}-wins`,
-      startedAt: this.startedAtFor(game.uuid),
+      startedAt: this.startedAts.stampFor(game.uuid, this.deps.now()),
       seats: this.seatMap,
     });
     this.pendingPersist = write;
@@ -1375,23 +1453,6 @@ export class NetSession {
     const resolve = this.enterResolve;
     this.enterResolve = null;
     if (resolve !== null) resolve();
-  }
-
-  /**
-   * The `startedAt` stamp this session archives the LIVE game's record with, or `null` when there is no
-   * live game. Read by the app's autosave (`main.ts`), which writes the SAME uuid-keyed record while a
-   * networked game is authoritative, so both writers stamp the record identically instead of alternately
-   * re-dating it (which would jitter the games-list order between two values).
-   *
-   * It is the game's date, not this session's clock: {@link startedAts} adopts what the archive already
-   * holds for a game we returned to and only mints for a game being persisted for the first time. Both
-   * this readout and the record it stamps are asserted after a real page reload + re-entry in
-   * `e2e/breadcrumbReload.spec.ts` (the wiring `main.ts` is excluded from unit coverage for).
-   */
-  gameStartedAt(): number | null {
-    const engine = this.engine;
-    if (engine === null) return null;
-    return this.startedAtFor(engine.game().uuid);
   }
 
   /**

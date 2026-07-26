@@ -35,6 +35,8 @@ import {
   archivedStartedAts,
   isEmptyShell,
   purgeLegacyNetRoomRecords,
+  rekeyArchiveRecordsByGameUuid,
+  StartedAtLedger,
   flagConflicted,
   loadConflicted,
   ArchiveError,
@@ -459,13 +461,14 @@ describe('game archive', () => {
       });
     });
 
-    it('ONE game archived twice lists ONCE — the canonical uuid-keyed record, not the shadow', async () => {
+    it('LISTS EVERY record, hiding nothing — one game is one record by construction (V.5, #47)', async () => {
       const { db } = await open();
-      // The exact state a `current`/`resume` entry produces: the app archived the played local board
-      // under its autosave id, then the net session persisted the SAME game (same uuid) under the
-      // game's own uuid with the identity-owned seat map. Two records, ONE game — listing both would
-      // show the game twice, and resuming the shadow would open a stale fork of it and drop the seats.
-      await saveGame(db, 'app-autosave-id', sampleGame(), { ...sampleMeta, startedAt: 1 });
+      // Since V.5 every writer keys a record by the GAME's uuid, so there is no such thing as a second
+      // record for one game to de-duplicate — and this listing is the ONLY route back to a game
+      // (reload → empty slate), so it may not filter. A store that DOES hold two records naming one
+      // uuid (a pre-V.5 store, before the boot re-key runs) therefore shows both rather than silently
+      // serving one of them: `rekeyArchiveRecordsByGameUuid` is what resolves that, honestly.
+      await saveGame(db, 'legacy-autosave-id', sampleGame(), { ...sampleMeta, startedAt: 1 });
       await saveGame(db, SAMPLE_UUID, sampleGame(), {
         ...sampleMeta,
         startedAt: 2,
@@ -473,23 +476,8 @@ describe('game archive', () => {
       });
 
       const list = await listArchivedGames(db);
-      expect(list.map((l) => l.id)).toEqual([SAMPLE_UUID]);
-      // The surviving entry is the one carrying the seat map the empty-room reclaim depends on.
+      expect(list.map((l) => l.id)).toEqual([SAMPLE_UUID, 'legacy-autosave-id']);
       expect(list[0]!.meta.seats).toEqual({ white: 'player-a', black: 'player-b' });
-      // Both records are still IN the store — the listing collapses a duplicate view of one game, it
-      // does not delete anything (the shadow remains loadable by its own id).
-      expect(await getGame(db, 'app-autosave-id')).not.toBeUndefined();
-    });
-
-    it('two records of one game with NO canonical copy BOTH list (a resumed game continuing under a fresh id)', async () => {
-      const { db } = await open();
-      // Resuming an archived game keeps its uuid and continues under a FRESH autosave id, so two
-      // records legitimately share a uuid while NEITHER is keyed by it. Both are real, distinct
-      // snapshots the player may reopen — collapsing them would hide the original game.
-      await saveGame(db, 'original', sampleGame(), { ...sampleMeta, startedAt: 1 });
-      await saveGame(db, 'continued', sampleGame(), { ...sampleMeta, startedAt: 2 });
-
-      expect((await listArchivedGames(db)).map((l) => l.id)).toEqual(['continued', 'original']);
     });
 
     it('a CONFLICTED record of the same game is NOT hidden (it holds both forks — nothing stands in for it)', async () => {
@@ -510,21 +498,6 @@ describe('game archive', () => {
       const forks = await loadConflicted(db, 'conflict-mine-theirs');
       expect(forks!.mine.uuid).toBe(SAMPLE_UUID);
       expect(forks!.theirs.uuid).toBe(FORKED_UUID);
-    });
-
-    it('a shadow with MORE history than the canonical record is NOT hidden (never hide history)', async () => {
-      const { db } = await open();
-      // Anomalous: the canonical uuid-keyed record holds FEWER events than the other copy of the same
-      // game. Collapsing to the canonical one would silently serve the shorter history, so both are
-      // listed and the player chooses.
-      const short = new Game(9, SAMPLE_UUID);
-      short.place([4, 4, 4]);
-      await saveGame(db, SAMPLE_UUID, short, { ...sampleMeta, startedAt: 2 });
-      await saveGame(db, 'longer-shadow', sampleGame(), { ...sampleMeta, startedAt: 1 });
-
-      const list = await listArchivedGames(db);
-      expect(list.map((l) => l.id)).toEqual([SAMPLE_UUID, 'longer-shadow']);
-      expect(list.map((l) => l.events)).toEqual([1, sampleGame().log.entries.length]);
     });
 
     it('loadNetGameByUuid prefers the CANONICAL record stored UNDER the uuid (the seated net game)', async () => {
@@ -781,6 +754,219 @@ describe('game archive', () => {
         white: 'player-a',
         black: 'player-b',
       });
+    });
+  });
+
+  /**
+   * The V.5 re-keying MIGRATION (epic #47): every record moves onto its game's own `uuid`, so one game
+   * has exactly one record. The point of these tests is that it is a MIGRATION and not a loss — a game
+   * an older build archived under its retired autosave id must still be listed, still be loadable, and
+   * must not turn into a second record the first time it is played again.
+   */
+  describe('rekeyArchiveRecordsByGameUuid', () => {
+    it('MOVES a legacy autosave-id record onto the game uuid — same game, one record', async () => {
+      const { db } = await open();
+      await saveGame(db, 'pente-autosave-42', sampleGame(), { ...sampleMeta, startedAt: 7 });
+
+      expect(await rekeyArchiveRecordsByGameUuid(db)).toEqual(['pente-autosave-42']);
+
+      // Keyed by the game now — and nothing about the game changed: same history, same date, and it
+      // resolves by uuid through the CANONICAL step (step 1) rather than the listing scan.
+      const list = await listArchivedGames(db);
+      expect(list.map((l) => l.id)).toEqual([SAMPLE_UUID]);
+      expect(list[0]!.meta.startedAt).toBe(7);
+      expect(await getGame(db, 'pente-autosave-42')).toBeUndefined();
+      expect(headHash((await loadGame(db, SAMPLE_UUID))!.log)).toBe(headHash(sampleGame().log));
+    });
+
+    it('keeps the seat map + result of the record it moves (a networked game stays reclaimable)', async () => {
+      const { db } = await open();
+      await saveGame(db, 'legacy-id', sampleGame(), {
+        ...sampleMeta,
+        result: 'white-wins',
+        seats: { white: 'player-a', black: 'player-b' },
+      });
+
+      await rekeyArchiveRecordsByGameUuid(db);
+
+      const loaded = await loadNetGameByUuid(db, SAMPLE_UUID);
+      expect(loaded!.seats).toEqual({ white: 'player-a', black: 'player-b' });
+      expect((await listArchivedGames(db))[0]!.meta.result).toBe('white-wins');
+    });
+
+    it('is idempotent — a second run has nothing left to move (negative case)', async () => {
+      const { db } = await open();
+      await saveGame(db, 'legacy-id', sampleGame(), sampleMeta);
+      expect(await rekeyArchiveRecordsByGameUuid(db)).toEqual(['legacy-id']);
+      expect(await rekeyArchiveRecordsByGameUuid(db)).toEqual([]);
+      expect((await listArchivedGames(db)).map((l) => l.id)).toEqual([SAMPLE_UUID]);
+    });
+
+    it('leaves a record ALREADY keyed by its game uuid untouched', async () => {
+      const { db } = await open();
+      await saveGame(db, SAMPLE_UUID, sampleGame(), sampleMeta);
+      expect(await rekeyArchiveRecordsByGameUuid(db)).toEqual([]);
+      expect((await listArchivedGames(db)).map((l) => l.id)).toEqual([SAMPLE_UUID]);
+    });
+
+    it('leaves a pre-uuid record where it is — there is no key to move it to (still listed, still loadable)', async () => {
+      const { db } = await open();
+      // A record written before games carried a uuid. Nothing identifies it, so re-keying it is
+      // impossible; losing it would be worse than leaving it, so it stays exactly as it was.
+      // `GameMeta.uuid` is REQUIRED by the type, so a record without one can only be written by
+      // bypassing it — which is exactly what an older build's records are: real bytes in the store that
+      // today's type does not describe.
+      const record = {
+        id: 'ancient-record',
+        log: [{ type: 'place', node: '4,4,4' }],
+        meta: { players: {}, result: 'in-progress', startedAt: 5, headHash: 'whatever' },
+      } as unknown as GameRecord;
+      await putGame(db, record);
+
+      expect(await rekeyArchiveRecordsByGameUuid(db)).toEqual([]);
+      expect((await listArchivedGames(db)).map((l) => l.id)).toEqual(['ancient-record']);
+      expect((await loadGame(db, 'ancient-record'))!.ply()).toBe(1);
+    });
+
+    it('leaves a CONFLICTED record where it is — its forks are not a view of one game', async () => {
+      const { db } = await open();
+      // A conflicted record is keyed by its own conflict id and its `meta.uuid` is the LOCAL fork's, so
+      // re-keying it would overwrite that game with one of its forks and destroy the pair.
+      await flagConflicted(db, 'conflict-mine-theirs', {
+        mineLog: sampleGame().log,
+        theirsLog: forkedGame().log,
+        meta: sampleMeta,
+      });
+
+      expect(await rekeyArchiveRecordsByGameUuid(db)).toEqual([]);
+      const forks = await loadConflicted(db, 'conflict-mine-theirs');
+      expect(forks!.mine.uuid).toBe(SAMPLE_UUID);
+      expect(forks!.theirs.uuid).toBe(FORKED_UUID);
+    });
+
+    it('never overwrites a conflicted record sitting on the uuid — BOTH records survive', async () => {
+      const { db } = await open();
+      // Contrived but the only honest answer: the conflicted pair happens to be stored UNDER the game's
+      // uuid while an ordinary legacy record of the same game sits elsewhere. Moving the legacy record
+      // on top would delete the fork pair, so neither is touched.
+      await flagConflicted(db, SAMPLE_UUID, {
+        mineLog: sampleGame().log,
+        theirsLog: forkedGame().log,
+        meta: sampleMeta,
+      });
+      await saveGame(db, 'legacy-id', sampleGame(), sampleMeta);
+
+      expect(await rekeyArchiveRecordsByGameUuid(db)).toEqual([]);
+      expect((await loadConflicted(db, SAMPLE_UUID))!.theirs.uuid).toBe(FORKED_UUID);
+      expect(await getGame(db, 'legacy-id')).not.toBeUndefined();
+    });
+
+    it('when both keys hold the game, the record with MORE history wins (never trade history for tidiness)', async () => {
+      const { db } = await open();
+      // The uuid key holds a 1-move snapshot; the legacy key holds the same game 3 moves in. Keeping
+      // the shorter one would silently lose two moves, so the longer record is the one that survives.
+      const short = new Game(9, SAMPLE_UUID);
+      short.place([4, 4, 4]);
+      await saveGame(db, SAMPLE_UUID, short, { ...sampleMeta, startedAt: 2 });
+      await saveGame(db, 'legacy-id', sampleGame(), { ...sampleMeta, startedAt: 1 });
+
+      expect(await rekeyArchiveRecordsByGameUuid(db)).toEqual(['legacy-id']);
+
+      const list = await listArchivedGames(db);
+      expect(list.map((l) => l.id)).toEqual([SAMPLE_UUID]);
+      expect(list[0]!.events).toBe(sampleGame().log.entries.length);
+    });
+
+    it('when the uuid key already holds AT LEAST as much history, the stale legacy record is dropped', async () => {
+      const { db } = await open();
+      // The live writer has kept the uuid-keyed record current; the legacy record is a stale snapshot of
+      // the same game. Nothing is lost by dropping it, and keeping it would show one game twice.
+      await saveGame(db, SAMPLE_UUID, sampleGame(), { ...sampleMeta, startedAt: 2 });
+      const short = new Game(9, SAMPLE_UUID);
+      short.place([4, 4, 4]);
+      await saveGame(db, 'legacy-id', short, { ...sampleMeta, startedAt: 1 });
+
+      expect(await rekeyArchiveRecordsByGameUuid(db)).toEqual(['legacy-id']);
+
+      const list = await listArchivedGames(db);
+      expect(list.map((l) => l.id)).toEqual([SAMPLE_UUID]);
+      expect(list[0]!.events).toBe(sampleGame().log.entries.length);
+      expect(await getGame(db, 'legacy-id')).toBeUndefined();
+    });
+
+    it('on a TIE the record ALREADY under the uuid wins — it is the one carrying the seat map', async () => {
+      const { db } = await open();
+      // Same game, same history length, in two records: the canonical uuid-keyed one (written by the net
+      // session, WITH the identity-owned seat map) and a legacy autosave-id one (seat-less). Equal
+      // history means neither holds more, so the canonical record must survive — overwriting it with the
+      // seat-less copy would silently drop the value the empty-room reclaim needs.
+      await saveGame(db, SAMPLE_UUID, sampleGame(), {
+        ...sampleMeta,
+        seats: { white: 'player-a', black: 'player-b' },
+      });
+      await saveGame(db, 'legacy-id', sampleGame(), sampleMeta);
+
+      expect(await rekeyArchiveRecordsByGameUuid(db)).toEqual(['legacy-id']);
+
+      const list = await listArchivedGames(db);
+      expect(list.map((l) => l.id)).toEqual([SAMPLE_UUID]);
+      expect(list[0]!.meta.seats).toEqual({ white: 'player-a', black: 'player-b' });
+    });
+
+    it('is a no-op on an EMPTY archive (negative case)', async () => {
+      const { db } = await open();
+      expect(await rekeyArchiveRecordsByGameUuid(db)).toEqual([]);
+    });
+  });
+
+  /**
+   * `StartedAtLedger` — the "established once per game" stamp both writers of the archive hold. Its
+   * whole job is that a game the browser RETURNS to keeps the date it began: the games list is sorted
+   * by that date and renders it, so re-minting it shuffles a returned-to game to the top and re-dates
+   * it (a user-visible loss, since the list is the only route back to a game).
+   */
+  describe('StartedAtLedger', () => {
+    it('MINTS a stamp on first use and reuses it forever after, whatever the clock says', async () => {
+      const ledger = new StartedAtLedger();
+      expect(ledger.stampFor('game-1', 1_000)).toBe(1_000);
+      // The clock moved on (a later autosave of the same game) — the game still began when it began.
+      expect(ledger.stampFor('game-1', 9_999)).toBe(1_000);
+    });
+
+    it('stamps each game independently', () => {
+      const ledger = new StartedAtLedger();
+      expect(ledger.stampFor('game-1', 100)).toBe(100);
+      expect(ledger.stampFor('game-2', 200)).toBe(200);
+      expect(ledger.stampFor('game-1', 300)).toBe(100);
+    });
+
+    it('ADOPTS the archive\'s dates, so a returned-to game is re-persisted with its ORIGINAL date', async () => {
+      const { db } = await open();
+      await saveGame(db, SAMPLE_UUID, sampleGame(), { ...sampleMeta, startedAt: 111 });
+
+      const ledger = new StartedAtLedger();
+      ledger.adopt(await archivedStartedAts(db));
+
+      // A much later clock: the return is happening long after the game started, and the stamp must be
+      // the archive's, not `now` (the concrete bug this prevents).
+      expect(ledger.stampFor(SAMPLE_UUID, 9_000_000)).toBe(111);
+      // A game the archive knows nothing about is still minted from the clock.
+      expect(ledger.stampFor('a-brand-new-game', 9_000_000)).toBe(9_000_000);
+    });
+
+    it('does NOT let a later adopt overwrite a stamp it already established', () => {
+      // Ordering guarantee: the stamp a writer already used for its live game stays the record's date
+      // even if a later adopt reads a different value for it (e.g. another writer's copy).
+      const ledger = new StartedAtLedger();
+      expect(ledger.stampFor('game-1', 500)).toBe(500);
+      ledger.adopt(new Map([['game-1', 999]]));
+      expect(ledger.stampFor('game-1', 1_000)).toBe(500);
+    });
+
+    it('adopting an EMPTY map establishes nothing (negative case)', () => {
+      const ledger = new StartedAtLedger();
+      ledger.adopt(new Map());
+      expect(ledger.stampFor('game-1', 42)).toBe(42);
     });
   });
 
