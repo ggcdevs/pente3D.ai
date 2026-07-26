@@ -110,7 +110,17 @@ const UI_STYLESHEET = `
 .pente-ui-zone--top-right { top: 0; right: 0; flex-direction: column; align-items: flex-end; }
 .pente-ui-zone--left { top: 50%; left: 0; transform: translateY(-50%); flex-direction: column; }
 .pente-ui-zone--right { top: 50%; right: 0; transform: translateY(-50%); flex-direction: column; align-items: flex-end; }
-.pente-ui-zone--center { top: 50%; left: 50%; transform: translate(-50%, -50%); flex-direction: column; align-items: center; }
+/* The CENTRE zone spans the overlay and centres its widgets with flexbox rather than the
+   top/left-50% + translate(-50%,-50%) trick the edge zones use. That is NOT cosmetic: a transform
+   makes an element the CONTAINING BLOCK for its position:fixed descendants (CSS Transforms 3.2),
+   and every widget this zone holds (endStateOverlay, divergencePanel) is a full-viewport
+   position:fixed; inset:0 layer. Against a translated zone, inset:0 resolved to the ZONE's box —
+   which, with no in-flow children (every centre widget is out of flow), is 24x24 — so the
+   divergence card rendered as a clipped 174px sliver hanging off the top and bottom of the screen.
+   Flex centring establishes no containing block, so fixed means the viewport again, as those
+   widgets' own stylesheets assume. The zone stays click-THROUGH (pointer-events is inherited none
+   from the root; only its children re-enable it), so covering the viewport costs nothing. */
+.pente-ui-zone--center { inset: 0; justify-content: center; flex-direction: column; align-items: center; }
 .pente-ui-zone--bottom-left { bottom: 0; left: 0; flex-direction: column; align-items: flex-start; }
 .pente-ui-zone--bottom-center { bottom: 0; left: 50%; transform: translateX(-50%); flex-direction: column; align-items: center; }
 .pente-ui-zone--bottom-right { bottom: 0; right: 0; flex-direction: column; align-items: flex-end; }
@@ -297,7 +307,10 @@ const UI_STYLESHEET = `
    game is not over (an in-progress or a local game shows nothing). */
 .pente-endstate[hidden] { display: none; }
 .pente-endstate { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; z-index: 35; }
-.pente-endstate-card { display: flex; flex-direction: column; gap: 12px; align-items: center; min-width: 240px; padding: 20px 28px; border-radius: 10px; background: rgba(20,20,26,0.92); backdrop-filter: blur(4px); color: #e6e6ea; font-family: system-ui, sans-serif; box-shadow: 0 8px 32px rgba(0,0,0,0.5); pointer-events: auto; text-align: center; }
+/* Same viewport guards as the divergence card: this one is short today, but it is the SAME
+   full-viewport-fixed-in-the-centre-zone shape, and a card that can outgrow the screen with no
+   scroll container is the defect the divergence panel shipped with. */
+.pente-endstate-card { display: flex; flex-direction: column; gap: 12px; align-items: center; box-sizing: border-box; min-width: min(240px, 100%); max-width: min(520px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow-y: auto; padding: 20px 28px; border-radius: 10px; background: rgba(20,20,26,0.92); backdrop-filter: blur(4px); color: #e6e6ea; font-family: system-ui, sans-serif; box-shadow: 0 8px 32px rgba(0,0,0,0.5); pointer-events: auto; text-align: center; }
 .pente-endstate-result { font-size: 18px; font-weight: 600; }
 .pente-endstate-note[hidden] { display: none; }
 .pente-endstate-note { font-size: 13px; opacity: 0.82; }
@@ -310,7 +323,12 @@ const UI_STYLESHEET = `
 .pente-endstate-decline:hover { background: rgba(255,80,80,0.38); }
 .pente-divergence[hidden] { display: none; }
 .pente-divergence { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; z-index: 45; }
-.pente-divergence-card { display: flex; flex-direction: column; gap: 10px; max-width: 520px; padding: 20px 24px; border-radius: 10px; background: rgba(20,20,26,0.95); backdrop-filter: blur(4px); color: #e6e6ea; font-family: system-ui, sans-serif; box-shadow: 0 8px 32px rgba(0,0,0,0.55); pointer-events: auto; }
+/* The card sizes itself between a floor and the viewport: min-width keeps it from collapsing to a
+   one-word-per-line column, max-width/max-height keep it inside the screen on a small window, and
+   overflow-y:auto gives the FORK case (three options, two move lists) a scroll container instead of
+   running its last button off the bottom edge. box-sizing:border-box so the padding is inside those
+   limits rather than added to them. */
+.pente-divergence-card { display: flex; flex-direction: column; gap: 10px; box-sizing: border-box; min-width: min(340px, 100%); max-width: min(520px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow-y: auto; padding: 20px 24px; border-radius: 10px; background: rgba(20,20,26,0.95); backdrop-filter: blur(4px); color: #e6e6ea; font-family: system-ui, sans-serif; box-shadow: 0 8px 32px rgba(0,0,0,0.55); pointer-events: auto; }
 .pente-divergence-headline { font-size: 17px; font-weight: 600; }
 .pente-divergence-explanation { font-size: 13px; opacity: 0.85; line-height: 1.45; }
 .pente-divergence-columns { display: flex; gap: 18px; }

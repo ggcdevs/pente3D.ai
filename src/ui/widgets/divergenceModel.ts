@@ -84,7 +84,10 @@ export type DivergenceUi =
 
 /** The whole card, as a plain serializable value. */
 export interface DivergenceView {
-  /** `false` (and everything else empty/hidden) when no divergence is open. */
+  /**
+   * `false` (and everything else empty/hidden) when there is nothing to show — no divergence and no
+   * ask of the peer's waiting on an answer.
+   */
   readonly show: boolean;
   /** The headline. */
   readonly headline: string;
@@ -96,7 +99,12 @@ export interface DivergenceView {
   readonly mine: readonly DivergenceLine[];
   /** What only my opponent has, after the shared point. */
   readonly theirs: readonly DivergenceLine[];
-  /** The offerable resolutions (empty while an ask is in flight, or when answering one). */
+  /**
+   * The offerable resolutions. Present while choosing AND while WAITING on our own ask (picking again
+   * supersedes it — the only way out of a wait for an ask the peer may never have received); empty
+   * only while ANSWERING the peer's ask, where a counter-proposal would supersede the question we
+   * have not answered.
+   */
   readonly options: readonly DivergenceOption[];
   /** Which sub-state the card is in. */
   readonly ui: DivergenceUi;
@@ -133,9 +141,24 @@ const HIDDEN: DivergenceView = {
 const HEADLINE = 'Your game and your opponent’s have gone out of step';
 
 /**
+ * The headline for the one card that is NOT about a divergence of ours: the peer has asked to settle
+ * one, and this client is holding no disagreement at all (its record was cleared by a republish, or
+ * the ask outlived the divergence). The ask still has to be answerable — see {@link deriveDivergence}.
+ */
+const STRANDED_HEADLINE = 'Your opponent is asking to settle a disagreement';
+
+/** Said when a suggestion names a history this client does not hold — the only honest answer is no. */
+const CANNOT_HONOUR_TEXT =
+  'Your opponent suggested continuing from a version of the game this one does not have.';
+
+/** The one line under {@link CANNOT_HONOUR_TEXT}: why Accept is absent rather than merely disabled. */
+const CANNOT_HONOUR_NOTE = 'You can only decline — nothing here matches either of your games.';
+
+/**
  * Build the divergence card from the live facts and the shared N.1 handshake.
  *
- * @param facts The open divergence, or `null` when there is none (→ a hidden card).
+ * @param facts The open divergence, or `null` when there is none — a hidden card, EXCEPT when the
+ *   peer has a `resolve:` ask pending against us, which must stay answerable ({@link strandedAsk}).
  * @param handshake The session's out-of-band handshake — the SAME one #12/#18 use. Only a `resolve:`
  *   proposal is read here; a pending rematch/undo ask belongs to another consumer and leaves this
  *   card in `choose` (raising a resolution supersedes it, which is the at-most-one rule, not this
@@ -145,7 +168,7 @@ export function deriveDivergence(
   facts: DivergenceFacts | null,
   handshake: HandshakeState,
 ): DivergenceView {
-  if (facts === null) return HIDDEN;
+  if (facts === null) return strandedAsk(handshake);
   const { diff, candidates } = facts;
   const mine = lines(diff.mine);
   const theirs = lines(diff.theirs);
@@ -167,13 +190,10 @@ export function deriveDivergence(
       ui: 'incoming',
       incomingText:
         choice === null
-          ? 'Your opponent suggested continuing from a version of the game this one does not have.'
+          ? CANNOT_HONOUR_TEXT
           : `Your opponent suggests: ${describeIncoming(choice, diff)}`,
       canAccept: choice !== null,
-      note:
-        choice === null
-          ? 'You can only decline — nothing here matches either of your games.'
-          : null,
+      note: choice === null ? CANNOT_HONOUR_NOTE : null,
     };
   }
 
@@ -185,11 +205,18 @@ export function deriveDivergence(
       sharedPly: diff.sharedPly,
       mine,
       theirs,
-      options: [],
+      // The buttons STAY while we wait. An ask is one unacknowledged publish over a lossy relay, and
+      // the peer may never have received it — with the buttons gone this state had no exit at all
+      // (no withdraw, no re-ask, no timeout): one player watching "waiting…" forever while the other
+      // saw nothing. Picking again simply supersedes our own ask (the handshake's at-most-one rule,
+      // which supersedes on the peer's side too), so the SAME choice re-sends it and a different one
+      // changes our mind. A local-only withdraw is deliberately NOT offered: it would leave the peer
+      // holding an ask we had stopped listening for, which is a worse dead end than this one.
+      options,
       ui: 'waiting',
       incomingText: null,
       canAccept: false,
-      note: 'Waiting for your opponent to agree…',
+      note: 'Waiting for your opponent to agree… You can suggest something else instead.',
     };
   }
 
@@ -211,6 +238,38 @@ export function deriveDivergence(
     incomingText: null,
     canAccept: false,
     note: declined ? 'Your opponent did not agree to that. You can suggest something else.' : null,
+  };
+}
+
+/**
+ * The card for an incoming `resolve:` ask that arrives while WE hold no divergence — the peer is
+ * asking about a disagreement this client cannot see (its record was cleared when the peer
+ * republished, the ask outlived the divergence, or a message went missing).
+ *
+ * It is shown, not hidden, because a hidden card is unanswerable: the ask is real and pending on the
+ * peer's side, and with nothing on screen the only way to say no was the browser console — leaving
+ * one player waiting on an agreement the other was never asked for. There is nothing to accept (we
+ * hold no history matching what they named — that is what "no divergence here" means), so it is the
+ * same decline-only card an unmatched target gets, with the same two lines of copy.
+ *
+ * Anything else with no divergence — no ask, our own ask, or another consumer's rematch/undo — is
+ * genuinely nothing to show, and stays {@link HIDDEN}.
+ */
+function strandedAsk(handshake: HandshakeState): DivergenceView {
+  if (resolutionPending(incomingPending(handshake)) === null) return HIDDEN;
+  return {
+    show: true,
+    headline: STRANDED_HEADLINE,
+    explanation:
+      'Your game does not show one. Nothing here can be agreed to, because they are asking about a version of the game this one is not holding. Saying no leaves both games exactly as they are.',
+    sharedPly: 0,
+    mine: [],
+    theirs: [],
+    options: [],
+    ui: 'incoming',
+    incomingText: CANNOT_HONOUR_TEXT,
+    canAccept: false,
+    note: CANNOT_HONOUR_NOTE,
   };
 }
 
@@ -283,12 +342,24 @@ function takeDetail(diff: LogDiff): string {
   return `Your opponent's ${moveCount(diff.theirs.length)} ${plural(diff.theirs.length, 'is', 'are')} taken; your ${moveCount(diff.mine.length)} ${plural(diff.mine.length, 'is', 'are')} dropped.`;
 }
 
-/** The peer's ask, said back in our own terms so the answer is never ambiguous. */
+/**
+ * The peer's ask, said back in our own terms so the answer is never ambiguous — under the SAME rule
+ * {@link keepDetail}/{@link takeDetail} follow: a side with nothing past the shared point loses
+ * nothing, and saying "their 0 moves would be dropped" would invent a loss that is not happening.
+ * (This card is read at the moment a player decides whether to give up their own moves; copy that
+ * overstates the cost is copy that decides for them.)
+ */
 function describeIncoming(choice: ResolutionChoice, diff: LogDiff): string {
   switch (choice) {
     case 'take-mine':
+      if (diff.theirs.length === 0) {
+        return `keep YOUR game (nothing of theirs is dropped; they catch up to your ${moveCount(diff.mine.length)}).`;
+      }
       return `keep YOUR game (their ${moveCount(diff.theirs.length)} would be dropped).`;
     case 'take-theirs':
+      if (diff.mine.length === 0) {
+        return `keep THEIR game (nothing of yours is dropped; you take their ${moveCount(diff.theirs.length)}).`;
+      }
       return `keep THEIR game (your ${moveCount(diff.mine.length)} would be dropped).`;
     case 'rewind':
       return `both go back to move ${diff.sharedPly} (everything after it dropped on both sides).`;

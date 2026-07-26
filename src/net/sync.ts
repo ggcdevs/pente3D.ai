@@ -150,7 +150,37 @@ export interface SyncMessage {
   readonly headHash: string;
   /** The full append-only log as plain events, in order. */
   readonly log: readonly Event[];
+  /**
+   * WHY this log was published, when it was published for a reason the receiver must know about.
+   * ABSENT on an ordinary announce — which is what a message with no tag, or with a tag from a
+   * future version, is read as ({@link SyncTag}).
+   */
+  readonly tag?: SyncTag;
 }
+
+/**
+ * The reason a {@link SyncMessage} was published, when it is not an ordinary announce. Both values
+ * exist to close a loop that a one-shot latch used to close — a latch cannot retry, and everything
+ * here rides one unacknowledged QoS-0 publish.
+ *
+ *  - `'answering'` — this log is the ANSWER to a peer's message that revealed a divergence
+ *    ({@link SyncEngine.receive}'s `needs-resolution` arm). An answer is NEVER itself answered, in
+ *    any arm, and that — not a latch — is what terminates the exchange. Every ANNOUNCE still draws
+ *    an answer, so a dropped answer heals on the peer's next publish, which is the whole point: this
+ *    message is the only thing that tells the peer that is BEHIND that it is missing moves. Same
+ *    flag-not-a-latch shape as the presence ack (`MqttTransport.ackHello`, `ack: true`).
+ *  - `'settled'` — this log is the history the sender just SETTLED a divergence onto
+ *    ({@link SyncEngine.applyResolution}). A receiver holding a divergence record drops it when an
+ *    IDENTICAL history arrives tagged this way: the sender is demonstrably on our history, so there
+ *    is nothing left to disagree about. It is safe against the relay's echo of our own publish — if
+ *    it is ours coming back, we dropped the record before we sent it, so the drop is a no-op.
+ *
+ * Neither tag AUTHORIZES anything: no adopt, no stop, no seat. A hostile peer setting `'answering'`
+ * only silences the answer it would itself have received; setting `'settled'` on an identical log
+ * only closes a panel that the real peer's next publish re-opens. Both directions are self-healing,
+ * which is why an unrecognised value is read as a plain announce rather than rejected.
+ */
+export type SyncTag = 'answering' | 'settled';
 
 /**
  * A **proposal** message: one player asks the peer to accept an out-of-band
@@ -385,14 +415,14 @@ export function parseGameMessage(msg: unknown): GameMessage {
   const kind = rec.kind;
   // Backward-compat: an un-kinded legacy sync message (pre-tagged-union peer).
   if (kind === undefined && looksLikeSync(rec)) {
-    return { kind: 'sync', version: rec.version as number, epoch: epochOf(rec), uuid: rec.uuid as string, headHash: rec.headHash as string, log: rec.log as readonly Event[] };
+    return { kind: 'sync', version: rec.version as number, epoch: epochOf(rec), ...tagOf(rec), uuid: rec.uuid as string, headHash: rec.headHash as string, log: rec.log as readonly Event[] };
   }
   switch (kind) {
     case 'sync': {
       if (!looksLikeSync(rec)) {
         throw new SyncError('sync message requires numeric version, string uuid, string headHash, and array log');
       }
-      return { kind: 'sync', version: rec.version as number, epoch: epochOf(rec), uuid: rec.uuid as string, headHash: rec.headHash as string, log: rec.log as readonly Event[] };
+      return { kind: 'sync', version: rec.version as number, epoch: epochOf(rec), ...tagOf(rec), uuid: rec.uuid as string, headHash: rec.headHash as string, log: rec.log as readonly Event[] };
     }
     case 'proposal': {
       if (typeof rec.id !== 'string') {
@@ -628,6 +658,20 @@ function epochOf(rec: Record<string, unknown>): number {
 }
 
 /**
+ * Read the {@link SyncMessage.tag} off a raw sync record, as the fragment to spread into the parsed
+ * message — or NOTHING at all for a missing/unknown value, so an ordinary announce parses to exactly
+ * the object it always did.
+ *
+ * The allow-list is exhaustive by construction: anything that is not one of the two known tags reads
+ * as a plain ANNOUNCE. That is the safe direction for both tags (an extra answer converges; a
+ * divergence record that is not dropped is re-shown rather than lost), and it is what keeps a peer
+ * on a future version from being misread by this one.
+ */
+function tagOf(rec: Record<string, unknown>): { readonly tag?: SyncTag } {
+  return rec.tag === 'answering' || rec.tag === 'settled' ? { tag: rec.tag } : {};
+}
+
+/**
  * Normalize a raw `epoch` value to a whole, non-negative generation: a missing / non-numeric /
  * non-finite / negative value becomes 0 (the first generation), a fractional value is floored. The
  * single source of truth for reading an epoch off the wire — used both by the {@link parseGameMessage}
@@ -688,15 +732,20 @@ export function decideUndo(
  * receiver can discriminate it from a `'proposal'` / `'response'`; the remaining
  * fields are the unchanged {@link SyncMessage} payload, so existing sync traffic
  * round-trips identically apart from the added tag.
+ *
+ * `tag` says WHY the log is being published ({@link SyncTag}); it is OMITTED entirely from an
+ * ordinary announce, so an announce is byte-identical to what every pre-existing caller published.
  */
 export function toSyncMessage(
   log: EventLog,
   epoch = 0,
+  tag?: SyncTag,
 ): { readonly kind: 'sync' } & SyncMessage {
   return {
     kind: 'sync',
     version: SYNC_VERSION,
     epoch,
+    ...(tag === undefined ? {} : { tag }),
     uuid: log.uuid,
     headHash: headHash(log),
     log: log.entries.map((entry) => entry.event),
@@ -932,14 +981,6 @@ export class SyncEngine {
   } | null = null;
 
   /**
-   * The `myHead|theirHead` pair we last ANSWERED a divergence with (see {@link receive}), so the
-   * exchange that makes a divergence MUTUAL terminates instead of ping-ponging. Kept separately from
-   * {@link _resolution} because the record is cleared by things that have nothing to do with whether
-   * the peer has heard us. `null` until an answer goes out.
-   */
-  private _answeredDivergence: string | null = null;
-
-  /**
    * The last log this engine refused to ADOPT because it did not replay through the rules engine
    * (design §5 "Integrity"), with the failing entry and the reason. `null` until one happens. The
    * observable record of the replay validator biting — a rejected log leaves the game untouched and
@@ -1051,7 +1092,7 @@ export class SyncEngine {
     if (divergence === null) return false;
     if (effect === 'keep-mine') {
       this.settleDivergence();
-      this.publishState();
+      this.publishSettled();
       this.emitChange();
       return true;
     }
@@ -1069,7 +1110,7 @@ export class SyncEngine {
     }
     this._game = Game.fromLog(this.size, target);
     this.settleDivergence();
-    this.publishState();
+    this.publishSettled();
     this.emitChange();
     return true;
   }
@@ -1337,6 +1378,30 @@ export class SyncEngine {
     this.transport.publish(toSyncMessage(this._game.log, this._epoch) as TransportMessage);
   }
 
+  /**
+   * Publish our log as the ANSWER to a peer's divergent one — the same payload {@link publishState}
+   * sends, tagged `'answering'` so no arm on the far side answers it back. That tag is the whole
+   * terminator of the exchange; see the `needs-resolution` arm of {@link receive}.
+   */
+  private publishDivergenceAnswer(): void {
+    this.transport.publish(
+      toSyncMessage(this._game.log, this._epoch, 'answering') as TransportMessage,
+    );
+  }
+
+  /**
+   * Publish the history we just SETTLED a divergence onto, tagged `'settled'` so a peer still
+   * holding a record against us drops it the moment it sees we are on the same history. Without
+   * that, a peer that resolved a beat before us re-recorded our pre-resolution log (we answer every
+   * announce, on purpose) and then had nothing to clear it: an agreed, converged pair, one of them
+   * left staring at a divergence panel about a disagreement that was over.
+   */
+  private publishSettled(): void {
+    this.transport.publish(
+      toSyncMessage(this._game.log, this._epoch, 'settled') as TransportMessage,
+    );
+  }
+
   /** The current fresh-game {@link _epoch} (0 for the first game; incremented per {@link resetGame}). */
   epoch(): number {
     return this._epoch;
@@ -1482,6 +1547,13 @@ export class SyncEngine {
     //    is not self-healing, so a pinned counter must not be able to make us deaf to the pair's own
     //    next generation.)
     this._epoch = Math.max(this._epoch, remoteEpoch);
+    // A message tagged `'answering'` ({@link SyncTag}) is a REPLY to a log we already put on the wire,
+    // and NO arm may reply to it. That is what terminates the exchange, and it has to hold across
+    // arms rather than only in the one that sends the answer: the two publishing arms bounce off each
+    // other otherwise (we answer their divergence; they read our log as one-behind and republish; we
+    // answer that; …) — an infinite exchange, which is exactly what the deleted one-shot latch was
+    // hiding. Replying is also pointless here: an answer proves its sender has just seen our log.
+    const isAnswer = msg.tag === 'answering';
     switch (decision.action) {
       case 'in-sync':
         // Identical histories: the game did not change, so no listener fires (a spurious re-render
@@ -1499,6 +1571,21 @@ export class SyncEngine {
         // nothing to resolve. A peer that genuinely converges onto us does so by adopting or by an
         // agreed resolution, and BOTH of those move OUR head too, which {@link emitChange}'s
         // {@link divergenceIsOver} already catches — so nothing is lost by staying quiet here.
+        //
+        // The ONE exception is a log tagged `'settled'`: the sender is saying it just settled a
+        // divergence ONTO this history, and this history is ours. That is not "a log identical to
+        // mine" read as agreement — it is the sender stating which history it is now on, and the
+        // echo cannot lie about it (if the message is our OWN coming back, we had already dropped
+        // the record before publishing it, so dropping again changes nothing). A record IS dropped
+        // here rather than left, because the peer that resolved first legitimately re-opens ours
+        // with its pre-resolution log and nothing else would ever close it again.
+        if (msg.tag === 'settled' && this._resolution !== null) {
+          this._resolution = null;
+          // Something really did change — the open divergence closed — so the panel must repaint.
+          // (The arm stays silent on an ordinary equal log for exactly the opposite reason: nothing
+          // changed there, and a re-render would be a lie about state.)
+          this.emitChange();
+        }
         return;
       case 'republish':
         // We hold what they lack — one entry of THIS generation, or a whole live generation they
@@ -1510,7 +1597,7 @@ export class SyncEngine {
         // Their log being a prefix of ours by one entry also SETTLES any divergence we were holding
         // against them: a near-prefix is a compatible history, not a disagreement.
         this._resolution = null;
-        this.publishState();
+        if (!isAnswer) this.publishState();
         return;
       case 'fast-forward':
         // The ONE automatic case (design §5): they are exactly one entry ahead on our own history
@@ -1532,25 +1619,29 @@ export class SyncEngine {
         // perfectly ordinary board while it was missing moves — the one player who most needs to be
         // told. Putting our log back on the wire makes the peer run this same policy on this same
         // pair of logs and reach this same arm, so BOTH panels open and either player can propose a
-        // resolution. It is `publishState`, not a new message kind: the divergence is a fact about
-        // two logs, and the log is the thing that carries it.
+        // resolution. It is our LOG, not a new message kind: the divergence is a fact about two logs,
+        // and the log is the thing that carries it.
         //
-        // The exchange TERMINATES because it is answered only when the peer's log is one we have not
-        // already recorded a divergence against. Two peers therefore trade at most one log each: the
-        // second time each sees the other's unchanged head, the record already names it and nothing
-        // more goes out. (Silence on an unchanged head is not staleness — the record IS re-armed by
-        // anything that changes either side, and dropped outright once the two agree again.)
+        // The exchange TERMINATES on a TAG, not on a latch: our answer carries `tag: 'answering'`
+        // ({@link SyncTag}), and an answer is never itself answered. Two peers therefore
+        // trade at most one log each per announce — A's log, B's answer, silence — while every
+        // ANNOUNCE still draws an answer.
         //
-        // The guard is keyed on BOTH heads, and NOT on the divergence record, because the record is
-        // not a reliable memory of what we have answered: our own publish comes straight back to us
-        // off the relay (see the `in-sync` arm), and anything that touches either history re-opens
-        // the question honestly. `mine|theirs` says exactly what an answer would say — "here is
-        // THIS log, about THAT one" — so a repeat is silent while any real change is served.
-        const exchange = `${headHash(this._game.log)}|${headHash(remote)}`;
+        // That distinction is the whole point, and it is why the earlier `myHead|theirHead` latch was
+        // wrong. Under it the answer went out EXACTLY ONCE per pair of heads: if that single QoS-0
+        // publish was dropped (no ack, no retry, nothing periodic anywhere in this system), every
+        // later announce from the behind peer hit the latch and was met with silence, so the one
+        // player who most needs to be told was never told, kept rendering an ordinary board, and
+        // played on — turning a recoverable one-sided divergence into a genuine fork. Answering every
+        // announce is exactly what the `republish` arm above does, and for exactly the same reason:
+        // a lost message must be able to heal on the next one.
+        //
+        // The peer's own re-announce is therefore the retry, and it costs one message: it is the
+        // announcement that is repeated (presence republish, resync, reconnect), never the answer,
+        // so nothing here can run away.
         this._resolution = { theirs: remote, lca: decision.lca, diff: decision.diff };
-        if (this._answeredDivergence !== exchange) {
-          this._answeredDivergence = exchange;
-          this.publishState();
+        if (!isAnswer) {
+          this.publishDivergenceAnswer();
         }
         if (isFork(decision.diff)) {
           // A genuine fork additionally STOPS the game and archives both histories: two real

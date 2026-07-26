@@ -2996,9 +2996,11 @@ describe('NetSession — resolving a divergence (Task V.4b, epic #47, absorbs #3
     expect(incoming.ui).toBe('incoming');
     expect(incoming.canAccept).toBe(true);
     expect(incoming.incomingText).toContain('keep YOUR game');
-    // …and A is visibly waiting, with no buttons to press twice.
+    // …and A is visibly waiting — with the choices still on screen, because an unanswered ask is one
+    // unacknowledged publish and a wait with no controls at all is a dead end, not a state.
     expect(a.divergenceView().ui).toBe('waiting');
-    expect(a.divergenceView().options).toEqual([]);
+    expect(a.divergenceView().note).toContain('You can suggest something else');
+    expect(a.divergenceView().options.map((o) => o.choice)).toEqual(['take-mine', 'take-theirs']);
 
     // B agrees. BOTH sides then apply the effect their own candidates read the agreed head as.
     expect(b.respondResolution(true)).toBe(true);
@@ -3086,6 +3088,51 @@ describe('NetSession — resolving a divergence (Task V.4b, epic #47, absorbs #3
     expect(b.respondResolution(false)).toBe(true);
     await flush();
     expect(headHash(b.syncEngine()!.game().log)).toBe(before);
+  });
+
+  it('an ask that arrives with NO divergence here is still on screen and still answerable', async () => {
+    // The other dead end V.4b could leave: a `resolve:` ask reaching a client whose own record is
+    // absent or already closed (its peer republished, the divergence settled under an ask in flight,
+    // a message went missing). The card used to short-circuit on "no divergence" and render nothing
+    // AT ALL, so the ask was invisible and unanswerable through the UI — one player waiting on an
+    // agreement the other was never given a way to refuse.
+    const hub = new MockRelayHub();
+    const a = makeSession(hub, 'ask-a');
+    await a.enter('RMSTRD', NEW);
+    const b = makeSession(hub, 'ask-b');
+    await b.enter('RMSTRD', DEFER);
+    await flush();
+    a.place(coordsOf('0,0,0'));
+    await flush();
+    // The two are perfectly in sync: neither has anything to resolve.
+    expect(b.divergenceFacts()).toBeNull();
+    expect(b.divergenceView().show).toBe(false);
+    const before = headHash(b.syncEngine()!.game().log);
+
+    a.syncEngine()!.publishResolution({
+      kind: 'proposal',
+      id: 'ask-stranded',
+      action: 'resolve:some-head-b-does-not-hold',
+      proposedBy: 'white',
+    });
+    await flush();
+
+    const view = b.divergenceView();
+    expect(view.show).toBe(true);
+    expect(view.ui).toBe('incoming');
+    expect(view.canAccept).toBe(false);
+    expect(view.note).toContain('only decline');
+    // Accept stays unreachable — there is no history here to agree onto…
+    expect(b.respondResolution(true)).toBe(false);
+    // …and DECLINE goes out, which is the affordance the hidden card denied the player.
+    expect(b.respondResolution(false)).toBe(true);
+    await flush();
+    expect(b.divergenceView().show).toBe(false);
+    expect(headHash(b.syncEngine()!.game().log)).toBe(before);
+    // The refusal really went on the wire (the ask was injected at the engine seam, so the proposer
+    // here holds no handshake of its own to resolve — what matters is that B could answer at all).
+    expect(b.getHandshake().pending).toBeNull();
+    expect(b.getHandshake().resolution?.outcome).toBe('declined');
   });
 
   it('resolving a FORK lifts the conflict phase — a fork is a state, not a terminus', async () => {

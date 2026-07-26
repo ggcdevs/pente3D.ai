@@ -87,8 +87,40 @@ describe('deriveDivergence — nothing open', () => {
     expect(view.sharedPly).toBe(0);
   });
 
-  it('stays hidden even with a resolution ask in flight — the card is about the divergence', () => {
+  it('stays hidden while OUR OWN ask is in flight — there is nothing left to resolve', () => {
     expect(deriveDivergence(null, weProposed('H-mine')).show).toBe(false);
+  });
+
+  it('stays hidden for another consumer’s pending ask (a rematch is not this card’s business)', () => {
+    const rematchIncoming = receiveProposal(IDLE, {
+      kind: 'proposal',
+      id: 'r9',
+      action: 'rematch',
+      proposedBy: 'black',
+    });
+    expect(deriveDivergence(null, rematchIncoming).show).toBe(false);
+  });
+
+  it('THEIR ask with no divergence here is still ANSWERABLE — declinable, never a hidden card', () => {
+    // The peer is waiting on an answer. Hiding the card made the ask reachable only from the console:
+    // one player watching "waiting for your opponent" while the other had no control at all on screen.
+    const view = deriveDivergence(null, theyProposed('H-theirs'));
+    expect(view.show).toBe(true);
+    expect(view.ui).toBe('incoming');
+    expect(view.headline).toBe('Your opponent is asking to settle a disagreement');
+    expect(view.canAccept).toBe(false); // we hold no history they could be naming
+    expect(view.incomingText).toBe(
+      'Your opponent suggested continuing from a version of the game this one does not have.',
+    );
+    expect(view.note).toBe('You can only decline — nothing here matches either of your games.');
+    expect(view.explanation).toBe(
+      'Your game does not show one. Nothing here can be agreed to, because they are asking about a version of the game this one is not holding. Saying no leaves both games exactly as they are.',
+    );
+    // No divergence to paint, and no counter-proposal to make from a game with no disagreement.
+    expect(view.mine).toEqual([]);
+    expect(view.theirs).toEqual([]);
+    expect(view.options).toEqual([]);
+    expect(view.sharedPly).toBe(0);
   });
 });
 
@@ -206,12 +238,18 @@ describe('deriveDivergence — which resolutions are offered', () => {
 });
 
 describe('deriveDivergence — the handshake sub-states', () => {
-  it('WE asked → waiting, with no buttons of our own', () => {
+  it('WE asked → waiting, and the buttons STAY so the wait is not a dead end', () => {
+    // An ask is one unacknowledged publish. With the buttons gone this state had no exit at all —
+    // no withdraw, no re-ask, no timeout — so a lost ask stranded the proposer forever. Picking
+    // again supersedes our own ask (the same choice re-sends it; a different one changes our mind).
     const view = deriveDivergence(FORK, weProposed('H-mine'));
     expect(view.ui).toBe('waiting');
-    expect(view.options).toEqual([]);
-    expect(view.note).toBe('Waiting for your opponent to agree…');
+    expect(view.options.map((o) => o.choice)).toEqual(['take-mine', 'take-theirs', 'rewind']);
+    expect(view.note).toBe(
+      'Waiting for your opponent to agree… You can suggest something else instead.',
+    );
     expect(view.incomingText).toBeNull();
+    expect(view.canAccept).toBe(false); // it is OUR ask; there is nothing here to accept
     // The facts stay on screen while we wait — you can still see what you are waiting on.
     expect(view.mine).toHaveLength(1);
     expect(view.theirs).toHaveLength(2);
@@ -354,13 +392,21 @@ describe('deriveDivergence — the exact copy (this is the one screen a player r
     );
   });
 
-  /** Every shape a divergence can take, with the exact sentence each button must show. */
+  /**
+   * Every shape a divergence can take, with the exact sentence each button must show AND the exact
+   * sentence the SAME resolution must show when the PEER is the one asking for it. The incoming copy
+   * gets the full table, not just the fork: it is minted by a different function from the button
+   * copy, and the arm that was missing (a side with an EMPTY tail) shipped "their 0 moves would be
+   * dropped" — a loss that is not happening — precisely because only the fork was ever exercised.
+   */
   const DETAILS: readonly {
     readonly name: string;
     readonly mine: number;
     readonly theirs: number;
     readonly keep: string;
     readonly take: string;
+    readonly keepAsk: string;
+    readonly takeAsk: string;
   }[] = [
     {
       name: 'a fork, one move each',
@@ -368,6 +414,8 @@ describe('deriveDivergence — the exact copy (this is the one screen a player r
       theirs: 1,
       keep: "Your 1 move stays; your opponent's 1 move is dropped.",
       take: "Your opponent's 1 move is taken; your 1 move is dropped.",
+      keepAsk: 'Your opponent suggests: keep YOUR game (their 1 move would be dropped).',
+      takeAsk: 'Your opponent suggests: keep THEIR game (your 1 move would be dropped).',
     },
     {
       name: 'a fork, several moves each',
@@ -375,6 +423,8 @@ describe('deriveDivergence — the exact copy (this is the one screen a player r
       theirs: 3,
       keep: "Your 2 moves stay; your opponent's 3 moves are dropped.",
       take: "Your opponent's 3 moves are taken; your 2 moves are dropped.",
+      keepAsk: 'Your opponent suggests: keep YOUR game (their 3 moves would be dropped).',
+      takeAsk: 'Your opponent suggests: keep THEIR game (your 2 moves would be dropped).',
     },
     {
       name: 'behind by one',
@@ -382,6 +432,9 @@ describe('deriveDivergence — the exact copy (this is the one screen a player r
       theirs: 1,
       keep: 'Stay where you are; the 1 move only your opponent has is dropped.',
       take: "Take your opponent's 1 move; nothing of yours is dropped.",
+      keepAsk: 'Your opponent suggests: keep YOUR game (their 1 move would be dropped).',
+      takeAsk:
+        'Your opponent suggests: keep THEIR game (nothing of yours is dropped; you take their 1 move).',
     },
     {
       name: 'behind by several',
@@ -389,6 +442,9 @@ describe('deriveDivergence — the exact copy (this is the one screen a player r
       theirs: 2,
       keep: 'Stay where you are; the 2 moves only your opponent has are dropped.',
       take: "Take your opponent's 2 moves; nothing of yours is dropped.",
+      keepAsk: 'Your opponent suggests: keep YOUR game (their 2 moves would be dropped).',
+      takeAsk:
+        'Your opponent suggests: keep THEIR game (nothing of yours is dropped; you take their 2 moves).',
     },
     {
       name: 'ahead by one',
@@ -396,6 +452,9 @@ describe('deriveDivergence — the exact copy (this is the one screen a player r
       theirs: 0,
       keep: 'Nothing of yours changes; your opponent catches up to your 1 move.',
       take: 'Go back to where your opponent is; your 1 move since then is dropped.',
+      keepAsk:
+        'Your opponent suggests: keep YOUR game (nothing of theirs is dropped; they catch up to your 1 move).',
+      takeAsk: 'Your opponent suggests: keep THEIR game (your 1 move would be dropped).',
     },
     {
       name: 'ahead by several',
@@ -403,6 +462,9 @@ describe('deriveDivergence — the exact copy (this is the one screen a player r
       theirs: 0,
       keep: 'Nothing of yours changes; your opponent catches up to your 3 moves.',
       take: 'Go back to where your opponent is; your 3 moves since then are dropped.',
+      keepAsk:
+        'Your opponent suggests: keep YOUR game (nothing of theirs is dropped; they catch up to your 3 moves).',
+      takeAsk: 'Your opponent suggests: keep THEIR game (your 3 moves would be dropped).',
     },
   ];
 
@@ -412,16 +474,35 @@ describe('deriveDivergence — the exact copy (this is the one screen a player r
     expect(view.options.find((o) => o.choice === 'take-theirs')!.detail).toBe(take);
   });
 
-  it('an incoming ask is described exactly, in each of the three shapes', () => {
-    const of = (target: string) => deriveDivergence(FORK, theyProposed(target)).incomingText;
-    expect(of('H-mine')).toBe(
-      'Your opponent suggests: keep YOUR game (their 2 moves would be dropped).',
-    );
-    expect(of('H-theirs')).toBe(
-      'Your opponent suggests: keep THEIR game (your 1 move would be dropped).',
-    );
-    expect(of('H-lca')).toBe(
+  it.each(DETAILS)(
+    '$name — the PEER’s ask for the same two resolutions says exactly what it costs',
+    ({ mine, theirs, keepAsk, takeAsk }) => {
+      const facts = { diff: diffOf(2, mine, theirs), candidates: CANDIDATES };
+      expect(deriveDivergence(facts, theyProposed('H-mine')).incomingText).toBe(keepAsk);
+      expect(deriveDivergence(facts, theyProposed('H-theirs')).incomingText).toBe(takeAsk);
+    },
+  );
+
+  it('an incoming REWIND ask names the move both sides go back to', () => {
+    expect(deriveDivergence(FORK, theyProposed('H-lca')).incomingText).toBe(
       'Your opponent suggests: both go back to move 2 (everything after it dropped on both sides).',
+    );
+  });
+
+  it('no incoming ask ever claims a side loses moves it does not have', () => {
+    // The property the missing zero-arm broke: the copy may only speak of a loss when there IS one.
+    fc.assert(
+      fc.property(fc.nat({ max: 3 }), fc.nat({ max: 3 }), (m, t) => {
+        // Both tails empty is not a divergence — the two logs would then have the SAME head, and
+        // `needsResolution()` (the only source of these facts) is null in that case. The card is
+        // never derived for it, so the property is about the states that can actually be on screen.
+        fc.pre(m + t > 0);
+        const facts = { diff: diffOf(2, m, t), candidates: CANDIDATES };
+        for (const target of ['H-mine', 'H-theirs', 'H-lca']) {
+          const text = deriveDivergence(facts, theyProposed(target)).incomingText!;
+          expect(text).not.toContain('0 move');
+        }
+      }),
     );
   });
 

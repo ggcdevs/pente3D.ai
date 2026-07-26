@@ -3077,6 +3077,7 @@
       "SyncError",
       "SyncMessage",
       "SyncStatus",
+      "SyncTag",
       "UndoDecision",
       "UndoRejection",
       "decideUndo",
@@ -3268,6 +3269,7 @@
           "readonly epoch: number",
           "readonly headHash: string",
           "readonly log: readonly Event[]",
+          "readonly tag: SyncTag",
           "readonly uuid: string",
           "readonly version: number"
         ]
@@ -3333,6 +3335,10 @@
     "enums": [],
     "typeAliases": [
       {
+        "name": "SyncTag",
+        "type": "'answering' | 'settled'"
+      },
+      {
         "name": "AdmittedGame",
         "type": "| { readonly source: 'arbiter'; readonly game: { readonly kind: 'sync' } & SyncMessage }\n  | { readonly source: 'newcomer'; readonly uuid: string }"
       },
@@ -3377,6 +3383,7 @@
       "parseSeat",
       "parseSeatMap",
       "parseSyncMessage",
+      "tagOf",
       "toAdmitMessage",
       "toAdoptAdmitMessage",
       "toHelloMessage",
@@ -6471,6 +6478,7 @@
       "offerable",
       "plural",
       "resolutionPending",
+      "strandedAsk",
       "takeDetail"
     ]
   },

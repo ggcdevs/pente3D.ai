@@ -19,6 +19,12 @@ import { append, emptyLog, headHash, type EventLog } from '../src/core/eventLog.
  *     handshake #12/#18 use, and BOTH logs converge to ONE `headHash` — asserted on
  *     `window.__pente.getHeadHash()` in both contexts (proof-by-state, never a log line;
  *     agent-principles #3), with the resolution driven through the panel's REAL buttons.
+ *  3. **It is actually READABLE.** `toBeVisible()` passes for a 24x24 box, and that is exactly what
+ *     this panel first shipped as — a clipped sliver, because its zone's `transform` made the zone
+ *     the containing block for the panel's `position: fixed; inset: 0` root. So every state this
+ *     spec reaches is MEASURED against the viewport ({@link assertReadable}) — card, headline and
+ *     every button — and photographed into `e2e/artifacts/`, where the project's visual review looks.
+ *     The measurement was watched rejecting the old CSS before it was kept (agent-principles #7).
  *
  * ## Why the divergence has to be MANUFACTURED
  *
@@ -191,9 +197,17 @@ function syncMessageFor(uuid: string, nodes: readonly string[]): Record<string, 
 }
 
 test.describe('V.4b — a divergence is seen by BOTH players and resolved by agreement', () => {
+  // Every scenario boots TWO isolated contexts (two full WebGL apps), drives them into a divergence
+  // over a BroadcastChannel relay, and additionally MEASURES + photographs the rendered card. Under
+  // the full suite's parallel workers that can exceed the 60s default — a real cost of the
+  // two-context + real-rendering proof, not a logic race (it runs in ~30s with `--workers=1`).
+  // `test.slow()` triples the budget, the sanctioned Playwright knob for legitimately-heavy tests;
+  // it pins no workers, serializes nothing, and weakens no assertion (agent-principles #7).
+  test.slow();
+
   test('both panels open at the same shared move, and agreeing converges both logs', async ({
     browser,
-  }, testInfo) => {
+  }) => {
     const context = await browser.newContext();
     const host = await context.newPage();
     const joiner = await context.newPage();
@@ -272,9 +286,9 @@ test.describe('V.4b — a divergence is seen by BOTH players and resolved by agr
     // Neither adopted anything on its own — that is the point of the refusal.
     expect(await headOf(host)).not.toBe(await headOf(joiner));
 
-    await host.getByTestId('divergence-panel').screenshot({
-      path: artifact(testInfo.outputDir, 'divergence-host-panel.png'),
-    });
+    // The panel a player actually reads — measured, not merely asserted "visible".
+    await assertReadable(host, 'one-sided-host');
+    await assertReadable(joiner, 'one-sided-joiner');
 
     // ── Resolve it through the REAL buttons. ─────────────────────────────────────────────────────
     // The joiner suggests taking the host's game; nothing has landed yet.
@@ -284,6 +298,12 @@ test.describe('V.4b — a divergence is seen by BOTH players and resolved by agr
       () => (window as unknown as { __pente: Pente }).__pente.getDivergence().ui === 'waiting',
     );
     expect(await headOf(joiner)).toBe(joinerHeadBefore); // held out-of-band: nothing applied
+    // Waiting is not a dead end: the choices are still on screen (and still legible), so a lost ask
+    // can be re-sent and a change of mind is possible. Nothing else in this flow can escape it —
+    // there is no timeout and no withdraw.
+    await expect(joiner.getByTestId('divergence-note')).toContainText('You can suggest something else');
+    await expect(joiner.getByTestId('divergence-choose-take-mine')).toBeVisible();
+    await assertReadable(joiner, 'waiting-joiner');
 
     // The host sees it as an ask about ITS OWN game, and can answer it.
     await host.waitForFunction(
@@ -292,9 +312,7 @@ test.describe('V.4b — a divergence is seen by BOTH players and resolved by agr
     const incoming = await divergence(host);
     expect(incoming.canAccept).toBe(true);
     expect(incoming.incomingText).toContain('keep YOUR game');
-    await host.getByTestId('divergence-panel').screenshot({
-      path: artifact(testInfo.outputDir, 'divergence-host-incoming.png'),
-    });
+    await assertReadable(host, 'incoming-ask');
     await host.getByTestId('divergence-accept').click();
 
     // ── BOTH logs converge onto ONE history (proof-by-state). ────────────────────────────────────
@@ -318,6 +336,76 @@ test.describe('V.4b — a divergence is seen by BOTH players and resolved by agr
     await expect(joiner.getByTestId('divergence-panel')).toBeHidden();
     expect((await net(host))?.phase).toBe('connected');
     expect((await net(joiner))?.phase).toBe('connected');
+
+    await context.close();
+  });
+
+  test('a FORK — the case that STOPS the game — is fully readable on screen', async ({ browser }) => {
+    // The primary case this panel exists for, and the worst one to render: both players have moves
+    // the other does not, so the card carries two populated lists AND a third option ("Go back to
+    // where you agreed"). That third button is what used to be pushed off the bottom of the screen.
+    const context = await browser.newContext();
+    const host = await context.newPage();
+    const joiner = await context.newPage();
+    await installMock(host, 'fork-host');
+    await installMock(joiner, 'fork-joiner');
+
+    await ready(host);
+    await host.evaluate(() => (window as unknown as { __pente: Pente }).__pente.dispatch('hostGame'));
+    await waitConnected(host);
+    const code = (await net(host))?.code;
+    await ready(joiner);
+    await joiner.evaluate((c: string) => {
+      const p = (window as unknown as { __pente: Pente }).__pente;
+      p.setPendingJoinCode(c);
+      p.dispatch('joinGame');
+    }, code!);
+    await waitConnected(joiner);
+
+    await host.evaluate(() => (window as unknown as { __pente: Pente }).__pente.place([0, 0, 0]));
+    await joiner.waitForFunction(() => {
+      const s = (window as unknown as { __pente: Pente }).__pente.getState();
+      return s?.pieces['0,0,0'] === 'white';
+    });
+    const uuid = await gameUuid(host);
+
+    // Cut the link, then let each side play on from the shared move — two REAL histories.
+    await setCut(host, true);
+    await setCut(joiner, true);
+    await host.evaluate((msg) => {
+      (window as unknown as MockControls).__penteMockDeliver(msg);
+    }, syncMessageFor(uuid!, ['0,0,0', '1,1,1']));
+    await host.waitForFunction(() => {
+      const s = (window as unknown as { __pente: Pente }).__pente.getState();
+      return s?.pieces['1,1,1'] === 'black';
+    });
+    await host.evaluate(() => (window as unknown as { __pente: Pente }).__pente.place([2, 2, 2]));
+    // The joiner, hearing none of that, plays its own reply to the move it CAN see.
+    await joiner.evaluate(() => (window as unknown as { __pente: Pente }).__pente.place([4, 4, 4]));
+
+    await setCut(host, false);
+    await setCut(joiner, false);
+    await host.evaluate(() => (window as unknown as { __pente: Pente }).__pente.resync());
+
+    for (const page of [host, joiner]) {
+      await page.waitForFunction(
+        () => (window as unknown as { __pente: Pente }).__pente.getDivergence().show === true,
+      );
+    }
+    // It really is a fork: each side has moves the other does not, and the third option is offered.
+    for (const page of [host, joiner]) {
+      const view = await divergence(page);
+      expect(view.mine.length).toBeGreaterThan(0);
+      expect(view.theirs.length).toBeGreaterThan(0);
+      expect(view.options.map((o) => o.choice)).toEqual(['take-mine', 'take-theirs', 'rewind']);
+    }
+    await expect(host.getByTestId('divergence-choose-rewind')).toBeVisible();
+
+    // …and the whole card, including that third button, is on screen and legible.
+    const box = await assertReadable(host, 'fork-host');
+    // Sanity on the measurement itself: a fork card is substantial, so a passing geometry check is
+    // not passing because the card is empty.
+    expect(box.height).toBeGreaterThan(200);
 
     await context.close();
   });
@@ -393,9 +481,62 @@ test.describe('V.4b — a divergence is seen by BOTH players and resolved by agr
   });
 });
 
-/** Put a screenshot artifact under the spec's output dir (creating it if needed). */
-function artifact(outputDir: string, name: string): string {
-  const path = resolve(outputDir, name);
+/**
+ * A reviewer-facing artifact path under `e2e/artifacts/` — where every other spec in this repo puts
+ * its screenshots, and where the project's visual review actually looks. NOT `testInfo.outputDir`
+ * (`test-results/`), which is wiped on the next run.
+ */
+function artifact(name: string): string {
+  const path = resolve('e2e/artifacts', name);
   mkdirSync(dirname(path), { recursive: true });
   return path;
+}
+
+/**
+ * Prove the panel is READABLE, not merely "visible", and leave the pictures that show it.
+ *
+ * `toBeVisible()` passes for a 24x24 box, which is exactly what this panel used to render: its root
+ * is `position: fixed; inset: 0`, and its zone carried a `transform`, which makes the zone the
+ * containing block for fixed descendants — so `inset: 0` resolved to the zone's 24x24 padding box and
+ * the card became a 174px column hanging off the top and bottom of the screen. Nothing in the DOM or
+ * in a passing assertion said so. These are the measurements that do: the card's own box, the
+ * headline's, and every button's, against the viewport.
+ *
+ * @returns the measured card box, so a caller can assert more about it.
+ */
+async function assertReadable(page: Page, name: string): Promise<{
+  x: number; y: number; width: number; height: number;
+}> {
+  const viewport = page.viewportSize()!;
+  const card = page.locator('.pente-divergence-card');
+  await expect(card).toBeVisible();
+  const box = (await card.boundingBox())!;
+
+  // Inside the viewport on every edge — the clipping this spec exists to catch.
+  expect(box.x, `${name}: card starts left of the viewport`).toBeGreaterThanOrEqual(0);
+  expect(box.y, `${name}: card starts above the viewport`).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width, `${name}: card runs off the right edge`).toBeLessThanOrEqual(viewport.width);
+  expect(box.y + box.height, `${name}: card runs off the bottom edge`).toBeLessThanOrEqual(viewport.height);
+  // Wide enough to read: the collapsed card was 174px and wrapped one word per line.
+  expect(box.width, `${name}: card collapsed to a narrow column`).toBeGreaterThanOrEqual(340);
+
+  // The headline and EVERY button are on screen too — a card whose box fits but whose last option is
+  // unreachable is still a broken screen.
+  const parts = page.locator(
+    '.pente-divergence-card [data-testid="divergence-headline"], .pente-divergence-card button:visible',
+  );
+  const count = await parts.count();
+  expect(count, `${name}: nothing painted in the card`).toBeGreaterThan(1);
+  for (let i = 0; i < count; i += 1) {
+    const part = (await parts.nth(i).boundingBox())!;
+    const label = (await parts.nth(i).innerText()).trim().slice(0, 40);
+    expect(part.y, `${name}: "${label}" is above the viewport`).toBeGreaterThanOrEqual(0);
+    expect(part.y + part.height, `${name}: "${label}" is below the fold`).toBeLessThanOrEqual(viewport.height);
+    expect(part.x + part.width, `${name}: "${label}" runs off the right edge`).toBeLessThanOrEqual(viewport.width);
+  }
+
+  // The artifacts a reviewer opens: what the player sees, and the card on its own.
+  await page.screenshot({ path: artifact(`divergence-${name}-screen.png`) });
+  await card.screenshot({ path: artifact(`divergence-${name}-card.png`) });
+  return box;
 }
