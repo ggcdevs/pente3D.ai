@@ -243,6 +243,26 @@ export function reconcileEpoched(
   return reconcile(mine, theirs, myColor);
 }
 
+/**
+ * Cut `log` back to its first `ply` entries — the ONE place in the system a log is SHORTENED, and it
+ * is deliberately not a game action.
+ *
+ * The append-only rule (`eventLog.ts`: *"undo/redo are events, never truncation — the log only ever
+ * grows"*) governs PLAY: nothing a player does to the board may rewrite history, which is why an undo
+ * is an appended `undo` event. A rewind-to-last-common-ancestor is the opposite kind of act — an
+ * agreed abandonment of a history that both players just decided not to continue (V.4b), reached only
+ * through a mutual handshake. Keeping it here, beside the ancestor walk that produces the `ply` and
+ * outside `src/core`, is what keeps the core invariant true of everything the rules engine offers.
+ *
+ * A `ply` at or beyond the log's length returns the log unchanged (there is nothing to cut), and the
+ * result carries the same uuid — a rewind stays inside the same game, so its prefix hashes, and
+ * therefore {@link LastCommonAncestor}, still line up with the peer's.
+ */
+export function rewindTo(log: EventLog, ply: number): EventLog {
+  if (ply >= log.entries.length) return log;
+  return { uuid: log.uuid, entries: log.entries.slice(0, Math.max(0, ply)) };
+}
+
 /** Why a log may not be adopted. */
 export type LogRejection =
   /** An entry the rules engine refuses (occupied / off-board / already-won place, bad undo/redo). */

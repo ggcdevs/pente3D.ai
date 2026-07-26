@@ -49,12 +49,15 @@ classDiagram
     note for ArchivedMeta "src/persist/archive.ts"
     class ArchiveInspect {
         <<interface>>
+        +getDivergence(): DivergenceView
         +getEndState(): EndState
         +getNetGameUuid(): string | null
         +getNetLastReject(): AdmissionReject | null
         +getNetSeatOwners(): SeatMap | null
         +getNotify(): NotifyReadout
         +listArchive(): Promise~readonly ArchiveListing[]~
+        +proposeResolution(choice: ResolutionChoice): boolean
+        +respondResolution(accepted: boolean): boolean
     }
     note for ArchiveInspect "src/debug/window.ts"
     class ArchiveItem {
@@ -262,6 +265,48 @@ classDiagram
         +readonly presets: Readonly~Record~string, unknown~~
     }
     note for ControlsConfig "src/ui/widgets/settingsModel.ts"
+    class DivergenceFacts {
+        <<interface>>
+        +readonly candidates: ResolutionCandidates
+        +readonly diff: LogDiff
+    }
+    note for DivergenceFacts "src/ui/widgets/divergenceModel.ts"
+    class DivergenceLine {
+        <<interface>>
+        +readonly ply: number
+        +readonly text: string
+    }
+    note for DivergenceLine "src/ui/widgets/divergenceModel.ts"
+    class DivergenceOption {
+        <<interface>>
+        +readonly choice: ResolutionChoice
+        +readonly detail: string
+        +readonly label: string
+    }
+    note for DivergenceOption "src/ui/widgets/divergenceModel.ts"
+    class DivergencePanelDeps {
+        <<interface>>
+        +readonly doc: Document
+        +getDivergence(): DivergenceView
+        +proposeResolution(choice: ResolutionChoice): boolean
+        +respondResolution(accepted: boolean): boolean
+    }
+    note for DivergencePanelDeps "src/ui/widgets/divergencePanel.ts"
+    class DivergenceView {
+        <<interface>>
+        +readonly canAccept: boolean
+        +readonly explanation: string
+        +readonly headline: string
+        +readonly incomingText: string | null
+        +readonly mine: readonly DivergenceLine[]
+        +readonly note: string | null
+        +readonly options: readonly DivergenceOption[]
+        +readonly sharedPly: number
+        +readonly show: boolean
+        +readonly theirs: readonly DivergenceLine[]
+        +readonly ui: DivergenceUi
+    }
+    note for DivergenceView "src/ui/widgets/divergenceModel.ts"
     class DivergentMove {
         <<interface>>
         +readonly event: Event
@@ -1003,6 +1048,7 @@ classDiagram
         +getCamera(): CameraReadout | null
         +getCameraPreset(): CameraPresetReadout | null
         +getColors(): ColorsReadout | null
+        +getDivergence(): DivergenceView
         +getEndState(): EndState
         +getHandshake(): HandshakeState
         +getHeadHash(): string | null
@@ -1033,9 +1079,11 @@ classDiagram
         +place(coords: Coord): GameState | null
         +pressKey(chord: string): KeyResolution | null
         +propose(action: string): boolean
+        +proposeResolution(choice: ResolutionChoice): boolean
         +radiusOf(node: Coord): number | null
         +rayNodeDistances(ndcX: number, ndcY: number): Object[]
         +respond(accepted: boolean): boolean
+        +respondResolution(accepted: boolean): boolean
         +resync(): void
         +scrubTo(k: number): void
         +setCamera(position: Object, target: Object): void
@@ -1230,6 +1278,13 @@ classDiagram
         +readonly outcome: ResolutionOutcome
     }
     note for Resolution "src/net/handshake.ts"
+    class ResolutionCandidates {
+        <<interface>>
+        +readonly lca: string | null
+        +readonly mine: string
+        +readonly theirs: string
+    }
+    note for ResolutionCandidates "src/net/resolution.ts"
     class ResolvedCameraPreset {
         <<interface>>
         +readonly name: string
@@ -1496,6 +1551,7 @@ classDiagram
         +currentGame(): Object | null
         +dispatch(commandId: string): boolean
         +enter(code: string, proposal: Proposal): void
+        +getDivergence(): DivergenceView
         +getEndState(): EndState
         +getHelpSources(): HelpSources
         +getHistory(): HistoryFacts
@@ -1503,12 +1559,14 @@ classDiagram
         +listArchive(): Promise~readonly ArchiveListing[]~
         +popScope(): void
         +proposeRematch(): boolean
+        +proposeResolution(choice: ResolutionChoice): boolean
         +pushScope(scope: MenuScope | SettingsScope | HelpScope | ArchiveScope | NetPanelScope): void
         +registerOpenArchive(open: () =~ void): void
         +registerOpenHelp(open: () =~ void): void
         +registerOpenNetwork(open: () =~ void): void
         +registerOpener(open: () =~ void): void
         +respondRematch(accepted: boolean): boolean
+        +respondResolution(accepted: boolean): boolean
         +respondUndoRedo(accepted: boolean): boolean
         +resumeArchived(id: string): Promise~void~
         +reviewArchived(id: string): Promise~void~
@@ -1706,9 +1764,12 @@ classDiagram
     }
     note for MqttTransport "src/net/mqttTransport.ts"
     class NetSession {
+        +applyAcceptedResolution(): boolean
         +applyAcceptedUndoRedo(): boolean
         +canPlace(): boolean
         +disconnect(): void
+        +divergenceFacts(): DivergenceFacts | null
+        +divergenceView(): DivergenceView
         +enter(rawCode: string, proposal: Proposal): Promise~void~
         +gameStartedAt(): number | null
         +gameState(): GameState | null
@@ -1722,10 +1783,12 @@ classDiagram
         +place(coords: Coord): void
         +ply(): number
         +propose(action: string): boolean
+        +proposeResolution(choice: ResolutionChoice): boolean
         +reconnect(): Promise~boolean~
         +redo(): void
         +resetForRematch(): boolean
         +respond(accepted: boolean): boolean
+        +respondResolution(accepted: boolean): boolean
         +seatOwners(): SeatMap | null
         +state(): NetSessionState
         +syncEngine(): SyncEngine | null
@@ -1756,6 +1819,7 @@ classDiagram
     class SyncEngine {
         +agreeOn(uuid: string): void
         +applyAgreedUndo(): void
+        +applyResolution(effect: ResolutionEffect): boolean
         +attach(): void
         +conflictForks(): Object | null
         +connect(roomCode: string): Promise~void~
@@ -1768,6 +1832,7 @@ classDiagram
         +place(coords: Coord): void
         +placeLocalOnly(coords: Coord): void
         +publishHandshake(msg: ProposalMessage | ResponseMessage): void
+        +publishResolution(msg: ProposalMessage | ResponseMessage): void
         +publishState(): void
         +receive(msg: SyncMessage): void
         +redo(): void
@@ -1775,6 +1840,7 @@ classDiagram
         +rejectedLog(): Object | null
         +reseat(color: Player): void
         +resetGame(newGame: Game, newMyColor: Player): void
+        +resolutionCandidates(): ResolutionCandidates | null
         +status(): SyncStatus
         +undo(): void
         +whenSettled(): Promise~void~

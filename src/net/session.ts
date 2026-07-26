@@ -135,6 +135,19 @@ import {
 import { canPlaceForSeat } from './turnGate';
 import { rematchGameUuid } from './rematch';
 import {
+  effectOf,
+  resolutionAction,
+  resolutionTarget,
+  targetChoice,
+  targetFor,
+  type ResolutionChoice,
+} from './resolution';
+import {
+  deriveDivergence,
+  type DivergenceFacts,
+  type DivergenceView,
+} from '../ui/widgets/divergenceModel';
+import {
   generateGameCode,
   validateGameCode,
   type NetPhase,
@@ -1428,6 +1441,130 @@ export class NetSession {
     return true;
   }
 
+  // ── Divergence resolution (Task V.4b, epic #47 — design §5, absorbs #38) ───────────────────────
+
+  /**
+   * The live divergence, as the facts a panel is built from — what differs ({@link LogDiff}) and the
+   * three histories that could settle it ({@link ResolutionCandidates}) — or `null` when there is
+   * none. Both come from the engine at the moment of the call, so they can never describe a game this
+   * session has moved off.
+   */
+  divergenceFacts(): DivergenceFacts | null {
+    if (this.engine === null) return null;
+    const open = this.engine.needsResolution();
+    const candidates = this.engine.resolutionCandidates();
+    if (open === null || candidates === null) return null;
+    return { diff: open.diff, candidates };
+  }
+
+  /**
+   * The DIVERGENCE PANEL view-model (V.4b): the pure {@link deriveDivergence} over the live
+   * divergence + the shared N.1 handshake. `show` is `false` whenever there is nothing to resolve,
+   * so the app can render it unconditionally. Exposed on `window.__pente` so the two-context e2e
+   * asserts BOTH clients opened the same card — observable state, not a log line.
+   */
+  divergenceView(): DivergenceView {
+    return deriveDivergence(this.divergenceFacts(), this.handshake);
+  }
+
+  /**
+   * Propose a RESOLUTION for the open divergence (V.4b) — the one player-facing way out of two
+   * histories that cannot both be right. It reuses the SAME N.1 out-of-band primitive #12/#18 use
+   * (there is exactly one handshake in this system): the `action` tag is `resolve:<headHash>`, which
+   * names the history to continue from ABSOLUTELY rather than relative to whoever asked, so the
+   * responder can neither invert it wrongly nor be pushed onto a history it does not hold
+   * (`resolution.ts`).
+   *
+   * Published through {@link SyncEngine.publishResolution}, which — unlike the rematch/undo path — is
+   * still available once a fork has STOPPED the game. That is the point: a stopped game has exactly
+   * one thing left to say, and refusing to carry it is what made a fork a dead end.
+   *
+   * Nothing is applied here. The choice lands only when the peer accepts and BOTH sides run
+   * {@link applyAcceptedResolution} — the same held-out-of-band guarantee #18 has, so a decline or a
+   * peer-gone auto-cancel leaves both games exactly as they were.
+   *
+   * @returns `false` (nothing published) when offline/unseated, when no divergence is open, or when
+   *   the chosen resolution names no history this client holds (a `rewind` with no shared ancestor).
+   */
+  proposeResolution(choice: ResolutionChoice): boolean {
+    if (this.engine === null || this.seat === null) return false;
+    const candidates = this.engine.resolutionCandidates();
+    if (candidates === null) return false;
+    const target = targetFor(choice, candidates);
+    if (target === null) return false;
+    const { state, message } = hsPropose(
+      this.handshake,
+      resolutionAction(target),
+      this.seat as Player,
+    );
+    // Publish first, exactly as {@link propose} does: if the transport refuses, the throw propagates
+    // and no pending state is recorded, so the handshake and the wire never disagree about an ask.
+    this.engine.publishResolution(message);
+    this.setHandshake(state);
+    return true;
+  }
+
+  /**
+   * Accept (`true`) / decline (`false`) the peer's incoming RESOLUTION proposal. Separate from the
+   * generic {@link respond} because it publishes over the stopped-game-safe seam and because an
+   * ACCEPT is refused unless this client actually holds the history being named: agreeing to a
+   * history we cannot produce would resolve the handshake while leaving the two games apart, which is
+   * worse than the divergence. The panel disables Accept in that case ({@link DivergenceView.canAccept})
+   * and offers only Decline, so the honest answer is the only reachable one.
+   *
+   * @returns `true` iff a response was published.
+   */
+  respondResolution(accepted: boolean): boolean {
+    if (this.engine === null) return false;
+    const incoming = incomingPending(this.handshake);
+    if (incoming === null) return false;
+    const target = resolutionTarget(incoming.action);
+    if (target === null) return false;
+    const candidates = this.engine.resolutionCandidates();
+    if (accepted && (candidates === null || targetChoice(target, candidates) === null)) return false;
+    const { state, message } = hsRespond(this.handshake, incoming.id, accepted);
+    if (message === null) return false;
+    this.engine.publishResolution(message);
+    this.setHandshake(state);
+    return true;
+  }
+
+  /**
+   * Apply an ACCEPTED resolution (the V.4b apply half — the mirror of {@link applyAcceptedUndoRedo}).
+   * Called by the app when the shared handshake RESOLVES to `accepted` for a `resolve:` action on
+   * EITHER side. Both clients read the SAME agreed head hash against their OWN candidates, so each
+   * derives its own local effect and the pair lands on ONE history: the proposer reads it as
+   * `take-mine` and republishes, the responder reads it as `take-theirs` and adopts — through
+   * {@link SyncEngine.applyResolution}, which REPLAY-VALIDATES anything it takes.
+   *
+   * The resolution is CLEARED whether or not it applied, so it can never re-fire and the handshake
+   * settles idle. A history that fails replay validation is refused there and recorded on
+   * `rejectedLog` — the honest failure path: the divergence stays open and the players choose again.
+   *
+   * @returns `true` iff an accepted resolution was applied to the game.
+   */
+  applyAcceptedResolution(): boolean {
+    if (this.engine === null) return false;
+    const res = this.handshake.resolution;
+    if (res === null || res.outcome !== 'accepted') return false;
+    const target = resolutionTarget(res.action);
+    if (target === null) return false;
+    // Clear FIRST: the accepted ask is spent whatever happens next, and every arm below (including
+    // the two that decline to act) must leave the handshake idle for the next one.
+    this.setHandshake(clearResolution(this.handshake));
+    const candidates = this.engine.resolutionCandidates();
+    // The divergence can close under a resolution in flight — the peer republished and the two
+    // histories agreed again. There is then nothing to apply, and applying anything would re-open a
+    // disagreement that no longer exists.
+    if (candidates === null) return false;
+    const choice = targetChoice(target, candidates);
+    if (choice === null) return false;
+    const applied = this.engine.applyResolution(effectOf(choice));
+    this.reflectEngineStatus();
+    this.emit();
+    return applied;
+  }
+
   /**
    * Reset to a FRESH game IN PLACE — the N.2 seamless rematch (design decision 2: "both reset to a
    * fresh game in the SAME room/connection — no disconnect/re-host", "colors ALTERNATE every game").
@@ -1815,10 +1952,21 @@ export class NetSession {
     engine.publishState();
   }
 
-  /** Fold the engine's conflict status into the session phase (a fork stops the game). */
+  /**
+   * Fold the engine's conflict status into the session phase — BOTH WAYS. A fork stops the game and
+   * shows the conflict phase; an AGREED resolution ({@link applyAcceptedResolution}) lifts the stop,
+   * and the phase has to come back with it or the game would stay visibly stopped after the players
+   * had un-stopped it. That is the V.4b change: a fork is a state, not a terminus.
+   *
+   * Only `conflict` is reversed, never any other phase: `connected` is where a live engine belongs,
+   * and nothing else here may overwrite `connecting`/`offline`, which the admission protocol owns.
+   */
   private reflectEngineStatus(): void {
-    if (this.engine !== null && this.engine.status().kind === 'conflict') {
+    if (this.engine === null) return;
+    if (this.engine.status().kind === 'conflict') {
       this.phase = 'conflict';
+    } else if (this.phase === 'conflict') {
+      this.phase = 'connected';
     }
   }
 

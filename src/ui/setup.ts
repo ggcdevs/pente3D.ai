@@ -35,6 +35,9 @@ import { archiveWidget, type ArchiveScope } from './widgets/archive.ts';
 import type { ArchiveListing } from './widgets/archiveModel.ts';
 import { endStateOverlayWidget } from './widgets/endStateOverlay.ts';
 import type { EndState } from '../net/endState.ts';
+import { divergencePanelWidget } from './widgets/divergencePanel.ts';
+import type { DivergenceView } from './widgets/divergenceModel.ts';
+import type { ResolutionChoice } from '../net/resolution.ts';
 import type { LayoutConfig } from './layout.ts';
 
 /**
@@ -169,6 +172,23 @@ export interface UiDeps {
    * call this; on mutual accept BOTH clients roll the undo/redo (the app applies on the resolution).
    */
   respondUndoRedo(accepted: boolean): boolean;
+  /**
+   * The live DIVERGENCE-panel view-model (Task V.4b, epic #47) — the app's `session.divergenceView()`
+   * (the pure `deriveDivergence` over the open divergence + the N.1 handshake). Supplied by the app so
+   * the UI shell never imports `src/net` state; the panel only paints it.
+   */
+  getDivergence(): DivergenceView;
+  /**
+   * Suggest a resolution for the open divergence (Task V.4b) — the app's
+   * `session.proposeResolution(choice)`. The panel's choice buttons call this; the SAME session API
+   * `window.__pente.proposeResolution` drives.
+   */
+  proposeResolution(choice: ResolutionChoice): boolean;
+  /**
+   * Agree (`true`) / decline (`false`) the peer's suggested resolution (Task V.4b) — the app's
+   * `session.respondResolution(accepted)`. Nothing lands until BOTH sides agree.
+   */
+  respondResolution(accepted: boolean): boolean;
 }
 
 /** The live UI handle exposed to the app + tests: the container plus its layout readout. */
@@ -199,6 +219,7 @@ export function defaultWidgetFactories(): WidgetFactory[] {
     helpWidget(),
     archiveWidget(),
     endStateOverlayWidget(),
+    divergencePanelWidget(),
   ];
 }
 
@@ -242,6 +263,9 @@ export function createUi(container: HTMLElement, deps: UiDeps): UiHandle {
       proposeRematch: deps.proposeRematch,
       respondRematch: deps.respondRematch,
       respondUndoRedo: deps.respondUndoRedo,
+      getDivergence: deps.getDivergence,
+      proposeResolution: deps.proposeResolution,
+      respondResolution: deps.respondResolution,
     },
     document,
   );

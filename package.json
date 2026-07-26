@@ -18,7 +18,8 @@
     "pente": "tsx cli/main.ts",
     "typecheck:cli": "tsc -p cli/tsconfig.json --noEmit",
     "scenario:issue45": "tsx cli/scenarios/issue45-reconnect-resync.ts",
-    "scenario:mirror": "tsx cli/scenarios/mirror-republish.ts"
+    "scenario:mirror": "tsx cli/scenarios/mirror-republish.ts",
+    "scenario:divergence": "tsx cli/scenarios/divergence-resolution.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.48.0",

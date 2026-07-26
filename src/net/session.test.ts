@@ -2926,3 +2926,201 @@ describe('NetSession — resident-peer republish on live presence (V.3, epic #47
     expect(() => aT[0]!.peerLive('player-b')).not.toThrow();
   });
 });
+
+describe('NetSession — resolving a divergence (Task V.4b, epic #47, absorbs #38)', () => {
+  /**
+   * Two ADMITTED sessions on one game, driven into a ONE-SIDED divergence: B runs two moves ahead
+   * without publishing (a gap the turn gate cannot produce between honest peers — which is why it
+   * needs resolving at all), then puts its log on the wire.
+   */
+  async function divergedPair(room = 'RMDIVG'): Promise<{ a: NetSession; b: NetSession }> {
+    const hub = new MockRelayHub();
+    const a = makeSession(hub, 'div-a');
+    await a.enter(room, NEW);
+    const b = makeSession(hub, 'div-b');
+    await b.enter(room, DEFER);
+    await flush();
+    expect(a.state().phase).toBe('connected');
+    expect(b.state().phase).toBe('connected');
+    expect(a.gameUuid()).toBe(b.gameUuid());
+
+    a.place(coordsOf('0,0,0'));
+    await flush();
+    const engineB = b.syncEngine()!;
+    expect(engineB.game().ply()).toBe(1);
+    engineB.placeLocalOnly(coordsOf('1,1,1'));
+    engineB.placeLocalOnly(coordsOf('2,2,2'));
+    engineB.publishState();
+    await flush();
+    return { a, b };
+  }
+
+  it('BOTH sessions surface the SAME divergence card at the SAME shared move', async () => {
+    const { a, b } = await divergedPair();
+    const va = a.divergenceView();
+    const vb = b.divergenceView();
+    expect(va.show).toBe(true);
+    expect(vb.show).toBe(true);
+    expect(va.sharedPly).toBe(1);
+    expect(vb.sharedPly).toBe(1);
+    // Mirrored: what only A has is what only B is missing, and vice versa.
+    expect(va.mine.map((m) => m.text)).toEqual(vb.theirs.map((m) => m.text));
+    expect(va.theirs.map((m) => m.text)).toEqual(vb.mine.map((m) => m.text));
+    expect(va.theirs.map((m) => m.text)).toEqual(['black plays 1,1,1', 'white plays 2,2,2']);
+  });
+
+  it('offline / in sync there is nothing to resolve and nothing can be proposed', async () => {
+    const hub = new MockRelayHub();
+    const offline = makeSession(hub, 'div-offline');
+    expect(offline.divergenceView().show).toBe(false);
+    expect(offline.divergenceFacts()).toBeNull();
+    expect(offline.proposeResolution('take-mine')).toBe(false);
+    expect(offline.respondResolution(true)).toBe(false);
+    expect(offline.applyAcceptedResolution()).toBe(false);
+
+    await offline.enter('RMNODV', NEW);
+    expect(offline.divergenceView().show).toBe(false);
+    expect(offline.proposeResolution('take-mine')).toBe(false);
+  });
+
+  it('AGREEING converges both games onto ONE history — and the ask reached the peer as an ask', async () => {
+    const { a, b } = await divergedPair('RMAGRE');
+    // A (behind) suggests keeping the opponent's game. Nothing has landed yet.
+    expect(a.proposeResolution('take-theirs')).toBe(true);
+    await flush();
+    const headsBefore = [headHash(a.syncEngine()!.game().log), headHash(b.syncEngine()!.game().log)];
+    expect(headsBefore[0]).not.toBe(headsBefore[1]);
+
+    // B sees the ask in ITS OWN terms: A named B's history, which from B is "keep my game".
+    const incoming = b.divergenceView();
+    expect(incoming.ui).toBe('incoming');
+    expect(incoming.canAccept).toBe(true);
+    expect(incoming.incomingText).toContain('keep YOUR game');
+    // …and A is visibly waiting, with no buttons to press twice.
+    expect(a.divergenceView().ui).toBe('waiting');
+    expect(a.divergenceView().options).toEqual([]);
+
+    // B agrees. BOTH sides then apply the effect their own candidates read the agreed head as.
+    expect(b.respondResolution(true)).toBe(true);
+    await flush();
+    expect(b.applyAcceptedResolution()).toBe(true);
+    await flush();
+    expect(a.applyAcceptedResolution()).toBe(true);
+    await flush();
+
+    const headA = headHash(a.syncEngine()!.game().log);
+    const headB = headHash(b.syncEngine()!.game().log);
+    expect(headA).toBe(headB);
+    expect(headA).toBe(headsBefore[1]);
+    // A really replayed the history it took: the pieces are on its board.
+    expect(a.gameState()?.pieces['1,1,1']).toBe('black');
+    expect(a.gameState()?.pieces['2,2,2']).toBe('white');
+    // Both cards are closed, and neither handshake is left holding a spent resolution.
+    expect(a.divergenceView().show).toBe(false);
+    expect(b.divergenceView().show).toBe(false);
+    expect(a.getHandshake().resolution).toBeNull();
+    expect(b.getHandshake().resolution).toBeNull();
+  });
+
+  it('a DECLINE leaves BOTH games untouched and returns both cards to choosing', async () => {
+    const { a, b } = await divergedPair('RMDECL');
+    const before = [headHash(a.syncEngine()!.game().log), headHash(b.syncEngine()!.game().log)];
+
+    expect(a.proposeResolution('take-mine')).toBe(true);
+    await flush();
+    expect(b.respondResolution(false)).toBe(true);
+    await flush();
+
+    // Nothing applied on either side — the #18 guarantee, unchanged.
+    expect(a.applyAcceptedResolution()).toBe(false);
+    expect(b.applyAcceptedResolution()).toBe(false);
+    expect(headHash(a.syncEngine()!.game().log)).toBe(before[0]);
+    expect(headHash(b.syncEngine()!.game().log)).toBe(before[1]);
+    // …and both are still able to suggest something else.
+    expect(a.divergenceView().ui).toBe('declined');
+    expect(a.divergenceView().options.length).toBeGreaterThan(0);
+    expect(b.divergenceView().ui).toBe('declined');
+  });
+
+  it('a peer that DROPS auto-cancels the ask — nothing lands, and the card can be used again', async () => {
+    const { a, b } = await divergedPair('RMDROP');
+    const before = headHash(a.syncEngine()!.game().log);
+    expect(a.proposeResolution('take-mine')).toBe(true);
+    expect(a.divergenceView().ui).toBe('waiting');
+
+    // The peer leaves the room: presence goes present→absent on A, which drops the pending ask.
+    b.disconnect();
+    await flush();
+
+    expect(a.getHandshake().pending).toBeNull();
+    expect(a.applyAcceptedResolution()).toBe(false);
+    expect(headHash(a.syncEngine()!.game().log)).toBe(before);
+    // The divergence itself is still open (it did not go away), and A may ask again when B returns.
+    expect(a.divergenceView().show).toBe(true);
+    expect(a.divergenceView().ui).toBe('choose');
+  });
+
+  it('an ACCEPT is refused for a history this client does not hold — the honest answer is Decline', async () => {
+    const { a, b } = await divergedPair('RMUNKN');
+    const before = headHash(b.syncEngine()!.game().log);
+    // An ask naming a history NOBODY here holds — a stale re-delivery, or anything at all on a
+    // publicly-writable relay. It reaches B's handshake seam like any other proposal.
+    a.syncEngine()!.publishResolution({
+      kind: 'proposal',
+      id: 'ask-unknown',
+      action: 'resolve:not-a-head-anyone-holds',
+      proposedBy: 'white',
+    });
+    await flush();
+
+    const view = b.divergenceView();
+    expect(view.ui).toBe('incoming');
+    expect(view.canAccept).toBe(false);
+    expect(view.note).toContain('only decline');
+    // Accepting is not merely discouraged — it is unreachable: agreeing to a history we cannot
+    // produce would resolve the handshake while leaving the two games apart.
+    expect(b.respondResolution(true)).toBe(false);
+    expect(b.getHandshake().pending).not.toBeNull();
+    expect(headHash(b.syncEngine()!.game().log)).toBe(before);
+    // Declining works, and leaves both games exactly as they were.
+    expect(b.respondResolution(false)).toBe(true);
+    await flush();
+    expect(headHash(b.syncEngine()!.game().log)).toBe(before);
+  });
+
+  it('resolving a FORK lifts the conflict phase — a fork is a state, not a terminus', async () => {
+    const hub = new MockRelayHub();
+    const a = makeSession(hub, 'fork-a');
+    await a.enter('RMFORK', NEW);
+    const b = makeSession(hub, 'fork-b');
+    await b.enter('RMFORK', DEFER);
+    await flush();
+
+    a.place(coordsOf('0,0,0'));
+    await flush();
+    // Both play on from the shared point without hearing each other — two real histories.
+    a.syncEngine()!.placeLocalOnly(coordsOf('1,1,1'));
+    b.syncEngine()!.placeLocalOnly(coordsOf('2,2,2'));
+    b.syncEngine()!.publishState();
+    await flush();
+
+    expect(a.state().phase).toBe('conflict');
+    expect(a.divergenceView().show).toBe(true);
+    // A fork offers the third answer: go back to where the two agreed.
+    expect(a.divergenceView().options.map((o) => o.choice)).toContain('rewind');
+
+    expect(a.proposeResolution('rewind')).toBe(true);
+    await flush();
+    expect(b.respondResolution(true)).toBe(true);
+    await flush();
+    expect(b.applyAcceptedResolution()).toBe(true);
+    expect(a.applyAcceptedResolution()).toBe(true);
+    await flush();
+
+    expect(headHash(a.syncEngine()!.game().log)).toBe(headHash(b.syncEngine()!.game().log));
+    // The stop is lifted on both sides, so the session is playable again.
+    expect(a.state().phase).toBe('connected');
+    expect(b.state().phase).toBe('connected');
+    expect(a.syncEngine()!.status()).toEqual({ kind: 'ok' });
+  });
+});

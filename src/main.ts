@@ -7,6 +7,8 @@ import { createAppNetSession } from './net/appSession.ts';
 import { shouldRenderSessionGame } from './net/netRouting.ts';
 import { shouldArchiveBeforeNetStart } from './net/rematch.ts';
 import { deriveEndState, REMATCH_ACTION, type EndState } from './net/endState.ts';
+import type { DivergenceView } from './ui/widgets/divergenceModel.ts';
+import type { ResolutionChoice } from './net/resolution.ts';
 import { NotifyGlue, type NotifyReadout, type NotificationApi } from './net/notifyGlue.ts';
 import type { SeatMap } from './net/seats.ts';
 import type { AdmissionReject } from './net/sync.ts';
@@ -177,6 +179,28 @@ const HIDDEN_END_STATE: EndState = {
 // net session wires up (below). Until then (offline / pre-wiring) there is no net game, so the overlay
 // is hidden — the same honest-until-wired pattern `netAuthoritativeGame` uses.
 let getNetEndState: () => EndState = () => HIDDEN_END_STATE;
+
+/** The hidden divergence card used before the net session wires up: there is nothing to resolve. */
+const HIDDEN_DIVERGENCE: DivergenceView = {
+  show: false,
+  headline: '',
+  explanation: '',
+  sharedPly: 0,
+  mine: [],
+  theirs: [],
+  options: [],
+  ui: 'choose',
+  incomingText: null,
+  canAccept: false,
+  note: null,
+};
+
+// The live DIVERGENCE-panel view-model + its two actions (Task V.4b, epic #47), set once the net
+// session wires up (below). Until then there is no session, so the card is hidden and the actions are
+// honest no-ops — the same honest-until-wired pattern the other net holders use.
+let getNetDivergence: () => DivergenceView = () => HIDDEN_DIVERGENCE;
+let proposeNetResolution: (choice: ResolutionChoice) => boolean = () => false;
+let respondNetResolution: (accepted: boolean) => boolean = () => false;
 
 // The live net session's identity-owned readouts (Task S.5, epic #35): seat OWNERS + game UUID + the
 // last typed admission reject reason. Set once the session wires up (below); until then (offline /
@@ -680,6 +704,14 @@ void createAppNetSession(scene.getState().size)
     // last typed admission reject reason, read straight off the session for `window.__pente`. These are
     // the two-context e2e's proof-by-state that admission converged both clients onto one game with
     // DISTINCT real seat owners (the #31 fix), and that a refused entry surfaces its honest typed reason.
+    // DIVERGENCE panel (Task V.4b, epic #47, absorbs #38): the live card the session derives through
+    // the pure `deriveDivergence` (the open divergence + the shared N.1 handshake), and the two
+    // actions that drive the resolution handshake. `proposeResolution` publishes an out-of-band
+    // `resolve:<headHash>` ask; `respondResolution` answers the peer's. Nothing lands until BOTH sides
+    // agree — `maybeApplyResolution` (below) applies it on the accepted resolution.
+    getNetDivergence = () => session.divergenceView();
+    proposeNetResolution = (choice) => session.proposeResolution(choice);
+    respondNetResolution = (accepted) => session.respondResolution(accepted);
     getNetSeatOwners = () => session.seatOwners();
     netGameStartedAt = () => session.gameStartedAt();
     getNetGameUuid = () => session.gameUuid();
@@ -774,6 +806,15 @@ void createAppNetSession(scene.getState().size)
     const maybeApplyUndoRedo = (): void => {
       session.applyAcceptedUndoRedo();
     };
+    // MUTUAL-ACCEPT DIVERGENCE RESOLUTION apply (Task V.4b, epic #47, absorbs #38). When the shared
+    // handshake resolves to `accepted` for a `resolve:` action on EITHER side, BOTH clients apply the
+    // agreed history to their own engine and publish, so the two logs converge — the proposer keeps
+    // and republishes, the responder adopts (replay-validated). A decline or a peer-gone auto-cancel
+    // never resolves to `accepted`, so both games stay untouched, exactly as #18 guarantees.
+    // `applyAcceptedResolution` guards on the action and CLEARS the resolution, so it fires once.
+    const maybeApplyResolution = (): void => {
+      session.applyAcceptedResolution();
+    };
     // Out-of-band handshake changes (N.1, #12/#18): an incoming ask, a resolution, or an auto-cancel.
     // Repaint the widgets so the #12 rematch overlay + the #18 undo/redo prompt reflect the pending
     // proposal / resolution, fire the MUTUAL-ACCEPT seat-swap restart when the rematch handshake
@@ -785,6 +826,7 @@ void createAppNetSession(scene.getState().size)
       refreshUi();
       maybeRematchReset();
       maybeApplyUndoRedo();
+      maybeApplyResolution();
     });
     refreshUi();
     log.info('net session wired');
@@ -861,6 +903,12 @@ const ui = createUi(container, {
   // prompt routes accept/decline through the SAME session handshake `respond` (`window.__pente.respond`
   // uses) — on mutual accept the app applies the undo/redo on the resolution (`applyAcceptedUndoRedo`).
   respondUndoRedo: (accepted) => scene.respond(accepted),
+  // DIVERGENCE panel (Task V.4b, epic #47): the card reads the live view-model the session derives,
+  // and its buttons drive the SAME session resolution API `window.__pente.proposeResolution` /
+  // `respondResolution` use — one action layer for a button and a test (design Principle 3).
+  getDivergence: () => getNetDivergence(),
+  proposeResolution: (choice) => proposeNetResolution(choice),
+  respondResolution: (accepted) => respondNetResolution(accepted),
 });
 
 /** Repaint every widget from the live state + the banner history context (Task 5.2). */
@@ -908,6 +956,12 @@ installInspectApi(scene, ui, {
   getNetSeatOwners: () => getNetSeatOwners(),
   getNetGameUuid: () => getNetGameUuid(),
   getNetLastReject: () => getNetLastReject(),
+  // DIVERGENCE readouts (Task V.4b, epic #47) — the live card + the two resolution actions, exposed
+  // so the two-context e2e proves BOTH clients opened the SAME divergence and that agreeing converges
+  // them to one `headHash` (proof-by-state, never a log line — agent-principles #3).
+  getDivergence: () => getNetDivergence(),
+  proposeResolution: (choice) => proposeNetResolution(choice),
+  respondResolution: (accepted) => respondNetResolution(accepted),
 });
 
 // Publish the build fingerprint (issue #22). `__APP_VERSION__` is substituted at build time from

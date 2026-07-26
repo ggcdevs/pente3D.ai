@@ -83,10 +83,16 @@ import { rematchGameUuid } from './rematch';
 import {
   isFork,
   reconcileEpoched,
+  rewindTo,
   validateAdoptable,
   type LastCommonAncestor,
   type LogRejection,
 } from './reconcile';
+import {
+  resolutionTarget,
+  type ResolutionCandidates,
+  type ResolutionEffect,
+} from './resolution';
 import type { LogDiff } from './logDiff';
 import type { SeatMap } from './seats';
 
@@ -926,6 +932,14 @@ export class SyncEngine {
   } | null = null;
 
   /**
+   * The `myHead|theirHead` pair we last ANSWERED a divergence with (see {@link receive}), so the
+   * exchange that makes a divergence MUTUAL terminates instead of ping-ponging. Kept separately from
+   * {@link _resolution} because the record is cleared by things that have nothing to do with whether
+   * the peer has heard us. `null` until an answer goes out.
+   */
+  private _answeredDivergence: string | null = null;
+
+  /**
    * The last log this engine refused to ADOPT because it did not replay through the rules engine
    * (design §5 "Integrity"), with the failing entry and the reason. `null` until one happens. The
    * observable record of the replay validator biting — a rejected log leaves the game untouched and
@@ -979,10 +993,13 @@ export class SyncEngine {
   /**
    * The last divergence that needs the players to choose (peer log + last common ancestor +
    * readable diff), or `null` if none has happened. See {@link _resolution}; the resolution
-   * PROTOCOL is Task V.4b.
+   * PROTOCOL is `resolution.ts` + {@link applyResolution} (V.4b).
    *
-   * An open record does NOT stop the game: local play stays legal while it is open, and a local move
-   * escalates a one-sided divergence into a stopped fork — see the `TODO(V.4b)` in {@link receive}.
+   * A ONE-SIDED divergence does not stop the game: local play stays legal while it is open, and a
+   * local move escalates it into a genuine fork, which does stop. That escalation is no longer a
+   * DEAD END — {@link applyResolution} lifts the stop once the pair agrees — and the player is no
+   * longer left guessing, because the detecting side now answers the peer (see {@link receive}) so
+   * both divergence panels open.
    */
   needsResolution(): {
     readonly theirs: EventLog;
@@ -990,6 +1007,84 @@ export class SyncEngine {
     readonly diff: LogDiff;
   } | null {
     return this._resolution;
+  }
+
+  /**
+   * The three histories an open divergence puts on the table, each by its head hash (V.4b) — what a
+   * resolution proposal NAMES and what an incoming one is read against (`resolution.ts`). `null`
+   * when no divergence is open, which is also the honest answer to "may I propose a resolution".
+   *
+   * Built at the moment of the question, never cached, so it cannot describe a history this engine
+   * has since moved off.
+   */
+  resolutionCandidates(): ResolutionCandidates | null {
+    const divergence = this._resolution;
+    if (divergence === null) return null;
+    return {
+      mine: headHash(this._game.log),
+      theirs: headHash(divergence.theirs),
+      lca: divergence.lca.hash,
+    };
+  }
+
+  /**
+   * Apply an AGREED resolution to this engine (V.4b) — the ONE way out of a divergence, and the only
+   * caller that may clear a `conflict` stop. Invoked on BOTH clients once the out-of-band N.1
+   * handshake resolved to `accepted`, each side supplying the effect its OWN candidates read the
+   * agreed head hash as (`resolution.ts`), so the pair lands on one history.
+   *
+   *  - `keep-mine` — our log is already the agreed one; put it back on the wire so the peer converges.
+   *  - `adopt-theirs` — take the divergent log, REPLAY-VALIDATED exactly as an automatic fast-forward
+   *    is (design §5 "Integrity"): agreement decides WHICH history, never that it is playable.
+   *  - `rewind-to-lca` — cut our own log back to the last shared move ({@link rewindTo}).
+   *
+   * A history that fails replay is REFUSED: the game is left exactly as it was, the divergence stays
+   * open, and the failure is recorded on {@link rejectedLog}. That is the honest failure path, and it
+   * is deliberately NOT a resolution — a log that cannot be played is not made playable by two people
+   * agreeing to it.
+   *
+   * @returns `true` iff the resolution landed. `false` when there is no open divergence (nothing to
+   *   resolve) or the agreed history does not replay.
+   */
+  applyResolution(effect: ResolutionEffect): boolean {
+    const divergence = this._resolution;
+    if (divergence === null) return false;
+    if (effect === 'keep-mine') {
+      this.settleDivergence();
+      this.publishState();
+      this.emitChange();
+      return true;
+    }
+    const target =
+      effect === 'adopt-theirs' ? divergence.theirs : rewindTo(this._game.log, divergence.lca.ply);
+    const validation = validateAdoptable(this.size, target);
+    if (!validation.ok) {
+      this._rejectedLog = {
+        uuid: target.uuid,
+        ply: validation.ply,
+        reason: validation.reason,
+        detail: validation.detail,
+      };
+      return false;
+    }
+    this._game = Game.fromLog(this.size, target);
+    this.settleDivergence();
+    this.publishState();
+    this.emitChange();
+    return true;
+  }
+
+  /**
+   * Close an open divergence: drop the record, drop the archived forks, and LIFT any conflict stop.
+   * The stop exists to keep the players from deepening a split they have not settled; once they have
+   * settled it, keeping the game stopped would make the resolution pointless. The conflicted ARCHIVE
+   * record is left in place on purpose — it is the durable copy of the history the pair chose not to
+   * continue, so agreeing to `take-theirs` never destroys your own.
+   */
+  private settleDivergence(): void {
+    this._resolution = null;
+    this._conflict = null;
+    this._status = { kind: 'ok' };
   }
 
   /**
@@ -1302,6 +1397,34 @@ export class SyncEngine {
   }
 
   /**
+   * Publish a RESOLUTION handshake message (V.4b) — the one out-of-band exchange a stopped game must
+   * still be able to have, and therefore the one that does NOT go through {@link assertLive}.
+   *
+   * The stop's rule is unchanged and still enforced by {@link publishHandshake}: a forked, stopped
+   * game exchanges no rematch/undo/redo traffic, because none of those mean anything until the pair
+   * has decided WHICH history they are playing. That question is what a resolution asks. Refusing it
+   * here would leave a stopped game with no way to say the only thing it has left to say — the
+   * dead-end V.4b exists to remove — so this is a deliberate, narrow exception, not a relaxation of
+   * the gate, and the narrowness is ENFORCED rather than merely intended: a `proposal` whose action
+   * is not a `resolve:` one is REFUSED here, so this seam can never be used to smuggle a rematch or
+   * undo ask past a stopped game. A `response` carries no action of its own (it is correlated to its
+   * proposal by id) and so cannot be checked here; the session only ever answers an incoming
+   * resolution through it ({@link NetSession.respondResolution} reads the pending action first).
+   *
+   * Like {@link publishHandshake} it is NON-RETAINED and never touches the append-only move-log.
+   *
+   * @throws {SyncError} if `msg` is a proposal for anything other than a resolution.
+   */
+  publishResolution(msg: ProposalMessage | ResponseMessage): void {
+    if (msg.kind === 'proposal' && resolutionTarget(msg.action) === null) {
+      throw new SyncError(
+        `publishResolution: "${msg.action}" is not a resolution — use publishHandshake`,
+      );
+    }
+    this.transport.publish(msg as TransportMessage);
+  }
+
+  /**
    * Apply a received {@link SyncMessage} through the pure decision. Public so tests
    * (and out-of-order replay scenarios) can inject messages directly; the transport
    * handler routes through here too.
@@ -1364,9 +1487,18 @@ export class SyncEngine {
         // Identical histories: the game did not change, so no listener fires (a spurious re-render
         // on an unchanged board would be a lie about state changing — keep the notification
         // truthful), and nothing goes back on the wire (answering an equal log would ping-pong
-        // forever). Agreeing again ENDS any divergence we were holding open, so the record is
-        // cleared: `needsResolution` reports a live divergence, never a historical one.
-        this._resolution = null;
+        // forever).
+        //
+        // AND IT CLEARS NOTHING. It is tempting to read "a log identical to mine" as "the peer
+        // agreed again, so drop the divergence", and this arm used to. But the LIVE relay DELIVERS A
+        // CLIENT'S OWN PUBLISH BACK TO IT — MQTT 3.1.1 has no `noLocal`, and the broker was probed to
+        // confirm it (the in-memory `MockRelayHub` deliberately does NOT echo, which is why only the
+        // real-relay CLI scenario showed this). So the overwhelmingly common `in-sync` message is
+        // OUR OWN, and clearing on it deleted the divergence record moments after it was made — the
+        // panel flickering out from under the player, and `proposeResolution` intermittently finding
+        // nothing to resolve. A peer that genuinely converges onto us does so by adopting or by an
+        // agreed resolution, and BOTH of those move OUR head too, which {@link emitChange}'s
+        // {@link divergenceIsOver} already catches — so nothing is lost by staying quiet here.
         return;
       case 'republish':
         // We hold what they lack — one entry of THIS generation, or a whole live generation they
@@ -1374,6 +1506,10 @@ export class SyncEngine {
         // into a converging exchange: their next publish carries our log back as an equal one,
         // which is silent, so it terminates. Without it, convergence in the MIRROR direction of an
         // outage rested on a single unacknowledged publish — issue #45 with the roles swapped.
+        //
+        // Their log being a prefix of ours by one entry also SETTLES any divergence we were holding
+        // against them: a near-prefix is a compatible history, not a disagreement.
+        this._resolution = null;
         this.publishState();
         return;
       case 'fast-forward':
@@ -1384,31 +1520,50 @@ export class SyncEngine {
         // {@link adopt}; nothing here trusts their derived state.
         this.adopt(remote, remoteEpoch);
         return;
-      case 'needs-resolution':
+      case 'needs-resolution': {
         // Beyond the turn gate's one-move cap, or a genuine fork: NOTHING is adopted automatically.
         // The ancestor + diff are recorded so the players can be shown where the two histories part
         // company and choose a resolution — the V.4b handshake (take-mine / take-theirs /
-        // rewind-to-LCA) is what will act on this record.
+        // rewind-to-LCA, `resolution.ts`) acts on exactly this record.
         //
-        // TODO(V.4b): a ONE-SIDED divergence recorded here neither adopts nor stops the game, and
-        // nothing gates local play while it is open — {@link place} still succeeds and {@link status}
-        // still reads `ok`. The next local move therefore turns a recoverable one-sided divergence
-        // into a genuine FORK, which does stop the game and archive both histories (pinned by the
-        // characterization test "a local move during an OPEN divergence is still legal — and
-        // ESCALATES it to a stopped fork"). That window is a real behaviour change from v3, where
-        // this log was auto-adopted and the outcome did not exist; it is left open deliberately
-        // because the resolution PROTOCOL that should close it (blocking play, or resolving before
-        // the next move) is V.4b's, and inventing a gate here would pre-empt that design.
+        // ANSWER THE PEER. This arm used to be silent, and silence made a divergence VISIBLE ONLY TO
+        // THE SIDE THAT IS AHEAD: the peer that is behind published its short log, got nothing back
+        // (`republish` answers a peer exactly one behind and no further), and went on rendering a
+        // perfectly ordinary board while it was missing moves — the one player who most needs to be
+        // told. Putting our log back on the wire makes the peer run this same policy on this same
+        // pair of logs and reach this same arm, so BOTH panels open and either player can propose a
+        // resolution. It is `publishState`, not a new message kind: the divergence is a fact about
+        // two logs, and the log is the thing that carries it.
+        //
+        // The exchange TERMINATES because it is answered only when the peer's log is one we have not
+        // already recorded a divergence against. Two peers therefore trade at most one log each: the
+        // second time each sees the other's unchanged head, the record already names it and nothing
+        // more goes out. (Silence on an unchanged head is not staleness — the record IS re-armed by
+        // anything that changes either side, and dropped outright once the two agree again.)
+        //
+        // The guard is keyed on BOTH heads, and NOT on the divergence record, because the record is
+        // not a reliable memory of what we have answered: our own publish comes straight back to us
+        // off the relay (see the `in-sync` arm), and anything that touches either history re-opens
+        // the question honestly. `mine|theirs` says exactly what an answer would say — "here is
+        // THIS log, about THAT one" — so a repeat is silent while any real change is served.
+        const exchange = `${headHash(this._game.log)}|${headHash(remote)}`;
         this._resolution = { theirs: remote, lca: decision.lca, diff: decision.diff };
+        if (this._answeredDivergence !== exchange) {
+          this._answeredDivergence = exchange;
+          this.publishState();
+        }
         if (isFork(decision.diff)) {
-          // A genuine fork additionally STOPS the game and archives both histories, exactly as
-          // before: two real histories exist, and until the players pick one, playing on either
-          // would deepen the split. A one-sided divergence is not archived — there is only one
-          // history there, and it is still whole.
+          // A genuine fork additionally STOPS the game and archives both histories: two real
+          // histories exist, and until the players pick one, playing on either would deepen the
+          // split. It is no longer a DEAD END — {@link applyResolution} lifts the stop once the pair
+          // agrees, and {@link publishResolution} keeps the resolution handshake exchangeable while
+          // it is in force (that, not the stop, is what V.4b replaces). A one-sided divergence is not
+          // archived — there is only one history there, and it is still whole.
           this._archiving = this.onConflict(remote, decision.lca.ply);
         }
         this.emitChange();
         return;
+      }
     }
   }
 
@@ -1440,6 +1595,11 @@ export class SyncEngine {
     // forward to its epoch, so both sides settle on the same generation.
     this._epoch = Math.max(this._epoch, remoteEpoch);
     this._game = Game.fromLog(this.size, remote);
+    // We just took the peer's history: whatever we had recorded as a disagreement with them is
+    // settled by construction, and leaving it would prompt for a resolution to a question we have
+    // already answered by adopting. (`emitChange`'s head comparison catches the case where the
+    // adopted log IS the recorded one; this covers the case where it is a newer one.)
+    this._resolution = null;
     this.emitChange();
   }
 

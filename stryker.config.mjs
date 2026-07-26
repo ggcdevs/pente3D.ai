@@ -42,8 +42,11 @@
  *   - config: the two `readOverride` early-returns whose fall-through yields the same
  *     `undefined`;
  *   - sync.ts: error-MESSAGE string literals (the `SyncError` TYPE and its occurrence
- *     ARE asserted; only the human-readable message text is not). Other survivors in this file
- *     live in the wire codec and the conflict-archival path; they are NOT characterised here
+ *     ARE asserted; only the human-readable message text is not). The `case 'in-sync':` LABEL is a
+ *     structurally equivalent survivor since V.4b: that arm's whole body is a `return`, so a mutated
+ *     label simply falls out of the switch to the same place. (It is deliberately empty — the arm used
+ *     to clear the divergence record, which the relay's self-echo made wrong; see the arm's comment.)
+ *     Other survivors in this file live in the wire codec and the conflict-archival path; they are NOT characterised here
  *     (nobody has analysed them), and the current set is whatever `npm run mutate` reports —
  *     never a frozen list in this comment;
  *   - winLineLayout.ts: the empty `drawn` array passed to `generatePartialLine` (`[]` →
@@ -94,6 +97,13 @@
  *     require a game with a `null` id, which the type forbids — i.e. asserting on non-behavior. The
  *     resume actionability behavior IS asserted (no-pick → not actionable; member pick → actionable;
  *     stale/non-member pick → not actionable).
+ *   - resolution.ts: the `candidates.lca !== null &&` short-circuit in `targetChoice`'s rewind arm
+ *     (mutated to `true &&`). Equivalent by TYPE: `target` is a `string`, so the following
+ *     `target === candidates.lca` is already false whenever `lca` is `null` — no string equals null.
+ *     The guard is a kept intent tripwire (there is nothing to rewind TO when the two logs share no
+ *     ancestor); killing it would require a `null` target, which the signature forbids, i.e. asserting
+ *     on non-behavior. The genuine behavior IS asserted (a rewind is neither offered nor readable
+ *     when there is no shared ancestor).
  *   - versionBump.mjs: BOTH surviving mutants replace an empty ARRAY LITERAL with Stryker's
  *     `["Stryker was here"]` sentinel, and both are equivalent because that sentinel is not a
  *     bump-carrying value anywhere it lands:
@@ -217,6 +227,13 @@ export default {
     // the IO boundary, and is covered by the mock-transport tests + `npm run scenario:issue45`.
     'src/net/reconcile.ts',
     'src/net/logDiff.ts',
+    // Pure v3.1 RESOLUTION vocabulary (Task V.4b, epic #47 — absorbs #38): how the two players NAME
+    // the history they agree to continue from (`resolve:<headHash>` — absolute, so a responder can
+    // neither invert it wrongly nor be pushed onto a history it does not hold), and what each side
+    // must do locally to land on it. Strings and comparisons only; the SyncEngine apply half and the
+    // session handshake glue are the excluded IO boundary, proven by the mock-transport tests and
+    // `e2e/divergence.spec.ts`.
+    'src/net/resolution.ts',
     '!src/net/**/*.test.ts',
     // Pure render resolvers only (THREE-free). (the net test-exclusion above covers notify.test.ts) The Three.js scene GLUE (`scene.ts`,
     // `lines.ts`) is NOT mutated — it is an IO boundary verified by Playwright (build
@@ -316,6 +333,11 @@ export default {
     // autosave/restore wiring (`main.ts`) are the Playwright-verified IO boundary, excluded exactly
     // as the menu/net/slider glue is above.
     'src/ui/widgets/archiveModel.ts',
+    // Pure DIVERGENCE-panel view-model (Task V.4b, epic #47): the open divergence + the N.1 handshake
+    // → the one card a player meets the sync protocol through (offerable resolutions, what each keeps
+    // and drops, and the choose/waiting/incoming/declined sub-state). THREE-free / DOM-free — the DOM
+    // glue (`widgets/divergencePanel.ts`) is the Playwright-verified IO boundary, NOT mutated.
+    'src/ui/widgets/divergenceModel.ts',
     '!src/ui/**/*.test.ts',
     // Pure version-bump logic (issue #22): the commit-prefix + ticket-label signals → the
     // minor/patch/no-release decision, the disagreement report, and the semver arithmetic.

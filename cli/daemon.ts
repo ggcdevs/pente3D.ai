@@ -14,6 +14,7 @@ import path from 'node:path';
 import { createSession } from './session';
 import { dropLink, restoreLink, linkStatus } from './netlink';
 import { render, type Snapshot } from './views';
+import type { DivergenceView } from '../src/ui/widgets/divergenceModel';
 import { generateGameCode, validateGameCode } from '../src/ui/widgets/netModel';
 import type { Coord } from '../src/core/coords';
 import type { NetSession } from '../src/net/session';
@@ -105,7 +106,16 @@ export async function runDaemon(opts: PlayOptions): Promise<void> {
       seatOwners: session.seatOwners(),
       game,
       link: linkStatus(),
+      // The open divergence (V.4b, #38) — the same pure card the browser panel paints, so a
+      // scenario asserts on the players' own facts rather than a CLI-only projection.
+      divergence: divergenceOrNull(),
     };
+  }
+
+  /** The open divergence card, or `null` when there is nothing to resolve (V.4b). */
+  function divergenceOrNull(): DivergenceView | null {
+    const view = session.divergenceView();
+    return view.show ? view : null;
   }
 
   function onChange(): void {
@@ -130,6 +140,14 @@ export async function runDaemon(opts: PlayOptions): Promise<void> {
   }
 
   session.onChange(onChange);
+  // The OUT-OF-BAND handshake (N.1) also changes what a player can do without the game changing:
+  // an incoming resolution ask, a decline, a peer-gone auto-cancel. Repaint on it, and APPLY an
+  // accepted resolution on BOTH sides exactly as the browser app does (`main.ts`) — the CLI must run
+  // the same protocol, not a simplified one, or it would stop being a faithful second client.
+  session.onHandshakeChange(() => {
+    session.applyAcceptedResolution();
+    console.log('\n' + render(snapshot(), opts.view) + '\n' + '─'.repeat(48));
+  });
 
   // ── Connect ──────────────────────────────────────────────────────────────
   console.log(`[pente] ${opts.host ? 'hosting' : 'joining'} room ${code} as ${playerId}…`);
@@ -196,6 +214,29 @@ export async function runDaemon(opts: PlayOptions): Promise<void> {
         if (!restoreLink()) return reply(conn, false, 'no link to restore');
         console.log('[pente] link RESTORING…');
         return reply(conn, true, snapshot());
+      // ── Divergence resolution (V.4b, #38) ─────────────────────────────────────
+      // `resolve <choice>` suggests one; `agree`/`refuse` answers the peer's. Nothing lands until
+      // BOTH sides agree — the apply runs off the handshake resolution, above.
+      case 'resolve': {
+        const choice = req.arg ?? '';
+        if (choice !== 'take-mine' && choice !== 'take-theirs' && choice !== 'rewind') {
+          return reply(conn, false, `resolve: want take-mine | take-theirs | rewind (got "${choice}")`);
+        }
+        if (!session.proposeResolution(choice)) {
+          return reply(conn, false, 'resolve: nothing to resolve (or that choice names no history here)');
+        }
+        return reply(conn, true, snapshot());
+      }
+      case 'agree':
+      case 'refuse': {
+        if (!session.respondResolution(req.cmd === 'agree')) {
+          return reply(conn, false, `${req.cmd}: no resolution to answer (or it names a history this game does not have)`);
+        }
+        // The APPLY is not done here: `respondResolution` resolves the handshake, and the
+        // `onHandshakeChange` subscription above applies it — the same single path the proposer's
+        // side takes when the peer's answer arrives, so both sides run identical code.
+        return reply(conn, true, snapshot());
+      }
       case 'undo':
         return reply(conn, doSafe(() => session.undo()), snapshot());
       case 'redo':

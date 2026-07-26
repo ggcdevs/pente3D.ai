@@ -74,9 +74,24 @@ the tie-breaker.
 - **Hash chain** — each log entry stores `hash = H(prevHash + entryData)`; the latest
   **headHash** fingerprints the whole history. Enables O(1) "identical history?" checks and
   pinpoints divergence.
-- **Conflict** — two players' logs fork (neither is a prefix of the other). v1 response:
-  stop the game, error, save the conflicted game (both forks) for possible future
-  resolution.
+- **Divergence** — the two peers hold histories of the SAME game that cannot both be right:
+  more than the **turn gate**'s one-move cap apart, or a genuine **fork**. Nothing is adopted
+  automatically; both sides record the **last common ancestor** + a readable diff and show the
+  **divergence panel** (v3.1, design §5).
+- **Last common ancestor (LCA)** — the deepest point two logs still agree on, as a ply count
+  plus the chain hash there. Found by walking both hash chains — free by construction, since an
+  entry-hash match already implies agreement on everything behind it.
+- **Conflict** — a **fork**: two players' logs diverge with real moves on BOTH sides (neither is
+  a prefix of the other). The game STOPS and both forks are archived, so playing on cannot deepen
+  a split the players have not settled. Since v3.1 it is **not a terminus**: an agreed
+  **resolution** lifts the stop and the archived record is kept (agreeing to the other history
+  never destroys your own).
+- **Resolution** — the agreed way out of a **divergence**, exchanged over the same out-of-band
+  ask/accept handshake as rematch/undo: **keep mine**, **use theirs**, or **rewind to the LCA**.
+  Nothing lands until BOTH sides agree; a decline or a peer-gone auto-cancel leaves both games
+  untouched. On the wire it names the target history by its **headHash** (`resolve:<headHash>`),
+  absolutely rather than relative to whoever asked, and an adopted history is **replay-validated**
+  before it is taken.
 - **Game archive** — persistent store (IndexedDB) of every game (event log + metadata),
   including conflicted ones, for later review/resume.
 - **History slider** — a **read-only, local** cursor over derived states for reviewing past

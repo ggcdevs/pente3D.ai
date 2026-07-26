@@ -308,6 +308,31 @@ const UI_STYLESHEET = `
 .pente-endstate-rematch:hover, .pente-endstate-accept:hover { background: rgba(74,144,217,0.7); }
 .pente-endstate-decline { background: rgba(255,80,80,0.24); color: #ffb0b0; }
 .pente-endstate-decline:hover { background: rgba(255,80,80,0.38); }
+.pente-divergence[hidden] { display: none; }
+.pente-divergence { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; z-index: 45; }
+.pente-divergence-card { display: flex; flex-direction: column; gap: 10px; max-width: 520px; padding: 20px 24px; border-radius: 10px; background: rgba(20,20,26,0.95); backdrop-filter: blur(4px); color: #e6e6ea; font-family: system-ui, sans-serif; box-shadow: 0 8px 32px rgba(0,0,0,0.55); pointer-events: auto; }
+.pente-divergence-headline { font-size: 17px; font-weight: 600; }
+.pente-divergence-explanation { font-size: 13px; opacity: 0.85; line-height: 1.45; }
+.pente-divergence-columns { display: flex; gap: 18px; }
+.pente-divergence-column { flex: 1 1 0; min-width: 0; }
+.pente-divergence-column-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.6; margin-bottom: 4px; }
+.pente-divergence-list { list-style: none; margin: 0; padding: 0; font-size: 13px; }
+.pente-divergence-list li { padding: 1px 0; }
+.pente-divergence-empty { opacity: 0.5; font-style: italic; }
+.pente-divergence-incoming[hidden], .pente-divergence-note[hidden] { display: none; }
+.pente-divergence-incoming { font-size: 13px; font-weight: 600; }
+.pente-divergence-note { font-size: 12px; opacity: 0.75; }
+.pente-divergence-actions { display: flex; flex-direction: column; gap: 6px; }
+.pente-divergence-option { display: flex; flex-direction: column; gap: 2px; }
+.pente-divergence-detail { font-size: 12px; opacity: 0.7; }
+.pente-divergence-answer[hidden] { display: none; }
+.pente-divergence-answer { display: flex; gap: 8px; }
+.pente-divergence-accept[hidden], .pente-divergence-decline[hidden] { display: none; }
+.pente-divergence-card button { cursor: pointer; padding: 7px 14px; border-radius: 6px; border: none; color: #e6e6ea; font-size: 13px; text-align: left; }
+.pente-divergence-choose, .pente-divergence-accept { background: rgba(74,144,217,0.5); }
+.pente-divergence-choose:hover, .pente-divergence-accept:hover { background: rgba(74,144,217,0.7); }
+.pente-divergence-decline { background: rgba(255,255,255,0.12); }
+.pente-divergence-decline:hover { background: rgba(255,255,255,0.2); }
 `;
 
 /** Install the overlay stylesheet once per document (idempotent, keyed by {@link UI_STYLE_ID}). */

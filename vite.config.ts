@@ -134,6 +134,12 @@ export default defineConfig({
         // rematch + seat-swap), not unit coverage. The PURE `net/endState.ts` it renders is pinned to
         // the 100% floor (via `src/net/**`) and in the mutation scope. Excluded file-by-file.
         'src/ui/widgets/endStateOverlay.ts',
+        // Task V.4b divergence panel: the card DOM glue that paints the PURE `divergenceModel.ts`
+        // view-model and drives the resolution handshake through the session. Touches the DOM —
+        // verified by `e2e/divergence.spec.ts` (two clients driven into a divergence and resolved,
+        // asserting one converged headHash), not unit coverage. The PURE `divergenceModel.ts` is
+        // pinned to the 100% floor below (and in the mutation scope). Excluded file-by-file.
+        'src/ui/widgets/divergencePanel.ts',
       ],
       // MACHINE-ENFORCED GATE (not documentation): the pure rules engine AND the
       // in-scope config/persist layers are held to a hard 100% floor
@@ -401,6 +407,18 @@ export default defineConfig({
         // wiring (`main.ts`) are the Playwright-verified IO boundary, excluded above. In the mutation
         // scope and held to the hard 100% floor. Do not weaken (agent-principles #6).
         'src/ui/widgets/archiveModel.ts': {
+          statements: 100,
+          branches: 100,
+          functions: 100,
+          lines: 100,
+        },
+        // Pure DIVERGENCE-panel view-model (Task V.4b, epic #47, absorbs #38): the open divergence +
+        // the shared N.1 handshake → the card a player resolves a fork from (which resolutions are
+        // offerable, what each keeps and drops, and which sub-state the card is in). THREE-free /
+        // DOM-free — the DOM glue (`widgets/divergencePanel.ts`) is the Playwright-verified IO
+        // boundary, excluded above. In the mutation scope and held to the hard 100% floor. Do not
+        // weaken (agent-principles #6).
+        'src/ui/widgets/divergenceModel.ts': {
           statements: 100,
           branches: 100,
           functions: 100,

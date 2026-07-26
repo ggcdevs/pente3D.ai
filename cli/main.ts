@@ -9,6 +9,8 @@
  *   pente move  <CODE> <x,y,z>  [--view NAME]   place a stone (must be your turn)
  *   pente undo  <CODE>                          request an undo of your last move
  *   pente redo  <CODE>
+ *   pente resolve <CODE> <take-mine|take-theirs|rewind>  suggest a resolution for a divergence
+ *   pente agree <CODE> | pente refuse <CODE>    answer the opponent's suggested resolution
  *   pente status <CODE>                         connection/seat/turn readout
  *   pente drop  <CODE> [--silent] [--lossy]      simulate a network outage (kill the socket)
  *   pente restore <CODE>                        end the outage (let mqtt.js reconnect)
@@ -145,6 +147,24 @@ async function main(): Promise<void> {
       return output(r.data, args);
     }
 
+    // Divergence resolution (V.4b, #38): suggest a way out, or answer the peer's suggestion.
+    case 'resolve': {
+      const choice = args.positional[1];
+      if (!choice) {
+        console.error("resolve: need a choice, e.g. 'pente resolve ABCDE take-theirs'");
+        process.exit(2);
+      }
+      const r = await request(requireCode(args), { cmd: 'resolve', arg: choice }, 10_000);
+      if (!r.ok) return fail(r.data);
+      return output(r.data, args);
+    }
+    case 'agree':
+    case 'refuse': {
+      const r = await request(requireCode(args), { cmd: args.verb }, 10_000);
+      if (!r.ok) return fail(r.data);
+      return output(r.data, args);
+    }
+
     case 'wait': {
       const code = requireCode(args);
       const timeoutS = Number(args.flags.timeout ?? 55);
@@ -174,6 +194,8 @@ async function main(): Promise<void> {
   pente wait  <CODE> [--view NAME] [--timeout S]   block until your move / game over
   pente move  <CODE> <x,y,z> [--view NAME]         place a stone (must be your turn)
   pente undo  <CODE> | pente redo <CODE>
+  pente resolve <CODE> <take-mine|take-theirs|rewind>   suggest a way out of a divergence
+  pente agree <CODE> | pente refuse <CODE>         answer your opponent's suggestion
   pente status <CODE>                              one-line readout
   pente drop  <CODE> [--silent] [--lossy]          simulate an outage (--silent: no Last-Will,
                                                    so the peer never sees an absence; --lossy:

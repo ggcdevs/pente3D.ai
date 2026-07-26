@@ -29,6 +29,8 @@ import type { AdmissionReject } from '../net/sync.ts';
 import type { HandshakeState } from '../net/handshake.ts';
 import type { EndState } from '../net/endState.ts';
 import type { NotifyReadout } from '../net/notifyGlue.ts';
+import type { DivergenceView } from '../ui/widgets/divergenceModel.ts';
+import type { ResolutionChoice } from '../net/resolution.ts';
 import type { UndoRedoPrompt } from '../net/undoRedo.ts';
 import type { HelpSources } from '../ui/widgets/helpModel.ts';
 import type { ArchiveListing } from '../ui/widgets/archiveModel.ts';
@@ -325,6 +327,23 @@ export interface PenteInspect {
    * The gate bites: flipping the `notifications` config off must leave `titleFlashCount` unchanged.
    */
   getNotify(): NotifyReadout;
+  /**
+   * The live DIVERGENCE card (Task V.4b, epic #47, absorbs #38): the pure `deriveDivergence` folded
+   * from the open divergence (what each side has past the last shared move) + the shared N.1
+   * handshake — `show`, `sharedPly`, the two move lists, the offered resolutions, and the sub-state
+   * (`choose`/`waiting`/`incoming`/`declined`). Lets a two-context e2e prove BOTH clients opened the
+   * SAME divergence at the SAME shared ply, and — with `getHeadHash` — that agreeing converged them
+   * onto ONE history. Observable state on the other client, never a log line (agent-principles #3).
+   */
+  getDivergence(): DivergenceView;
+  /**
+   * Suggest a resolution for the open divergence (Task V.4b) — the app's
+   * `session.proposeResolution`, the SAME entry point the panel's buttons use. Publishes an
+   * out-of-band `resolve:<headHash>` ask; nothing lands until the peer agrees.
+   */
+  proposeResolution(choice: ResolutionChoice): boolean;
+  /** Agree (`true`) / decline (`false`) the peer's suggested resolution (Task V.4b). */
+  respondResolution(accepted: boolean): boolean;
 }
 
 /** The app-level archive readouts wired into the inspect API (Task 5.8; the DB lives in `main.ts`). */
@@ -359,6 +378,14 @@ export interface ArchiveInspect {
    * exposed here for the same app-level reason. Wired onto `window.__pente.getNetLastReject`.
    */
   getNetLastReject(): AdmissionReject | null;
+  /**
+   * The live divergence card + its two resolution actions (Task V.4b) — the app's
+   * `session.divergenceView()` / `proposeResolution` / `respondResolution`, exposed here for the same
+   * app-level reason as the other session readouts (the net session needs a DB + transport).
+   */
+  getDivergence(): DivergenceView;
+  proposeResolution(choice: ResolutionChoice): boolean;
+  respondResolution(accepted: boolean): boolean;
 }
 
 declare global {
@@ -452,6 +479,12 @@ export function installInspectApi(
     getNetSeatOwners: () => archive.getNetSeatOwners(),
     getNetGameUuid: () => archive.getNetGameUuid(),
     getNetLastReject: () => archive.getNetLastReject(),
+    // Divergence readouts + resolution actions (Task V.4b, epic #47) — the app's session, exposed so
+    // the two-context e2e asserts BOTH clients opened the same card and that agreeing converged their
+    // logs to one head. App-level like the other session readouts, so they ride `archive`.
+    getDivergence: () => archive.getDivergence(),
+    proposeResolution: (choice: ResolutionChoice) => archive.proposeResolution(choice),
+    respondResolution: (accepted: boolean) => archive.respondResolution(accepted),
   };
   window.__pente = api;
   log.info('window.__pente installed', Object.keys(api));

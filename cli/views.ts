@@ -11,6 +11,7 @@
 import type { GameState, Player } from '../src/core/gameState';
 import type { SeatMap } from '../src/net/seats';
 import type { LinkStatus } from './netlink';
+import type { DivergenceView } from '../src/ui/widgets/divergenceModel';
 
 /** The plain, JSON-safe game readout the daemon sends and the views render. */
 export interface Snapshot {
@@ -30,6 +31,14 @@ export interface Snapshot {
    * `down` — the exact split issue #45 lives in.
    */
   readonly link: LinkStatus;
+  /**
+   * The open DIVERGENCE (V.4b, #38), or `null` when there is nothing to resolve — the SAME pure
+   * view-model the browser panel paints (`src/ui/widgets/divergenceModel.ts`), so a scenario script
+   * and a player see identical facts. Its presence means the two peers hold histories that cannot
+   * both be right and neither side will adopt automatically: `pente resolve` / `pente agree` is the
+   * way out.
+   */
+  readonly divergence: DivergenceView | null;
 }
 
 export type View = (s: Snapshot) => string;
@@ -48,6 +57,17 @@ function header(s: Snapshot): string {
   // this the board looks authoritative while it is quietly frozen in the past (#45).
   const link = s.link === 'down' ? ' · LINK DOWN (offline)' : '';
   lines.push(`Room ${s.code} · you are ${seat} · phase ${s.phase} · opponent ${opp}${link}`);
+  // A divergence is called out ABOVE the board, because the board below it is one of two histories
+  // and nothing will converge until the two players agree which (V.4b).
+  const d = s.divergence;
+  if (d !== null) {
+    lines.push(`OUT OF STEP — you agree up to move ${d.sharedPly}, then you differ:`);
+    lines.push(`  only yours:  ${d.mine.map((m) => m.text).join(', ') || '(nothing)'}`);
+    lines.push(`  only theirs: ${d.theirs.map((m) => m.text).join(', ') || '(nothing)'}`);
+    if (d.incomingText !== null) lines.push(`  ${d.incomingText}  →  pente agree | pente refuse`);
+    else if (d.ui === 'waiting') lines.push('  waiting for your opponent to agree…');
+    else lines.push(`  pente resolve <${d.options.map((o) => o.choice).join(' | ')}>`);
+  }
   const g = s.game;
   if (g) {
     if (g.winner) {

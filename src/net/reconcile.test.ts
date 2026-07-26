@@ -16,6 +16,7 @@ import {
   lastCommonAncestor,
   reconcile,
   reconcileEpoched,
+  rewindTo,
   validateAdoptable,
 } from './reconcile';
 
@@ -633,6 +634,51 @@ describe('property: nothing but the one narrow case ever auto-adopts', () => {
         expect(rejection.ply).toBe(target);
       }),
       { numRuns: 300 },
+    );
+  });
+});
+
+describe('rewindTo — the one place a log is SHORTENED (an agreed abandonment, never a play)', () => {
+  it('cuts to exactly `ply` entries, keeping the game identity', () => {
+    const log = logOf('0,0,0', '1,1,1', '2,2,2');
+    const cut = rewindTo(log, 1);
+    expect(cut.entries).toHaveLength(1);
+    expect(cut.uuid).toBe(log.uuid);
+    // The kept entries are IDENTICAL objects with identical hashes — a rewind never re-derives.
+    expect(cut.entries[0]).toBe(log.entries[0]);
+  });
+
+  it('rewinding to the LAST COMMON ANCESTOR lands both sides on the SAME head', () => {
+    // The property the resolution rests on: two forked logs cut at their shared ply hash equal.
+    const shared = gameOf('0,0,0', '1,1,1');
+    const mine = eventsOnto(shared.log, [{ type: 'place', node: '2,2,2' }]);
+    const theirs = eventsOnto(shared.log, [{ type: 'place', node: '3,3,3' }]);
+    const lca = lastCommonAncestor(mine, theirs);
+    expect(lca.ply).toBe(2);
+    expect(headHash(rewindTo(mine, lca.ply))).toBe(headHash(rewindTo(theirs, lca.ply)));
+    expect(headHash(rewindTo(mine, lca.ply))).toBe(lca.hash);
+  });
+
+  it('cuts to the empty log at ply 0 — the genesis head, still of this game', () => {
+    const log = logOf('0,0,0', '1,1,1');
+    const cut = rewindTo(log, 0);
+    expect(cut.entries).toEqual([]);
+    expect(headHash(cut)).toBe(genesisHash(UUID));
+  });
+
+  it('returns the log UNCHANGED (referentially) when there is nothing to cut', () => {
+    const log = logOf('0,0,0', '1,1,1');
+    expect(rewindTo(log, 2)).toBe(log);
+    expect(rewindTo(log, 7)).toBe(log);
+    expect(rewindTo(emptyLog(UUID), 0).entries).toEqual([]);
+  });
+
+  it('a rewound log still REPLAYS — a prefix of a legal history is a legal history', () => {
+    fc.assert(
+      fc.property(fc.nat({ max: 4 }), (ply) => {
+        const legal = gameOf('0,0,0', '1,1,1', '2,2,2', '3,3,3').log;
+        expect(validateAdoptable(SIZE, rewindTo(legal, ply))).toEqual({ ok: true });
+      }),
     );
   });
 });

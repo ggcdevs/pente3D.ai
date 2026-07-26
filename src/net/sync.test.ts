@@ -5,7 +5,7 @@ import { Game } from '../core/game';
 import { emptyLog, append, headHash, type EventLog } from '../core/eventLog';
 import { openDatabase } from '../persist/db';
 import { loadConflicted } from '../persist/archive';
-import { MockRelayHub, MockTransport, type TransportMessage } from './transport';
+import { MockRelayHub, MockTransport, type Transport, type TransportMessage } from './transport';
 import {
   normalizeEpoch,
   decideUndo,
@@ -1064,10 +1064,15 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
     expect(parseSyncMessage(heard[0] as SyncMessage)).toEqual(eng.game().log);
   });
 
-  it('does NOT answer — or adopt — a peer TWO behind: it records the divergence instead', async () => {
+  it('does NOT adopt from a peer TWO behind — it records the divergence and ANSWERS so the peer sees it too', async () => {
     // The turn gate cannot produce a two-move gap between peers playing the same game, so this is
     // already anomalous: v3 would have quietly served it (or, the other way round, quietly adopted).
     // v3.1 keeps the game exactly as it is and files the ancestor + diff for the players (V.4b).
+    //
+    // It DOES put our log back on the wire, exactly once per peer head. Staying silent here (V.4a's
+    // behaviour) left the divergence visible only to the side that is AHEAD: the behind peer saw an
+    // ordinary board while it was missing moves. Answering makes it run the same policy on the same
+    // two logs, so both players are told.
     const hub = new MockRelayHub();
     const mine = new MockTransport(hub, 'ahead2');
     const theirs = new MockTransport(hub, 'behind2');
@@ -1084,6 +1089,12 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
     heard.length = 0;
 
     eng.receive(toSyncMessage(logOf('0,0,0')));
+    // Answered ONCE, with our own (unchanged) log — nothing of theirs was taken.
+    expect(heard).toHaveLength(1);
+    expect(parseSyncMessage(heard[0] as SyncMessage)).toEqual(eng.game().log);
+    // …and the SAME log again is not answered again: the exchange terminates rather than ping-ponging.
+    heard.length = 0;
+    eng.receive(toSyncMessage(logOf('0,0,0')));
     expect(heard).toEqual([]);
     expect(headHash(eng.game().log)).toBe(headBefore);
     expect(eng.status().kind).toBe('ok'); // one-sided: a real history, not a fork — nothing stops
@@ -1095,8 +1106,12 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
     ]);
     expect(pending?.diff.theirs).toEqual([]);
 
-    // …and once they catch up, the divergence is over: the record does not linger as a false alarm.
-    eng.receive(toSyncMessage(eng.game().log));
+    // …and once they catch up to WITHIN the turn gate's one move, the divergence is over: the record
+    // does not linger as a false alarm. (An EXACTLY-equal log no longer clears it, deliberately: the
+    // live relay delivers our own publishes back to us, so "a log identical to mine" is nearly always
+    // our own echo — see the `in-sync` arm. A peer that has genuinely come back onto our history says
+    // so with a log we can answer, which is this one.)
+    eng.receive(toSyncMessage(logOf('0,0,0', '1,1,1')));
     expect(eng.needsResolution()).toBeNull();
   });
 
@@ -1137,13 +1152,13 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
     expect(eng.needsResolution()).toBeNull();
   });
 
-  it('a local move during an OPEN divergence is still legal — and ESCALATES it to a stopped fork', async () => {
-    // CHARACTERIZATION of the window the `TODO(V.4b)` in `receive` names: a one-sided divergence
-    // neither adopts nor stops the game, and nothing gates local play while it is open. Playing on
-    // is therefore accepted, and it converts a recoverable one-sided divergence into a genuine fork
-    // — which DOES stop the game and archive both histories. Under v3 this log was auto-adopted, so
-    // this outcome did not exist; pinned here so V.4b changes it deliberately rather than by
-    // accident.
+  it('a local move during an OPEN divergence is still legal — it escalates to a fork, which is RECOVERABLE', async () => {
+    // The V.4b decision, pinned: a ONE-SIDED divergence does not gate local play. Playing on is
+    // accepted and converts it into a genuine fork, which DOES stop the game and archive both
+    // histories — playing on an unsettled split is exactly what deepens it. What V.4b changed is
+    // that the stop is no longer a TERMINUS: an agreed resolution lifts it (asserted at the end),
+    // and the player is told rather than left guessing, because the detecting side answers the peer.
+    // Under v3 this log was auto-adopted and neither outcome existed.
     const hub = new MockRelayHub();
     const t = new MockTransport(hub, 'open-divergence');
     await t.connect('ROOM-OPEN-DIVERGENCE');
@@ -1167,6 +1182,14 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
     expect(eng.status().kind).toBe('conflict');
     await eng.whenSettled();
     expect(eng.conflictForks()?.theirs).toEqual(twoAhead);
+
+    // …and it is recoverable: an agreed resolution lifts the stop and the game plays on.
+    expect(eng.applyResolution('rewind-to-lca')).toBe(true);
+    expect(eng.status()).toEqual({ kind: 'ok' });
+    expect(eng.needsResolution()).toBeNull();
+    expect(headHash(eng.game().log)).toBe(headHash(logOf('0,0,0')));
+    eng.place([5, 5, 5]);
+    expect(eng.game().state().pieces['5,5,5']).toBe('black');
   });
 
   it('REFUSES to adopt a peer TWO ahead, however clean its prefix looks', async () => {
@@ -2326,8 +2349,12 @@ describe('SyncEngine.receive — the seed gate on a FOREIGN game (design §3, #4
     expect(eng.refusedGame()).toBeNull();
   });
 
-  it('SAME-game divergence still CONFLICTS (the gate never swallows a real fork)', () => {
+  it('SAME-game divergence still CONFLICTS (the gate never swallows a real fork)', async () => {
+    // Connected because a detected divergence now ANSWERS the peer with our own log (V.4b), so the
+    // engine publishes on this path — the divergence has to be mutual or only the peer that is
+    // AHEAD ever learns of it.
     const eng = engineWith({ kind: 'new' }, logFor(MINE, '0,0,0'));
+    await eng.connect('same-game-fork-room');
     eng.receive(toSyncMessage(logFor(MINE, '8,8,8'), 0));
     expect(eng.status().kind).toBe('conflict');
     expect(eng.refusedGame()).toBeNull();
@@ -2592,5 +2619,341 @@ describe('SyncEngine.receive — the AGREED game and our own next generation (de
     black.receive(toSyncMessage(logFor(THEIRS, '0,0,0'), 0));
     black.reseat('black');
     expect(() => black.undo()).toThrow(/not-your-move/);
+  });
+});
+
+describe('SyncEngine — resolving a divergence (Task V.4b, epic #47, absorbs #38)', () => {
+  let db: IDBDatabase;
+  const meta = { players: { white: 'w', black: 'b' }, startedAt: 1000 };
+
+  beforeEach(async () => {
+    db = await openDatabase(`resolve-test-${Math.random().toString(36).slice(2)}`);
+  });
+
+  /** Two engines on one game over a shared relay, both connected. */
+  async function pair(room: string): Promise<{ a: SyncEngine; b: SyncEngine }> {
+    const hub = new MockRelayHub();
+    const a = new SyncEngine(
+      new Game(9, PAIR_UUID), new MockTransport(hub, 'res-a'), db, () => meta, 'white', ANY_SEED,
+    );
+    const b = new SyncEngine(
+      new Game(9, PAIR_UUID), new MockTransport(hub, 'res-b'), db, () => meta, 'black', ANY_SEED,
+    );
+    await a.connect(room);
+    await b.connect(room);
+    return { a, b };
+  }
+
+  /**
+   * Drive the pair into a ONE-SIDED divergence: B runs two moves ahead WITHOUT publishing (the turn
+   * gate cannot produce this between honest peers, which is exactly why it needs resolving), then
+   * puts its log on the wire.
+   */
+  async function diverged(room: string): Promise<{ a: SyncEngine; b: SyncEngine }> {
+    const { a, b } = await pair(room);
+    a.place([0, 0, 0]);
+    expect(headHash(b.game().log)).toBe(headHash(a.game().log));
+    b.placeLocalOnly([1, 1, 1]);
+    b.placeLocalOnly([2, 2, 2]);
+    b.publishState();
+    return { a, b };
+  }
+
+  it('BOTH peers see the divergence — the detecting side answers so the behind peer is told too', async () => {
+    const { a, b } = await diverged('resolve-mutual');
+    // A is two behind and knows it…
+    expect(a.needsResolution()?.lca.ply).toBe(1);
+    // …and B, which never received anything about it, now knows too — because A answered.
+    expect(b.needsResolution()?.lca.ply).toBe(1);
+    // Neither adopted anything: A is still on its own move, B on its three.
+    expect(a.game().ply()).toBe(1);
+    expect(b.game().ply()).toBe(3);
+  });
+
+  it('the two peers see MIRRORED candidates (each one’s `mine` is the other’s `theirs`)', async () => {
+    const { a, b } = await diverged('resolve-mirror');
+    const ca = a.resolutionCandidates()!;
+    const cb = b.resolutionCandidates()!;
+    expect(ca.mine).toBe(cb.theirs);
+    expect(ca.theirs).toBe(cb.mine);
+    expect(ca.lca).toBe(cb.lca);
+    expect(ca.mine).toBe(headHash(a.game().log));
+    expect(ca.theirs).toBe(headHash(b.game().log));
+  });
+
+  it('there are no candidates — and nothing to resolve — while the pair agrees', async () => {
+    const { a } = await pair('resolve-agreed');
+    expect(a.resolutionCandidates()).toBeNull();
+    expect(a.applyResolution('keep-mine')).toBe(false);
+    expect(a.applyResolution('adopt-theirs')).toBe(false);
+  });
+
+  it('AGREEING converges the pair onto ONE history (adopt-theirs + keep-mine)', async () => {
+    const { a, b } = await diverged('resolve-converge');
+    const theirs = headHash(b.game().log);
+
+    // Each side applies the effect ITS OWN candidates read the agreed head hash as.
+    expect(b.applyResolution('keep-mine')).toBe(true);
+    expect(a.applyResolution('adopt-theirs')).toBe(true);
+
+    expect(headHash(a.game().log)).toBe(theirs);
+    expect(headHash(b.game().log)).toBe(theirs);
+    // A really replayed it: the moves are on A's board, not just in its log.
+    expect(a.game().state().pieces['1,1,1']).toBe('black');
+    expect(a.game().state().pieces['2,2,2']).toBe('white');
+    // The divergence is closed on both sides — no lingering card.
+    expect(a.needsResolution()).toBeNull();
+    expect(b.needsResolution()).toBeNull();
+    expect(a.resolutionCandidates()).toBeNull();
+  });
+
+  it('keeping MINE puts my log back on the wire so the peer converges onto it', async () => {
+    const { a, b } = await diverged('resolve-keep-mine');
+    const mine = headHash(a.game().log);
+    // A is the one that is BEHIND here; keeping its history is a real choice, not a no-op.
+    expect(a.applyResolution('keep-mine')).toBe(true);
+    expect(headHash(a.game().log)).toBe(mine);
+    // B receives it. It is still diverged, so it does not adopt automatically — but once B applies
+    // the agreed effect on ITS side, the two are one history.
+    expect(b.applyResolution('adopt-theirs')).toBe(true);
+    expect(headHash(b.game().log)).toBe(mine);
+    expect(b.game().ply()).toBe(1);
+  });
+
+  it('a FORK is no longer a DEAD END: resolving it lifts the stop and play resumes', async () => {
+    const { a, b } = await pair('resolve-fork');
+    a.place([0, 0, 0]);
+    // Both play on from the shared point without hearing each other — two real histories.
+    a.placeLocalOnly([1, 1, 1]);
+    b.placeLocalOnly([2, 2, 2]);
+    b.publishState();
+
+    expect(a.status().kind).toBe('conflict');
+    expect(() => a.place([3, 3, 3])).toThrow(/conflict|stopped/i);
+    const open = a.needsResolution()!;
+    expect(open.lca.ply).toBe(1);
+
+    // Go back to where they agreed: both cut to the last shared move.
+    expect(a.applyResolution('rewind-to-lca')).toBe(true);
+    expect(b.applyResolution('rewind-to-lca')).toBe(true);
+    expect(a.status()).toEqual({ kind: 'ok' });
+    expect(a.conflictForks()).toBeNull();
+    expect(headHash(a.game().log)).toBe(open.lca.hash);
+    expect(headHash(b.game().log)).toBe(open.lca.hash);
+    expect(a.game().ply()).toBe(1);
+    // …and the game is live again: a move that was refused a moment ago now lands.
+    a.placeLocalOnly([4, 4, 4]);
+    expect(a.game().state().pieces['4,4,4']).toBe('black');
+  });
+
+  it('the conflicted ARCHIVE record survives a resolution — agreeing never destroys a history', async () => {
+    const { a, b } = await pair('resolve-archive');
+    a.place([0, 0, 0]);
+    const mine = a.game().log;
+    a.placeLocalOnly([1, 1, 1]);
+    b.placeLocalOnly([2, 2, 2]);
+    b.publishState();
+    const status = a.status();
+    expect(status.kind).toBe('conflict');
+    const conflictId = status.kind === 'conflict' ? status.conflictId : '';
+    await a.whenSettled();
+
+    expect(a.applyResolution('adopt-theirs')).toBe(true);
+    // The history A gave up is still on disk under the conflicted record.
+    const loaded = await loadConflicted(db, conflictId);
+    expect(loaded?.mine.ply()).toBe(mine.entries.length + 1);
+    expect(loaded?.theirs.ply()).toBe(2);
+  });
+
+  it('a history that does NOT replay is REFUSED — the honest failure path, not a resolution', async () => {
+    const hub = new MockRelayHub();
+    const a = new SyncEngine(
+      new Game(9, PAIR_UUID), new MockTransport(hub, 'bad-a'), db, () => meta, 'white', ANY_SEED,
+    );
+    await a.connect('resolve-illegal');
+    a.place([0, 0, 0]);
+    const before = headHash(a.game().log);
+    // Chain-valid but UNPLAYABLE: the third entry re-places an occupied node. Two entries beyond our
+    // history, so it lands as a divergence rather than a fast-forward.
+    let illegal: EventLog = emptyLog(PAIR_UUID);
+    for (const node of ['0,0,0', '1,1,1', '1,1,1']) {
+      illegal = append(illegal, { type: 'place', node });
+    }
+    a.receive(toSyncMessage(illegal, 0));
+    expect(a.needsResolution()).not.toBeNull();
+
+    expect(a.applyResolution('adopt-theirs')).toBe(false);
+    expect(headHash(a.game().log)).toBe(before);
+    expect(a.rejectedLog()).toEqual({
+      uuid: PAIR_UUID,
+      ply: 2,
+      reason: 'illegal-move',
+      detail: expect.any(String),
+    });
+    // The divergence is STILL open — a log we cannot play does not settle anything.
+    expect(a.needsResolution()).not.toBeNull();
+    expect(a.status()).toEqual({ kind: 'ok' });
+  });
+
+  it('publishResolution carries a resolution ask out of a STOPPED game — publishHandshake still will not', async () => {
+    const hub = new MockRelayHub();
+    const heard: TransportMessage[] = [];
+    const listener = new MockTransport(hub, 'listener');
+    await listener.connect('resolve-stopped');
+    listener.onMessage((m) => heard.push(m));
+    const a = new SyncEngine(
+      new Game(9, PAIR_UUID), new MockTransport(hub, 'stopped-a'), db, () => meta, 'white', ANY_SEED,
+    );
+    await a.connect('resolve-stopped');
+    a.place([0, 0, 0]);
+    a.placeLocalOnly([1, 1, 1]);
+    let fork: EventLog = emptyLog(PAIR_UUID);
+    for (const node of ['0,0,0', '2,2,2']) fork = append(fork, { type: 'place', node });
+    a.receive(toSyncMessage(fork, 0));
+    expect(a.status().kind).toBe('conflict');
+
+    const ask: ProposalMessage = {
+      kind: 'proposal',
+      id: 'res-1',
+      action: 'resolve:whatever',
+      proposedBy: 'white',
+    };
+    // The old gate is UNCHANGED for everything else: a stopped game exchanges no rematch/undo traffic.
+    expect(() =>
+      a.publishHandshake({ kind: 'proposal', id: 'r', action: 'rematch', proposedBy: 'white' }),
+    ).toThrow(/conflict|stopped/i);
+    heard.length = 0;
+    a.publishResolution(ask);
+    expect(heard).toContainEqual(ask);
+    // …and the exception is NARROW, not a hole: this seam refuses to carry anything but a resolution,
+    // so it can never be used to smuggle a rematch/undo ask past the stop.
+    expect(() =>
+      a.publishResolution({ kind: 'proposal', id: 'r2', action: 'rematch', proposedBy: 'white' }),
+    ).toThrow(/not a resolution/i);
+    expect(heard).toHaveLength(1);
+  });
+});
+
+describe('SyncEngine — the divergence answer TERMINATES on a relay that echoes our own publishes', () => {
+  let db: IDBDatabase;
+  const meta = { players: { white: 'w', black: 'b' }, startedAt: 1000 };
+
+  beforeEach(async () => {
+    db = await openDatabase(`echo-test-${Math.random().toString(36).slice(2)}`);
+  });
+
+  /**
+   * A relay that behaves like the REAL one: it delivers every publish to the peer AND BACK TO THE
+   * SENDER. MQTT 3.1.1 has no `noLocal`, and the live broker was probed to confirm it does exactly
+   * this. `MockRelayHub` deliberately does not echo, which is why the ping-pong this test pins was
+   * invisible to every mock-transport test and only showed up over the real relay.
+   */
+  class EchoingRelay {
+    readonly peers: EchoingTransport[] = [];
+    /** Every message published in this room, in order — the wire, for counting. */
+    readonly traffic: TransportMessage[] = [];
+    deliver(msg: TransportMessage): void {
+      this.traffic.push(msg);
+      // Snapshot first: a handler may publish, and that publish appends to `peers`' inboxes, not here.
+      for (const peer of [...this.peers]) peer.receiveFromRelay(msg);
+    }
+  }
+
+  class EchoingTransport implements Transport {
+    private cb: (msg: TransportMessage) => void = () => {};
+    constructor(private readonly relay: EchoingRelay) {
+      relay.peers.push(this);
+    }
+    connect(): Promise<void> {
+      return Promise.resolve();
+    }
+    publish(msg: TransportMessage): void {
+      this.relay.deliver(JSON.parse(JSON.stringify(msg)) as TransportMessage);
+    }
+    onMessage(cb: (msg: TransportMessage) => void): void {
+      this.cb = cb;
+    }
+    onPresence(): void {}
+    onPeerLive(): void {}
+    disconnect(): void {}
+    receiveFromRelay(msg: TransportMessage): void {
+      this.cb(JSON.parse(JSON.stringify(msg)) as TransportMessage);
+    }
+  }
+
+  it('two peers exchange a BOUNDED number of logs and BOTH keep the divergence record', async () => {
+    const relay = new EchoingRelay();
+    const ta = new EchoingTransport(relay);
+    const tb = new EchoingTransport(relay);
+    const a = new SyncEngine(new Game(9, PAIR_UUID), ta, db, () => meta, 'white', ANY_SEED);
+    const b = new SyncEngine(new Game(9, PAIR_UUID), tb, db, () => meta, 'black', ANY_SEED);
+    a.attach();
+    b.attach();
+
+    // A gets TWO entries ahead of B without B hearing either — beyond the turn gate's one-move cap
+    // in BOTH directions, so each side reaches `needs-resolution` rather than the republish mirror.
+    a.placeLocalOnly([0, 0, 0]);
+    a.placeLocalOnly([1, 1, 1]);
+    a.placeLocalOnly([2, 2, 2]);
+    b.placeLocalOnly([0, 0, 0]);
+    // Everything published up to here is setup; count only the exchange the divergence provokes.
+    relay.traffic.length = 0;
+
+    a.publishState();
+
+    // BOUNDED: A's own log, B's answer, A's answer — and then silence. Without a guard immune to the
+    // echo (which wipes the divergence record on arrival) this never stops.
+    expect(relay.traffic.length).toBeLessThanOrEqual(4);
+    // BOTH sides are holding the divergence, at the same shared point — the asymmetry V.4a left.
+    expect(a.needsResolution()?.lca.ply).toBe(1);
+    expect(b.needsResolution()?.lca.ply).toBe(1);
+    expect(a.resolutionCandidates()).not.toBeNull();
+    expect(b.resolutionCandidates()).not.toBeNull();
+    // Neither adopted anything.
+    expect(a.game().ply()).toBe(3);
+    expect(b.game().ply()).toBe(1);
+
+    // Re-announcing the same log again (a presence republish) adds nothing: already answered.
+    const settled = relay.traffic.length;
+    a.publishState();
+    b.publishState();
+    expect(relay.traffic.length).toBe(settled + 2); // the two announces themselves, no answers
+    expect(a.needsResolution()).not.toBeNull();
+    expect(b.needsResolution()).not.toBeNull();
+
+    // …but the silence is about THIS pair of histories, not a one-shot latch. Change ours, and the
+    // next announce from the peer is answered again — it has not seen this log.
+    a.placeLocalOnly([3, 3, 3]);
+    const beforeMove = relay.traffic.length;
+    b.publishState();
+    // B's announce, A's fresh answer carrying the new log, and B's one answer to THAT — then silence
+    // again. Bounded, and strictly more than the announce alone: the guard is per pair of histories,
+    // not a latch that goes quiet forever after the first exchange.
+    expect(relay.traffic.length).toBe(beforeMove + 3);
+  });
+
+  it('agreeing over an ECHOING relay converges both peers onto one history', async () => {
+    const relay = new EchoingRelay();
+    const a = new SyncEngine(
+      new Game(9, PAIR_UUID), new EchoingTransport(relay), db, () => meta, 'white', ANY_SEED,
+    );
+    const b = new SyncEngine(
+      new Game(9, PAIR_UUID), new EchoingTransport(relay), db, () => meta, 'black', ANY_SEED,
+    );
+    a.attach();
+    b.attach();
+    a.placeLocalOnly([0, 0, 0]);
+    a.placeLocalOnly([1, 1, 1]);
+    a.placeLocalOnly([2, 2, 2]);
+    b.placeLocalOnly([0, 0, 0]);
+    a.publishState();
+
+    const agreed = headHash(a.game().log);
+    expect(a.applyResolution('keep-mine')).toBe(true);
+    expect(b.applyResolution('adopt-theirs')).toBe(true);
+    expect(headHash(a.game().log)).toBe(agreed);
+    expect(headHash(b.game().log)).toBe(agreed);
+    expect(a.needsResolution()).toBeNull();
+    expect(b.needsResolution()).toBeNull();
   });
 });

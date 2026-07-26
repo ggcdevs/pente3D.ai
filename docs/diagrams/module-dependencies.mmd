@@ -44,6 +44,7 @@ graph LR
         src_net_reconcile_ts["reconcile.ts"]
         src_net_rematch_ts["rematch.ts"]
         src_net_republish_ts["republish.ts"]
+        src_net_resolution_ts["resolution.ts"]
         src_net_seats_ts["seats.ts"]
         src_net_session_ts["session.ts"]
         src_net_sync_ts["sync.ts"]
@@ -84,6 +85,8 @@ graph LR
         src_ui_widgets_archiveModel_ts["archiveModel.ts"]
         src_ui_widgets_banner_ts["banner.ts"]
         src_ui_widgets_bannerModel_ts["bannerModel.ts"]
+        src_ui_widgets_divergenceModel_ts["divergenceModel.ts"]
+        src_ui_widgets_divergencePanel_ts["divergencePanel.ts"]
         src_ui_widgets_endStateOverlay_ts["endStateOverlay.ts"]
         src_ui_widgets_help_ts["help.ts"]
         src_ui_widgets_helpModel_ts["helpModel.ts"]
@@ -132,6 +135,7 @@ graph LR
     src_debug_window_ts --> src_net_endState_ts
     src_debug_window_ts --> src_net_handshake_ts
     src_debug_window_ts --> src_net_notifyGlue_ts
+    src_debug_window_ts --> src_net_resolution_ts
     src_debug_window_ts --> src_net_seats_ts
     src_debug_window_ts --> src_net_sync_ts
     src_debug_window_ts --> src_net_undoRedo_ts
@@ -146,6 +150,7 @@ graph LR
     src_debug_window_ts --> src_ui_setup_ts
     src_debug_window_ts --> src_ui_widgets_archiveModel_ts
     src_debug_window_ts --> src_ui_widgets_banner_ts
+    src_debug_window_ts --> src_ui_widgets_divergenceModel_ts
     src_debug_window_ts --> src_ui_widgets_helpModel_ts
     src_debug_window_ts --> src_ui_widgets_netModel_ts
     src_input_keybindings_ts --> src_input_scopes_ts
@@ -166,6 +171,7 @@ graph LR
     src_main_ts --> src_net_netRouting_ts
     src_main_ts --> src_net_notifyGlue_ts
     src_main_ts --> src_net_rematch_ts
+    src_main_ts --> src_net_resolution_ts
     src_main_ts --> src_net_seats_ts
     src_main_ts --> src_net_sync_ts
     src_main_ts --> src_persist_archive_ts
@@ -174,6 +180,7 @@ graph LR
     src_main_ts --> src_render_scene_ts
     src_main_ts --> src_ui_setup_ts
     src_main_ts --> src_ui_widgets_archiveModel_ts
+    src_main_ts --> src_ui_widgets_divergenceModel_ts
     src_main_ts --> src_ui_widgets_netPanelModel_ts
     src_main_ts --> src_util_randomId_ts
     src_net_activeGame_ts --> src_ui_widgets_netModel_ts
@@ -220,12 +227,14 @@ graph LR
     src_net_session_ts --> src_net_handshake_ts
     src_net_session_ts --> src_net_rematch_ts
     src_net_session_ts --> src_net_republish_ts
+    src_net_session_ts --> src_net_resolution_ts
     src_net_session_ts --> src_net_seats_ts
     src_net_session_ts --> src_net_sync_ts
     src_net_session_ts --> src_net_transport_ts
     src_net_session_ts --> src_net_turnGate_ts
     src_net_session_ts --> src_net_undoRedo_ts
     src_net_session_ts --> src_persist_archive_ts
+    src_net_session_ts --> src_ui_widgets_divergenceModel_ts
     src_net_session_ts --> src_ui_widgets_netModel_ts
     src_net_session_ts --> src_util_randomId_ts
     src_net_sync_ts --> src_core_coords_ts
@@ -236,6 +245,7 @@ graph LR
     src_net_sync_ts --> src_net_logDiff_ts
     src_net_sync_ts --> src_net_reconcile_ts
     src_net_sync_ts --> src_net_rematch_ts
+    src_net_sync_ts --> src_net_resolution_ts
     src_net_sync_ts --> src_net_seats_ts
     src_net_sync_ts --> src_net_transport_ts
     src_net_sync_ts --> src_persist_archive_ts
@@ -317,12 +327,15 @@ graph LR
     src_ui_setup_ts --> src_config_config_ts
     src_ui_setup_ts --> src_net_admission_ts
     src_ui_setup_ts --> src_net_endState_ts
+    src_ui_setup_ts --> src_net_resolution_ts
     src_ui_setup_ts --> src_ui_container_ts
     src_ui_setup_ts --> src_ui_layout_ts
     src_ui_setup_ts --> src_ui_registry_ts
     src_ui_setup_ts --> src_ui_widgets_archive_ts
     src_ui_setup_ts --> src_ui_widgets_archiveModel_ts
     src_ui_setup_ts --> src_ui_widgets_banner_ts
+    src_ui_setup_ts --> src_ui_widgets_divergenceModel_ts
+    src_ui_setup_ts --> src_ui_widgets_divergencePanel_ts
     src_ui_setup_ts --> src_ui_widgets_endStateOverlay_ts
     src_ui_setup_ts --> src_ui_widgets_help_ts
     src_ui_setup_ts --> src_ui_widgets_helpModel_ts
@@ -342,6 +355,12 @@ graph LR
     src_ui_widgets_banner_ts --> src_ui_widgets_netModel_ts
     src_ui_widgets_banner_ts --> src_ui_widgets_sliderModel_ts
     src_ui_widgets_bannerModel_ts --> src_core_gameState_ts
+    src_ui_widgets_divergenceModel_ts --> src_net_handshake_ts
+    src_ui_widgets_divergenceModel_ts --> src_net_logDiff_ts
+    src_ui_widgets_divergenceModel_ts --> src_net_resolution_ts
+    src_ui_widgets_divergencePanel_ts --> src_net_resolution_ts
+    src_ui_widgets_divergencePanel_ts --> src_ui_registry_ts
+    src_ui_widgets_divergencePanel_ts --> src_ui_widgets_divergenceModel_ts
     src_ui_widgets_endStateOverlay_ts --> src_net_endState_ts
     src_ui_widgets_endStateOverlay_ts --> src_ui_registry_ts
     src_ui_widgets_help_ts --> src_ui_registry_ts

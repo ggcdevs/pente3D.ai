@@ -811,6 +811,13 @@
         ]
       },
       {
+        "source": "../net/resolution.ts",
+        "target": "src/net/resolution.ts",
+        "specifiers": [
+          "ResolutionChoice"
+        ]
+      },
+      {
         "source": "../net/seats.ts",
         "target": "src/net/seats.ts",
         "specifiers": [
@@ -917,6 +924,13 @@
         ]
       },
       {
+        "source": "../ui/widgets/divergenceModel.ts",
+        "target": "src/ui/widgets/divergenceModel.ts",
+        "specifiers": [
+          "DivergenceView"
+        ]
+      },
+      {
         "source": "../ui/widgets/helpModel.ts",
         "target": "src/ui/widgets/helpModel.ts",
         "specifiers": [
@@ -952,6 +966,7 @@
           "getCamera(): CameraReadout | null",
           "getCameraPreset(): CameraPresetReadout | null",
           "getColors(): ColorsReadout | null",
+          "getDivergence(): DivergenceView",
           "getEndState(): EndState",
           "getHandshake(): HandshakeState",
           "getHeadHash(): string | null",
@@ -982,9 +997,11 @@
           "place(coords: Coord): GameState | null",
           "pressKey(chord: string): KeyResolution | null",
           "propose(action: string): boolean",
+          "proposeResolution(choice: ResolutionChoice): boolean",
           "radiusOf(node: Coord): number | null",
           "rayNodeDistances(ndcX: number, ndcY: number): { node: string; distance: number; depth: number }[]",
           "respond(accepted: boolean): boolean",
+          "respondResolution(accepted: boolean): boolean",
           "resync(): void",
           "scrubTo(k: number): void",
           "setCamera(position: { x: number; y: number; z: number }, target: { x: number; y: number; z: number }): void",
@@ -997,12 +1014,15 @@
         "name": "ArchiveInspect",
         "extends": [],
         "methods": [
+          "getDivergence(): DivergenceView",
           "getEndState(): EndState",
           "getNetGameUuid(): string | null",
           "getNetLastReject(): AdmissionReject | null",
           "getNetSeatOwners(): SeatMap | null",
           "getNotify(): NotifyReadout",
-          "listArchive(): Promise<readonly ArchiveListing[]>"
+          "listArchive(): Promise<readonly ArchiveListing[]>",
+          "proposeResolution(choice: ResolutionChoice): boolean",
+          "respondResolution(accepted: boolean): boolean"
         ],
         "properties": []
       },
@@ -1463,6 +1483,13 @@
         ]
       },
       {
+        "source": "./net/resolution.ts",
+        "target": "src/net/resolution.ts",
+        "specifiers": [
+          "ResolutionChoice"
+        ]
+      },
+      {
         "source": "./net/seats.ts",
         "target": "src/net/seats.ts",
         "specifiers": [
@@ -1528,6 +1555,13 @@
         "target": "src/ui/widgets/archiveModel.ts",
         "specifiers": [
           "ArchiveListing"
+        ]
+      },
+      {
+        "source": "./ui/widgets/divergenceModel.ts",
+        "target": "src/ui/widgets/divergenceModel.ts",
+        "specifiers": [
+          "DivergenceView"
         ]
       },
       {
@@ -2465,6 +2499,7 @@
       "lastCommonAncestor",
       "reconcile",
       "reconcileEpoched",
+      "rewindTo",
       "validateAdoptable"
     ],
     "imports": [
@@ -2546,6 +2581,7 @@
       "lastCommonAncestor",
       "reconcile",
       "reconcileEpoched",
+      "rewindTo",
       "theirsToAdd",
       "validateAdoptable"
     ]
@@ -2637,6 +2673,51 @@
       }
     ],
     "functions": []
+  },
+  "src/net/resolution.ts": {
+    "exports": [
+      "RESOLVE_ACTION_PREFIX",
+      "ResolutionCandidates",
+      "ResolutionChoice",
+      "ResolutionEffect",
+      "effectOf",
+      "resolutionAction",
+      "resolutionTarget",
+      "targetChoice",
+      "targetFor"
+    ],
+    "imports": [],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "ResolutionCandidates",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly lca: string | null",
+          "readonly mine: string",
+          "readonly theirs: string"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [
+      {
+        "name": "ResolutionChoice",
+        "type": "| 'take-mine'\n  /** Continue from THEIR history; the moves only I have are dropped. */\n  | 'take-theirs'\n  /** Both sides return to the last shared move; everything after it is dropped on both sides. */\n  | 'rewind'"
+      },
+      {
+        "name": "ResolutionEffect",
+        "type": "| 'keep-mine'\n  /** Adopt the divergent log (replay-validated first, like any adopted history). */\n  | 'adopt-theirs'\n  /** Cut our own log back to the last common ancestor. */\n  | 'rewind-to-lca'"
+      }
+    ],
+    "functions": [
+      "effectOf",
+      "resolutionAction",
+      "resolutionTarget",
+      "targetChoice",
+      "targetFor"
+    ]
   },
   "src/net/seats.ts": {
     "exports": [
@@ -2737,6 +2818,15 @@
         ]
       },
       {
+        "source": "../ui/widgets/divergenceModel",
+        "target": "src/ui/widgets/divergenceModel.ts",
+        "specifiers": [
+          "DivergenceFacts",
+          "DivergenceView",
+          "deriveDivergence"
+        ]
+      },
+      {
         "source": "../ui/widgets/netModel",
         "target": "src/ui/widgets/netModel.ts",
         "specifiers": [
@@ -2816,6 +2906,18 @@
         ]
       },
       {
+        "source": "./resolution",
+        "target": "src/net/resolution.ts",
+        "specifiers": [
+          "ResolutionChoice",
+          "effectOf",
+          "resolutionAction",
+          "resolutionTarget",
+          "targetChoice",
+          "targetFor"
+        ]
+      },
+      {
         "source": "./seats",
         "target": "src/net/seats.ts",
         "specifiers": [
@@ -2885,9 +2987,12 @@
         "extends": null,
         "implements": [],
         "methods": [
+          "applyAcceptedResolution(): boolean",
           "applyAcceptedUndoRedo(): boolean",
           "canPlace(): boolean",
           "disconnect(): void",
+          "divergenceFacts(): DivergenceFacts | null",
+          "divergenceView(): DivergenceView",
           "enter(rawCode: string, proposal: Proposal): Promise<void>",
           "gameStartedAt(): number | null",
           "gameState(): GameState | null",
@@ -2901,10 +3006,12 @@
           "place(coords: Coord): void",
           "ply(): number",
           "propose(action: string): boolean",
+          "proposeResolution(choice: ResolutionChoice): boolean",
           "reconnect(): Promise<boolean>",
           "redo(): void",
           "resetForRematch(): boolean",
           "respond(accepted: boolean): boolean",
+          "respondResolution(accepted: boolean): boolean",
           "seatOwners(): SeatMap | null",
           "state(): NetSessionState",
           "syncEngine(): SyncEngine | null",
@@ -3059,6 +3166,7 @@
           "LogRejection",
           "isFork",
           "reconcileEpoched",
+          "rewindTo",
           "validateAdoptable"
         ]
       },
@@ -3067,6 +3175,15 @@
         "target": "src/net/rematch.ts",
         "specifiers": [
           "rematchGameUuid"
+        ]
+      },
+      {
+        "source": "./resolution",
+        "target": "src/net/resolution.ts",
+        "specifiers": [
+          "ResolutionCandidates",
+          "ResolutionEffect",
+          "resolutionTarget"
         ]
       },
       {
@@ -3112,6 +3229,7 @@
         "methods": [
           "agreeOn(uuid: string): void",
           "applyAgreedUndo(): void",
+          "applyResolution(effect: ResolutionEffect): boolean",
           "attach(): void",
           "conflictForks(): { readonly mine: EventLog; readonly theirs: EventLog } | null",
           "connect(roomCode: string): Promise<void>",
@@ -3124,6 +3242,7 @@
           "place(coords: Coord): void",
           "placeLocalOnly(coords: Coord): void",
           "publishHandshake(msg: ProposalMessage | ResponseMessage): void",
+          "publishResolution(msg: ProposalMessage | ResponseMessage): void",
           "publishState(): void",
           "receive(msg: SyncMessage): void",
           "redo(): void",
@@ -3131,6 +3250,7 @@
           "rejectedLog(): {\n    readonly uuid: string;\n    readonly ply: number;\n    readonly reason: LogRejection;\n    readonly detail: string;\n  } | null",
           "reseat(color: Player): void",
           "resetGame(newGame: Game, newMyColor: Player): void",
+          "resolutionCandidates(): ResolutionCandidates | null",
           "status(): SyncStatus",
           "undo(): void",
           "whenSettled(): Promise<void>"
@@ -5762,6 +5882,13 @@
         ]
       },
       {
+        "source": "../net/resolution.ts",
+        "target": "src/net/resolution.ts",
+        "specifiers": [
+          "ResolutionChoice"
+        ]
+      },
+      {
         "source": "./container.ts",
         "target": "src/ui/container.ts",
         "specifiers": [
@@ -5805,6 +5932,20 @@
         "target": "src/ui/widgets/banner.ts",
         "specifiers": [
           "bannerWidget"
+        ]
+      },
+      {
+        "source": "./widgets/divergenceModel.ts",
+        "target": "src/ui/widgets/divergenceModel.ts",
+        "specifiers": [
+          "DivergenceView"
+        ]
+      },
+      {
+        "source": "./widgets/divergencePanel.ts",
+        "target": "src/ui/widgets/divergencePanel.ts",
+        "specifiers": [
+          "divergencePanelWidget"
         ]
       },
       {
@@ -5892,6 +6033,7 @@
           "currentGame(): { readonly uuid: string; readonly headHash: string } | null",
           "dispatch(commandId: string): boolean",
           "enter(code: string, proposal: Proposal): void",
+          "getDivergence(): DivergenceView",
           "getEndState(): EndState",
           "getHelpSources(): HelpSources",
           "getHistory(): HistoryFacts",
@@ -5899,12 +6041,14 @@
           "listArchive(): Promise<readonly ArchiveListing[]>",
           "popScope(): void",
           "proposeRematch(): boolean",
+          "proposeResolution(choice: ResolutionChoice): boolean",
           "pushScope(scope: MenuScope | SettingsScope | HelpScope | ArchiveScope | NetPanelScope): void",
           "registerOpenArchive(open: () => void): void",
           "registerOpenHelp(open: () => void): void",
           "registerOpenNetwork(open: () => void): void",
           "registerOpener(open: () => void): void",
           "respondRematch(accepted: boolean): boolean",
+          "respondResolution(accepted: boolean): boolean",
           "respondUndoRedo(accepted: boolean): boolean",
           "resumeArchived(id: string): Promise<void>",
           "reviewArchived(id: string): Promise<void>",
@@ -6213,6 +6357,176 @@
     "typeAliases": [],
     "functions": [
       "deriveBanner"
+    ]
+  },
+  "src/ui/widgets/divergenceModel.ts": {
+    "exports": [
+      "DivergenceFacts",
+      "DivergenceLine",
+      "DivergenceOption",
+      "DivergenceUi",
+      "DivergenceView",
+      "deriveDivergence"
+    ],
+    "imports": [
+      {
+        "source": "../../net/handshake",
+        "target": "src/net/handshake.ts",
+        "specifiers": [
+          "HandshakeState"
+        ]
+      },
+      {
+        "source": "../../net/handshake",
+        "target": "src/net/handshake.ts",
+        "specifiers": [
+          "incomingPending",
+          "outgoingPending",
+          "resolution"
+        ]
+      },
+      {
+        "source": "../../net/logDiff",
+        "target": "src/net/logDiff.ts",
+        "specifiers": [
+          "DivergentMove",
+          "LogDiff"
+        ]
+      },
+      {
+        "source": "../../net/resolution",
+        "target": "src/net/resolution.ts",
+        "specifiers": [
+          "ResolutionCandidates",
+          "ResolutionChoice",
+          "resolutionTarget",
+          "targetChoice",
+          "targetFor"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "DivergenceLine",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly ply: number",
+          "readonly text: string"
+        ]
+      },
+      {
+        "name": "DivergenceOption",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly choice: ResolutionChoice",
+          "readonly detail: string",
+          "readonly label: string"
+        ]
+      },
+      {
+        "name": "DivergenceView",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly canAccept: boolean",
+          "readonly explanation: string",
+          "readonly headline: string",
+          "readonly incomingText: string | null",
+          "readonly mine: readonly DivergenceLine[]",
+          "readonly note: string | null",
+          "readonly options: readonly DivergenceOption[]",
+          "readonly sharedPly: number",
+          "readonly show: boolean",
+          "readonly theirs: readonly DivergenceLine[]",
+          "readonly ui: DivergenceUi"
+        ]
+      },
+      {
+        "name": "DivergenceFacts",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly candidates: ResolutionCandidates",
+          "readonly diff: LogDiff"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [
+      {
+        "name": "DivergenceUi",
+        "type": "| 'choose'\n  /** WE proposed one; the peer has not answered. */\n  | 'waiting'\n  /** The PEER proposed one; we accept or decline. */\n  | 'incoming'\n  /** The peer declined ours: pick again (either side may). */\n  | 'declined'"
+      }
+    ],
+    "functions": [
+      "deriveDivergence",
+      "describeIncoming",
+      "explain",
+      "keepDetail",
+      "lines",
+      "moveCount",
+      "offerable",
+      "plural",
+      "resolutionPending",
+      "takeDetail"
+    ]
+  },
+  "src/ui/widgets/divergencePanel.ts": {
+    "exports": [
+      "DIVERGENCE_PANEL_ID",
+      "DivergencePanelDeps",
+      "divergencePanelWidget"
+    ],
+    "imports": [
+      {
+        "source": "../../net/resolution.ts",
+        "target": "src/net/resolution.ts",
+        "specifiers": [
+          "ResolutionChoice"
+        ]
+      },
+      {
+        "source": "../registry.ts",
+        "target": "src/ui/registry.ts",
+        "specifiers": [
+          "Widget",
+          "WidgetFactory"
+        ]
+      },
+      {
+        "source": "./divergenceModel.ts",
+        "target": "src/ui/widgets/divergenceModel.ts",
+        "specifiers": [
+          "DivergenceLine",
+          "DivergenceView"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [
+      {
+        "name": "DivergencePanelDeps",
+        "extends": [],
+        "methods": [
+          "getDivergence(): DivergenceView",
+          "proposeResolution(choice: ResolutionChoice): boolean",
+          "respondResolution(accepted: boolean): boolean"
+        ],
+        "properties": [
+          "readonly doc: Document"
+        ]
+      }
+    ],
+    "enums": [],
+    "typeAliases": [],
+    "functions": [
+      "buildColumn",
+      "buildOption",
+      "divergencePanelWidget",
+      "render"
     ]
   },
   "src/ui/widgets/endStateOverlay.ts": {
