@@ -197,13 +197,25 @@ function syncMessageFor(uuid: string, nodes: readonly string[]): Record<string, 
 }
 
 test.describe('V.4b — a divergence is seen by BOTH players and resolved by agreement', () => {
-  // Every scenario boots TWO isolated contexts (two full WebGL apps), drives them into a divergence
-  // over a BroadcastChannel relay, and additionally MEASURES + photographs the rendered card. Under
-  // the full suite's parallel workers that can exceed the 60s default — a real cost of the
-  // two-context + real-rendering proof, not a logic race (it runs in ~30s with `--workers=1`).
-  // `test.slow()` triples the budget, the sanctioned Playwright knob for legitimately-heavy tests;
-  // it pins no workers, serializes nothing, and weakens no assertion (agent-principles #7).
-  test.slow();
+  // Every scenario boots TWO pages of a fresh context (two full WebGL apps) against the real dev
+  // server, drives them into a divergence over a BroadcastChannel relay, and additionally MEASURES
+  // and photographs the rendered card — four full-page screenshots in the first test alone. That is
+  // legitimately heavy, and it needs more than the 60s default.
+  //
+  // HOW heavy is NOT a fact this comment may state (agent-principles #8): it moves with the box, the
+  // load, the worker count and whether Vite's cache is warm. Measure it, never quote it —
+  //
+  //   npx playwright test e2e/divergence.spec.ts --workers=1
+  //
+  // — the `list` reporter prints each test's own duration. The spread that mechanism reveals is the
+  // reason the budget is set the way it is: the same headline test has been observed both finishing
+  // in well under a minute and EXCEEDING the 180s that `test.slow()` (a x3 multiplier on the
+  // default) allowed. A budget sized from a fast observation is a flake generator, so this one is
+  // stated outright and set several times above the slowest run seen rather than trimmed to it.
+  //
+  // A timeout is a resource cap, not a check: it pins no workers, serializes nothing and weakens no
+  // assertion in this file (agent-principles #6). A genuine hang still fails the run — later.
+  test.describe.configure({ timeout: 300_000 });
 
   test('both panels open at the same shared move, and agreeing converges both logs', async ({
     browser,

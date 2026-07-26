@@ -1594,9 +1594,26 @@ export class SyncEngine {
         // which is silent, so it terminates. Without it, convergence in the MIRROR direction of an
         // outage rested on a single unacknowledged publish — issue #45 with the roles swapped.
         //
-        // Their log being a prefix of ours by one entry also SETTLES any divergence we were holding
-        // against them: a near-prefix is a compatible history, not a disagreement.
-        this._resolution = null;
+        // `one-ahead` — and ONLY `one-ahead` — also SETTLES any divergence we were holding against
+        // them: that reason means their log IS our history minus its last entry ({@link reconcile}
+        // checks `isPrefix` for it), and a near-prefix is a compatible history, not a disagreement.
+        //
+        // The other reason reaching this arm says nothing of the kind. `superseded-generation`
+        // ({@link reconcileEpoched}) is decided on `theirEpoch < this._epoch` alone, WITHOUT
+        // comparing the two histories: their log may be an unrelated fork, and `_epoch` is a
+        // sender-supplied number any publisher on the shared-credential relay can pin arbitrarily
+        // high (see the note on the `Math.max` above, and the `epoch: 999` tests). Clearing on it
+        // would let one stale-looking message drop a live, real disagreement — closing both panels
+        // on a question the players never answered. So a stale message is answered and nothing else.
+        if (decision.reason === 'one-ahead' && this._resolution !== null) {
+          this._resolution = null;
+          // The open divergence really closed, so the panel must repaint. Every other arm that
+          // mutates `_resolution` notifies (`in-sync`+`settled`, `needs-resolution`, {@link adopt});
+          // dropping a record silently left `main.ts` painting a panel about a divergence that no
+          // longer exists, whose buttons no longer resolve anything (`proposeResolution` returns
+          // `false` once {@link resolutionCandidates} is `null`).
+          this.emitChange();
+        }
         if (!isAnswer) this.publishState();
         return;
       case 'fast-forward':

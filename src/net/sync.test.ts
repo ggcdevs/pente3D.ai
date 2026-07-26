@@ -1306,6 +1306,51 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
     expect(eng.epoch()).toBe(5);
   });
 
+  it('a SUPERSEDED-generation message settles NOTHING — a stale log cannot close a live divergence', async () => {
+    // `republish` is reached for TWO different reasons and only one of them is a statement about the
+    // two histories. `one-ahead` means their log is our own history minus its last entry, so the
+    // disagreement really is over. `superseded-generation` is decided on `theirEpoch < myEpoch`
+    // ALONE — the logs are never compared — and the counter it is measured against is a
+    // sender-supplied number any publisher on this relay can pin (the tests above). So a forked log
+    // stamped with a low epoch must leave the record exactly where it was: dropping it would close
+    // both players' panels on a question neither of them answered.
+    const hub = new MockRelayHub();
+    const mine = new MockTransport(hub, 'superseded-mine');
+    const peer = new MockTransport(hub, 'superseded-peer');
+    await mine.connect('ROOM-SUPERSEDED');
+    await peer.connect('ROOM-SUPERSEDED');
+    const heard: TransportMessage[] = [];
+    peer.onMessage((m) => heard.push(m));
+
+    const eng = new SyncEngine(new Game(9, PAIR_UUID), mine, db, () => meta, 'black', ANY_SEED);
+    eng.receive(toSyncMessage(logOf('0,0,0'))); // white's move: the one fast-forward that IS allowed
+    // Two ahead at a HIGH generation: nothing adopted, the divergence recorded, the counter converged.
+    eng.receive(toSyncMessage(logOf('0,0,0', '1,1,1', '2,2,2'), 9));
+    const open = eng.needsResolution();
+    expect(open?.diff.theirs.map((m) => m.text)).toEqual(['black plays 1,1,1', 'white plays 2,2,2']);
+    expect(eng.epoch()).toBe(9);
+    let fires = 0;
+    eng.onChange(() => (fires += 1));
+    heard.length = 0;
+
+    // A log that is not our history at all, from below the converged generation → superseded.
+    eng.receive(toSyncMessage(logOf('4,4,4', '3,3,3'), 0));
+
+    // The record is still there, unchanged — including the diff the panel renders.
+    expect(eng.needsResolution()).toEqual(open);
+    expect(eng.needsResolution()?.diff.theirs.map((m) => m.text)).toEqual([
+      'black plays 1,1,1',
+      'white plays 2,2,2',
+    ]);
+    // Nothing changed, so nothing was announced, and the stale log took nothing from our board.
+    expect(fires).toBe(0);
+    expect(eng.game().ply()).toBe(1);
+    expect(eng.status().kind).toBe('ok');
+    // …and the arm still did its job: our live log went back to the stale peer.
+    expect(heard).toHaveLength(1);
+    expect(parseSyncMessage(heard[0] as SyncMessage)).toEqual(eng.game().log);
+  });
+
   it('a FORGED epoch pins the counter — and the pair’s own next generation still crosses it', async () => {
     // The cost of converging on a sender-supplied number, stated honestly: ONE well-formed message
     // that adopts nothing (`{...ourOwnLog, epoch: 999}`, exactly what any peer on the publicly
@@ -1836,6 +1881,35 @@ describe('SyncEngine.onChange — the resync notification (Task 6.1, issue #4)',
     expect(eng.needsResolution()).toBeNull();
     expect(fires).toBe(1);
     // …and it took nothing from the peer to do it: our own history is exactly where it was.
+    expect(eng.game().ply()).toBe(1);
+  });
+
+  it('a peer CATCHING UP to within one move closes the divergence AND says so', async () => {
+    // The `republish`/`one-ahead` arm drops the record when the peer comes back onto our history to
+    // within the turn gate's one move. That is a real state change, and it must notify like every
+    // other arm that touches the record: `main.ts` re-renders only from `onChange`, so a silent drop
+    // left the divergence panel painted over a divergence that no longer exists — offering
+    // take-mine / take-theirs buttons that resolve nothing (`proposeResolution` returns `false` once
+    // there are no candidates).
+    const eng = await solo(9, 'black');
+    eng.receive(toSyncMessage(logOf('0,0,0'))); // fast-forward → 1
+    eng.receive(toSyncMessage(logOf('0,0,0', '1,1,1', '2,2,2', '3,3,3'))); // three ahead → recorded
+    expect(eng.needsResolution()).not.toBeNull();
+    let fires = 0;
+    let recordAtFire: unknown = 'listener never ran';
+    eng.onChange(() => {
+      fires += 1;
+      recordAtFire = eng.needsResolution();
+    });
+
+    eng.receive(toSyncMessage(emptyGameLog())); // one behind us → republish/one-ahead
+
+    expect(eng.needsResolution()).toBeNull();
+    expect(fires).toBe(1);
+    // The listener saw the CLOSED state — a notification that arrived before the drop would repaint
+    // the panel with the record still in it and change nothing on screen.
+    expect(recordAtFire).toBeNull();
+    // …and nothing was taken from the peer to close it: our own history is where it was.
     expect(eng.game().ply()).toBe(1);
   });
 
