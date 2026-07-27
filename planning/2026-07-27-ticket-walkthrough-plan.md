@@ -10,10 +10,23 @@ of them answer themselves.
 
 ---
 
-## Step 0 — play it, on two devices (~15 min)
+## Step 0 — CONFIRM WHAT IS DEPLOYED, then play it on two devices (~15 min)
 
-Open **https://ggcdevs.github.io/pente3D.ai/dev/** on a laptop and a phone. Confirm the version with
-`curl -s https://ggcdevs.github.io/pente3D.ai/dev/version.json`.
+**Check the build before you trust anything you see.** The page loading proves nothing — a failed
+deploy leaves the PREVIOUS build serving happily at the same URL:
+
+```bash
+curl -s https://ggcdevs.github.io/pente3D.ai/dev/version.json   # must describe a commit you recognise
+gh run list --branch dev --limit 1                              # and the deploy must say success
+```
+
+This is not hypothetical. On 2026-07-27 the v3.1 promotion pushed two branches seconds apart, the two
+deploys raced on `gh-pages`, and the `dev` one lost — so `/dev/` served the pre-v3.1 build for an
+hour, and the only symptom was `version.json` 404ing (that older build predates the file). Playing
+that build and triaging tickets against it would have produced confident, wrong answers. The race is
+fixed (`concurrency: gh-pages-deploy` in `deploy.yml`), but the habit is the real protection.
+
+Then open **https://ggcdevs.github.io/pente3D.ai/dev/** on a laptop and a phone.
 
 Run this sequence and keep notes — it exercises nearly everything v3.1 changed:
 

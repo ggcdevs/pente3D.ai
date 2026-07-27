@@ -9,8 +9,10 @@
 # with slashes become nested gh-pages dirs, which is fine. `keep_files: true` + a per-branch
 # `destination_dir` mean deploying one branch never deletes another branch's subtree.
 #
-# Cleanup of a DELETED branch's subpath is handled separately (see cleanup-branch-pages.yml —
-# an `on: delete` workflow, which GitHub only fires from the DEFAULT branch).
+# Cleanup of a DELETED branch's subpath happens IN THIS FILE, opportunistically on every push (see
+# the prune step below). It is not an `on: delete` workflow: GitHub only fires those from the DEFAULT
+# branch, and that would mean plumbing on `main`. (This comment used to point at a
+# `cleanup-branch-pages.yml` that does not exist.)
 #
 # The relay endpoint/creds are NOT in the repo (portability). They live in the `RELAY_CONFIG`
 # repo variable and are written into src/config/defaults/relay.json before the build.
@@ -22,6 +24,20 @@ on:
 
 permissions:
   contents: write
+
+# SERIALIZE every deploy, because they all publish by PUSHING to the one `gh-pages` branch. Two
+# branches pushed close together (a feature branch and `dev`, seconds apart) raced: both built fine,
+# both tried to push, and the loser was rejected non-fast-forward. The failure is QUIET in the worst
+# way — the site keeps serving the previous build, so the URL still loads and only `version.json`
+# reveals that the deploy never landed. Observed 2026-07-27: `/dev/` served the pre-v3.1 build for
+# an hour after the promotion, and `version.json` 404'd because that older build predates it.
+#
+# `cancel-in-progress: false` is deliberate: each run publishes a DIFFERENT subpath, so a later push
+# must WAIT for the earlier one rather than cancel it — cancelling would drop that branch's deploy
+# entirely and reintroduce the same silent staleness from the other direction.
+concurrency:
+  group: gh-pages-deploy
+  cancel-in-progress: false
 
 jobs:
   build-and-deploy:
