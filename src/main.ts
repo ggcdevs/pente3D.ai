@@ -19,6 +19,7 @@ import {
   loadGame as loadArchivedGame,
   loadConflicted,
   listArchivedGames,
+  loadNetGame,
   loadNetGameByUuid,
   archivedIdentity,
   archivedStartedAts,
@@ -171,6 +172,18 @@ let respondNetResolution: (accepted: boolean) => boolean = () => false;
 let getNetSeatOwners: () => SeatMap | null = () => null;
 let getNetGameUuid: () => string | null = () => null;
 let getNetLastReject: () => AdmissionReject | null = () => null;
+
+/**
+ * The uuid of the SESSION's game while the session is the one being RENDERED, else `null` — the net half
+ * of "which game is on screen" ({@link installInspectApi}'s `getGameUuid`).
+ *
+ * Distinct from {@link getNetGameUuid}, which reports the session's game whenever it holds one: the
+ * scene renders the session's game only while it is authoritative (`netRouting.shouldRenderSessionGame`
+ * — the same predicate `getNetHeadHash` gates on), and after a stop (conflict/disconnect) the board on
+ * screen is the scene-LOCAL game again. Set when the session wires up; `null` until then (offline /
+ * pre-wiring), the same honest-until-wired pattern as the readouts above.
+ */
+let getRenderedNetGameUuid: () => string | null = () => null;
 
 // The unified-entry action the Network-Game panel's Enter button drives (Task S.6, design §3): enter a
 // room with a canonical code + the chosen seed proposal. Set once the net session wires up (below);
@@ -650,15 +663,26 @@ async function reviewArchived(id: string): Promise<void> {
  * continued play is written back to THE SAME record the game was loaded from (V.5: records are keyed
  * by the game's uuid, so a game has one record whether it is being played for the first time or picked
  * up again, and its `startedAt` is preserved by the ledger). The board just abandoned keeps its own
- * record, as every past game does. A networked game is resumed the same way: the user then enters a
- * room from the resumed board (the "Current local board" seed).
+ * record, as every past game does. A networked game is resumed the same way — the user then enters a
+ * room from the resumed board (the "Current local board" seed) — with one difference the ONE-WRITER rule
+ * forces: the record of a game a session ran belongs to that session ({@link sessionOwnedGames}), so
+ * resuming it RE-ADOPTS the record for the app (otherwise every move on the resumed board would be
+ * dropped by {@link autosaveTick}), while the game a live session still holds is refused outright.
  *
- * The `uuid` — not the record key — is the handle because that is the identity a game keeps across
- * records: `loadNetGameByUuid` resolves the uuid-keyed record OR, failing that, a record an older
- * build wrote under its retired autosave id. The PURE `selectResumeTarget` gates the load against the
- * CURRENT listing first, so a row that went stale while the modal was open (the game finished in
- * another tab, or its record was collected) is refused with its typed reason instead of quietly
- * loading something the player can no longer continue.
+ * The `uuid` — not the record key — is the handle the ROW hands over, because that is the identity a
+ * game keeps across records (a pre-V.5 record under a retired autosave id, a conflicted record under
+ * its conflict id). The PURE `selectResumeTarget` turns it into the RECORD to load, against the CURRENT
+ * listing: a row that went stale while the modal was open (the game finished in another tab, or its
+ * record was collected) is refused with its typed reason instead of quietly loading something the
+ * player can no longer continue.
+ *
+ * THE RECORD THE GATE CHOSE IS THE RECORD LOADED (`selection.id`, via `loadNetGame`). Resolving the
+ * uuid a second time — `loadNetGameByUuid` — would apply a DIFFERENT rule (the record keyed by the uuid
+ * wins, else the first listing that claims it) that is blind to resumability, so with several records
+ * claiming one uuid (the shape `rekeyArchiveRecordsByGameUuid` deliberately leaves when it cannot prove
+ * containment) it can serve a FINISHED or CONFLICTED claimant for a row the list shows as Unfinished.
+ * One decision, taken once, in the gated pure model — which is also what makes the `id` in the success
+ * line below an observed fact about the game on screen.
  */
 async function resumeArchived(uuid: string): Promise<void> {
   if (archiveDb === null) return;
@@ -671,12 +695,41 @@ async function resumeArchived(uuid: string): Promise<void> {
       log.error('archive resume refused', { uuid, reason: selection.reason });
       return;
     }
+    // THE GAME THE LIVE SESSION STILL HOLDS IS NOT RESUMABLE FROM HERE: that record is the SESSION's to
+    // write (design §2/§7 — it is the writer of the identity-owned seat map), and while it is authoritative
+    // its game is also the board already on screen. Loading the archived snapshot as a local board would
+    // put a second writer on one record, so this is refused — with a typed reason, like a stale row, rather
+    // than half-happening. Keyed on `getNetGameUuid` (the session HOLDS the game) and not on what is being
+    // rendered, because ownership is what the refusal is about, and it outlives being authoritative.
+    if (getNetGameUuid() === uuid) {
+      log.error('archive resume refused: that game is the live networked game', { uuid });
+      return;
+    }
+    // Learn when the archived games BEGAN before continuing one (idempotent: `adopt` never overwrites a
+    // stamp this ledger established). The boot pass cannot know a game the SESSION started later in
+    // this same page load — its stamp lives in the session's own ledger — and without this the first
+    // autosave of the resumed board would re-stamp it "now" and shuffle it up the newest-first list.
+    startedAts.adopt(await archivedStartedAts(archiveDb));
     // Ensure autosave is active (a prior review may have suspended it) so continued play is written.
     autosaveSuspended = false;
-    const resumed = await loadNetGameByUuid(archiveDb, uuid);
+    const resumed = await loadNetGame(archiveDb, selection.id);
     if (resumed === undefined) {
-      log.error('archive resume: no game under that uuid', { uuid, id: selection.id });
+      log.error('archive resume: no record under the chosen id', { uuid, id: selection.id });
       return;
+    }
+    // RE-ADOPT a record a session of OURS ran earlier in this page load. Ownership
+    // ({@link sessionOwnedGames}) exists to stop a STALE local board overwriting a networked record —
+    // but this load IS that record's own history, and `autosaveTarget` carries its stored
+    // identity-owned `players`/`seats` forward verbatim (`archivedIdentity`), so the app writing it is
+    // the record continuing, not a stale board replacing it. Without this the resumed board is one
+    // NOBODY writes: `autosaveTick` returns early for an owned game, so every move would be silently
+    // lost on reload — the exact hazard `handOverSessionOwnedBoard` prevents on the other route out.
+    // Safe by the guard above: the session is not running this game now, so there is only ONE writer.
+    // Keyed off the LOADED game's own uuid — the board `autosaveTick` will be asked to write.
+    if (sessionOwnedGames.delete(resumed.game.uuid)) {
+      log.info('resume re-adopted a session-owned record (the app is its writer again)', {
+        uuid: resumed.game.uuid,
+      });
     }
     swapGameIntoScene(resumed.game);
     log.info('archived game resumed (continues under its own record)', {
@@ -853,6 +906,11 @@ void createAppNetSession(scene.getState().size)
     getNetSeatOwners = () => session.seatOwners();
     getNetGameUuid = () => session.gameUuid();
     getNetLastReject = () => session.lastRejectReason();
+    // The identity of the game the SCENE is rendering while the session runs it — gated on the SAME pure
+    // predicate `netGameState`/`getNetHeadHash` use, so `getGameUuid` and `getHeadHash` can never
+    // describe two different games at one moment (see {@link getRenderedNetGameUuid}).
+    getRenderedNetGameUuid = () =>
+      shouldRenderSessionGame(session.state()) ? session.gameUuid() : null;
 
     // Unified entry (Task S.6, design §3): the Network-Game panel's single Enter button routes HERE with
     // the canonical code + the chosen seed proposal. It goes through the SAME `startNetGame` boundary
@@ -1116,9 +1174,13 @@ onConfigChange((section) => {
 // Kept unconditional for the v1 walking skeleton; a prod gate lands with the real build.
 installInspectApi(scene, ui, {
   listArchive: () => listArchive(),
-  // The LOADED board's game uuid (Task V.6, epic #47 / #37) — so the games-list e2e can prove a
+  // The uuid of the game ON SCREEN (Task V.6, epic #47 / #37) — so the games-list e2e can prove a
   // Resume landed on the game the row named, by identity rather than by the pieces on the board.
-  getGameUuid: () => scene.getGame().uuid,
+  // Resolved EXACTLY as `getHeadHash` resolves its head (scene.ts): the SESSION's game while the
+  // session is running it (the scene renders that game, not its own), else the scene-local board. A
+  // seam that reported the local uuid under net play would name a game nobody is looking at, and would
+  // disagree with the head hash reported for the same moment.
+  getGameUuid: () => getRenderedNetGameUuid() ?? scene.getGame().uuid,
   // The networked end-state view-model (Task N.2.2, issue #12) — derived in the app over the net
   // session + seat, so it is supplied here (not from the scene) for `window.__pente.getEndState`.
   getEndState: () => getNetEndState(),

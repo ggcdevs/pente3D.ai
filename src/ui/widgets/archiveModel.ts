@@ -42,8 +42,11 @@
  *     across records (a pre-V.5 record keyed by a retired autosave id, a conflicted record keyed by
  *     its conflict id), which is exactly why the resume handle is the uuid and not the record key.
  *   - **the Resume SEED list** — {@link deriveSeedGames} projects the same listings into the
- *     Network-Game panel's Resume selector, so the browser and the panel can never disagree about
- *     what a game is or which games can be continued (one rule, one derivation).
+ *     Network-Game panel's Resume selector, so the browser and the panel can never disagree about what
+ *     a game IS. What each OFFERS differs, because they are different questions: the browser's Resume
+ *     button continues a game locally (unfinished only), while a seed hands a game to a room — which
+ *     design §3 lists as "finished + unfinished", a finished game being brought in to look at
+ *     together. A conflicted record is the only thing that cannot be seeded: it has no single log.
  */
 
 import type { SeedGame } from './netPanelModel.ts';
@@ -362,10 +365,19 @@ export function selectResumeTarget(model: ArchiveModel, uuid: string): ResumeSel
 
 /**
  * Project the SAME listings into the Network-Game panel's Resume selector (design §3 "Resume — pick
- * from your games list"; Task V.6 wires the panel to this list so the two can never disagree).
+ * from your **games list** (finished + unfinished) → seed that UUID (#37)"; Task V.6 wires the panel
+ * to this list so the two can never disagree about what a game is).
  *
- * Only RESUMABLE (unfinished) games are offered — the identical rule the browser's Resume button
- * obeys — in the same newest-first order, minus the uuids the caller excludes (the board already
+ * FINISHED GAMES ARE OFFERED, exactly as that design line says: seeding a game that is over is how two
+ * players bring a finished game into a room to look at it together (it is also what #36 spectator and
+ * #33 networked slider are about), and the N.2 rematch handshake is how they then start playing. A
+ * CONFLICTED record is the one thing that cannot be seeded — it has no single continuable log, so
+ * there is no one history to hand the room. This is deliberately a WIDER rule than the browser's
+ * Resume button ({@link ArchiveItem.canResume}, unfinished only — a finished game rejects further
+ * moves locally); the two answer different questions, so each states its own rule against the same
+ * rows rather than sharing one that fits neither.
+ *
+ * Rows come in the same newest-first order, minus the uuids the caller excludes (the board already
  * loaded, and the live networked game: offering to "resume" the game you are playing is a confusing
  * self-reference, not a seed). A `null` exclusion is IGNORED, so a source that has no game right now
  * (there is no live net game offline) excludes nothing rather than matching a literal `"null"` uuid.
@@ -383,7 +395,7 @@ export function deriveSeedGames(
   // a structural fix, not a rule about them).
   const excluded = new Set<string | null>(excludeUuids);
   return deriveArchive(listings)
-    .items.filter((item) => item.canResume && !excluded.has(item.uuid))
+    .items.filter((item) => !item.conflicted && !excluded.has(item.uuid))
     .map((item) => ({
       id: item.id,
       label: `${item.playersLabel}${SEED_LABEL_SEPARATOR}${shortHeadHash(item.headHash)}`,

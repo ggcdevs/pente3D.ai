@@ -250,12 +250,18 @@ export interface PenteInspect {
    */
   getArchive(): Promise<readonly ArchiveListing[]>;
   /**
-   * The LOADED board's game UUID (Task V.6, epic #47 / #37) — the portable identity of the game on
-   * screen (design §2.2), minted at genesis and part of its hash chain. Lets the games-list e2e assert
-   * that RESUMING the row whose `data-game-uuid` is X actually made game X the live board — identity,
-   * not a board that merely has the right pieces on it (agent-principles #3).
+   * The portable UUID (design §2.2, minted at genesis and part of the hash chain) of the game the app is
+   * RENDERING (Task V.6, epic #47 / #37) — the AUTHORITATIVE game, resolved exactly as {@link getHeadHash}
+   * resolves its head: the networked SESSION's game while the session is running it (the scene renders
+   * that game, never its own, `render/scene.ts` `getState`), else the scene-local board. So the uuid and
+   * the head hash always describe ONE game.
+   *
+   * Lets the games-list e2e assert that RESUMING the row whose `data-game-uuid` is X actually made game X
+   * the live board — identity, not a board that merely has the right pieces on it (agent-principles #3) —
+   * and a networked spec assert WHICH game a room converged on. Never `null`: there is always a game on
+   * screen (the scene always holds one, even before a session exists).
    */
-  getGameUuid(): string | null;
+  getGameUuid(): string;
   /**
    * The live canonical game's `headHash` — the whole-history fingerprint of the event log the app
    * autosaves (GLOSSARY "Hash chain"). Lets Playwright wait DETERMINISTICALLY for an autosave to
@@ -372,9 +378,11 @@ export interface ArchiveInspect {
   /** List every archived game as `{ id, meta }` (no logs) — the browser's live data source. */
   listArchive(): Promise<readonly ArchiveListing[]>;
   /**
-   * The LOADED board's game UUID (Task V.6, epic #47 / #37) — the app's `scene.getGame().uuid`. Rides
-   * here beside `listArchive` because it answers an ARCHIVE question: which listed game is the one on
-   * screen. Lets the games-list e2e prove a Resume landed on the game whose `uuid` the row named,
+   * The uuid of the game the app is RENDERING (Task V.6, epic #47 / #37) — the app's
+   * `getRenderedNetGameUuid() ?? scene.getGame().uuid`: the networked session's game while the session
+   * is running it, else the scene-local board (the same resolution `getHeadHash` uses for its head).
+   * Rides here beside `listArchive` because it answers an ARCHIVE question: which listed game is the one
+   * on screen. Lets the games-list e2e prove a Resume landed on the game whose `uuid` the row named,
    * rather than inferring identity from a board that merely looks right (agent-principles #3).
    */
   getGameUuid(): string;
@@ -480,7 +488,9 @@ export function installInspectApi(
     setPendingJoinCode: (code: string) => scene.setPendingJoinCode(code),
     getHelpSources: () => scene.getHelpSources(),
     getArchive: () => archive.listArchive(),
-    // The loaded board's game uuid (Task V.6) — the identity assertion the games-list e2e resumes on.
+    // The RENDERED game's uuid (Task V.6) — the identity assertion the games-list e2e resumes on. The
+    // app resolves it net-first, exactly as `getHeadHash` below resolves the head, so the two always
+    // name one game.
     getGameUuid: () => archive.getGameUuid(),
     // The AUTHORITATIVE game's head hash (Task 6.1, issue #4): the networked session's game when a
     // net game is live, else the local game — so a two-client test proves convergence to one head.

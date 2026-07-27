@@ -31,8 +31,10 @@ import {
  *
  * V.6 adds the model half of the "the games list is the ONLY route back to a game" behaviour
  * (design §6/§10): the finished/unfinished STATUS + grouping, resume selection BY GAME UUID, and
- * the Resume-seed projection the Network-Game panel lists — all derived from the same listings so
- * the browser and the panel can never disagree about what a game is or which ones can be continued.
+ * the Resume-seed projection the Network-Game panel lists — all derived from the same listings so the
+ * browser and the panel can never disagree about what a game is. What each OFFERS is tested as its own
+ * rule: continuing a game locally needs an unfinished one, while seeding a game into a room takes
+ * "finished + unfinished" (design §3) and refuses only a conflicted record, which has no single log.
  * The DOM/IndexedDB wiring is proven separately by Playwright (`e2e/archive.spec.ts`,
  * `e2e/gamesList.spec.ts`).
  */
@@ -569,10 +571,16 @@ describe('shortHeadHash — the disambiguating fingerprint in a seed label', () 
 });
 
 describe('deriveSeedGames — the net panel Resume selector, from the SAME list (#37)', () => {
-  it('offers ONLY unfinished games, newest-first, labelled players + head fingerprint', () => {
+  it('offers FINISHED and unfinished games (design §3), newest-first, labelled players + head', () => {
     const games = deriveSeedGames(
       [
-        listing('rec-won', { result: 'white-wins', startedAt: 500, uuid: 'u-won' }),
+        listing('rec-won', {
+          result: 'white-wins',
+          startedAt: 500,
+          uuid: 'u-won',
+          headHash: 'wwwwwwwwww',
+          players: { white: 'Ann', black: 'Bo' },
+        }),
         listing('rec-b', {
           result: IN_PROGRESS_RESULT,
           startedAt: 400,
@@ -591,12 +599,28 @@ describe('deriveSeedGames — the net panel Resume selector, from the SAME list 
       ],
       [],
     );
+    // A FINISHED game IS seedable — design §3 line "Resume — pick from your games list (finished +
+    // unfinished)": bringing a game that is over into a room is how two players look at it together.
+    // The CONFLICTED record is the one that is not: it has no single log to hand the room.
     expect(games).toEqual([
+      { id: 'rec-won', label: 'Ann vs Bo · wwwwwww', uuid: 'u-won', headHash: 'wwwwwwwwww' },
       { id: 'rec-b', label: 'Ann vs Bo · bbbbbbb', uuid: 'u-b', headHash: 'bbbbbbbbbb' },
       { id: 'rec-a', label: '— vs — · aaaaaaa', uuid: 'u-a', headHash: 'aaaaaaaaaa' },
     ]);
     // The separator is the shared SSOT, so the label can never drift from the constant.
     expect(games[0]!.label).toContain(SEED_LABEL_SEPARATOR);
+  });
+
+  it('never offers a CONFLICTED record, even when it is the only game there is (negative)', () => {
+    expect(deriveSeedGames([listing('rec-forked', { result: CONFLICTED_RESULT })], [])).toEqual([]);
+  });
+
+  it('offers a game whose result this build does not recognize (it still has ONE log)', () => {
+    // `resolveArchiveStatus` files an unknown marker under `finished` — review-only LOCALLY, but it is
+    // still a single history, so it can be handed to a room. Pins that the seed rule keys on
+    // "conflicted or not", not on the in-progress SSOT.
+    const games = deriveSeedGames([listing('rec-odd', { result: 'abandoned-by-v9' })], []);
+    expect(games.map((g) => g.id)).toEqual(['rec-odd']);
   });
 
   it('EXCLUDES the games whose uuids the caller names (the loaded board, the live net game)', () => {
@@ -618,14 +642,16 @@ describe('deriveSeedGames — the net panel Resume selector, from the SAME list 
     expect(deriveSeedGames(listings, [null]).map((g) => g.uuid).sort()).toEqual(['null', 'u-a']);
   });
 
-  it('yields an empty selector when every game is over (negative — nothing to seed)', () => {
+  it('yields an empty selector when the only seedable games are excluded (negative)', () => {
+    // Every remaining row is either forked (never seedable) or the caller's own excluded game, so the
+    // selector is empty — the negative that makes "offers finished games" a rule and not a pass-through.
     expect(
       deriveSeedGames(
         [
-          listing('rec-won', { result: 'white-wins' }),
-          listing('rec-forked', { result: CONFLICTED_RESULT }),
+          listing('rec-won', { result: 'white-wins', uuid: 'u-loaded' }),
+          listing('rec-forked', { result: CONFLICTED_RESULT, uuid: 'u-f' }),
         ],
-        [],
+        ['u-loaded'],
       ),
     ).toEqual([]);
   });
@@ -634,7 +660,7 @@ describe('deriveSeedGames — the net panel Resume selector, from the SAME list 
     expect(deriveSeedGames([], [])).toEqual([]);
   });
 
-  it('property: every seed row is a resumable, non-excluded row of the SAME derived list', () => {
+  it('property: every seed row is a NON-CONFLICTED, non-excluded row of the SAME derived list', () => {
     fc.assert(
       fc.property(
         fc.uniqueArray(
@@ -656,14 +682,15 @@ describe('deriveSeedGames — the net panel Resume selector, from the SAME list 
           const rowById = new Map(rows.map((r) => [r.id, r]));
           for (const seed of seeds) {
             const row = rowById.get(seed.id)!;
-            expect(row.canResume).toBe(true);
+            expect(row.conflicted).toBe(false);
+            expect(row.status).not.toBe('conflicted');
             expect(row.uuid).toBe(seed.uuid);
             expect(row.headHash).toBe(seed.headHash);
             expect(exclude).not.toContain(seed.uuid);
           }
-          // …and nothing resumable and non-excluded is missing from the selector.
+          // …and nothing seedable and non-excluded is missing from the selector.
           const expected = rows
-            .filter((r) => r.canResume && !exclude.includes(r.uuid))
+            .filter((r) => !r.conflicted && !exclude.includes(r.uuid))
             .map((r) => r.id);
           expect(seeds.map((s) => s.id)).toEqual(expected);
         },

@@ -23,10 +23,13 @@ import { STATUS_EMPTY_TEXT, shortHeadHash } from '../src/ui/widgets/archiveModel
  *   - RESUME IS KEYED BY THE GAME, NOT THE RECORD: a game moved to a record key that is NOT its uuid
  *     (what a pre-V.5 build's store looks like before the boot re-key) still resumes — which the
  *     record-id path could not do, since no record answers to that id;
+ *   - RESUME LOADS THE RECORD THE LIST CHOSE: when two records claim one uuid (the shape the V.5
+ *     migration deliberately leaves behind), the unfinished claimant's history is what lands on screen —
+ *     a finished claimant sitting on the game's own uuid key is never served;
  *   - the EMPTY ANSWER IS STATED: with every game over, the Unfinished section is still rendered, with
  *     the model's note;
- *   - the NET PANEL's Resume selector is the SAME list: exactly the browser's unfinished games minus
- *     the board already loaded — the finished game is not offered as a seed.
+ *   - the NET PANEL's Resume selector is the SAME list: the browser's games minus the board already
+ *     loaded — including a FINISHED one, which design §3 lists as seedable ("finished + unfinished").
  *
  * Copy, testids and status text all come from the modules under test, so nothing user-facing is
  * hardcoded here (agent-principles #8).
@@ -384,6 +387,101 @@ test('RESUME follows the GAME uuid, not the record key — a game stored under a
   expect(gameB.uuid).not.toBe(gameA.uuid); // the board we came from really was a different game
 });
 
+/** Write `record` under its own `id` (overwriting whatever is there) — grafts a second claimant in. */
+const rawPut = (page: Page, dbName: string, record: RawRecord): Promise<void> =>
+  page.evaluate(
+    ([name, store, rec]) =>
+      new Promise<void>((resolve, reject) => {
+        const open = indexedDB.open(name as string);
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+          const db = open.result;
+          const tx = db.transaction(store as string, 'readwrite');
+          tx.objectStore(store as string).put(rec as RawRecord);
+          tx.onerror = () => reject(tx.error);
+          tx.oncomplete = () => {
+            db.close();
+            resolve();
+          };
+        };
+      }),
+    [dbName, GAMES_STORE, record] as const,
+  );
+
+test('RESUME loads the record the LIST chose — a NON-RESUMABLE claimant of the same uuid is never served', async ({
+  page,
+}) => {
+  const dbName = await isolate(page);
+  await ready(page);
+
+  // Game A — left mid-game (3 pieces, continuable). Game B — played to a white win (9 pieces, over).
+  await playUnfinished(page);
+  await waitForAutosaved(page);
+  const gameA = await identify(page);
+  const boardA = await get(page, (p) => p.getState()!);
+  await dispatch(page, 'reset');
+  await playToWhiteWin(page);
+  await waitForAutosaved(page);
+  const gameB = await identify(page);
+  const boardB = await get(page, (p) => p.getState()!);
+
+  // Build the TWO-CLAIMANT store the V.5 migration deliberately leaves in place (`archive.ts`: a record
+  // it cannot prove is CONTAINED in the survivor is never deleted): game A's own record moved to a
+  // retired autosave key, and a DIVERGENT, FINISHED history grafted onto game A's uuid — both records
+  // claim `meta.uuid === gameA.uuid`, and only one of them can be continued.
+  const recordA = await rawGet(page, dbName, gameA.uuid);
+  const recordB = await rawGet(page, dbName, gameB.uuid);
+  expect(recordA).not.toBeNull();
+  expect(recordB).not.toBeNull();
+  const LEGACY_KEY = 'autosave-from-an-older-build';
+  await rawRekey(page, dbName, recordA!, LEGACY_KEY);
+  await rawPut(page, dbName, {
+    ...recordB!,
+    id: gameA.uuid,
+    meta: { ...recordB!.meta, uuid: gameA.uuid },
+  });
+
+  await openBrowser(page);
+  // Both claimants are listed (nothing is hidden), and the row offering RESUME is the unfinished one.
+  await expect(rowByUuid(page, gameA.uuid)).toHaveCount(2);
+  const resumable = groupOf(page, 'unfinished').locator(
+    `.pente-archive-row[data-game-uuid="${gameA.uuid}"]`,
+  );
+  const dead = groupOf(page, 'finished').locator(
+    `.pente-archive-row[data-game-uuid="${gameA.uuid}"]`,
+  );
+  await expect(resumable).toHaveAttribute('data-id', LEGACY_KEY);
+  await expect(dead).toHaveAttribute('data-id', gameA.uuid);
+  await expect(dead.locator('.pente-archive-resume')).toHaveCount(0);
+
+  await resumable.locator('.pente-archive-resume').click();
+  await expect(modal(page)).toBeHidden();
+
+  // THE BOARD IS GAME A, as the row described it: its 3 pieces, its head, still playable. NOT the
+  // finished claimant — which is what re-resolving the uuid independently of the list serves, since
+  // that rule prefers the record keyed BY the uuid and is blind to whether it can be continued. Both
+  // candidates report the same `getGameUuid`, so the HISTORY is what tells them apart.
+  await page.waitForFunction(
+    (want: string) => {
+      const p = (window as unknown as { __pente?: Pente }).__pente;
+      return p?.getGameUuid() === want;
+    },
+    gameA.uuid,
+  );
+  const resumed = await get(page, (p) => p.getState()!);
+  expect(resumed.pieces).toEqual(boardA.pieces);
+  expect(resumed.winner).toBeNull();
+  expect(resumed.pieces).not.toEqual(boardB.pieces);
+  expect(await get(page, (p) => p.getHeadHash())).toBe(gameA.head);
+  expect((await get(page, (p) => p.getHistory()!)).maxPly).toBe(3);
+
+  // …and it CONTINUES: a finished board would have rejected this move outright.
+  await placeAt(page, [2, 0, 2]);
+  const continued = await get(page, (p) => p.getState()!);
+  expect(Object.keys(continued.pieces)).toHaveLength(4);
+  expect(continued.pieces['2,0,2']).toBe('black');
+});
+
 test('with every game over, the UNFINISHED section still shows — and SAYS there is nothing to resume', async ({
   page,
 }) => {
@@ -411,7 +509,7 @@ test('with every game over, the UNFINISHED section still shows — and SAYS ther
   await page.screenshot({ path: shot });
 });
 
-test("the net panel's Resume selector IS the browser's unfinished list, minus the loaded board", async ({
+test("the net panel's Resume selector IS the browser's games, minus the loaded board", async ({
   page,
 }) => {
   await isolate(page);
@@ -440,9 +538,10 @@ test("the net panel's Resume selector IS the browser's unfinished list, minus th
   await page.locator('[data-testid="archive-close"]').click();
   await expect(modal(page)).toBeHidden();
 
-  // The PANEL's Resume selector is that same list minus the loaded board: exactly game A. The seed
-  // cache is refreshed after each autosave write, so the panel is (re)opened until it settles — the
-  // panel reads the cache once, on open.
+  // The PANEL's Resume selector is that same list minus the loaded board: games A and C — design §3
+  // seeds "finished + unfinished", a finished game being brought into a room to look at together. The
+  // seed cache is refreshed after each autosave write, so the panel is (re)opened until it settles —
+  // the panel reads the cache once, on open.
   const panel = page.locator('[data-testid="netpanel-modal"]');
   const seedRows = panel.locator('[data-testid="netpanel-game-row"]');
   const readSeedRows = async (): Promise<string[]> => {
@@ -461,23 +560,26 @@ test("the net panel's Resume selector IS the browser's unfinished list, minus th
   await expect
     .poll(async () => {
       seeded = await readSeedRows();
-      if (seeded.length !== 1) {
+      if (seeded.length !== 2) {
         await panel.locator('[data-testid="netpanel-close"]').click();
       }
       return seeded.length;
     })
-    .toBe(1);
+    .toBe(2);
 
-  // The one seed row IS game A: its record key, and a label carrying game A's head fingerprint (the
-  // shared derivation's, imported from the model — no copy hardcoded here).
-  expect(seeded).toEqual([gameA.uuid]);
-  await expect(seedRows.first()).toHaveAttribute('data-game-id', gameA.uuid);
-  await expect(panel.locator('[data-testid="netpanel-game"]').first()).toContainText(
-    shortHeadHash(gameA.head),
-  );
-  // The FINISHED game is NOT offered as a seed — a game that is over cannot be brought into a room to
-  // continue (the same rule the browser's missing Resume button states).
-  expect(seeded).not.toContain(gameC.uuid);
+  // The seed rows are games C (FINISHED) and A (unfinished), with the loaded board (D) excluded. Each
+  // row's key is its record key, and the labels carry the games' head fingerprints (the shared
+  // derivation's, imported from the model — no copy hardcoded here). Compared as a SET: the newest-first
+  // order is pinned deterministically in the model's unit tests, whereas two games saved milliseconds
+  // apart here could legitimately tie on `startedAt`.
+  expect(seeded.slice().sort()).toEqual([gameA.uuid, gameC.uuid].sort());
+  const seedLabels = await panel
+    .locator('[data-testid="netpanel-game"]')
+    .evaluateAll((els) => els.map((el) => el.textContent ?? ''));
+  expect(seedLabels.some((t) => t.includes(shortHeadHash(gameA.head)))).toBe(true);
+  expect(seedLabels.some((t) => t.includes(shortHeadHash(gameC.head)))).toBe(true);
+  // The LOADED board is never offered (that is the separate "Current local board" seed).
+  expect(seeded).not.toContain(gameD.uuid);
 
   const shot = resolve('e2e/artifacts/games-list-seed-selector.png');
   mkdirSync(dirname(shot), { recursive: true });

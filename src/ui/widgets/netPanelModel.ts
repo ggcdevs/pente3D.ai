@@ -56,10 +56,11 @@ export type SeedKind = 'new' | 'resume' | 'current' | 'defer';
 export const DEFAULT_SEED_KIND: SeedKind = 'new';
 
 /**
- * One resume-able persisted game the selector lists (the simple games list — the rich one is #37). The
- * glue supplies these from the archive; the model lists them and, on selection, hands the chosen `id`
- * back so the glue resolves it to a `resume(uuid, headHash)` {@link Proposal}. `uuid`/`headHash` are
- * carried through so the resolution stays a pure lookup in the glue with no second archive read.
+ * One persisted game the selector offers as a seed — design §3's "pick from your games list (finished +
+ * unfinished)". WHICH games those are is decided by the archive model (`archiveModel.deriveSeedGames`,
+ * #37), not here: this model lists what the glue supplies and, on selection, hands the chosen `id` back
+ * so the glue resolves it to a `resume(uuid, headHash)` {@link Proposal}. `uuid`/`headHash` are carried
+ * through so the resolution stays a pure lookup in the glue with no second archive read.
  */
 export interface SeedGame {
   /** The stable archive game id — the selection handle + the DOM/test key. */
