@@ -43,6 +43,20 @@ export const REPO_ROOT = path.resolve(HERE, '..', '..');
 const TSX = path.join(REPO_ROOT, 'node_modules', '.bin', 'tsx');
 const CLI = path.join(REPO_ROOT, 'cli', 'main.ts');
 
+/**
+ * Files in this directory that are NOT scenarios: the `scenario:all` runner itself, this harness,
+ * and any vitest suite (`*.test.ts`) that tests the harness. Discovery is by directory (see
+ * `all.ts`), so this predicate — not a hand-maintained registry — is what keeps a non-scenario out
+ * of the matrix. Exported so it can be asserted directly, without importing `all.ts` (which runs
+ * the whole matrix on import).
+ */
+const NOT_A_SCENARIO = new Set(['all.ts', 'harness.ts']);
+
+/** True for a file `scenario:all` should execute as a scenario. */
+export function isScenario(file: string): boolean {
+  return file.endsWith('.ts') && !file.endsWith('.test.ts') && !NOT_A_SCENARIO.has(file);
+}
+
 /** Print scenario progress with a marker that stands out in a wall of daemon output. */
 export function log(msg: string): void {
   console.log(`\n▸ ${msg}`);
@@ -252,10 +266,30 @@ export function showBoard(peer: Peer, snap: Snapshot, viewName = 'list'): void {
   console.log(`\n── ${peer.name} ──\n${render(snap, viewName)}`);
 }
 
-/** Print the tally and return the process exit code (0 all-pass, 1 any failure). */
+/**
+ * Print the tally and return the process exit code: `0` all checks passed, `1` a check FAILED — **or
+ * no check ran at all**.
+ *
+ * A scenario that asserts NOTHING must never exit 0. `failed.length === 0` is trivially true on an
+ * empty check list, so the earlier version reported `0/0 checks passed` and `scenario:all` — which
+ * discovers scenarios by directory and classifies `code === 0` as `passed` — printed "all run
+ * scenarios passed." That is the exact false-green `sync.realrelay.test.ts` was built to remove one
+ * tier down (a silent early-return that vitest counts as a zero-assertion PASS), and a scenario
+ * arrives at it by accident: an early `return` on an unexpected state, a `check` that moved behind a
+ * branch that no longer runs. Proving nothing is a failure to prove, not a pass.
+ */
 export function report(title: string): number {
   const failed = checks.filter((c) => !c.ok);
   console.log(`\n${'═'.repeat(70)}\n${title}: ${checks.length - failed.length}/${checks.length} checks passed`);
+  if (checks.length === 0) {
+    console.log(
+      '  ✗ PROVED NOTHING: this scenario recorded ZERO checks.\n' +
+        '    Exiting 1. A run that asserts nothing is not a pass — find the `check` calls that never\n' +
+        '    executed (an early return? a branch that no longer runs?) or delete the scenario.',
+    );
+    console.log('═'.repeat(70));
+    return 1;
+  }
   for (const f of failed) console.log(`  ✗ ${f.label}${f.detail ? ` — ${f.detail}` : ''}`);
   console.log('═'.repeat(70));
   return failed.length === 0 ? 0 : 1;

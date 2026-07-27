@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createSession } from './session';
 import { dropLink, restoreLink, linkStatus } from './netlink';
+import { lastMoveOf } from './lastMove';
 import { render, type Snapshot } from './views';
 import type { DivergenceView } from '../src/ui/widgets/divergenceModel';
 import { generateGameCode, validateGameCode } from '../src/ui/widgets/netModel';
@@ -88,10 +89,6 @@ export async function runDaemon(opts: PlayOptions): Promise<void> {
   const playerId = loadPlayerId();
   const { session } = await createSession(`pente-cli-${code}`, playerId);
 
-  // Track lastMove by diffing placements across changes (a place adds exactly one
-  // stone — the mover's — even when it also captures).
-  let prevKeys = new Set<string>();
-  let lastMove: string | null = null;
   const waiters = new Set<Waiter>();
 
   function snapshot(): Snapshot {
@@ -105,7 +102,11 @@ export async function runDaemon(opts: PlayOptions): Promise<void> {
       joinError: st.joinError,
       canPlace: session.canPlace(),
       ply: session.ply(),
-      lastMove,
+      // DERIVED from the live engine on every read, never remembered: a tracked value survives an
+      // undo, a resolution rewind and a rematch reset, and the CLI then advertises a "last move"
+      // that is not on the board (see cli/lastMove.ts). The CLI is the glue tier's measuring
+      // instrument — a field it reports falsely is a test-integrity defect.
+      lastMove: lastMoveOf(session.syncEngine()?.game() ?? null),
       seatOwners: session.seatOwners(),
       game,
       // Game IDENTITY + history fingerprint, read off the live engine exactly as the browser's
@@ -136,13 +137,6 @@ export async function runDaemon(opts: PlayOptions): Promise<void> {
   }
 
   function onChange(): void {
-    const game = session.gameState();
-    if (game) {
-      const keys = new Set(Object.keys(game.pieces));
-      const added = [...keys].filter((k) => !prevKeys.has(k));
-      if (added.length === 1) lastMove = added[0]!;
-      prevKeys = keys;
-    }
     const snap = snapshot();
     // Live log to the daemon's stdout.
     console.log('\n' + render(snap, opts.view) + '\n' + '─'.repeat(48));

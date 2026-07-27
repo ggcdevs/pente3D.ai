@@ -5,6 +5,7 @@ graph LR
     end
     subgraph src/config
         src_config_config_ts["config.ts"]
+        src_config_relayEnv_ts["relayEnv.ts"]
     end
     subgraph src/core
         src_core_axes_ts["axes.ts"]
@@ -108,6 +109,7 @@ graph LR
         src_util_randomId_ts["randomId.ts"]
     end
     src_config_config_ts --> src_util_emitter_ts
+    src_config_relayEnv_ts --> src_config_config_ts
     src_core_axes_ts --> src_core_coords_ts
     src_core_eventLog_ts --> src_core_coords_ts
     src_core_eventLog_ts --> src_core_hash_ts

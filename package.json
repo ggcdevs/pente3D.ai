@@ -24,6 +24,7 @@
     "scenario:rematch": "tsx cli/scenarios/rematch-reconnect.ts",
     "scenario:both-absent": "tsx cli/scenarios/both-absent-return.ts",
     "scenario:ff-boundary": "tsx cli/scenarios/ff-vs-diff-boundary.ts",
+    "scenario:last-move": "tsx cli/scenarios/last-move-truth.ts",
     "scenario:all": "tsx cli/scenarios/all.ts"
   },
   "devDependencies": {

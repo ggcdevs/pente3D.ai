@@ -9,9 +9,14 @@
  *
  * ## What it runs
  *
- * Every `*.ts` in this directory except this file and the shared {@link harness}. Discovery is by
- * DIRECTORY, not a list: a scenario that exists cannot be left out of the suite by forgetting to add
- * it here, which is the failure mode a hand-maintained registry has.
+ * Every `*.ts` in this directory that `harness.isScenario` accepts — i.e. all of them except this
+ * runner, the shared {@link harness}, and the vitest suites that test the harness (`*.test.ts`).
+ * Discovery is by DIRECTORY, not a list: a scenario that exists cannot be left out of the suite by
+ * forgetting to add it here, which is the failure mode a hand-maintained registry has.
+ *
+ * That cuts both ways, which is why `report()` refuses to exit 0 on zero checks: a scenario that
+ * stops asserting is still discovered, and without that refusal it would join the matrix as a green
+ * line saying nothing.
  *
  * ## Exit codes — a missing relay is not a regression
  *
@@ -30,13 +35,10 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { EXIT_UNREACHABLE, REPO_ROOT } from './harness';
+import { EXIT_UNREACHABLE, REPO_ROOT, isScenario } from './harness';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const TSX = path.join(REPO_ROOT, 'node_modules', '.bin', 'tsx');
-
-/** Files in this directory that are not scenarios. */
-const NOT_A_SCENARIO = new Set(['all.ts', 'harness.ts']);
 
 /**
  * How long one scenario may run before it is killed and counted as a FAILURE. A scenario that hangs
@@ -55,10 +57,7 @@ interface Result {
 }
 
 function scenarioFiles(): string[] {
-  return fs
-    .readdirSync(HERE)
-    .filter((f) => f.endsWith('.ts') && !NOT_A_SCENARIO.has(f))
-    .sort();
+  return fs.readdirSync(HERE).filter(isScenario).sort();
 }
 
 /** Run one scenario as its own process, streaming its output through, and classify its exit code. */

@@ -54,9 +54,11 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    // Vitest owns src/**/*.test.ts plus the PURE build-tooling suites under tools/
-    // (issue #22 version resolution); Playwright owns e2e/. Keep them from colliding.
-    include: ['src/**/*.test.ts', 'tools/**/*.test.mjs'],
+    // Vitest owns src/**/*.test.ts, the build-tooling suites under tools/ (issue #22 version
+    // resolution, and the lint-gate fixture check), and the PURE units of the cli/ net client —
+    // its scenario harness and view derivations, which are ordinary logic and must not need a live
+    // relay to be tested. Playwright owns e2e/. Keep them from colliding.
+    include: ['src/**/*.test.ts', 'tools/**/*.test.mjs', 'cli/**/*.test.ts'],
     exclude: ['e2e/**', 'node_modules/**', 'docs/**', 'poc/**'],
     coverage: {
       provider: 'v8',

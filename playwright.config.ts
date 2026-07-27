@@ -9,6 +9,16 @@ import { defineConfig, devices } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './e2e',
+  // `e2e/lintFixtures/` holds SPECS THAT MUST FAIL LINT (a focused describe, a bare `test.skip()`,
+  // …) — they exist only as the fixture `tools/lintGate.test.mjs` runs eslint over to prove the
+  // test-integrity rules bite. They are not tests and must never be executed here; running them
+  // would do exactly the damage they demonstrate (the focused describe would drop the whole run).
+  testIgnore: '**/lintFixtures/**',
+  // A `.only` that reaches the repo makes Playwright run that spec ALONE and exit 0 — a green
+  // suite that tested almost nothing. The lint gate rejects it at review time; this rejects it at
+  // RUN time, so the two do not depend on each other. Unconditional, not `!!process.env.CI`: a
+  // local run reporting green off one focused spec is the same lie as a CI run doing it.
+  forbidOnly: true,
   timeout: 60_000,
   // Tests within a file run serially; separate spec files still run on parallel WORKERS (each a
   // separate browser process, and each test a fresh context → isolated localStorage + IndexedDB).

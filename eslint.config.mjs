@@ -16,11 +16,15 @@ import vitest from 'eslint-plugin-vitest';
  * actually fires there and that is deliberate, not an oversight: this plugin's
  * expect-expect / valid-expect / no-disabled-tests resolve a call as a test only when
  * the test fn comes from vitest (import or global), and e2e/ imports `test`/`expect`
- * from `@playwright/test`, so those three are inert on a Playwright spec. Establish this
- * by probe, never by reading — drop a spec containing each violation under e2e/ and run
- * `npm run lint`. The two holes that actually matter for e2e — a focused spec (Playwright
- * then runs ONLY it and reports the whole suite green) and a statically disabled spec —
- * are covered by `vitest/no-focused-tests` plus the `playwrightTestIntegrity` block below.
+ * from `@playwright/test`, so those three are inert on a Playwright spec.
+ *
+ * EXACTLY what this block covers on a Playwright spec, and nothing more: `vitest/no-focused-tests`
+ * fires on `test.only(…)` — a member call whose OBJECT is the identifier `test`. It does NOT fire on
+ * `test.describe.only(…)`, whose callee object is itself a member expression; that form focuses a
+ * whole file's worth of specs and is closed by `playwrightTestIntegrity` below, not here. Every claim
+ * in this paragraph is asserted, not asserted-by-reading: `e2e/lintFixtures/*.spec.ts` holds one
+ * instance of each form and `tools/lintGate.test.mjs` runs eslint over it and demands the exact
+ * rule/line set (both directions — a violating line must error, a legitimate line must not).
  */
 const vitestTestIntegrity = {
   files: ['src/**/*.test.ts', 'tools/**/*.test.mjs', 'cli/**/*.test.ts', 'e2e/**/*.spec.ts'],
@@ -34,18 +38,31 @@ const vitestTestIntegrity = {
 };
 
 /**
- * Statically-disabled Playwright specs are banned (the e2e half of "no test is silently
- * disabled"). e2e/ is the boundary that JUSTIFIES excluding the THREE.js/DOM IO glue from
- * unit coverage and from the mutation scope — so a spec that quietly stops running turns
- * that exclusion into an unverified claim.
+ * Statically-disabled and FOCUSED Playwright specs are banned (the e2e half of "no test is
+ * silently disabled"). e2e/ is the boundary that JUSTIFIES excluding the THREE.js/DOM IO glue
+ * from unit coverage and from the mutation scope — so a spec that quietly stops running, or a
+ * `test.describe.only` that makes Playwright run ONE block and exit 0, turns that exclusion into
+ * an unverified claim while the suite reports green.
  *
- * The selectors below match the MODIFIER forms only, whose first argument is a string
- * literal title: `test.skip('title', fn)`, `test.fixme('title', fn)`, and the
- * `test.describe.skip('title', fn)` / `.fixme` variants. Playwright's RUNTIME conditional
- * skip — `test.skip(cond, 'reason')`, used across the live-relay specs to opt out when the
- * broker is unreachable — passes an expression first and is deliberately NOT matched: it is
- * an honest, condition-reported skip, not a silent disable. `.only` is already covered by
- * `vitest/no-focused-tests` above.
+ * WHAT EACH SELECTOR MATCHES — and, as importantly, what it does not:
+ *
+ *  1. `test.skip(<title>, fn)` / `test.fixme(<title>, fn)` where the title is a string literal
+ *     OR a template literal. Both spellings statically disable the spec; matching only
+ *     `Literal` let `` test.skip(`${TITLE} skip`, fn) `` walk straight through.
+ *  2. `test.skip()` with NO arguments — the body form, the most common way a spec is silently
+ *     turned off from the inside. It has no `arguments.0` at all, so selector 1 cannot see it.
+ *  3. `test.describe.skip` / `.fixme` — the whole-block disable.
+ *  4. `test.describe.only` — the whole-block FOCUS. `vitest/no-focused-tests` only sees
+ *     `test.only` (callee object = the identifier `test`), never this member-of-member form.
+ *
+ * Playwright's RUNTIME conditional skip — `test.skip(cond, 'reason')`, used across the live-relay
+ * specs to opt out when the broker is unreachable — passes an EXPRESSION first and is deliberately
+ * NOT matched by selector 1 (nor by 2, which requires zero arguments): it is an honest,
+ * condition-reported skip, not a silent disable.
+ *
+ * Established by probe, never by reading: `e2e/lintFixtures/*.spec.ts` holds one instance of every
+ * form above (violating AND allowed) and `tools/lintGate.test.mjs` asserts the exact rule/line set
+ * eslint reports on it. Re-break a selector there and that test goes red.
  */
 const playwrightTestIntegrity = {
   files: ['e2e/**/*.spec.ts'],
@@ -54,15 +71,27 @@ const playwrightTestIntegrity = {
       'error',
       {
         selector:
-          "CallExpression[callee.object.name='test'][callee.property.name=/^(skip|fixme)$/][arguments.0.type='Literal']",
+          "CallExpression[callee.object.name='test'][callee.property.name=/^(skip|fixme)$/][arguments.0.type=/^(Literal|TemplateLiteral)$/]",
         message:
           'Statically disabled Playwright spec. Delete it or fix it — a silently skipped e2e spec voids the Playwright-verified IO boundary (planning/agent-principles.md #6). Runtime `test.skip(condition, reason)` is allowed.',
+      },
+      {
+        selector:
+          "CallExpression[callee.object.name='test'][callee.property.name='skip'][arguments.length=0]",
+        message:
+          'Bare `test.skip()` disables this spec from the inside with no condition and no reason — the silent disable this gate exists to stop (planning/agent-principles.md #6). Delete the spec or give the skip a real runtime condition: `test.skip(cond, reason)`.',
       },
       {
         selector:
           "CallExpression[callee.object.property.name='describe'][callee.property.name=/^(skip|fixme)$/]",
         message:
           'Statically disabled Playwright describe block. Delete it or fix it — a silently skipped e2e spec voids the Playwright-verified IO boundary (planning/agent-principles.md #6).',
+      },
+      {
+        selector:
+          "CallExpression[callee.object.property.name='describe'][callee.property.name='only']",
+        message:
+          'Focused Playwright describe block. Playwright then runs ONLY this block and exits 0 — a green suite that tested almost nothing (planning/agent-principles.md #6/#7). Remove `.only`; run one file with `npx playwright test <file>` instead.',
       },
     ],
   },
@@ -121,7 +150,16 @@ export default tseslint.config(
     // it behind on an interrupted run. Linting that copy floods `npm run lint` with
     // hundreds of spurious errors on code we didn't write, so it is ignored like the
     // other build-output dirs — this is not a relaxation of any rule on real source.
-    ignores: ['dist/**', 'docs/**', 'poc/**', 'node_modules/**', 'coverage/**', 'playwright-report/**', 'test-results/**', '.stryker-tmp/**'],
+    // `e2e/lintFixtures/**` holds the DELIBERATE violations that prove the two test-integrity
+    // blocks above actually bite (a focused describe, a bare `test.skip()`, a template-literal
+    // skip, …). They are real `.spec.ts` files under `e2e/` ON PURPOSE, so the production globs
+    // apply to them unchanged — nothing about the gate is special-cased for the fixture. They are
+    // excluded from the ordinary `eslint .` sweep only because their whole point is to be
+    // non-compliant; `tools/lintGate.test.mjs` lints them explicitly with `--no-ignore` and FAILS
+    // unless eslint reports the exact expected rule/line set. That is the opposite of a
+    // relaxation: it is the only reason we know the rules fire at all (agent-principles #7).
+    // Playwright skips the directory too (`testIgnore` in playwright.config.ts).
+    ignores: ['e2e/lintFixtures/**', 'dist/**', 'docs/**', 'poc/**', 'node_modules/**', 'coverage/**', 'playwright-report/**', 'test-results/**', '.stryker-tmp/**'],
   },
   ...tseslint.configs.recommended,
   {

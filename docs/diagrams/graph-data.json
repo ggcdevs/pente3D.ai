@@ -163,6 +163,41 @@
       "setConfig"
     ]
   },
+  "src/config/relayEnv.ts": {
+    "exports": [
+      "EnvRecord",
+      "NODE_RELAY_FALLBACK",
+      "NO_RELAY",
+      "RELAY_ENV_KEYS",
+      "hostEnv",
+      "relaySkipReason",
+      "resolveRelay"
+    ],
+    "imports": [
+      {
+        "source": "./config",
+        "target": "src/config/config.ts",
+        "specifiers": [
+          "RelayConfig"
+        ]
+      }
+    ],
+    "classes": [],
+    "interfaces": [],
+    "enums": [],
+    "typeAliases": [
+      {
+        "name": "EnvRecord",
+        "type": "Readonly<Record<string, string | undefined>>"
+      }
+    ],
+    "functions": [
+      "hostEnv",
+      "present",
+      "relaySkipReason",
+      "resolveRelay"
+    ]
+  },
   "src/core/axes.ts": {
     "exports": [
       "AXES",

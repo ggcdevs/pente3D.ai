@@ -23,12 +23,18 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import mqtt from 'mqtt';
 import { getConfig } from '../config/config';
+import { hostEnv, relaySkipReason, resolveRelay } from '../config/relayEnv';
 import { roomTopic } from './transport';
 import { MqttTransport, type MqttConnectFn } from './mqttTransport';
 import type { RelayConfig } from '../config/config';
 
-/** The SSOT relay config — the SAME record the client transport uses. */
-const relay = getConfig('relay') as RelayConfig;
+/**
+ * The relay this run talks to: the SSOT `relay.json` the client transport uses, resolved for a NODE
+ * process (`src/config/relayEnv.ts`) — `PENTE_*` env first, then the tracked config, then the live
+ * deployed relay. Without that last step this suite was dark in every checkout (`relay.json` ships
+ * blank and node has no `localStorage` override), skipping even with working egress.
+ */
+const relay = resolveRelay(getConfig('relay') as RelayConfig, hostEnv());
 
 /** Real mqtt.js factory: opens an actual outbound wss connection to the broker. */
 const realConnect: MqttConnectFn = (url, opts) =>
@@ -59,9 +65,13 @@ async function staysFalse(predicate: () => boolean, timeoutMs: number): Promise<
   return !predicate();
 }
 
-/** Probe the live relay once; if it won't connect, the suite is skipped. */
-async function relayReachable(): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
+/**
+ * Probe the live relay once. Resolves `true` when the broker accepted a connection, else the failure
+ * AS OBSERVED, so the skip line can quote what happened rather than guess at a cause.
+ */
+async function relayReachable(): Promise<true | string> {
+  return new Promise<true | string>((resolve) => {
+    if (relay.wssUrl === '') return resolve('no relay url to dial');
     const client = mqtt.connect(relay.wssUrl, {
       username: relay.username,
       password: relay.password,
@@ -69,22 +79,25 @@ async function relayReachable(): Promise<boolean> {
       connectTimeout: CONNECT_PROBE_MS,
       reconnectPeriod: 0,
     });
-    const done = (ok: boolean): void => {
+    const done = (ok: true | string): void => {
       client.end(true);
       resolve(ok);
     };
     client.on('connect', () => done(true));
-    client.on('error', () => done(false));
-    setTimeout(() => done(false), CONNECT_PROBE_MS);
+    client.on('error', (e: Error) => done(e.message));
+    setTimeout(() => done(`no CONNACK within ${CONNECT_PROBE_MS}ms`), CONNECT_PROBE_MS);
   });
 }
 
-const reachable = await relayReachable();
-if (!reachable) {
-  console.warn(
-    `[presence.realrelay] SKIPPED (vitest skip): relay ${relay.wssUrl} unreachable — ` +
-      `run again with network egress to the broker to exercise the live presence path.`,
-  );
+/**
+ * The skip decision + the OBSERVED reason for it (`relaySkipReason` distinguishes "no broker
+ * configured, nothing contacted" from "this broker refused us, here is its error" — one message for
+ * both is a mislabeled diagnostic).
+ */
+const probe = await relayReachable();
+const skipReason = relaySkipReason(relay, probe);
+if (skipReason !== null) {
+  console.warn(`[presence.realrelay] SKIPPED (vitest skip): ${skipReason}`);
 }
 
 /**
@@ -139,7 +152,7 @@ async function clearRetained(topic: string): Promise<void> {
   });
 }
 
-describe.skipIf(!reachable)('real relay: presence liveness (issue #5)', () => {
+describe.skipIf(skipReason !== null)('real relay: presence liveness (issue #5)', () => {
   const transports: MqttTransport[] = [];
   const seededTopics: string[] = [];
 

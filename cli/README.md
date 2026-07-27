@@ -105,6 +105,7 @@ SCENARIO_VERBOSE=1 npm run scenario:issue45   # one scenario, teeing both daemon
 | `scenario:rematch` | after a rematch swap, a returning peer comes back on its NEW colour (#40) |
 | `scenario:both-absent` | both leave, both return → same head, seats intact |
 | `scenario:ff-boundary` | ONE entry behind converges itself; TWO must be resolved by the players |
+| `scenario:last-move` | the CLI's own `lastMove` readout always names a stone that is ON the board |
 
 **Exit codes.** `0` every check passed · `1` a check FAILED (a regression) · `2` SKIPPED because
 the relay was unreachable. The last one is deliberate: without egress a scenario proves nothing,
@@ -117,9 +118,23 @@ you `requireRelay` / `startPeer` / `verb` / `waitFor` / `check` / `report`; a sc
 script (live network, child processes and multi-second waits make it an integration probe, not a
 unit test).
 
+`report()` exits **1 on zero checks**, not 0. Directory discovery means a scenario that quietly
+stops asserting — an early return, a `check` behind a branch that no longer runs — is still
+discovered and would otherwise report `0/0 checks passed` as a green line. Proving nothing is a
+failure to prove. (`cli/scenarios/harness.test.ts` pins that, and runs under `npm test`.)
+
+## Against the BROWSER
+
+`e2e/cliVsBrowser.spec.ts` (Playwright) plays a real daemon against the real browser app over the
+same relay — design §8's other half, and the only place the two implementations meet. It starts the
+daemon through this same `harness`, so it cannot drift into testing a different client. Run it with
+`npx playwright test e2e/cliVsBrowser.spec.ts`; with no broker egress it is a genuine skip.
+
 ## Config / env overrides
 
-Defaults target the live deployed relay. Override any of:
+Relay resolution lives in `src/config/relayEnv.ts` and is shared with the `*.realrelay.test.ts`
+vitest suites, so `pente` and `npm test` cannot disagree about which broker they mean: environment
+variable → the tracked `src/config/defaults/relay.json` → the live deployed relay. Override any of:
 
 | var | purpose |
 |-----|---------|

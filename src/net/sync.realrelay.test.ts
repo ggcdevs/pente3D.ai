@@ -45,14 +45,21 @@ import { Game } from '../core/game';
 import { headHash } from '../core/eventLog';
 import { openDatabase } from '../persist/db';
 import { getConfig } from '../config/config';
+import { hostEnv, relaySkipReason, resolveRelay } from '../config/relayEnv';
 import { loadConflicted } from '../persist/archive';
 import { MqttTransport, type MqttConnectFn } from './mqttTransport';
 import { SyncEngine, toSyncMessage } from './sync';
 import type { Proposal } from './admission';
 import type { RelayConfig } from '../config/config';
 
-/** The SSOT relay config — the SAME record the client transport uses. */
-const relay = getConfig('relay') as RelayConfig;
+/**
+ * The relay this run talks to: the SSOT `relay.json` the client transport uses, resolved for a NODE
+ * process (`src/config/relayEnv.ts`) — `PENTE_*` env first, then the tracked config, then the live
+ * deployed relay. Without that last step this whole suite was dark in every checkout: `relay.json`
+ * ships blank (the deploy writes it) and node has no `localStorage` to carry an override, so the
+ * probe below was dialling the empty string and every test skipped even with working egress.
+ */
+const relay = resolveRelay(getConfig('relay') as RelayConfig, hostEnv());
 
 /** Real mqtt.js factory: opens an actual outbound wss connection to the broker. */
 const realConnect: MqttConnectFn = (url, opts) =>
@@ -123,9 +130,14 @@ async function waitForWithRepublish(
   return predicate();
 }
 
-/** Probe the live relay once; if it won't connect, the suite is skipped. */
-async function relayReachable(): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
+/**
+ * Probe the live relay once. Resolves `true` when the broker accepted a connection, else the
+ * failure AS OBSERVED — the message is carried out, not discarded, so the skip line can quote what
+ * actually happened instead of guessing at a cause.
+ */
+async function relayReachable(): Promise<true | string> {
+  return new Promise<true | string>((resolve) => {
+    if (relay.wssUrl === '') return resolve('no relay url to dial');
     const client = mqtt.connect(relay.wssUrl, {
       username: relay.username,
       password: relay.password,
@@ -133,13 +145,13 @@ async function relayReachable(): Promise<boolean> {
       connectTimeout: CONNECT_PROBE_MS,
       reconnectPeriod: 0,
     });
-    const done = (ok: boolean): void => {
+    const done = (ok: true | string): void => {
       client.end(true);
       resolve(ok);
     };
     client.on('connect', () => done(true));
-    client.on('error', () => done(false));
-    setTimeout(() => done(false), CONNECT_PROBE_MS);
+    client.on('error', (e: Error) => done(e.message));
+    setTimeout(() => done(`no CONNACK within ${CONNECT_PROBE_MS}ms`), CONNECT_PROBE_MS);
   });
 }
 
@@ -149,16 +161,18 @@ async function relayReachable(): Promise<boolean> {
  * must resolve here, at the top level, for the skip decision to see the real answer.
  * An unreachable relay therefore yields a genuine vitest SKIP for every test in the
  * suite — never a zero-assertion green pass (agent-principles #2/#3).
+ *
+ * The reason it prints states the OBSERVED fact (`relaySkipReason`), which distinguishes "no broker
+ * was configured, nothing was contacted" from "this broker refused us, here is its error". One
+ * message for both used to send readers hunting a firewall when the real cause was a blank config.
  */
-const reachable = await relayReachable();
-if (!reachable) {
-  console.warn(
-    `[sync.realrelay] SKIPPED (vitest skip): relay ${relay.wssUrl} unreachable — ` +
-      `run again with network egress to the broker to exercise the live path.`,
-  );
+const probe = await relayReachable();
+const skipReason = relaySkipReason(relay, probe);
+if (skipReason !== null) {
+  console.warn(`[sync.realrelay] SKIPPED (vitest skip): ${skipReason}`);
 }
 
-describe.skipIf(!reachable)('real relay: two SyncEngines over the LIVE MQTT broker', () => {
+describe.skipIf(skipReason !== null)('real relay: two SyncEngines over the LIVE MQTT broker', () => {
   const meta = { players: { white: 'w', black: 'b' }, startedAt: 2000 };
   const engines: SyncEngine[] = [];
   let db: IDBDatabase;
