@@ -112,16 +112,29 @@ function header(s: Snapshot): string {
           `   captures W${g.captures.white} B${g.captures.black} · ply ${s.ply}`,
       );
     }
-    if (s.lastMove) lines.push(`Last move: ${lastMoveDesc(s)}`);
+    if (s.lastMove) lines.push(`Last move: ${lastMoveDesc(g, s.lastMove)}`);
   } else if (s.joinError) {
     lines.push(`join error: ${s.joinError}`);
   }
   return lines.join('\n');
 }
 
-function lastMoveDesc(s: Snapshot): string {
-  const who = s.lastMove && s.game ? s.game.pieces[s.lastMove] : undefined;
-  return `${who ? who : '?'} @ (${s.lastMove})`;
+/**
+ * The last move in words: `black @ (1,1,1)`, or `? @ (…)` for a node the game does not hold.
+ *
+ * The game and the node are PARAMETERS rather than re-derived from the `Snapshot`, because the one
+ * caller has already established both (it is inside `if (g)` / `if (s.lastMove)`). The previous
+ * signature re-tested `s.lastMove && s.game` inside, a condition that was true on every reachable
+ * call — an unfalsifiable branch. Making the precondition a TYPE removes it instead of asserting it:
+ * there is now nothing to test and nothing that can go untested (agent-principles: a guard no input
+ * can falsify is redundant code wearing a disguise).
+ *
+ * `?` is kept and is NOT redundant: a `lastMove` naming a node the game does not hold is exactly the
+ * stale-`lastMove` defect `cli/lastMove.ts` exists to prevent, and printing `?` reports it honestly
+ * instead of hiding it.
+ */
+function lastMoveDesc(g: GameState, lastMove: string): string {
+  return `${g.pieces[lastMove] ?? '?'} @ (${lastMove})`;
 }
 
 function glyphAt(g: GameState, key: string, lastMove: string | null): string {

@@ -2,7 +2,10 @@
 /**
  * StrykerJS mutation-testing config.
  *
- * SCOPE: mutate the pure, deterministic logic only. The `mutate` list below is the single
+ * SCOPE: mutate the pure, deterministic logic only, across the whole reviewed tree
+ * ("planning docs src cli" — `planning/` and `docs/` are prose and contribute no mutable file, so
+ * the executable half is `src` + `cli`, plus the pre-existing `tools/versionBump.mjs` pin). The
+ * `mutate` list below is the single
  * source of truth for WHICH files those are — it is not re-enumerated here, because a second
  * copy of the list in prose goes stale the moment a file is added (agent-principles #8). The
  * RULE it encodes: a file is mutated iff it is THREE-free / DOM-free pure logic (a file may
@@ -117,6 +120,20 @@
  *     The behavior these literals enable IS asserted (an empty range yields the no-release
  *     answer; a cited-but-unlabelled ticket degrades to the commit-prefix half and is reported
  *     in `unlabelledTickets`).
+ *   - cli/args.ts: the `if (arity === undefined) return null` early return in
+ *     `unexpectedPositional` (mutated to `if (false)`). Equivalent by ARITHMETIC: fall through and
+ *     the very next line indexes `args.positional[1 + arity]` with `arity` undefined, i.e.
+ *     `positional[NaN]`, which no array can hold — so `extra` is `undefined` and the following
+ *     `if (extra === undefined) return null` returns the same `null` by the same path. The guard is
+ *     kept because it states the rule (a verb absent from `VERB_ARITY` is simply not checked)
+ *     rather than leaving it to an `NaN` index accident. The behavior IS asserted (an unknown verb
+ *     is not policed; every known verb is).
+ *   - cli/views.ts: the `{ x: 0, y: 0, z: 0 }` initializer in the private `keyFor` (mutated to
+ *     `{}`). Equivalent by TOTALITY: `FRAME` maps every slice axis to the OTHER TWO as its row and
+ *     column, so the three assignments that follow write all three axes on every call and no zero
+ *     ever survives to be read. Killing it would require a frame whose three axes are not distinct,
+ *     which `FRAME` does not contain. The axis wiring itself IS asserted — the three cuts of one
+ *     asymmetric board are rendered in full and are required to differ.
  *
  * Gate-rejection is re-proven on every review-gate run (agent-principles #7): temporarily
  * raising `break` above the current score makes `npm run mutate` exit non-zero.
@@ -358,6 +375,37 @@ export default {
     // repo, NOT mutated, exactly as the scene/DOM glue is excluded above. Do NOT add them here.
     'tools/versionBump.mjs',
     '!tools/**/*.test.mjs',
+    // The PURE units of the `cli/` net client (scope "planning docs src cli"). `planning/` and
+    // `docs/` carry no `.ts`/`.mjs` at all — they are prose — so the executable half of that scope
+    // is `src` + `cli`, and these four files are its THREE-free / DOM-free logic:
+    //   · `args.ts`     — the `pente` command-line parse: verb/code/positionals/flags, the per-verb
+    //                     arity refusal, and the `--seed` decision. Pure by construction (it takes
+    //                     an argv array), which is why the silently-ignored-`enter <CODE> new`
+    //                     regression is a unit test instead of a live-daemon probe.
+    //   · `lastMove.ts` — the derived "which node did the last committed placement put down": the
+    //                     single key present in one state and absent from the previous one. Reads
+    //                     `Game`/`GameState` as types only.
+    //   · `views.ts`    — the board VIEWS (`layers` / `layers-x` / `layers-y` / `list`) and the
+    //                     status header: pure `(Snapshot) => string`. It renders the same pure
+    //                     view-models the browser paints (`divergenceModel`, `endState`), so a
+    //                     scenario script and a player read identical facts — which makes a wrong
+    //                     glyph or a stale "last move" a test-integrity defect in the measuring
+    //                     instrument, not cosmetics.
+    //   · `relay.ts`    — which broker a node run talks to: `resolveRelay(relay.json, hostEnv())`
+    //                     plus the board edge length. It reads the host ENVIRONMENT through the
+    //                     `src/config/relayEnv.ts` seam (env as a value, never `process` directly),
+    //                     so it qualifies exactly as `util/randomId.ts` and `net/activeGame.ts` do.
+    // The CLI's IO GLUE is deliberately absent and must NOT be added: `main.ts` (argv + `console` +
+    // `process.exit`), `daemon.ts`/`client.ts` (a unix socket over `node:net` + `node:fs`),
+    // `netlink.ts` (the real mqtt.js socket), `session.ts` (NetSession + fake-indexeddb),
+    // `scenarios/harness.ts` + `scenarios/all.ts` + `scenarios/*.scenario.ts` (they SPAWN daemons and
+    // talk to the live relay — the CLI's e2e tier, the counterpart of `e2e/*.spec.ts`, proven by
+    // `npm run scenario:all`).
+    'cli/args.ts',
+    'cli/lastMove.ts',
+    'cli/views.ts',
+    'cli/relay.ts',
+    '!cli/**/*.test.ts',
   ],
   coverageAnalysis: 'perTest',
   // Generous timeout to make Killed-vs-Timeout classification DETERMINISTIC (see header):

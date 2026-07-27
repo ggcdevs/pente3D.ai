@@ -63,9 +63,12 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
-      // Core is the pure rules engine held to a 100% floor (see testing-strategy).
-      // The rest is pragmatic; boundaries added per-stage.
-      include: ['src/**/*.ts', 'tools/**/*.mjs'],
+      // MEASURED SCOPE — "planning docs src cli" (plus the pre-existing pure `tools/` unit).
+      // `planning/` and `docs/` hold prose only: no `.ts`/`.mjs` exists under either, so there is
+      // nothing there for a coverage tool to measure and no include pattern can conjure one. The
+      // executable half of the scope is `src` + `cli`, both measured whole here and narrowed to
+      // their pure files by the file-by-file glue exclusions below.
+      include: ['src/**/*.ts', 'tools/**/*.mjs', 'cli/**/*.ts'],
       // `src/render/**` is the Three.js IO glue (verified by Playwright, not unit
       // coverage) EXCEPT the pure, THREE-free resolvers (`sceneConfig.ts`, …), which
       // are held to the strict pure-logic gate below. Excluding the glue file-by-file
@@ -73,6 +76,30 @@ export default defineConfig({
       exclude: [
         'src/**/*.test.ts',
         'tools/**/*.test.mjs',
+        'cli/**/*.test.ts',
+        // The `cli/` net client's IO GLUE (scope "planning docs src cli"). The CLI is the glue
+        // tier's MEASURING INSTRUMENT — it drives a real relay so a scenario can assert what the
+        // other client actually received (agent-principles #3) — so its own transport/process half
+        // is verified BY those runs (`npm run scenario:all`), not by unit coverage:
+        //   · `main.ts`    — argv → `console` → `process.exit`; calls `main()` at import time.
+        //   · `daemon.ts`  — the long-lived session process behind a unix socket (`node:net`,
+        //                    `node:fs`, a state dir).
+        //   · `client.ts`  — the socket client that talks to it (`node:net`, `node:fs`, retries).
+        //   · `netlink.ts` — the real mqtt.js socket plus the drop/restore outage control.
+        //   · `session.ts` — NetSession + MqttTransport + a fake-indexeddb database.
+        //   · `scenarios/**` — the CLI's E2E tier: `harness.ts` SPAWNS daemons and probes the live
+        //                    broker, `all.ts` shells out to each scenario, and every
+        //                    `*.scenario.ts` is a live two-peer script. This is the counterpart of
+        //                    `e2e/*.spec.ts` and is excluded for the same reason.
+        // The PURE `args.ts`, `lastMove.ts`, `views.ts` and `relay.ts` are pinned to the hard 100%
+        // floor below (and are in the mutation scope). Excluded file-by-file, NOT as a whole `cli/`
+        // dir, so those four stay measured.
+        'cli/main.ts',
+        'cli/daemon.ts',
+        'cli/client.ts',
+        'cli/netlink.ts',
+        'cli/session.ts',
+        'cli/scenarios/**',
         // Build TOOLING glue (issue #22). `tools/version.mjs` shells out to `git`/`gh` and
         // `tools/generate-diagrams.mjs` walks the filesystem — both are IO boundaries verified
         // by RUNNING them against this repo, not by unit coverage. Excluded file-by-file (NOT
@@ -450,6 +477,39 @@ export default defineConfig({
         // above. In the mutation scope and held to the hard 100% floor. Do not weaken
         // (agent-principles #6).
         'tools/versionBump.mjs': {
+          statements: 100,
+          branches: 100,
+          functions: 100,
+          lines: 100,
+        },
+        // The PURE units of the `cli/` net client — the `src`+`cli` half of the reviewed scope
+        // "planning docs src cli" (`planning/`+`docs/` are prose and carry no measurable file).
+        // Each is THREE-free / DOM-free: the argv parse, the derived last-placed node, the board
+        // views + status header (`(Snapshot) => string`), and the relay/board-size resolution over
+        // the `src/config/relayEnv.ts` env-as-a-value seam. All four are in the mutation scope, so
+        // the alignment rule above applies to them unchanged. The CLI's transport/process glue
+        // (`main.ts`, `daemon.ts`, `client.ts`, `netlink.ts`, `session.ts`, `scenarios/**`) is the
+        // scenario-verified IO boundary, excluded above and NOT pinned. Do not weaken
+        // (agent-principles #6).
+        'cli/args.ts': {
+          statements: 100,
+          branches: 100,
+          functions: 100,
+          lines: 100,
+        },
+        'cli/lastMove.ts': {
+          statements: 100,
+          branches: 100,
+          functions: 100,
+          lines: 100,
+        },
+        'cli/views.ts': {
+          statements: 100,
+          branches: 100,
+          functions: 100,
+          lines: 100,
+        },
+        'cli/relay.ts': {
           statements: 100,
           branches: 100,
           functions: 100,
