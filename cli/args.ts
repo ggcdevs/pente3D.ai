@@ -15,9 +15,19 @@
  * ## The rule
  *
  * An argument this CLI does not understand is REFUSED, never ignored (agent-principles, logging
- * discipline: errors must propagate honestly and never be masked or swallowed). {@link VERB_ARITY}
- * declares, per verb, how many positionals may follow the room code; anything beyond that is named
- * back to the operator with the spelling they probably meant.
+ * discipline: errors must propagate honestly and never be masked or swallowed). That rule covers
+ * BOTH halves of a command line, because a swallow does not care which half it hides in:
+ *
+ *   · positionals — {@link VERB_ARITY} declares, per verb, how many may follow the room code;
+ *   · flags — {@link FLAG_KIND} declares every flag name this CLI reads, and whether it takes a
+ *     value. {@link unknownFlag} refuses anything else.
+ *
+ * The flag half was open for a full stage after the positional half was closed, which is the whole
+ * argument for stating the rule over the command line rather than over one token type: `pente enter
+ * ABCDE --seedd new` parsed, dropped `--seedd` on the floor and asked the daemon for `defer` — the
+ * exact "adopt a peer's game when the operator said `new`" inversion described above, reachable by
+ * adding one character instead of by dropping two. Same for `pente drop CODE --silen`, which made a
+ * NON-silent drop and so ran the opposite branch of the #45 mirror case while reporting success.
  */
 
 /** A parsed command line: the verb, the room code (first positional), the rest, and the flags. */
@@ -29,8 +39,44 @@ export interface Args {
 }
 
 /**
- * Split `argv` into verb / positionals / flags. `--k v` takes the next token as its value unless
- * that token is itself a flag, in which case `--k` is a boolean.
+ * Whether a flag carries a value (`--view layers`) or is a bare switch (`--json`).
+ *
+ * This is the CLI's whole flag vocabulary, declared as data in one place. It is checked against
+ * `cli/main.ts` + this file — the code that actually READS `flags.x` — by `args.test.ts`, in both
+ * directions: a flag read with no row here would be refused as unknown, and a row nobody reads is a
+ * flag this CLI accepts and then ignores. Either way the table is compared with something outside
+ * itself, never with itself.
+ *
+ * The check is global rather than per-verb because two of these are read through helpers shared by
+ * every branch (`--view` before the switch, `--json` inside `output`/`jsonMode`), so a per-verb
+ * source scan could not see who reads them and would be sound only by accident.
+ */
+export const FLAG_KIND: Readonly<Record<string, 'value' | 'switch'>> = {
+  view: 'value', // the board rendering — cli/views.ts owns the name vocabulary
+  seed: 'value', // enter's §3 seed — cli/daemon.ts owns the `new | defer` vocabulary
+  timeout: 'value', // wait's budget in seconds
+  json: 'switch', // print the raw snapshot instead of a board
+  host: 'switch', // play: take the host seat
+  silent: 'switch', // drop: graceful DISCONNECT, so no Last-Will fires (the #45 mirror case)
+  lossy: 'switch', // drop: throw away publishes made while down instead of queueing them
+};
+
+/**
+ * Split `argv` into verb / positionals / flags.
+ *
+ * Three shapes are understood, and they are understood by NAME rather than by position:
+ *
+ *   · `--k=v` — the GNU spelling. It used to parse as a flag literally named `k=v`, which meant
+ *     `flags.view` stayed undefined and `--view=layerz` sailed past main's refusal into the default
+ *     board, and `--seed=new` reached the daemon as `defer`: the standard spelling silently produced
+ *     the OPPOSITE seed, bypassing a guard written specifically to stop that.
+ *   · `--k v` — only for a flag {@link FLAG_KIND} declares as `value`, and only when `v` is not
+ *     itself a flag. Nothing else eats the next token: `pente move ABCDE --json 2,2,2` keeps its
+ *     coordinate instead of feeding it to `--json`, and an UNKNOWN flag does not guess at an arity
+ *     it has no row for — `--vew list` leaves `list` alone rather than swallowing it, so the
+ *     refusal `cli/main.ts` prints names the flag the operator got wrong.
+ *   · `--k` — a switch, or (for a value flag) the valueless shape `true`, which each reader refuses
+ *     by name rather than collapsing to a default.
  */
 export function parseArgs(argv: readonly string[]): Args {
   const [verb = 'help', ...rest] = argv;
@@ -39,15 +85,54 @@ export function parseArgs(argv: readonly string[]): Args {
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i]!;
     if (a.startsWith('--')) {
-      const key = a.slice(2);
+      const body = a.slice(2);
+      const eq = body.indexOf('=');
+      if (eq !== -1) {
+        flags[body.slice(0, eq)] = body.slice(eq + 1);
+        continue;
+      }
       const next = rest[i + 1];
-      if (next !== undefined && !next.startsWith('--')) {
-        flags[key] = next;
+      if (FLAG_KIND[body] === 'value' && next !== undefined && !next.startsWith('--')) {
+        flags[body] = next;
         i++;
-      } else flags[key] = true;
+      } else flags[body] = true;
     } else positional.push(a);
   }
   return { verb, code: positional[0] ?? null, positional, flags };
+}
+
+/** The flag names this CLI understands, in a stable order, for a refusal message. */
+function flagList(): string {
+  return Object.keys(FLAG_KIND)
+    .sort()
+    .map((k) => `--${k}`)
+    .join(', ');
+}
+
+/**
+ * The refusal for a flag this CLI does not understand, or `null` when every flag is known.
+ *
+ * Two ways to be wrong, both of which used to be silent:
+ *
+ *   · a name nobody reads (`--vew list`, `--silen`) — collected by the parser and dropped, so the
+ *     command did something OTHER than what was typed and exited 0 saying nothing;
+ *   · a value handed to a switch (`--json=true`), which is not the `true` its reader tests for and
+ *     so turned the switch off while looking like it turned it on.
+ *
+ * Returned rather than printed so the decision is testable as a value; `cli/main.ts` prints it and
+ * exits non-zero, in the same place it checks {@link unexpectedPositional}.
+ */
+export function unknownFlag(args: Args): string | null {
+  for (const [name, value] of Object.entries(args.flags)) {
+    const kind = FLAG_KIND[name];
+    if (kind === undefined) {
+      return `${args.verb}: unknown option "--${name}" — this CLI understands: ${flagList()}`;
+    }
+    if (kind === 'switch' && typeof value === 'string') {
+      return `${args.verb}: --${name} is a switch and takes no value (got "${value}")`;
+    }
+  }
+  return null;
 }
 
 /**
@@ -144,4 +229,37 @@ export function enterSeed(args: Args): { readonly seed: string } | { readonly er
     return { error: "enter: --seed needs a value: 'pente enter <CODE> --seed new|defer'" };
   }
   return { seed: raw };
+}
+
+/** How long `pente wait` blocks when `--timeout` is not given, in seconds. */
+export const DEFAULT_WAIT_SECONDS = 55;
+
+/**
+ * The number of seconds `pente wait` will block for, or the refusal to print.
+ *
+ * `--timeout` was the third flag with the swallow the other two had already closed, left open in the
+ * same switch statement: `const timeoutS = Number(args.flags.timeout ?? 55)` turned the valueless
+ * `--timeout` into `Number(true) === 1`, so `pente wait CODE --timeout --json` waited ONE second and
+ * then reported "(still opponent's turn after 1s)" — a wrong number stated as an observed fact — and
+ * `--timeout abc` became `NaN`, which flowed into `request(…, { timeoutMs: NaN }, NaN)` with no
+ * diagnostic at all.
+ *
+ * Lives here, as a value-returning pure function like {@link enterSeed}, precisely so both of those
+ * are unit-assertable: `cli/main.ts` runs `main()` at import time and cannot be loaded to be
+ * asserted on, which is why the defect survived inside it.
+ */
+export function waitTimeout(
+  flags: Args['flags'],
+): { readonly seconds: number } | { readonly error: string } {
+  const raw = flags.timeout;
+  if (raw === undefined) return { seconds: DEFAULT_WAIT_SECONDS };
+  if (typeof raw !== 'string') {
+    return { error: "wait: --timeout needs a value: 'pente wait <CODE> --timeout 30'" };
+  }
+  // `Number()` alone accepts '', ' 5 ', '0x1e' and '1e3'; a seconds budget is a plain whole number,
+  // and anything else is a typo we must name rather than silently reinterpret.
+  if (!/^[0-9]+$/.test(raw) || Number(raw) === 0) {
+    return { error: `wait: --timeout: not a whole number of seconds (got "${raw}")` };
+  }
+  return { seconds: Number(raw) };
 }

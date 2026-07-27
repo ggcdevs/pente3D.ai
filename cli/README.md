@@ -75,7 +75,34 @@ flagged "still their turn" so a blocking call always ends; just run it again.
 
 A `--view` name nobody registered is **refused** (exit 2, with that same list) rather than
 quietly downgraded to the default — one cut of the cube must never be printed in answer to a
-request for another. `--view layers-Y`, `--view layerz` and a valueless `--view` are all errors.
+request for another. `--view layers-Y`, `--view layerz` and a valueless `--view` are all errors,
+in both the `--view NAME` and the `--view=NAME` spelling.
+
+## What the CLI refuses
+
+An argument this CLI does not understand is **refused (exit 2), never ignored** — both halves of
+the command line, because a swallowed token makes the CLI do something other than what was typed
+and say nothing about it. That matters most here: this CLI is the measuring instrument the
+scenarios and `e2e/cliVsBrowser.spec.ts` grade the browser with, so an ignored `--silen` would
+run the opposite branch of a test and still report green.
+
+| you type | you get |
+| --- | --- |
+| `enter ABCDE new` | refused — the seed is a flag (`--seed new`), not a positional |
+| `views extra`, `undo ABCDE stray` | refused — the verb takes no such argument ([`VERB_ARITY`](./args.ts)) |
+| `--vew list`, `--silen`, `--seedd new` | refused — unknown flag, named back with the ones that exist ([`FLAG_KIND`](./args.ts)) |
+| `--json=true` | refused — `--json` is a switch and takes no value |
+| `--view`, `--seed`, `--timeout` with no value | refused — each names the value it needs |
+| `--timeout abc`, `--timeout 2.5` | refused — a wait is a whole number of seconds |
+| `PENTE_BOARD_SIZE=abc` | refused at startup — a daemon never plays on a `NaN`-edged board |
+
+Both spellings are understood everywhere: `--view=list` is the same as `--view list`. Only a flag
+declared as taking a value consumes the token after it, so `move ABCDE --json 2,2,2` keeps its
+coordinate.
+
+The flag vocabulary lives in one table, `FLAG_KIND` in [`args.ts`](./args.ts), and `args.test.ts`
+checks it against the code that actually reads `flags.x` — in both directions, so a flag with no
+row and a row nobody reads are each a failing test rather than a silent swallow.
 
 ## Outages — `drop` / `restore`
 

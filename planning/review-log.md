@@ -655,3 +655,62 @@ structure over more words. Proposed:
 **Gate status:** V.0–V.7 each passed their review gate; V.8a's round is the fixes above. Nothing is
 merged to `dev`/`test`/`main` — the pre-push hook (`59ea06d`) refuses all three by design while v3.1
 is in flight, and promotion is the user's call (build plan, *V.8b*).
+
+### V.8b's own round — the same swallow, on the other half of the command line (one blocker, six majors)
+
+V.8a's headline was "the CLI refuses what it does not understand" (`f96eeb2`). The reviewer's finding
+is that it refused **positionals** only, and that the identical defect was still live one keystroke
+away — which makes this round the cleanest evidence yet for the *A gate that never rejected anything*
+and *An error/argument masked, swallowed or mislabeled* categories above: the fix and the surviving
+hole were in the same file, in the same commit.
+
+1. **BLOCKER — `--flag=value` bypassed every refusal V.8a added.** `parseArgs` understood only
+   `--k v`, so `--view=layerz` parsed as a flag literally NAMED `view=layerz`; `flags.view` stayed
+   `undefined`, `viewFromFlag(undefined)` returned the DEFAULT and the guard never fired. Observed:
+   `--view listt` → exit 2, `--view=listt` → exit 0. The damaging half was `--seed`:
+   `enter CODE --seed=new`, the standard GNU spelling, asked the daemon for `defer` — *adopt the
+   peer's game* when the operator said *start over*, verbatim the #43/#46 inversion `cli/args.ts`
+   exists to refuse. Fixed in the parser, so every existing refusal now covers both spellings.
+2. **Unknown FLAGS were still silently dropped.** `VERB_ARITY` policed positionals; nothing checked
+   flag NAMES. `--seedd new` → `defer`; `--vew list` → exit 0, empty stderr; `drop --silen` → a
+   NON-silent drop, i.e. a scenario written for the #45 mirror case fired a Last-Will, took the other
+   branch and still reported green — in the measuring instrument. Fixed with `FLAG_KIND`, checked
+   beside `unexpectedPositional`.
+3. **`--timeout` was the third flag with the swallow the other two had just closed**, in the same
+   switch statement. `Number(true) === 1`, so `wait CODE --timeout --json` waited 1s and then STATED
+   "(still opponent's turn after 1s)" — a wrong number reported as an observed fact; `--timeout abc`
+   reached `request(…, { timeoutMs: NaN }, NaN)` with no diagnostic. Now a pure `waitTimeout()`.
+4. **`VERB_ARITY is complete` checked presence, never the VALUE.** A wrongly-zeroed row makes the CLI
+   refuse an argument its verb needs, and the zero-arity sweep derives its cases from
+   `Object.keys(VERB_ARITY)` — so it asserts the wrong row against itself. Proven by injecting a verb
+   reading `positional[1]` with a row of `0`: all cli tests green, real CLI exit 2. Now the row is
+   compared with how deep the verb's `case` block actually indexes.
+5. **`BOARD_SIZE` claimed an SSOT link it did not have.** `Number(env ?? 5)` under a comment saying
+   "matching src/config/defaults/board.json" — it duplicated the literal, and the new test asserted
+   `toBe(5)` against that same hardcoded 5. Proven by setting board.json to `{"size": 7}`: suite
+   green, `board.json size = 7 | CLI BOARD_SIZE = 5`. Now imported the way `src/config/config.ts`
+   does, and the test asserts the RELATIONSHIP.
+6. **A file at 100% coverage AND 100% mutation accepted garbage.** `PENTE_BOARD_SIZE=abc` → `NaN`,
+   `PENTE_BOARD_SIZE=` → `0`, and a daemon played on that board — every render, coordinate check and
+   scenario assertion past it meaningless. Both gates are blind to a MISSING refusal, which is the
+   argument V.8a itself made for `VERB_ARITY` and did not carry to the sibling file in the same
+   commit. Now refused, naming the variable.
+
+**Every probe the reviewer ran is landed as a permanent test**, at the tier that can see it: the
+value decisions in `cli/args.test.ts` / `cli/relay.test.ts`, the argv→exit-code wiring in
+`cli/refusals.test.ts` (which spawns the real binary — `cli/main.ts` calls `main()` at import time
+and is outside both gates, which is exactly where all of these lived). Each was proven to BITE by
+re-breaking the implementation and watching it go red, then restoring.
+
+Two things the mutation gate then caught in the fix itself, both fixed genuinely rather than
+excluded: `FLAG_KIND`'s `'value'` literal had no observable meaning (the parser tested `!== 'switch'`,
+so `'value' → ""` was equivalent — now it tests `=== 'value'`, and an unknown flag no longer guesses
+at an arity it has no row for), and `/^[0-9]+$/ → /^[0-9]$/` survived because no test used a
+multi-digit board size, though 11 is an offered board. Both are pinned by new cases.
+
+**Category note:** this round adds to *An error/argument masked, swallowed or mislabeled* (items 1–3,
+6) and to *A gate that never rejected anything* (items 4–6 — two tables asserted against themselves,
+and a file scoring 100/100 on both gates while accepting `NaN`). It is also the second consecutive
+round in which **a table was checked against itself**, which is precisely proposed principle #2
+above; V.8a proposed it, and V.8b found two more instances of it in the code V.8a wrote. That is a
+strong argument for adopting it rather than leaving it proposed.

@@ -63,6 +63,21 @@ describe('relayConfig — the one answer the CLI and the vitest suites share', (
   });
 });
 
+/**
+ * WHICH BOARD A CLI DAEMON PLAYS ON — and that it refuses to play on a nonsense one.
+ *
+ * Two ways this went silently wrong, both invisible to the gates `cli/relay.ts` sits inside (it
+ * scores full marks on coverage AND mutation; neither can see a refusal nobody wrote):
+ *
+ *   · `Number(hostEnv()['PENTE_BOARD_SIZE'] ?? 5)` re-stated the tracked default as a LITERAL under
+ *     a comment claiming it matched `src/config/defaults/board.json`. It did not read that file, so
+ *     editing board.json moved the browser and left the CLI behind — observed: with board.json set
+ *     to `{ "size": 7 }`, `board.json size = 7 | CLI BOARD_SIZE = 5`, suite green. The old test
+ *     asserted `toBe(5)` against the same 5 the code hardcoded: the literal checked against itself.
+ *   · Nothing was refused: `PENTE_BOARD_SIZE=abc` -> `NaN`, `PENTE_BOARD_SIZE=` -> `0`. A daemon
+ *     then played on a NaN- or 0-edged board and every render, coordinate check and scenario
+ *     assertion past that point was meaningless, with nothing said.
+ */
 describe('BOARD_SIZE — the edge length a CLI daemon plays on', () => {
   /** Re-imported per test: the constant is resolved once, at module load, from the environment. */
   const load = async (): Promise<number> => {
@@ -70,12 +85,52 @@ describe('BOARD_SIZE — the edge length a CLI daemon plays on', () => {
     return (await import('./relay')).BOARD_SIZE;
   };
 
-  it('is 5 with nothing set — matching src/config/defaults/board.json', async () => {
-    await expect(load()).resolves.toBe(5);
+  it('follows src/config/defaults/board.json, which is the SSOT — not a copy of its number', async () => {
+    const board = (await import('../src/config/defaults/board.json', { with: { type: 'json' } }))
+      .default;
+    await expect(load()).resolves.toBe(board.size);
   });
 
   it('follows PENTE_BOARD_SIZE, as a NUMBER rather than the raw string', async () => {
     vi.stubEnv('PENTE_BOARD_SIZE', '7');
     await expect(load()).resolves.toBe(7);
+  });
+
+  it('accepts a MULTI-DIGIT size — 11 is an offered board, not a typo', async () => {
+    // `BOARD_SIZE_OPTIONS` (src/ui/widgets/settingsModel.ts) offers 5/7/9/11, so a one-digit-only
+    // rule would refuse a board the product ships. Caught by the mutation gate: narrowing the
+    // guard to `/^[0-9]$/` survived until this case existed.
+    vi.stubEnv('PENTE_BOARD_SIZE', '11');
+    await expect(load()).resolves.toBe(11);
+  });
+
+  it('refuses a non-numeric PENTE_BOARD_SIZE instead of playing on a NaN board', async () => {
+    vi.stubEnv('PENTE_BOARD_SIZE', 'abc');
+    await expect(load()).rejects.toThrow(/PENTE_BOARD_SIZE.*got "abc"/);
+  });
+
+  it('refuses an empty PENTE_BOARD_SIZE instead of a 0-edged board', async () => {
+    vi.stubEnv('PENTE_BOARD_SIZE', '');
+    await expect(load()).rejects.toThrow(/PENTE_BOARD_SIZE/);
+  });
+
+  it.each(['0', '-5', '5.5', ' 5 ', '0x7', '5e0'])(
+    'refuses "%s", which `Number()` alone would have zeroed or reinterpreted',
+    async (raw) => {
+      vi.stubEnv('PENTE_BOARD_SIZE', raw);
+      await expect(load()).rejects.toThrow(/PENTE_BOARD_SIZE/);
+    },
+  );
+
+  it('names the variable and the tracked default it would fall back to', async () => {
+    // The refusal has to be actionable at the boundary: this is the only place the operator can
+    // still be told WHICH variable is wrong and what unsetting it would give them.
+    const board = (await import('../src/config/defaults/board.json', { with: { type: 'json' } }))
+      .default;
+    const { boardSize } = await import('./relay');
+    expect(() => boardSize({ PENTE_BOARD_SIZE: 'abc' })).toThrow(
+      `PENTE_BOARD_SIZE: not a positive whole number of cells (got "abc") — ` +
+        `unset it to play on the tracked default of ${board.size}`,
+    );
   });
 });

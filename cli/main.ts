@@ -26,7 +26,14 @@
  */
 import { runDaemon } from './daemon';
 import { request } from './client';
-import { enterSeed, parseArgs, unexpectedPositional, type Args } from './args';
+import {
+  enterSeed,
+  parseArgs,
+  unexpectedPositional,
+  unknownFlag,
+  waitTimeout,
+  type Args,
+} from './args';
 import { render, viewFromFlag, viewNames, DEFAULT_VIEW, type Snapshot } from './views';
 
 /**
@@ -72,11 +79,16 @@ function output(data: unknown, args: Args, viewName: string): void {
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
-  // An argument this CLI does not understand is REFUSED, never ignored. Checked here — once, for
-  // every verb — rather than inside each `case`, because the bug this closes was a `case` that
-  // simply never read `positional[1]`: `pente enter ABCDE new` was accepted and silently treated as
-  // `--seed defer`, i.e. it adopted a peer's game instead of starting a fresh one.
-  const badArg = unexpectedPositional(args);
+  // An argument this CLI does not understand is REFUSED, never ignored — BOTH halves of the command
+  // line. Checked here — once, for every verb — rather than inside each `case`, because the bug this
+  // closes was a `case` that simply never read its argument: `pente enter ABCDE new` was accepted and
+  // silently treated as `--seed defer`, i.e. it adopted a peer's game instead of starting a fresh
+  // one. The flag half is the same defect one character over (`--seedd new` → `defer`, `--silen` →
+  // a NON-silent drop), so it is refused in the same breath rather than in a later stage.
+  // Flags first: an unknown flag no longer swallows the token after it, so `--vew list` leaves
+  // `list` as a positional. Reporting the positional would name the wrong token — the operator's
+  // mistake is the flag.
+  const badArg = unknownFlag(args) ?? unexpectedPositional(args);
   if (badArg !== null) {
     console.error(badArg);
     process.exit(2);
@@ -211,7 +223,12 @@ async function main(): Promise<void> {
 
     case 'wait': {
       const code = requireCode(args);
-      const timeoutS = Number(args.flags.timeout ?? 55);
+      const asked = waitTimeout(args.flags);
+      if ('error' in asked) {
+        console.error(asked.error);
+        process.exit(2);
+      }
+      const timeoutS = asked.seconds;
       const r = await request(code, { cmd: 'wait', timeoutMs: timeoutS * 1000 }, timeoutS * 1000 + 10_000);
       if (!r.ok) return fail(r.data);
       const s = r.data as Snapshot & { timedOut: boolean };
