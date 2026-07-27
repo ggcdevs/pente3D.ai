@@ -13,45 +13,83 @@ for multi-task stages), **gate rigorously**, and **independently verify** — ne
 A **3D Pente** game (N×N×N lattice): pure deterministic rules core, IndexedDB archive, real
 networked play over an MQTT relay, instanced Three.js rendering, composable config-driven UI.
 
-**v3 is feature-complete and frozen. v3.1 — a networked-game-model remodel — is designed and is the
-thing that will ship to `main`.**
+**v3 is feature-complete and frozen. v3.1 — the networked-game-model remodel — is BUILT on
+`feat/net-model-v3.1` (V.0–V.7 landed, each through its review gate; V.8a is the docs close-out) and
+is the thing that will ship to `main`. It has NOT been promoted: the closing behavioural re-review
+and every promotion step are the user's calls (V.8b).**
 
 | Where | State |
 |---|---|
 | `main` | `v3.0.0` (`80e9ead`) — the last release. **Frozen**; v3 never ships standalone. |
 | `dev` / `test` | v3 complete (`5c73104` + CLI work). Playable, but carries the bugs v3.1 fixes. |
-| `feat/net-model-v3.1` | The remodel. Design committed; **implementation not started**. |
+| `feat/net-model-v3.1` | **The remodel, built.** V.0–V.7 landed with their review gates; V.8a is the docs close-out. Last build commit `dfff4ad`. Not merged anywhere. |
 | `feat/cli-analyzer` | CLI tactical analyzer (#48), 10 commits ahead of `dev`, unmerged. |
 
-Live: root = `main`, plus `/dev/`, `/test/`, and **every branch at `/<branch>/`**.
+Live: root = `main`, plus `/dev/`, `/test/`, and **every branch at `/<branch>/`** — so the remodel is
+playable at `/feat/net-model-v3.1/`, which is where hands-on cross-device play should happen next.
+
+⚠️ **A pre-push hook (`59ea06d`) refuses `dev`/`test`/`main` by design** while v3.1 is in flight.
+Never bypass it; removing it is part of the promotion, not a workaround.
 
 **Why v3 is frozen:** hands-on cross-device play found #45 (reconnect never resyncs → stuck turn →
 Undo diverges → *game bricked*) and #46 (New Game pushes a stale code-saved game to the peer).
 Shipping v3 would hand friends the exact bugs the remodel removes.
 
+**What remains before promotion is listed in ONE place** — the build plan's
+`## V.8b — what remains before promotion`. Short version: the §10 behavioural re-review (#40, #31,
+#41, #33, #34, #36), #49, the copy collaboration points, the knowingly-shipped limitations, hands-on
+play, then `dev` → `test` → `main`. **#33, #34 and #36 are NOT built** — a clean seam, not a stub.
+
 ## 2. The v3.1 model (read the design doc before touching net code)
 
-**Plan of record: `planning/2026-07-24-net-model-v3.1-design.md`.** Epic **#47**, milestone `v3.1`.
+**Design of record: `planning/2026-07-24-net-model-v3.1-design.md`** (it carries the user's verbatim
+rationale). **Build plan / build record: `planning/2026-07-25-net-model-v3.1-build-plan.md`.**
+**Vocabulary: `GLOSSARY.md`.** Epic **#47**, milestone `v3.1`.
 
 One root caused the whole v3 bug cluster: #35's `net-room:{code}` (a game + seatmap persisted per
 room **code**) both re-coupled code↔game *and* became a stale local substitute for real state-sync.
 
-The remodel, in four sentences:
+The remodel, in four sentences — **all four are built and behaviour-verified**:
 - **A room code is pure rendezvous; a game is a UUID; there is NO mapping between them anywhere.**
-  localStorage keeps only visited codes + a session breadcrumb; games live in the archive by UUID.
-- **Seed selection is explicit and enforced on the wire** — `New` sends/accepts only empty state;
-  **Dealer's-choice is the only kind that adopts a peer's non-empty game**.
+  `net-room:{code}` is deleted (v3 shards purged on boot). localStorage keeps only visited codes +
+  an `activeNetworkedGame` **breadcrumb** — session state driving a **prompt, never an auto-load**,
+  never published. Games live in the archive **keyed by UUID**, one record per game, one writer. A
+  reload always lands on an **empty slate**, so the **games list** is the only route back to a game.
+- **Seed selection is explicit and enforced on the wire**, at **all three** channels a game can
+  cross — `New` sends/accepts only empty state; **Dealer's-choice is the only kind that adopts a
+  peer's non-empty game**; a mismatch is a typed reject surfaced verbatim.
 - **On (re)connect, converge to the LIVE state via resident-peer republish** (deliberately *not*
-  retained MQTT — that would re-couple code↔game at the broker and kill code reuse).
+  retained MQTT — that would re-couple code↔game at the broker and kill code reuse). It fires on
+  **any** fresh live presence (a graceful disconnect leaves no absence to observe) and in **both**
+  directions.
 - **The turn gate caps legitimate drift at exactly one move**, so the *only* automatic path is a
-  one-move fast-forward; anything else gets last-common-ancestor + diff + a resolution handshake.
+  one-move fast-forward; anything else gets last-common-ancestor + diff + a **resolution handshake**
+  (a divergence panel both players see; the wire names a **head hash**, never "mine"/"theirs").
 
 Integrity: a dumb relay cannot referee (one shared credential; retained messages are client-written).
 Defense is the hash chain + **validating an adopted log by replaying it through the rules engine**.
 An authoritative server is captured as #50 — v4-scale, not planned.
 
-**Next step:** write the implementation plan, and **build the CLI-driven #45 repro first** so the
-bug that started this has a failing test before the model changes.
+**The acceptance test:** `npm run scenario:issue45` drives two real CLI peers over the live relay.
+**Exit 0 = converged; exit 2 = SKIPPED for want of a relay (not a pass, not a regression); exit 1 =
+the bug is back.** `npm run scenario:all` runs the whole matrix. `npm run typecheck:cli` gates
+`cli/` — `npm run build` typechecks `src/` only.
+
+**Three v3.1 lessons worth carrying** (the fuller list is in the build plan's "Where the build
+differed from the plan"):
+- **A test that self-skips is not a test.** Every live-relay Playwright spec resolved its broker from
+  the committed-blank `relay.json` and so skipped in *every* checkout — the browser-side proofs of
+  #31 and #40 were claimed, never observed. `e2e/relayFixture.ts` is now the only way to resolve one,
+  guarded by `tools/e2eRelayFixture.test.mjs`. Lighting that tier found three real defects at once.
+- **A latch cannot retry.** Twice (the presence ack, then the divergence answer) a "send it once"
+  optimisation meant one dropped QoS-0 packet bricked the pair forever. The shape that works is a
+  **tag on the message** — answer everything, never answer a tagged answer — so the peer's own next
+  announce is the retry.
+- **The live broker ECHOES your own publishes back to you.** No mock showed this; `MockRelayHub`
+  deliberately does not echo, so the unit suite was green while the real relay ping-ponged.
+
+**Next step:** hands-on cross-device play at `/feat/net-model-v3.1/`, then the §10 behavioural
+re-review — see §1 and the build plan's V.8b list.
 
 ## 3. The apparatus
 
@@ -103,7 +141,11 @@ bug that started this has a failing test before the model changes.
   `src/util/randomId.ts`. Playwright runs on localhost (always secure) so it won't catch these.
 - Relay creds live in the `RELAY_CONFIG` repo variable, injected at build; the tracked
   `relay.json` ships blank. Real-relay tests self-skip without egress — **they were never green in
-  CI**, so exercise them on a real deploy.
+  CI**, so exercise them on a real deploy. **A self-skipping test is indistinguishable from a passing
+  one in a summary line**: every live-relay Playwright spec skipped in *every* checkout for weeks
+  because it read the blank `relay.json` directly. Brokers are now resolved only through
+  `e2e/relayFixture.ts` (guarded by `tools/e2eRelayFixture.test.mjs`); count the skips, don't read
+  the exit code.
 
 **Design**
 - **Integration gaps slip past component gates.** The scene↔SyncEngine wiring was never tasked and

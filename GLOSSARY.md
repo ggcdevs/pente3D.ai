@@ -74,6 +74,28 @@ the tie-breaker.
 - **Hash chain** — each log entry stores `hash = H(prevHash + entryData)`; the latest
   **headHash** fingerprints the whole history. Enables O(1) "identical history?" checks and
   pinpoints divergence.
+- **Turn gate** — the rule that a player may only append when the log says it is their turn (undo /
+  redo additionally need mutual confirm). Its *consequence* is the premise the whole v3.1
+  reconciliation policy rests on: **legitimate drift between two peers is capped at exactly one
+  move** — if it is your turn they cannot move at all, and if it is theirs they move once and are
+  then blocked. So a gap of more than one entry is **already anomalous** and is never adopted
+  automatically (design §5).
+- **Log reconciliation** (`src/net/reconcile.ts` `reconcile`) — the pure decision taken on **every**
+  log that arrives for the game we are on, and the only thing allowed to change our history: one of
+  `in-sync` (identical heads — say nothing), `fast-forward` (adopt theirs), `republish` (keep ours
+  and answer), or `needs-resolution` (a **divergence**, carrying the **LCA** and a **diff**). Not to
+  be confused with **seed reconciliation** (`admission.ts` `reconcile`), which decides what *game*
+  two peers bring into a room, not which *history* of it is right.
+- **Fast-forward** — the **one** automatic convergence in v3.1 (`fast-forward`, reason `one-move`):
+  their log is **exactly one entry longer**, our log is its **prefix**, and our log says that entry
+  was **theirs** to make. The mirror case — we are one ahead because our move never got out — is a
+  **republish**, not an adoption. Everything else (a longer prefix, or a fork) is a **divergence**.
+  This replaced v3's blanket "adopt any strict extension", which is what let a stale peer be
+  silently overwritten by an arbitrary history.
+- **Replay-validation** (`validateAdoptable`) — before an adopted log is taken it is **replayed
+  through the pure rules engine** (`placePiece` fold) and rejected on the first illegal entry. A
+  sender's *derived* state (board, scores, winner) is never trusted. On a dumb relay the opponent's
+  client is the validator, so this is the integrity mechanism, not a sanity check (design §5).
 - **Divergence** — the two peers hold histories of the SAME game that cannot both be right:
   more than the **turn gate**'s one-move cap apart, or a genuine **fork**. Nothing is adopted
   automatically; both sides record the **last common ancestor** + a readable diff and show the
@@ -93,7 +115,16 @@ the tie-breaker.
   absolutely rather than relative to whoever asked, and an adopted history is **replay-validated**
   before it is taken.
 - **Game archive** — persistent store (IndexedDB) of every game (event log + metadata),
-  including conflicted ones, for later review/resume.
+  including conflicted ones, for later review/resume. Since v3.1 every record is **keyed by its
+  game's UUID**, so one game has exactly one record by construction (the retired `autosaveId` key
+  is migrated forward at boot by `rekeyArchiveRecordsByGameUuid`).
+- **Games list** (`ui/widgets/archiveModel.ts` + `archive.ts`) — the archive browser: one row per
+  **record**, grouped by **status** (`unfinished` / `finished` / `conflicted`), resumed by the
+  game's **UUID** rather than by the store key. With **empty-slate boot** and no code→game map it is
+  the **only** route back into a game (design §10), which is why the Unfinished section is rendered
+  even when it is empty — an empty answer is stated, not implied by a missing heading. A refused
+  resume is typed and shown (`not-found` / `not-resumable` / `session-live` / `session-active`),
+  never a silent no-op.
 - **History slider** — a **read-only, local** cursor over derived states for reviewing past
   plies. Removes pieces after the cursor *for the local viewer only*; emits/syncs/mutates
   nothing. Distinct from **undo** (a real, restricted, synced game action).
@@ -132,9 +163,10 @@ the tie-breaker.
   (it adopts the arbiter's game) or the **arbiter** (its `admit` names the newcomer's game and it adopts
   that off the move-sync channel). A mismatch is an honest typed reject, never a silent adoption.
   Enforced at **all three** points a game can cross into a peer — see **Seed refusal**.
-- **Reconciliation** — the pure decision that turns a **pair of seed proposals** into a single
-  agreed game or a **typed reject** (`seed-refused` / `game-mismatch` / `game-divergent`) surfaced
-  to the UI: both empty (defer/new, any mix) → one fresh game; a concrete game beside a **defer** →
+- **Seed reconciliation** (`admission.ts` `reconcile`) — the pure decision that turns a **pair of
+  seed proposals** into a single agreed game or a **typed reject** (`seed-refused` /
+  `game-mismatch` / `game-divergent`) surfaced to the UI: both empty (defer/new, any mix) → one
+  fresh game; a concrete game beside a **defer** →
   play it; a concrete game beside a **new** → `seed-refused`; two concrete same-UUID+matching-headHash
   → resume together; two concrete same-UUID divergent → `game-divergent`; two concrete different-UUID
   → `game-mismatch`.
@@ -155,6 +187,27 @@ the tie-breaker.
 - **Initiator election** — the deterministic pick (earlier live-presence **arrival**, then
   lower **playerId**) of which of two **simultaneously-arriving** peers computes reconciliation
   and publishes the agreed game — killing the initial double-white race.
+- **Resident-peer republish** (design §4, fixes **#45**; pure rule in `src/net/republish.ts`) — how
+  v3.1 converges on the **live** state after an outage: on a peer's **fresh live presence**, whoever
+  is in the room puts its **full authoritative log** back on the wire (`SyncEngine.publishState`),
+  and the peer reconciles onto it. Idempotent — there is no new message kind, only the log. Chosen
+  **deliberately over a retained MQTT message**, which would make the *topic* own a game and so
+  re-couple code↔game at the broker, destroying code reuse.
+  - It triggers on **any** fresh live presence, **not** on an `absent → present` **edge**: a
+    graceful DISCONNECT discards the broker's Last-Will, so a **silent outage** produces no absence
+    to observe and an edge-gated trigger would never fire.
+  - It runs in **both directions** — the resident serves a returner that missed moves, and the
+    returner serves a resident that missed the move it made while away.
+  - `RepublishLimiter` is the pure decision: `rate-limited` suppresses the presence handshake's own
+    ack echo (a sub-second window), `nothing-to-serve` refuses when we hold no authoritative log.
+- **Answer** (`tag: 'answering'`) — a log published *in reply* to a peer's announce, because
+  reconciliation said we are **ahead** or that the pair has **diverged**. **Every** announce is
+  answered, never once per head-pair: nothing acks a QoS-0 publish, so the peer's own next announce
+  (presence republish, resync, reconnect) is the **retry** for a lost answer. The **tag**, not a
+  latch, terminates the exchange — no arm answers a tagged answer. An applied **resolution**
+  publishes with `tag: 'settled'` instead, which closes a divergence record rather than re-opening
+  one. (The live broker **echoes** a client's own publishes back to it, so "a log identical to mine"
+  is usually our own message and may never be read as the peer agreeing.)
 - **Rematch game identity** (`rematchGameUuid`) — a rematch is **one** new game, so its UUID is
   **derived** from state both peers already share (the prior game's UUID + the generation being
   entered), not independently randomized. Both sides reset over the same live connection with no
@@ -175,11 +228,52 @@ the tie-breaker.
   ⚠️ The v3 `net-room:{code}` record (a game + seat map persisted **per code**) was the opposite of
   this and is **deleted**: it made a rendezvous channel own a game (#43/#46). Shards a v3 build left
   in a real user's IndexedDB are **purged on boot** (`purgeLegacyNetRoomRecords`), not hidden.
+- **Empty-slate boot** (design §6) — a tab reload **always** lands on a fresh empty board. There is
+  no auto-restore of "the current game": the loaded game is a **JS var**, never a persisted pointer.
+  Nothing is lost — every game is durable in the **archive** by UUID and reachable from the **games
+  list** — and the only thing a reload may do with the **breadcrumb** is *offer* a rejoin.
+- **Rejoin probe** (`NetSession.probeRoom`, pure reading in `src/net/roomProbe.ts`) — the look into
+  the room the **breadcrumb** names, taken on a fresh boot. It is **presence-only**: it publishes no
+  admission message, because its presence announce is what a resident answers with a **resident-peer
+  republish**, and that log carries the game's UUID. So a probe cannot claim a seat, start a game,
+  be mistaken for an entry, or leave a retained trace. Four honest outcomes: `same-game`,
+  `other-game`, `empty-room`, and `peer-silent` (a peer really is present and really said nothing
+  inside the window). The window is a **deadline**, not a fixed cost — the probe stops listening the
+  moment it holds both facts.
+- **Rejoin prompt** (`ui/widgets/rejoinPromptModel.ts`) — what a probe outcome is offered to the
+  player as (design §6's table). It **displays** the colour **derived** from the game's seat map; it
+  never negotiates one — that is what keeps #31 and #40 shut. Declining clears the breadcrumb; a
+  `different game in the room` outcome warns rather than hijacking. The **copy** is a deliberate
+  collaboration point with the user and lives in the pure model so it can be tuned against tests.
 - **Empty shell** (`isEmptyShell`) — an archive record for a board with **no history and no
-  outcome**. Kept in the store (a live session writes its game's record as soon as seats are
-  negotiated, and the empty-room reclaim re-seeds an unplayed post-rematch game from it by UUID) but
-  **not shown as a game**: entering a room and leaving before a single move must not litter the games
-  list, exactly as an idle reset of a never-played local board mints nothing.
+  outcome** (`events === 0`, result `in-progress`). Every boot and every reset starts a game with a
+  new UUID, so unplayed boards would otherwise accumulate forever. They are therefore **collected,
+  not merely hidden** (`purgeEmptyShellRecords`, at boot and at each local game boundary): one
+  cursor transaction, keeping the loaded board, any game a live session owns, and the game the
+  breadcrumb names. A **seated** husk is exempt only while it is younger than
+  `SEATED_SHELL_MAX_AGE_MS` (24h — the breadcrumb's own horizon), because the live room the caller
+  cannot see may be another **tab's**; the exemption is bounded in time rather than granted forever,
+  since a permanent exemption re-creates the same leak for networked boards.
 - **Visited room codes** (`pente:recentCodes`, localStorage) — the codes this browser has used,
   newest-first: the code picker's memory. **Codes only** — it holds no game state, so a code in the
   list says nothing about which game (if any) was ever played there.
+
+## CLI client (`cli/`)
+
+- **Phase** vs **link** — two different facts, reported side by side, and the split **#45** lives
+  in. **Phase** (`offline` / `connecting` / `connected` / `conflict`) is the **session**: whether we
+  hold a seat in a room, with an engine and a game. **Link** (`up` / `down` / `none`,
+  `cli/netlink.ts`) is the **transport socket**. `pente drop` — and a real outage — takes the link
+  `down` while the session stays `connected`, engine, seat and game intact; `pente restore`
+  reconnects it. Nothing re-runs **admission** on a reconnect (the transport re-subscribes and
+  re-announces; the session never re-`enter`s), so the moves missed while the link was down come
+  back only via **resident-peer republish**. A `connected` phase therefore never means "in sync" —
+  `headHash` does.
+- **`drop` vs `leave`** — `drop` kills the socket under a live session (an outage). `leave` is a
+  real **departure**: seat and engine released, so returning re-runs admission. Only `leave` →
+  `enter` exercises the re-admission path #40 broke; a socket drop would have missed it.
+- **Silent outage** (`drop --silent`) — a **graceful** MQTT DISCONNECT, which makes the broker
+  **discard our Last-Will**. The peer therefore never observes an absence, which is exactly the case
+  an `absent → present` edge trigger cannot serve — see **Resident-peer republish**.
+- **Scenario exit codes** — `0` converged / passed, `1` the bug is present, **`2` skipped because
+  the relay was unreachable**. `2` is not a regression and must never be read as a pass.

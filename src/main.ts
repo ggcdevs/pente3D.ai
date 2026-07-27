@@ -659,7 +659,9 @@ function currentGame(): { readonly uuid: string; readonly headHash: string } | n
  * success). Shared by REVIEW and RESUME (Task 6.6): both fold the stored log into a live `Game` and
  * render it; they differ only in what happens to the AUTOSAVE record afterward (see below). A
  * conflicted record has no single game — we load its LOCAL fork (`mine`) so the player can inspect
- * the fork they were on (GLOSSARY "conflict": both forks are stored; resolution is a future feature).
+ * the fork they were on (GLOSSARY "Conflict": both forks are stored, and since v3.1 an agreed
+ * **resolution** can lift the stop in the LIVE session; the conflicted record is kept either way,
+ * so agreeing to the other history never destroys your own).
  */
 async function loadArchivedIntoScene(id: string): Promise<Game | undefined> {
   const conflicted = await loadConflictedIfAny(archiveDb!, id);
