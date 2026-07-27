@@ -6,7 +6,7 @@ import { createLogger } from './debug/log.ts';
 import { createAppNetSession } from './net/appSession.ts';
 import { shouldRenderSessionGame } from './net/netRouting.ts';
 import { shouldArchiveBeforeNetStart } from './net/rematch.ts';
-import { deriveEndState, REMATCH_ACTION, type EndState } from './net/endState.ts';
+import { deriveEndState, HIDDEN_END_STATE, REMATCH_ACTION, type EndState } from './net/endState.ts';
 import type { DivergenceView } from './ui/widgets/divergenceModel.ts';
 import type { ResolutionChoice } from './net/resolution.ts';
 import { NotifyGlue, type NotifyReadout, type NotificationApi } from './net/notifyGlue.ts';
@@ -128,18 +128,6 @@ const scene = createScene(container);
  * session holds its own for the games it persists (`persist/archive.ts` `StartedAtLedger`).
  */
 const startedAts = new StartedAtLedger();
-
-/** The hidden end-state used before the net session wires up (offline / pre-wiring): the networked
- *  end-state overlay shows nothing until there is a live, finished net game to describe. */
-const HIDDEN_END_STATE: EndState = {
-  show: false,
-  winner: null,
-  winReason: null,
-  iWon: false,
-  resultText: '',
-  rematchUi: 'idle',
-  rematchPrompt: null,
-};
 
 // The live networked END-STATE view-model the overlay renders (Task N.2.2, issue #12), set once the
 // net session wires up (below). Until then (offline / pre-wiring) there is no net game, so the overlay

@@ -11,6 +11,10 @@
  *   pente redo  <CODE>
  *   pente resolve <CODE> <take-mine|take-theirs|rewind>  suggest a resolution for a divergence
  *   pente agree <CODE> | pente refuse <CODE>    answer the opponent's suggested resolution
+ *   pente rematch <CODE>                        ask for a rematch (colours alternate)
+ *   pente accept <CODE> | pente decline <CODE>  answer the opponent's rematch ask
+ *   pente leave <CODE>                          leave the room (daemon stays up)
+ *   pente enter <CODE> [--seed new|defer]       walk back in on an explicit seed
  *   pente status <CODE>                         connection/seat/turn readout
  *   pente drop  <CODE> [--silent] [--lossy]      simulate a network outage (kill the socket)
  *   pente restore <CODE>                        end the outage (let mqtt.js reconnect)
@@ -165,6 +169,34 @@ async function main(): Promise<void> {
       return output(r.data, args);
     }
 
+    // Rematch (N.2, #12): the out-of-band ask and its answer. Distinct from `resolve`/`agree`, which
+    // answer a DIVERGENCE — a rematch that both sides accept resets to a fresh game with the colours
+    // ALTERNATED, so the two asks must not share a verb.
+    case 'rematch':
+    case 'accept':
+    case 'decline': {
+      const r = await request(requireCode(args), { cmd: args.verb }, 15_000);
+      if (!r.ok) return fail(r.data);
+      return output(r.data, args);
+    }
+
+    // Room lifecycle: a real departure, and a re-entry on an explicit seed (design §3). `leave` is
+    // NOT `drop` — it takes the session offline (seat and engine dropped) rather than killing the
+    // socket under a session that stays connected.
+    case 'leave': {
+      const r = await request(requireCode(args), { cmd: 'leave' }, 15_000);
+      if (!r.ok) return fail(r.data);
+      return output(r.data, args);
+    }
+    case 'enter': {
+      const seed = typeof args.flags.seed === 'string' ? args.flags.seed : 'defer';
+      // The entry negotiates over the relay (hello → settle window → admit/establish), so it is given
+      // room to complete; a refusal comes back as a `joinError` on the snapshot, not as a timeout.
+      const r = await request(requireCode(args), { cmd: 'enter', arg: seed }, 60_000);
+      if (!r.ok) return fail(r.data);
+      return output(r.data, args);
+    }
+
     case 'wait': {
       const code = requireCode(args);
       const timeoutS = Number(args.flags.timeout ?? 55);
@@ -196,6 +228,11 @@ async function main(): Promise<void> {
   pente undo  <CODE> | pente redo <CODE>
   pente resolve <CODE> <take-mine|take-theirs|rewind>   suggest a way out of a divergence
   pente agree <CODE> | pente refuse <CODE>         answer your opponent's suggestion
+  pente rematch <CODE>                             ask for a rematch (colours alternate)
+  pente accept <CODE> | pente decline <CODE>       answer your opponent's rematch ask
+  pente leave <CODE>                               leave the room (the daemon stays up)
+  pente enter <CODE> [--seed new|defer]            walk back in: new = start over (empty only),
+                                                   defer = dealer's choice (adopts theirs)
   pente status <CODE>                              one-line readout
   pente drop  <CODE> [--silent] [--lossy]          simulate an outage (--silent: no Last-Will,
                                                    so the peer never sees an absence; --lossy:

@@ -200,6 +200,14 @@ function run(peer: Peer, argv: readonly string[], timeoutMs: number): Promise<st
 export const statusOf = (peer: Peer): Promise<Snapshot> => verb(peer, ['status'], 20_000);
 
 /**
+ * The placed nodes on a snapshot's board, sorted — "is this board empty / the same board" in one
+ * comparable value. Deliberately NOT a proxy for the game's identity or its history: an empty board
+ * is also what a rewound game looks like, which is why the scenarios that care assert `gameUuid` and
+ * `headHash` alongside it.
+ */
+export const pieceKeys = (snap: Snapshot): string[] => Object.keys(snap.game?.pieces ?? {}).sort();
+
+/**
  * Poll `status` until `pred` holds. Used for the transitions that have no blocking verb —
  * a link coming back up, the peer's presence clearing after a Last-Will. Throws on timeout
  * with the last snapshot, so a stall names what it was waiting for.

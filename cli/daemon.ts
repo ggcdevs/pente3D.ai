@@ -16,7 +16,10 @@ import { dropLink, restoreLink, linkStatus } from './netlink';
 import { render, type Snapshot } from './views';
 import type { DivergenceView } from '../src/ui/widgets/divergenceModel';
 import { generateGameCode, validateGameCode } from '../src/ui/widgets/netModel';
+import { headHash } from '../src/core/eventLog';
+import { deriveEndState, HIDDEN_END_STATE, REMATCH_ACTION } from '../src/net/endState';
 import type { Coord } from '../src/core/coords';
+import type { Proposal } from '../src/net/admission';
 import type { NetSession } from '../src/net/session';
 
 /** Runtime state dir (sockets + playerid). Overridable so two CLIs can co-exist. */
@@ -105,10 +108,18 @@ export async function runDaemon(opts: PlayOptions): Promise<void> {
       lastMove,
       seatOwners: session.seatOwners(),
       game,
+      // Game IDENTITY + history fingerprint, read off the live engine exactly as the browser's
+      // `window.__pente.getGameUuid`/`getHeadHash` do (`main.ts` `getNetHeadHash`) — the same two
+      // facts, so a CLI scenario and a Playwright spec assert on one truth rather than two.
+      gameUuid: session.gameUuid(),
+      headHash: headHashOrNull(),
       link: linkStatus(),
       // The open divergence (V.4b, #38) — the same pure card the browser panel paints, so a
       // scenario asserts on the players' own facts rather than a CLI-only projection.
       divergence: divergenceOrNull(),
+      // The end-state / rematch card (N.2, #12), from the same pure `deriveEndState` the browser
+      // overlay paints — over the live net game, the N.1 handshake and this client's seat.
+      endState: game === null ? HIDDEN_END_STATE : deriveEndState(game, session.getHandshake(), st.seat),
     };
   }
 
@@ -116,6 +127,12 @@ export async function runDaemon(opts: PlayOptions): Promise<void> {
   function divergenceOrNull(): DivergenceView | null {
     const view = session.divergenceView();
     return view.show ? view : null;
+  }
+
+  /** The authoritative log's head hash, or `null` with no live engine (offline). */
+  function headHashOrNull(): string | null {
+    const engine = session.syncEngine();
+    return engine === null ? null : headHash(engine.game().log);
   }
 
   function onChange(): void {
@@ -139,13 +156,34 @@ export async function runDaemon(opts: PlayOptions): Promise<void> {
     }
   }
 
+  /**
+   * Apply a MUTUALLY-ACCEPTED rematch, exactly as the browser app does (`src/main.ts`): when the
+   * out-of-band handshake resolves `accepted` for the `rematch` action — whether WE asked and the
+   * peer agreed or the reverse — both clients seamlessly reset to a fresh game over the SAME
+   * connection with their seats ALTERNATED (`resetForRematch`). Fired once per resolution id, so a
+   * repeat notification cannot reset a game that is already under way.
+   *
+   * The CLI runs the real protocol rather than a simplified one; a client that asked for a rematch
+   * and then never swapped would be a second client the browser could not actually play against, and
+   * the post-swap colour a returning peer must come back on (#40) would be a fiction of this file.
+   */
+  let handledRematchId: string | null = null;
+  function maybeRematchReset(): void {
+    const res = session.getHandshake().resolution;
+    if (res === null || res.action !== REMATCH_ACTION || res.outcome !== 'accepted') return;
+    if (res.id === handledRematchId) return;
+    handledRematchId = res.id;
+    session.resetForRematch();
+  }
+
   session.onChange(onChange);
   // The OUT-OF-BAND handshake (N.1) also changes what a player can do without the game changing:
   // an incoming resolution ask, a decline, a peer-gone auto-cancel. Repaint on it, and APPLY an
-  // accepted resolution on BOTH sides exactly as the browser app does (`main.ts`) — the CLI must run
-  // the same protocol, not a simplified one, or it would stop being a faithful second client.
+  // accepted resolution/rematch on BOTH sides exactly as the browser app does (`main.ts`) — the CLI
+  // must run the same protocol, not a simplified one, or it would stop being a faithful second client.
   session.onHandshakeChange(() => {
     session.applyAcceptedResolution();
+    maybeRematchReset();
     console.log('\n' + render(snapshot(), opts.view) + '\n' + '─'.repeat(48));
   });
 
@@ -213,6 +251,50 @@ export async function runDaemon(opts: PlayOptions): Promise<void> {
       case 'restore':
         if (!restoreLink()) return reply(conn, false, 'no link to restore');
         console.log('[pente] link RESTORING…');
+        return reply(conn, true, snapshot());
+      // ── Room lifecycle (V.7 scenarios) ────────────────────────────────────────
+      // `leave` is a real DEPARTURE (transport down, engine + seat dropped) — not the `drop` outage,
+      // which keeps the session. `enter <seed>` walks back in with an explicit seed, so a scenario can
+      // drive the §3 matrix from the CLI: `new` (start over — accepts EMPTY only) or `defer` (dealer's
+      // choice — the only kind that adopts a peer's game, and the one a returning peer re-seeds from
+      // its breadcrumb on). Together they are how a player re-uses a room code for another game.
+      case 'leave':
+        if (session.state().phase === 'offline') return reply(conn, false, 'not in a room');
+        session.disconnect();
+        console.log('[pente] LEFT the room (session offline; the daemon stays up)');
+        return reply(conn, true, snapshot());
+      case 'enter': {
+        if (session.state().phase !== 'offline') {
+          return reply(conn, false, "already in a room — 'pente leave' first");
+        }
+        const seed = req.arg ?? 'defer';
+        if (seed !== 'new' && seed !== 'defer') {
+          return reply(conn, false, `enter: want a seed of new | defer (got "${seed}")`);
+        }
+        const proposal: Proposal = { kind: seed };
+        console.log(`[pente] ENTERING room ${code} on the '${seed}' seed…`);
+        // The entry is a negotiation (connect → hello → settle window → admit/establish), so the
+        // reply waits for it and carries the OUTCOME — including a refusal, which lands as a
+        // `joinError` on an offline snapshot rather than as a thrown error.
+        session
+          .enter(code, proposal)
+          .then(() => reply(conn, true, snapshot()))
+          .catch((e: unknown) => reply(conn, false, e instanceof Error ? e.message : String(e)));
+        return;
+      }
+      // ── Rematch (N.2/#12): the out-of-band ask, and the answer to one ──────────
+      // Distinct from `resolve`/`agree`, which answer a DIVERGENCE. A mutually-accepted rematch resets
+      // both peers to a fresh game with their colours ALTERNATED (see `maybeRematchReset`).
+      case 'rematch':
+        if (!session.propose(REMATCH_ACTION)) {
+          return reply(conn, false, 'rematch: not connected/seated, so there is nothing to ask about');
+        }
+        return reply(conn, true, snapshot());
+      case 'accept':
+      case 'decline':
+        if (!session.respond(req.cmd === 'accept')) {
+          return reply(conn, false, `${req.cmd}: there is no pending proposal to answer`);
+        }
         return reply(conn, true, snapshot());
       // ── Divergence resolution (V.4b, #38) ─────────────────────────────────────
       // `resolve <choice>` suggests one; `agree`/`refuse` answers the peer's. Nothing lands until

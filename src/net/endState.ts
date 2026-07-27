@@ -96,6 +96,23 @@ export interface EndState {
 export const REMATCH_ACTION = 'rematch';
 
 /**
+ * The end-state a consumer holds when there is NO live networked game to derive one from — offline,
+ * or before the session wires up. Nothing to show, nothing asked. It lives here, beside
+ * {@link deriveEndState}, because every consumer needs the same "not applicable" value and a
+ * hand-written copy per consumer is a shape that can drift from the type it claims to be (the app
+ * shell and the CLI daemon each had their own).
+ */
+export const HIDDEN_END_STATE: EndState = {
+  show: false,
+  winner: null,
+  winReason: null,
+  iWon: false,
+  resultText: '',
+  rematchUi: 'idle',
+  rematchPrompt: null,
+};
+
+/**
  * A human name for a color, for the fixed result sentence and the rematch prompt. Enumerated over the
  * `Player` union with an explicit assertion on each arm (not a lax "else = Black" fallthrough): an
  * input outside `{'white','black'}` is an invariant violation and throws, so no caller can smuggle an

@@ -18,8 +18,9 @@ flapping presence at the browser peer), so the client is split in two:
   joins/hosts the room, and serves state + commands over a Unix socket
   (`.pente-cli/<CODE>.sock`). It also prints the board to stdout on every change, so
   running it in the background gives a live game log.
-- **Thin verbs** (`show`, `move`, `wait`, `status`, `undo`, `redo`, `quit`) connect to
-  that socket, do one thing, and exit — ideal for scripting.
+- **Thin verbs** (`show`, `move`, `wait`, `status`, `undo`, `redo`, `leave`, `enter`,
+  `rematch`, `accept`/`decline`, `resolve`, `agree`/`refuse`, `quit`) connect to that socket,
+  do one thing, and exit — ideal for scripting.
 
 ## Usage
 
@@ -38,6 +39,15 @@ flapping presence at the browser peer), so the client is split in two:
 # Simulate a network outage (see "Outages" below):
 ./cli/pente drop    ABCDE                # kill the socket — the session stays "connected"
 ./cli/pente restore ABCDE                # let mqtt.js reconnect
+
+# Leave the room and walk back in on an explicit seed (design §3):
+./cli/pente leave ABCDE                  # a real departure: seat + engine dropped (NOT `drop`)
+./cli/pente enter ABCDE --seed new       # start over — sends/accepts an EMPTY game only
+./cli/pente enter ABCDE --seed defer     # dealer's choice — the only seed that adopts theirs
+
+# Rematch after a decided game (colours alternate on both sides):
+./cli/pente rematch ABCDE                # ask
+./cli/pente accept  ABCDE                # …or `decline`, to answer the opponent's ask
 ```
 
 Any state-returning verb accepts **`--json`**, which prints the raw snapshot instead of a
@@ -82,16 +92,30 @@ cover what the browser cannot easily drive (design doc §8) and assert on the da
 snapshots, never on log output.
 
 ```sh
-npm run scenario:issue45     # issue #45: does a reconnect converge to the live game?
-SCENARIO_VERBOSE=1 npm run scenario:issue45   # …and tee both daemons' live boards
+npm run scenario:all         # the whole matrix, with a pass/FAIL/skipped line per scenario
+SCENARIO_VERBOSE=1 npm run scenario:issue45   # one scenario, teeing both daemons' live boards
 ```
 
-Exit code 0 = every check passed. **`scenario:issue45` fails on purpose today** — it is the
-repro for the reconnect-resync bug and turns green when the v3.1 remodel lands.
+| script | what it puts on trial |
+|---|---|
+| `scenario:issue45` | a reconnect converges to the LIVE game (#45) |
+| `scenario:mirror` | the returner's own unheard move reaches the resident (design §5 mirror) |
+| `scenario:divergence` | a fork is seen by BOTH and resolved by agreement (#38) |
+| `scenario:code-reuse` | re-using a code with New Game starts a NEW game (#46, #43) |
+| `scenario:rematch` | after a rematch swap, a returning peer comes back on its NEW colour (#40) |
+| `scenario:both-absent` | both leave, both return → same head, seats intact |
+| `scenario:ff-boundary` | ONE entry behind converges itself; TWO must be resolved by the players |
 
-Writing another: `harness.ts` gives you `startPeer` / `verb` / `waitFor` / `check` / `report`;
-a scenario is a plain script (live network, child processes and multi-second waits make it an
-integration probe, not a unit test).
+**Exit codes.** `0` every check passed · `1` a check FAILED (a regression) · `2` SKIPPED because
+the relay was unreachable. The last one is deliberate: without egress a scenario proves nothing,
+and reporting that as a failure would train everyone to ignore a real one. `scenario:all` applies
+the same rule to the suite — `1` if anything failed, `2` if *everything* was skipped.
+
+Writing another: drop a `*.ts` in `cli/scenarios/` (it joins `scenario:all` automatically — the
+runner enumerates the directory) and give it its own `scenario:<name>` script. `harness.ts` gives
+you `requireRelay` / `startPeer` / `verb` / `waitFor` / `check` / `report`; a scenario is a plain
+script (live network, child processes and multi-second waits make it an integration probe, not a
+unit test).
 
 ## Config / env overrides
 

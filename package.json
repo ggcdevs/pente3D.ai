@@ -19,7 +19,12 @@
     "typecheck:cli": "tsc -p cli/tsconfig.json --noEmit",
     "scenario:issue45": "tsx cli/scenarios/issue45-reconnect-resync.ts",
     "scenario:mirror": "tsx cli/scenarios/mirror-republish.ts",
-    "scenario:divergence": "tsx cli/scenarios/divergence-resolution.ts"
+    "scenario:divergence": "tsx cli/scenarios/divergence-resolution.ts",
+    "scenario:code-reuse": "tsx cli/scenarios/code-reuse-new-game.ts",
+    "scenario:rematch": "tsx cli/scenarios/rematch-reconnect.ts",
+    "scenario:both-absent": "tsx cli/scenarios/both-absent-return.ts",
+    "scenario:ff-boundary": "tsx cli/scenarios/ff-vs-diff-boundary.ts",
+    "scenario:all": "tsx cli/scenarios/all.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.48.0",

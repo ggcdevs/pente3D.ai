@@ -1484,6 +1484,7 @@
         "target": "src/net/endState.ts",
         "specifiers": [
           "EndState",
+          "HIDDEN_END_STATE",
           "REMATCH_ACTION",
           "deriveEndState"
         ]
@@ -1921,6 +1922,7 @@
   "src/net/endState.ts": {
     "exports": [
       "EndState",
+      "HIDDEN_END_STATE",
       "REMATCH_ACTION",
       "RematchUi",
       "WinReason",

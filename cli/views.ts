@@ -12,6 +12,7 @@ import type { GameState, Player } from '../src/core/gameState';
 import type { SeatMap } from '../src/net/seats';
 import type { LinkStatus } from './netlink';
 import type { DivergenceView } from '../src/ui/widgets/divergenceModel';
+import type { EndState } from '../src/net/endState';
 
 /** The plain, JSON-safe game readout the daemon sends and the views render. */
 export interface Snapshot {
@@ -26,6 +27,20 @@ export interface Snapshot {
   readonly seatOwners: SeatMap | null;
   readonly game: GameState | null;
   /**
+   * The live game's IDENTITY (`Game.uuid`), or `null` offline. A room code is pure rendezvous and a
+   * game is a UUID with no mapping between them (design §2), so "did re-using this code start a
+   * DIFFERENT game?" is a question only this field can answer — the board being empty is not the
+   * same fact (a fresh game and a rewound one both look empty).
+   */
+  readonly gameUuid: string | null;
+  /**
+   * The authoritative log's `headHash` — the fingerprint of identity + whole history, or `null`
+   * offline. Two peers holding the same head hold the same game AND the same line of play, which is
+   * what "converged" means; two boards that merely look alike do not prove it (an undo leaves the
+   * board bare with the history real).
+   */
+  readonly headHash: string | null;
+  /**
    * The TRANSPORT link, distinct from the session `phase`: a dropped socket
    * (`drop`, or a real outage) leaves the session `connected` while the link is
    * `down` — the exact split issue #45 lives in.
@@ -39,6 +54,13 @@ export interface Snapshot {
    * way out.
    */
   readonly divergence: DivergenceView | null;
+  /**
+   * The networked END-STATE view-model (N.2, #12) — the SAME pure `deriveEndState` the browser's
+   * overlay paints, so the CLI sees a finished game and the rematch ask exactly as a player does.
+   * Always present (`show` is `false` while a game is in progress); `rematchUi` is what a scenario
+   * reads to prove an ask really reached the OTHER client instead of trusting a publish.
+   */
+  readonly endState: EndState;
 }
 
 export type View = (s: Snapshot) => string;
@@ -56,7 +78,10 @@ function header(s: Snapshot): string {
   // A dropped link is called out loudly: the session still says `connected`, so without
   // this the board looks authoritative while it is quietly frozen in the past (#45).
   const link = s.link === 'down' ? ' · LINK DOWN (offline)' : '';
-  lines.push(`Room ${s.code} · you are ${seat} · phase ${s.phase} · opponent ${opp}${link}`);
+  // The GAME identity, short: a room code names no game (design §2), so when a re-used code hands you
+  // a board you did not expect, this is the field that says whether it is a different game.
+  const game = s.gameUuid === null ? '' : ` · game ${s.gameUuid.slice(0, 8)}`;
+  lines.push(`Room ${s.code} · you are ${seat} · phase ${s.phase} · opponent ${opp}${game}${link}`);
   // A divergence is called out ABOVE the board, because the board below it is one of two histories
   // and nothing will converge until the two players agree which (V.4b).
   const d = s.divergence;
@@ -73,6 +98,13 @@ function header(s: Snapshot): string {
     if (g.winner) {
       const mine = g.winner === s.seat;
       lines.push(`GAME OVER — ${g.winner.toUpperCase()} wins${mine ? ' (you!)' : ''}`);
+      // The rematch ask, in the same words the browser overlay uses (N.2): a player must be able to
+      // see an incoming ask, not just answer one they were told about out of band.
+      const e = s.endState;
+      if (e.rematchPrompt !== null) lines.push(`  ${e.rematchPrompt}  →  pente accept | pente decline`);
+      else if (e.rematchUi === 'proposed-waiting') lines.push('  waiting for your opponent to accept the rematch…');
+      else if (e.rematchUi === 'declined') lines.push('  the rematch was declined');
+      else if (e.rematchUi === 'idle') lines.push('  pente rematch  (colours alternate)');
     } else {
       const yours = s.canPlace;
       lines.push(
