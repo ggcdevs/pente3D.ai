@@ -532,9 +532,6 @@ export async function rekeyArchiveRecordsByGameUuid(
     // ordinary record can stand in for it. Every claimant stays where it is.
     if (byId.get(uuid)?.meta.result === 'conflicted') continue;
     const survivor = group.reduce((best, l) => (beatsForUuid(l, best, uuid) ? l : best));
-    // Set once a record we could NOT prove stale is holding the destination key itself (see the
-    // re-key below).
-    let destinationKept = false;
     /** Records this pass deleted (their history provably contained by the survivor). */
     const dropped = new Set<string>();
     for (const loser of group) {
@@ -545,11 +542,14 @@ export async function rekeyArchiveRecordsByGameUuid(
         await deleteGame(db, loser.id);
         dropped.add(loser.id);
         moved.push(loser.id);
-      } else if (loser.id === uuid) {
-        destinationKept = true;
       }
+      // A loser we could NOT prove stale is simply left where it is. It needs no flag of its own:
+      // if it happens to hold the destination key, the occupant check below refuses the move for the
+      // same reason and by the same containment proof. (There WAS a `destinationKept` flag here; once
+      // that check existed the two were one rule written twice, and mutation testing found it —
+      // neither could be killed independently, because either alone produced the right answer.)
     }
-    if (survivor.id !== uuid && !destinationKept) {
+    if (survivor.id !== uuid) {
       // The destination key may be held by a record that is not a CLAIMANT for this uuid at all —
       // one whose id merely collides with it, while its own `meta.uuid` names a different game (or it
       // predates uuids entirely). Such a record is never in `group`, so the loser loop above cannot

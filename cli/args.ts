@@ -124,7 +124,11 @@ function flagList(): string {
  */
 export function unknownFlag(args: Args): string | null {
   for (const [name, value] of Object.entries(args.flags)) {
-    const kind = FLAG_KIND[name];
+    // `Object.hasOwn`, never a raw index read. `FLAG_KIND` is a plain object literal, so
+    // `FLAG_KIND['constructor']` (or `toString`, `valueOf`, `__proto__`…) resolves to an INHERITED
+    // member that is neither `undefined` nor `'switch'` — every such flag would be accepted as known
+    // and then silently dropped, exit 0 and empty stderr. Same defect, same fix as `isViewName`.
+    const kind = Object.hasOwn(FLAG_KIND, name) ? FLAG_KIND[name] : undefined;
     if (kind === undefined) {
       return `${args.verb}: unknown option "--${name}" — this CLI understands: ${flagList()}`;
     }
@@ -196,7 +200,9 @@ const ARITY_HINT: Readonly<Record<string, string>> = {
  * exits non-zero.
  */
 export function unexpectedPositional(args: Args): string | null {
-  const arity = VERB_ARITY[args.verb];
+  // Own-property only, for the same reason as `unknownFlag`: `VERB_ARITY['toString']` would
+  // otherwise resolve to an inherited function and be used as an arity.
+  const arity = Object.hasOwn(VERB_ARITY, args.verb) ? VERB_ARITY[args.verb] : undefined;
   if (arity === undefined) return null;
   // positional[0] is the room code, so the verb's own arguments start at 1 — except for a verb that
   // takes no room code, whose own arguments start at 0.

@@ -1127,6 +1127,32 @@ describe('game archive', () => {
    * must not turn into a second record the first time it is played again.
    */
   describe('rekeyArchiveRecordsByGameUuid', () => {
+    it('KEEPS a claimant sitting on the destination key whose history the survivor cannot contain', async () => {
+      // The `destinationKept` protection, pinned. Mutation review proved it could be defeated
+      // entirely with the suite still green: the earlier test covers an occupant that is a DIFFERENT
+      // game (never a claimant, so the loser loop never judges it), while this is the other shape —
+      // two records claiming ONE uuid whose histories have DIVERGED, with one of them holding the
+      // destination key. Neither contains the other, so nothing may be deleted and nothing may be
+      // overwritten: both histories survive, and a human resolves it.
+      const { db } = await open();
+      const forkA = new Game(9, SAMPLE_UUID);
+      forkA.place([4, 4, 4]);
+      forkA.place([0, 0, 0]);
+      const forkB = new Game(9, SAMPLE_UUID);
+      forkB.place([4, 4, 4]);
+      forkB.place([1, 1, 1]);
+      forkB.place([2, 2, 2]); // longer, so it wins the survivor pick and would do the overwriting
+      await saveGame(db, SAMPLE_UUID, forkA, { ...sampleMeta, startedAt: 1 });
+      await saveGame(db, 'longer-fork', forkB, { ...sampleMeta, startedAt: 2 });
+
+      expect(await rekeyArchiveRecordsByGameUuid(db)).toEqual([]);
+
+      // BOTH are still readable, each with its own history — the migration moved nothing rather than
+      // choosing a winner it could not justify.
+      expect(headHash((await loadGame(db, SAMPLE_UUID))!.log)).toBe(headHash(forkA.log));
+      expect(headHash((await loadGame(db, 'longer-fork'))!.log)).toBe(headHash(forkB.log));
+    });
+
     it('REFUSES to move onto a destination key held by a DIFFERENT game it cannot contain', async () => {
       const { db } = await open();
       // The destination key is occupied by a record that is not a claimant for this uuid at all: its

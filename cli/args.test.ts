@@ -124,6 +124,18 @@ describe('parseArgs — verb, room code, positionals, flags', () => {
  *     pente quit ABCDE --vew list       -> stderr '', exit 0
  */
 describe('unknownFlag — a flag we do not understand is REFUSED, never ignored', () => {
+
+  it('refuses an Object.prototype member as a flag — the whole chain, not just a sample', () => {
+    // A raw index read on a plain object literal resolves EVERY inherited member to something that
+    // is neither `undefined` nor `'switch'`, so each of these was accepted as a known flag and then
+    // silently dropped: exit 0, empty stderr, the option ignored. Enumerated from the prototype
+    // itself so a future member is covered the day it exists.
+    for (const name of Object.getOwnPropertyNames(Object.prototype)) {
+      const refusal = unknownFlag({ verb: 'show', code: 'ABCDEF', positional: ['ABCDEF'], flags: { [name]: true } });
+      // (the flag name is in the loop variable; a failure names it in the diff)
+      expect({ name, refusal }).not.toEqual({ name, refusal: null });
+    }
+  });
   it('THE BUG: a one-character typo on `--seed` is refused, not turned into `defer`', () => {
     const a = cli('enter', 'ABCDE', '--seedd', 'new');
     expect(enterSeed(a)).toEqual({ seed: 'defer' }); // what the daemon would have been asked for
