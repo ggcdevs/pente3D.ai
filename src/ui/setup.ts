@@ -18,6 +18,7 @@
  */
 
 import { getConfig } from '../config/config.ts';
+import { createLogger } from '../debug/log.ts';
 import { createWidgetRegistry, type WidgetFactory } from './registry.ts';
 import { createUiContainer, type LayoutReadout, type UiContainerHandle } from './container.ts';
 import { bannerWidget } from './widgets/banner.ts';
@@ -46,6 +47,9 @@ import type { LayoutConfig } from './layout.ts';
  * The command-dispatch surface widgets need — the SAME registry keybindings use (design
  * Principle 3). Supplied by the app (the scene handle) so the UI shell never imports render.
  */
+/** Logger for the UI shell's own glue (widget wiring), matching the app's per-module convention. */
+const log = createLogger('app:ui');
+
 export interface UiDeps {
   /** Dispatch a command id (e.g. `'undo'`). Returns whether a command ran. */
   dispatch(commandId: string): boolean;
@@ -93,7 +97,9 @@ export interface UiDeps {
    * without re-minting the autosave id. Supplied by the app so the UI shell never imports
    * `src/persist` / `src/render`.
    */
-  reviewArchived(id: string): Promise<void>;
+  /** REVIEW a record read-only; resolves the same typed outcome as `resumeArchived` so a refusal
+   *  (a live room, a damaged record) can be shown rather than swallowed. */
+  reviewArchived(id: string): Promise<ResumeOutcome>;
   /**
    * RESUME an archived game (Task 6.6; keyed by the GAME's uuid since Task V.6): reconstruct the game,
    * swap it into the scene, and make it the live CONTINUABLE game — continued play is written back to
@@ -266,6 +272,9 @@ export function createUi(container: HTMLElement, deps: UiDeps): UiHandle {
       registerOpenArchive: deps.registerOpenArchive,
       registerOpenNetwork: deps.registerOpenNetwork,
       listArchive: deps.listArchive,
+      // The widget shows the copy; the APP logs what actually happened, so a failed archive read is
+      // never reduced to a message on screen with no trace of its cause.
+      onReadError: (err: unknown) => log.error('archive list read failed', err),
       reviewArchived: deps.reviewArchived,
       resumeArchived: deps.resumeArchived,
       getHelpSources: deps.getHelpSources,

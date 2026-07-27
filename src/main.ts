@@ -19,6 +19,7 @@ import {
   loadGame as loadArchivedGame,
   loadConflicted,
   listArchivedGames,
+  ArchiveError,
   loadNetGame,
   loadNetGameByUuid,
   archivedIdentity,
@@ -36,6 +37,7 @@ import {
   deriveArchive,
   deriveSeedGames,
   selectResumeTarget,
+  selectReviewTarget,
   type ArchiveListing,
   type ResumeOutcome,
 } from './ui/widgets/archiveModel.ts';
@@ -598,10 +600,17 @@ function userFacingGames(listings: readonly GameListing[]): readonly GameListing
 
 /**
  * List every archived game for the browser (Task 5.8) — the app's `listArchivedGames` projected to
- * the widget's `ArchiveListing` shape. Resolves empty until the DB is open (honest, never a crash).
+ * the widget's `ArchiveListing` shape.
+ *
+ * A closed archive REJECTS rather than resolving `[]`. `archiveDb` is null both before the boot open
+ * resolves and PERMANENTLY after it fails, and an empty array is indistinguishable from a real empty
+ * archive — so the widget painted "No saved games yet." at a player whose games are all still there,
+ * unreadable. Saying nothing about damage is the one thing an archive browser must not do.
  */
 async function listArchive(): Promise<readonly ArchiveListing[]> {
-  if (archiveDb === null) return [];
+  if (archiveDb === null) {
+    throw new ArchiveError('the game archive is not open (it failed to open, or is still opening)');
+  }
   return userFacingGames(await listArchivedGames(archiveDb));
 }
 
@@ -692,16 +701,39 @@ function swapGameIntoScene(game: Game): void {
  * the slider is a read-only local feature, `scene.scrubTo`). The suspension ends when the user starts a
  * real game (reset / host / join) or RESUMES the browsed game — a real move only happens via RESUME.
  */
-async function reviewArchived(id: string): Promise<void> {
-  if (archiveDb === null) return;
+async function reviewArchived(id: string): Promise<ResumeOutcome> {
+  // Nothing to read from — the same honest answer a missing record gets, rather than a closed modal.
+  if (archiveDb === null) return { ok: false, reason: 'not-found' };
   try {
+    // The SAME active-room rule resume obeys, taken at click time from the same two facts. Without it
+    // a review inside a room loaded the board into the scene-local slot while the scene renders the
+    // session's game: the load happened and nothing on screen changed.
+    const selection = selectReviewTarget(
+      deriveArchive(userFacingGames(await listArchivedGames(archiveDb))),
+      id,
+      { heldGameUuid: getNetGameUuid(), authoritative: isNetAuthoritative() },
+    );
+    if (!selection.ok) {
+      log.error('archive review refused', { id, reason: selection.reason });
+      return { ok: false, reason: selection.reason };
+    }
     // Suspend BEFORE the swap so the load's own onStateChange tick is a no-op (never mints/overwrites).
     autosaveSuspended = true;
     const game = await loadArchivedIntoScene(id);
-    if (game === undefined) return;
+    if (game === undefined) return { ok: false, reason: 'not-found' };
+    // Remember WHERE this board came from, for the same reason RESUME does: the record's key may not
+    // be the game's uuid (a pre-V.5 record, or one the migration left in place), and the autosave's
+    // default key IS the uuid. A review is not supposed to write at all — but if the suspension is
+    // ever lifted while this board is live, the write must land on the record it was read from rather
+    // than on a DIFFERENT game that happens to own the uuid key. One rule for both routes in.
+    loadedRecordIds.set(game.uuid, id);
     log.info('archived game loaded for review (autosave suspended)', { id, ply: game.ply() });
+    return { ok: true };
   } catch (err: unknown) {
+    // A corrupt/illegal stored log or an IndexedDB failure — reported as DAMAGE, never as "no such
+    // game", exactly as the resume path reports it.
     log.error('archive review failed', { id, err });
+    return { ok: false, reason: 'unreadable' };
   }
 }
 
@@ -766,13 +798,16 @@ async function resumeArchived(uuid: string): Promise<ResumeOutcome> {
     // this same page load — its stamp lives in the session's own ledger — and without this the first
     // autosave of the resumed board would re-stamp it "now" and shuffle it up the newest-first list.
     startedAts.adopt(await archivedStartedAts(archiveDb));
-    // Ensure autosave is active (a prior review may have suspended it) so continued play is written.
-    autosaveSuspended = false;
     const resumed = await loadNetGame(archiveDb, selection.id);
     if (resumed === undefined) {
       log.error('archive resume: no record under the chosen id', { uuid, id: selection.id });
       return { ok: false, reason: 'not-found' };
     }
+    // Lift a prior REVIEW's suspension only once the load has SUCCEEDED. Lifting it earlier made every
+    // refusal arm below (`not-found`, `unreadable`) leave the reviewed board writable — the next tick
+    // would then persist a game the player was only looking at, breaking the guarantee stated at
+    // `reviewArchived`: a review leaves the archive exactly as it found it.
+    autosaveSuspended = false;
     // WRITE BACK WHERE WE READ. The record the gate chose may not be keyed by the game's uuid (a
     // pre-V.5 record, or the claimant that lost the migration's containment test), and the autosave's
     // default key is the uuid — so without this the next tick would write the continued board over a

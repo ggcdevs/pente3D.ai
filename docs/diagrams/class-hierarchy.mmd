@@ -32,11 +32,12 @@ classDiagram
         <<interface>>
         +readonly doc: Document
         +listArchive(): Promise~readonly ArchiveListing[]~
+        +onReadError(err: unknown): void
         +popScope(): void
         +pushScope(scope: ArchiveScope): void
         +registerOpenArchive(open: () =~ void): void
-        +resumeArchived(id: string): Promise~void~
-        +reviewArchived(id: string): Promise~void~
+        +resumeArchived(uuid: string): Promise~ResumeOutcome~
+        +reviewArchived(id: string): Promise~ResumeOutcome~
     }
     note for ArchiveDeps "src/ui/widgets/archive.ts"
     class ArchivedMeta {
@@ -47,11 +48,21 @@ classDiagram
         +readonly startedAt: number
     }
     note for ArchivedMeta "src/persist/archive.ts"
+    class ArchiveGroup {
+        <<interface>>
+        +readonly emptyText: string
+        +readonly isEmpty: boolean
+        +readonly items: readonly ArchiveItem[]
+        +readonly label: string
+        +readonly status: ArchiveStatus
+    }
+    note for ArchiveGroup "src/ui/widgets/archiveModel.ts"
     class ArchiveInspect {
         <<interface>>
         +answerRejoin(confirmed: boolean): boolean
         +getDivergence(): DivergenceView
         +getEndState(): EndState
+        +getGameUuid(): string
         +getNetGameUuid(): string | null
         +getNetLastReject(): AdmissionReject | null
         +getNetSeatOwners(): SeatMap | null
@@ -72,6 +83,9 @@ classDiagram
         +readonly playersLabel: string
         +readonly result: string
         +readonly startedAt: number
+        +readonly status: ArchiveStatus
+        +readonly statusLabel: string
+        +readonly uuid: string
     }
     note for ArchiveItem "src/ui/widgets/archiveModel.ts"
     class ArchiveListing {
@@ -86,10 +100,12 @@ classDiagram
         +readonly players: Readonly~Record~string, string~~
         +readonly result: string
         +readonly startedAt: number
+        +readonly uuid: string
     }
     note for ArchiveListingMeta "src/ui/widgets/archiveModel.ts"
     class ArchiveModel {
         <<interface>>
+        +readonly groups: readonly ArchiveGroup[]
         +readonly isEmpty: boolean
         +readonly items: readonly ArchiveItem[]
     }
@@ -1033,6 +1049,7 @@ classDiagram
         +getColors(): ColorsReadout | null
         +getDivergence(): DivergenceView
         +getEndState(): EndState
+        +getGameUuid(): string
         +getHandshake(): HandshakeState
         +getHeadHash(): string | null
         +getHelpSources(): HelpSources | null
@@ -1336,6 +1353,12 @@ classDiagram
         +readonly proposalId: string
     }
     note for ResponseMessage "src/net/sync.ts"
+    class ResumeSession {
+        <<interface>>
+        +readonly authoritative: boolean
+        +readonly heldGameUuid: string | null
+    }
+    note for ResumeSession "src/ui/widgets/archiveModel.ts"
     class RoomProbe {
         <<interface>>
         +readonly code: string
@@ -1592,8 +1615,8 @@ classDiagram
         +respondRematch(accepted: boolean): boolean
         +respondResolution(accepted: boolean): boolean
         +respondUndoRedo(accepted: boolean): boolean
-        +resumeArchived(id: string): Promise~void~
-        +reviewArchived(id: string): Promise~void~
+        +resumeArchived(id: string): Promise~ResumeOutcome~
+        +reviewArchived(id: string): Promise~ResumeOutcome~
         +scrubTo(k: number): void
         +seedSources(): SeedSources
         +setPendingJoinCode(code: string): void

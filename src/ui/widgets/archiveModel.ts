@@ -218,7 +218,9 @@ export type ResumeRefusal =
   /**
    * A room is running, so the session's game is what the scene renders
    * (`netRouting.shouldRenderSessionGame`). Loading ANY archived game into the scene-local slot now
-   * would put it somewhere nobody can see — the silent no-op this reason replaces.
+   * would put it somewhere nobody can see — the silent no-op this reason replaces. Applied by BOTH
+   * routes into the scene, {@link selectResumeTarget} and {@link selectReviewTarget}: it was resume-only
+   * at first, which left Review doing exactly the invisible load this describes.
    */
   | 'session-active'
   /**
@@ -441,6 +443,29 @@ export function deriveArchive(listings: readonly ArchiveListing[]): ArchiveModel
  * Refusals are TYPED and distinct so the caller can SAY which one happened
  * ({@link RESUME_REFUSAL_TEXT}) instead of silently doing nothing.
  */
+/**
+ * Whether a REVIEW of the record `id` may go ahead, or the typed reason it may not (Task V.6 review
+ * follow-up, ticket #37). The pure sibling of {@link selectResumeTarget}, and it exists because the
+ * two buttons sit in the SAME row and were not held to the same rule: resume grew both session
+ * guards while review kept none, so clicking Review inside a room loaded a board into the
+ * scene-local slot while the scene renders the SESSION's game — the load happened, and the player
+ * saw nothing change.
+ *
+ * Only the `session-active` guard applies. `session-live` does not: reviewing the game the room is
+ * playing is a read-only look at a record, not a second writer of it — but it is still refused by
+ * the active-room rule, for the same reason as any other row.
+ */
+export function selectReviewTarget(
+  model: ArchiveModel,
+  id: string,
+  session: ResumeSession,
+): ResumeSelection {
+  if (session.authoritative) return { ok: false, reason: 'session-active' };
+  const item = model.items.find((candidate) => candidate.id === id);
+  if (item === undefined) return { ok: false, reason: 'not-found' };
+  return { ok: true, uuid: item.uuid, id: item.id };
+}
+
 export function selectResumeTarget(
   model: ArchiveModel,
   uuid: string,

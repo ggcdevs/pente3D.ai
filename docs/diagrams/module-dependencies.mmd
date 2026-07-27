@@ -332,6 +332,7 @@ graph LR
     src_ui_container_ts --> src_ui_layout_ts
     src_ui_container_ts --> src_ui_registry_ts
     src_ui_setup_ts --> src_config_config_ts
+    src_ui_setup_ts --> src_debug_log_ts
     src_ui_setup_ts --> src_net_admission_ts
     src_ui_setup_ts --> src_net_endState_ts
     src_ui_setup_ts --> src_net_resolution_ts
@@ -357,6 +358,7 @@ graph LR
     src_ui_setup_ts --> src_ui_widgets_sliderModel_ts
     src_ui_widgets_archive_ts --> src_ui_registry_ts
     src_ui_widgets_archive_ts --> src_ui_widgets_archiveModel_ts
+    src_ui_widgets_archiveModel_ts --> src_ui_widgets_netPanelModel_ts
     src_ui_widgets_banner_ts --> src_core_gameState_ts
     src_ui_widgets_banner_ts --> src_net_undoRedo_ts
     src_ui_widgets_banner_ts --> src_ui_registry_ts

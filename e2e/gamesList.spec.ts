@@ -624,3 +624,49 @@ test("the net panel's Resume selector IS the browser's games, minus the loaded b
   mkdirSync(dirname(shot), { recursive: true });
   await page.screenshot({ path: shot });
 });
+
+test('an UNREADABLE archive says so — it is never shown as an empty one', async ({ page }) => {
+  // Opposite facts about a player's games: "you have none" and "yours could not be read". `listArchive`
+  // used to resolve `[]` whenever the DB handle was null — which is also the PERMANENT state after a
+  // failed open — and `renderRows` had no rejection path at all, so a broken archive rendered as
+  // "No saved games yet." while the games sat there intact.
+  await isolate(page);
+  // Break IndexedDB for the whole page BEFORE boot, so the archive open fails the way a real
+  // quota/private-mode/corruption failure does.
+  await page.addInitScript(() => {
+    const real = indexedDB.open.bind(indexedDB);
+    Object.defineProperty(indexedDB, 'open', {
+      configurable: true,
+      value: (...args: unknown[]) => {
+        const req = real('a-name-that-will-not-be-used-for-the-games-db');
+        // Fail asynchronously, like a real rejected open.
+        setTimeout(() => {
+          Object.defineProperty(req, 'error', { value: new Error('forced open failure') });
+          req.onerror?.(new Event('error'));
+        }, 0);
+        void args;
+        return req;
+      },
+    });
+  });
+  // NOT `ready()`: that helper polls `__pente.getArchive()`, which now REJECTS on a broken archive
+  // (the honest answer this test exists to pin). Wait on the app having mounted instead — a broken
+  // archive must not stop the app booting (issue #6's boot-resilience rule).
+  await page.goto('/');
+  await page.waitForFunction(() => {
+    const p = (window as unknown as { __pente?: Record<string, unknown> }).__pente;
+    return (
+      !!p &&
+      typeof p.dispatch === 'function' &&
+      !!document.querySelector('[data-widget-id="archiveBrowser"]')
+    );
+  });
+
+  await openBrowser(page);
+  const panel = modal(page);
+  await expect(panel).toHaveAttribute('data-unreadable', 'true');
+  await expect(panel).toHaveAttribute('data-empty', 'false');
+  await expect(page.locator('[data-testid="archive-empty"]')).toContainText('could not be read');
+  // …and it does NOT claim the archive is empty.
+  await expect(page.locator('[data-testid="archive-empty"]')).not.toContainText('No saved games yet');
+});

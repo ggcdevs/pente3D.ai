@@ -78,6 +78,17 @@ export interface ArchiveScope {
  * `resumeArchived(uuid)` loads it by the GAME's uuid to CONTINUE PLAYING (Task V.6 — the two keys are
  * not always the same). All async — reading/loading an archive is a promise (IndexedDB).
  */
+/** What the browser says when the archive is readable and holds nothing. */
+export const ARCHIVE_EMPTY_TEXT = 'No saved games yet.';
+
+/**
+ * What it says when the archive could not be READ. Deliberately different from the empty text: those
+ * are opposite facts about a player's games, and showing the empty one for a failed read says the
+ * games are gone when they are merely unreachable.
+ */
+export const ARCHIVE_UNREADABLE_TEXT =
+  'Your saved games could not be read on this device — they may still be there. Try reloading.';
+
 export interface ArchiveDeps {
   readonly doc: Document;
   /** Push the blocking `archive` scope when the modal opens. */
@@ -93,7 +104,14 @@ export interface ArchiveDeps {
    * user can browse its history via the slider. Does not re-mint the autosave id — reviewing an old
    * game must not disturb the current autosave record.
    */
-  reviewArchived(id: string): Promise<void>;
+  /**
+   * REVIEW the record `id` read-only. Resolves the SAME typed outcome as {@link resumeArchived} so a
+   * refusal can be shown rather than swallowed — the two buttons sit in one row and must not fail in
+   * two different ways.
+   */
+  /** Notified when a listing read FAILS, so the app can log the real error (the widget only shows copy). */
+  onReadError?(err: unknown): void;
+  reviewArchived(id: string): Promise<ResumeOutcome>;
   /**
    * RESUME (Task 6.6; keyed by GAME UUID since Task V.6): reconstruct the game whose portable
    * `uuid` this is (design §2.2 — NOT the record id, which a conflicted or pre-V.5 record does not
@@ -160,7 +178,7 @@ export function archiveWidget(): WidgetFactory {
       const empty = doc.createElement('div');
       empty.className = 'pente-archive-empty';
       empty.setAttribute('data-testid', 'archive-empty');
-      empty.textContent = 'No saved games yet.';
+      empty.textContent = ARCHIVE_EMPTY_TEXT;
       empty.hidden = true;
       panel.appendChild(empty);
 
@@ -233,9 +251,17 @@ export function archiveWidget(): WidgetFactory {
           reviewButton.className = 'pente-archive-review';
           reviewButton.setAttribute('data-testid', `archive-review-${item.id}`);
           reviewButton.textContent = 'Review';
+          // Like RESUME, the modal closes only on SUCCESS. A review can be refused for the same
+          // reason a resume can — a room is running, so the scene renders the SESSION's game and a
+          // board loaded into the scene-local slot would go somewhere nobody can see. That refusal
+          // used to be invisible in a different way from resume's: the list simply closed and the
+          // board never changed, which is the silent no-op this whole outcome type exists to end.
           reviewButton.addEventListener('click', () => {
-            close();
-            void deps.reviewArchived(item.id);
+            showRefusal(null);
+            void deps.reviewArchived(item.id).then((outcome) => {
+              if (outcome.ok) close();
+              else showRefusal(RESUME_REFUSAL_TEXT[outcome.reason]);
+            });
           });
           actions.appendChild(reviewButton);
         }
@@ -273,7 +299,26 @@ export function archiveWidget(): WidgetFactory {
 
       /** Rebuild the game rows from the pure model derived off the archive listings. */
       async function renderRows(): Promise<void> {
-        const listings = await deps.listArchive();
+        // A read that FAILS says so. `listArchive` rejects when the archive could not be opened, and
+        // this used to have no rejection path at all: the previous rows, `data-count` and `data-empty`
+        // were left stale, nothing was said, and the failure surfaced only as an unhandled promise
+        // rejection — while the header comment claimed a read failure was "surfaced honestly". An
+        // unreadable archive shown as an empty one tells a player their games are gone.
+        let listings: readonly ArchiveListing[];
+        try {
+          listings = await deps.listArchive();
+        } catch (err: unknown) {
+          body.replaceChildren();
+          empty.hidden = false;
+          empty.textContent = ARCHIVE_UNREADABLE_TEXT;
+          element.setAttribute('data-empty', 'false');
+          element.setAttribute('data-unreadable', 'true');
+          element.setAttribute('data-count', '0');
+          deps.onReadError?.(err);
+          return;
+        }
+        element.removeAttribute('data-unreadable');
+        empty.textContent = ARCHIVE_EMPTY_TEXT;
         const model = deriveArchive(listings);
         body.replaceChildren();
         empty.hidden = !model.isEmpty;

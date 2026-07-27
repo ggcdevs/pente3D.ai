@@ -976,6 +976,7 @@
           "getColors(): ColorsReadout | null",
           "getDivergence(): DivergenceView",
           "getEndState(): EndState",
+          "getGameUuid(): string",
           "getHandshake(): HandshakeState",
           "getHeadHash(): string | null",
           "getHelpSources(): HelpSources | null",
@@ -1026,6 +1027,7 @@
           "answerRejoin(confirmed: boolean): boolean",
           "getDivergence(): DivergenceView",
           "getEndState(): EndState",
+          "getGameUuid(): string",
           "getNetGameUuid(): string | null",
           "getNetLastReject(): AdmissionReject | null",
           "getNetSeatOwners(): SeatMap | null",
@@ -1548,6 +1550,7 @@
         "source": "./persist/archive.ts",
         "target": "src/persist/archive.ts",
         "specifiers": [
+          "ArchiveError",
           "ArchivedMeta",
           "PersistedSeats",
           "StartedAtLedger",
@@ -1557,6 +1560,7 @@
           "listArchivedGames",
           "loadConflicted",
           "loadGame",
+          "loadNetGame",
           "loadNetGameByUuid",
           "purgeEmptyShellRecords",
           "purgeLegacyNetRoomRecords",
@@ -1591,7 +1595,12 @@
         "source": "./ui/widgets/archiveModel.ts",
         "target": "src/ui/widgets/archiveModel.ts",
         "specifiers": [
-          "ArchiveListing"
+          "ArchiveListing",
+          "ResumeOutcome",
+          "deriveArchive",
+          "deriveSeedGames",
+          "selectResumeTarget",
+          "selectReviewTarget"
         ]
       },
       {
@@ -1654,11 +1663,13 @@
       "noteSessionOwnedGame",
       "probeForRejoin",
       "purgeAbandonedBoards",
+      "recordIdFor",
       "refreshSeedGames",
       "refreshUi",
       "resumeArchived",
       "reviewArchived",
       "seedSources",
+      "swapGameIntoScene",
       "userFacingGames"
     ]
   },
@@ -5945,6 +5956,13 @@
         ]
       },
       {
+        "source": "../debug/log.ts",
+        "target": "src/debug/log.ts",
+        "specifiers": [
+          "createLogger"
+        ]
+      },
+      {
         "source": "../net/admission.ts",
         "target": "src/net/admission.ts",
         "specifiers": [
@@ -6001,7 +6019,8 @@
         "source": "./widgets/archiveModel.ts",
         "target": "src/ui/widgets/archiveModel.ts",
         "specifiers": [
-          "ArchiveListing"
+          "ArchiveListing",
+          "ResumeOutcome"
         ]
       },
       {
@@ -6143,8 +6162,8 @@
           "respondRematch(accepted: boolean): boolean",
           "respondResolution(accepted: boolean): boolean",
           "respondUndoRedo(accepted: boolean): boolean",
-          "resumeArchived(id: string): Promise<void>",
-          "reviewArchived(id: string): Promise<void>",
+          "resumeArchived(id: string): Promise<ResumeOutcome>",
+          "reviewArchived(id: string): Promise<ResumeOutcome>",
           "scrubTo(k: number): void",
           "seedSources(): SeedSources",
           "setPendingJoinCode(code: string): void"
@@ -6171,7 +6190,9 @@
   },
   "src/ui/widgets/archive.ts": {
     "exports": [
+      "ARCHIVE_EMPTY_TEXT",
       "ARCHIVE_SCOPE_ID",
+      "ARCHIVE_UNREADABLE_TEXT",
       "ARCHIVE_WIDGET_ID",
       "ArchiveDeps",
       "ArchiveScope",
@@ -6190,7 +6211,10 @@
         "source": "./archiveModel.ts",
         "target": "src/ui/widgets/archiveModel.ts",
         "specifiers": [
+          "ArchiveItem",
           "ArchiveListing",
+          "RESUME_REFUSAL_TEXT",
+          "ResumeOutcome",
           "deriveArchive"
         ]
       }
@@ -6212,11 +6236,12 @@
         "extends": [],
         "methods": [
           "listArchive(): Promise<readonly ArchiveListing[]>",
+          "onReadError(err: unknown): void",
           "popScope(): void",
           "pushScope(scope: ArchiveScope): void",
           "registerOpenArchive(open: () => void): void",
-          "resumeArchived(id: string): Promise<void>",
-          "reviewArchived(id: string): Promise<void>"
+          "resumeArchived(uuid: string): Promise<ResumeOutcome>",
+          "reviewArchived(id: string): Promise<ResumeOutcome>"
         ],
         "properties": [
           "readonly doc: Document"
@@ -6228,31 +6253,60 @@
     "functions": [
       "archiveScope",
       "archiveWidget",
+      "buildRow",
       "close",
       "formatDate",
       "onKeyDown",
       "onOutsidePointer",
       "openModal",
-      "renderRows"
+      "renderRows",
+      "showRefusal"
     ]
   },
   "src/ui/widgets/archiveModel.ts": {
     "exports": [
       "ArchiveActions",
+      "ArchiveGroup",
       "ArchiveItem",
       "ArchiveListing",
       "ArchiveListingMeta",
       "ArchiveModel",
+      "ArchiveStatus",
       "CONFLICTED_RESULT",
       "IN_PROGRESS_RESULT",
+      "OFFLINE_SESSION",
       "PLAYERS_LABEL_SEPARATOR",
       "PLAYER_SEAT_ORDER",
+      "RESUME_REFUSAL_REASONS",
+      "RESUME_REFUSAL_TEXT",
+      "ResumeOutcome",
+      "ResumeRefusal",
+      "ResumeSelection",
+      "ResumeSession",
+      "SEED_LABEL_SEPARATOR",
+      "SHORT_HEAD_HASH_CHARS",
+      "STATUS_EMPTY_TEXT",
+      "STATUS_LABEL",
+      "STATUS_ORDER",
       "UNKNOWN_PLAYER",
       "deriveArchive",
+      "deriveSeedGames",
       "playersLabel",
-      "resolveArchiveActions"
+      "resolveArchiveActions",
+      "resolveArchiveStatus",
+      "selectResumeTarget",
+      "selectReviewTarget",
+      "shortHeadHash"
     ],
-    "imports": [],
+    "imports": [
+      {
+        "source": "./netPanelModel.ts",
+        "target": "src/ui/widgets/netPanelModel.ts",
+        "specifiers": [
+          "SeedGame"
+        ]
+      }
+    ],
     "classes": [],
     "interfaces": [
       {
@@ -6263,7 +6317,8 @@
           "readonly headHash: string",
           "readonly players: Readonly<Record<string, string>>",
           "readonly result: string",
-          "readonly startedAt: number"
+          "readonly startedAt: number",
+          "readonly uuid: string"
         ]
       },
       {
@@ -6287,7 +6342,22 @@
           "readonly id: string",
           "readonly playersLabel: string",
           "readonly result: string",
-          "readonly startedAt: number"
+          "readonly startedAt: number",
+          "readonly status: ArchiveStatus",
+          "readonly statusLabel: string",
+          "readonly uuid: string"
+        ]
+      },
+      {
+        "name": "ArchiveGroup",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly emptyText: string",
+          "readonly isEmpty: boolean",
+          "readonly items: readonly ArchiveItem[]",
+          "readonly label: string",
+          "readonly status: ArchiveStatus"
         ]
       },
       {
@@ -6295,8 +6365,18 @@
         "extends": [],
         "methods": [],
         "properties": [
+          "readonly groups: readonly ArchiveGroup[]",
           "readonly isEmpty: boolean",
           "readonly items: readonly ArchiveItem[]"
+        ]
+      },
+      {
+        "name": "ResumeSession",
+        "extends": [],
+        "methods": [],
+        "properties": [
+          "readonly authoritative: boolean",
+          "readonly heldGameUuid: string | null"
         ]
       },
       {
@@ -6310,11 +6390,33 @@
       }
     ],
     "enums": [],
-    "typeAliases": [],
+    "typeAliases": [
+      {
+        "name": "ArchiveStatus",
+        "type": "'unfinished' | 'finished' | 'conflicted'"
+      },
+      {
+        "name": "ResumeRefusal",
+        "type": "| 'not-found'\n  /** The game is listed, but it is over or forked — review-only, so there is nothing to continue. */\n  | 'not-resumable'\n  /**\n   * That game is the one a LIVE session holds. Its record is the session's to write (design §2/§7),\n   * so the app must not become a second writer of it.\n   */\n  | 'session-live'\n  /**\n   * A room is running, so the session's game is what the scene renders\n   * (`netRouting.shouldRenderSessionGame`). Loading ANY archived game into the scene-local slot now\n   * would put it somewhere nobody can see — the silent no-op this reason replaces. Applied by BOTH\n   * routes into the scene, {@link selectResumeTarget} and {@link selectReviewTarget}: it was resume-only\n   * at first, which left Review doing exactly the invisible load this describes.\n   */\n  | 'session-active'\n  /**\n   * The record was found but could not be turned back into a game — a corrupt/illegal stored log\n   * (an `ArchiveError`), or an IndexedDB failure. Reported as damage, never as \"no such game\".\n   */\n  | 'unreadable'"
+      },
+      {
+        "name": "ResumeSelection",
+        "type": "| {\n      readonly ok: true;\n      /** The game's uuid, echoed back (the identity the glue loads by). */\n      readonly uuid: string;\n      /** The RECORD id holding it — the row the decision was taken on. */\n      readonly id: string;\n    }\n  | { readonly ok: false; readonly reason: ResumeRefusal }"
+      },
+      {
+        "name": "ResumeOutcome",
+        "type": "| { readonly ok: true }\n  | { readonly ok: false; readonly reason: ResumeRefusal }"
+      }
+    ],
     "functions": [
       "deriveArchive",
+      "deriveSeedGames",
       "playersLabel",
-      "resolveArchiveActions"
+      "resolveArchiveActions",
+      "resolveArchiveStatus",
+      "selectResumeTarget",
+      "selectReviewTarget",
+      "shortHeadHash"
     ]
   },
   "src/ui/widgets/banner.ts": {
@@ -7034,7 +7136,7 @@
       },
       {
         "name": "JoinErrorReason",
-        "type": "| 'room-full'\n  /** A seat is held for an absent owner and this peer is not that owner (seat manager `seat-reserved`). */\n  | 'seat-reserved'\n  /** The two peers proposed DIFFERENT games — different game uuids (admission `game-mismatch`). */\n  | 'game-mismatch'\n  /** The SAME game uuid but forked histories — divergent headHash (admission `game-divergent`). */\n  | 'game-divergent'\n  /**\n   * The two SEEDS are incompatible: one side chose New Game (empty only) while the other brought a\n   * real game (admission `seed-refused`, design §3). Only Dealer's choice adopts a peer's game.\n   */\n  | 'seed-refused'\n  /** The transport could not connect (relay unreachable / rejected). */\n  | 'connect-failed'\n  /**\n   * The seed's own archived game could NOT be read — the stored log is corrupt/illegal, so folding it\n   * threw (an `ArchiveError`). A LOCAL failure, not a peer's refusal: nothing was published and the\n   * entry never joined the room. It is surfaced with its own label rather than left silent (the V.1\n   * review finding: the session returned to offline with no reason and the player was told nothing).\n   */\n  | 'seed-unreadable'\n  /**\n   * The seed named a game this browser does NOT hold, so there was nothing to resume. A LOCAL failure,\n   * not a peer's refusal: nothing was published and the entry never joined the room. It has its own\n   * label because the alternative — entering on a fresh game while announcing the named one — made every\n   * downstream refusal a lie (a peer proposing the SAME game was told the two of you \"brought different\n   * games\").\n   */\n  | 'seed-unavailable'"
+        "type": "| 'room-full'\n  /** A seat is held for an absent owner and this peer is not that owner (seat manager `seat-reserved`). */\n  | 'seat-reserved'\n  /** The two peers proposed DIFFERENT games — different game uuids (admission `game-mismatch`). */\n  | 'game-mismatch'\n  /** The SAME game uuid but forked histories — divergent headHash (admission `game-divergent`). */\n  | 'game-divergent'\n  /**\n   * The two SEEDS are incompatible: one side chose New Game (empty only) while the other brought a\n   * real game (admission `seed-refused`, design §3). Only Dealer's choice adopts a peer's game.\n   */\n  | 'seed-refused'\n  /** The transport could not connect (relay unreachable / rejected). */\n  | 'connect-failed'\n  /**\n   * The seed's own archived game could NOT be read — the stored log is corrupt/illegal, so folding it\n   * threw (an `ArchiveError`). A LOCAL failure, not a peer's refusal: nothing was published and the\n   * entry never joined the room. It is surfaced with its own label rather than left silent (the V.1\n   * review finding: the session returned to offline with no reason and the player was told nothing).\n   */\n  | 'seed-unreadable'\n  /**\n   * The seed named a game this browser does NOT hold, so there was nothing to resume. A LOCAL failure,\n   * not a peer's refusal: nothing was published and the entry never joined the room. It has its own\n   * label because the alternative — entering on a fresh game while announcing the named one — made every\n   * downstream refusal a lie (a peer proposing the SAME game was told the two of you \"brought different\n   * games\").\n   */\n  | 'seed-unavailable'\n  /**\n   * The seed named a game this browser holds, but no record here still holds the HISTORY the games-list\n   * row showed (`resume` carries the row's `headHash`). A LOCAL failure, not a peer's refusal: nothing\n   * was published. Its own label because entering on the same game at a different head would announce a\n   * history nobody asked for, and the divergence that followed would be blamed on the other player.\n   */\n  | 'seed-stale'"
       },
       {
         "name": "CodeError",

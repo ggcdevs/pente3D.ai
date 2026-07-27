@@ -7,6 +7,7 @@ import {
   resolveArchiveActions,
   resolveArchiveStatus,
   selectResumeTarget,
+  selectReviewTarget,
   shortHeadHash,
   OFFLINE_SESSION,
   RESUME_REFUSAL_REASONS,
@@ -462,6 +463,56 @@ describe('deriveArchive — the listing hides nothing and duplicates nothing (V.
         },
       ),
     );
+  });
+});
+
+describe('selectReviewTarget — the SAME room rule resume obeys (#37)', () => {
+  const model = () =>
+    deriveArchive([
+      listing('rec-live', { result: IN_PROGRESS_RESULT, uuid: 'u-live', startedAt: 300 }),
+      listing('rec-won', { result: 'white-wins', uuid: 'u-won', startedAt: 200 }),
+      listing('rec-forked', { result: CONFLICTED_RESULT, uuid: 'u-forked', startedAt: 100 }),
+    ]);
+
+  it('resolves any listed record — a FINISHED or FORKED game is reviewable (that is what review is for)', () => {
+    expect(selectReviewTarget(model(), 'rec-won', OFFLINE_SESSION)).toEqual({
+      ok: true,
+      uuid: 'u-won',
+      id: 'rec-won',
+    });
+    expect(selectReviewTarget(model(), 'rec-forked', OFFLINE_SESSION)).toEqual({
+      ok: true,
+      uuid: 'u-forked',
+      id: 'rec-forked',
+    });
+  });
+
+  it('REFUSES while a room is running — the scene shows the session game, so the load would be invisible', () => {
+    // The gap this closes: resume grew both session guards and review kept none, so clicking Review
+    // in a room loaded a board into the scene-local slot and the player saw nothing change.
+    expect(selectReviewTarget(model(), 'rec-live', { heldGameUuid: 'u-other', authoritative: true })).toEqual({
+      ok: false,
+      reason: 'session-active',
+    });
+    expect(selectReviewTarget(model(), 'rec-won', { heldGameUuid: null, authoritative: true })).toEqual({
+      ok: false,
+      reason: 'session-active',
+    });
+  });
+
+  it('does NOT refuse `session-live`: looking at the room’s own game reads a record, it does not write one', () => {
+    expect(selectReviewTarget(model(), 'rec-live', { heldGameUuid: 'u-live', authoritative: false })).toEqual({
+      ok: true,
+      uuid: 'u-live',
+      id: 'rec-live',
+    });
+  });
+
+  it('refuses a record that is not listed (negative case)', () => {
+    expect(selectReviewTarget(model(), 'rec-vanished', OFFLINE_SESSION)).toEqual({
+      ok: false,
+      reason: 'not-found',
+    });
   });
 });
 
