@@ -138,6 +138,7 @@ for (;;) {
         `Read the real implementation AND tests under ${SCOPE}. Focus especially on: ${L.focus}.\n` +
         `VISUAL VERIFICATION: if the stage produced Playwright screenshot artifacts (e2e/artifacts/*.png), VIEW them (Read the image files) and confirm each shows what its test claims — a passing Playwright test paired with a blank, empty, or visibly-wrong screenshot is a BLOCKER (proof-by-inference, not proof-by-behavior).\n` +
         `Assume the implementer took the minimal-effort path; verify the opposite. Cite exact file:line. If uncertain, FLAG it (do not approve to be safe).\n` +
+        `HARVEST YOUR PROBES. When you prove a finding by experiment — a throwaway spec, a stubbed call, an injected failure, an instrumented branch — that probe IS the regression test the suite was missing: it names a concrete defect and demonstrably catches it. Do NOT just delete it. Put its essential form in the issue \`description\` (the setup, the assertion, and the observed failure output) so the fix lands it PERMANENTLY. A coverage test written from the implementation asserts what the code does; a harvested probe asserts what it must not do — that difference is why every real defect this build found came from running an experiment rather than from reading code.\n` +
         `Return {approved, issues[]}. Only set approved=true if you found no blocker/major issues.`,
       { schema: REVIEW_SCHEMA, phase: 'Review', label: `review:${L.key}:r${round + 1}` }
     )
@@ -159,7 +160,9 @@ for (;;) {
   await agent(
     `Fix these reviewer-flagged issues in Pente3D Stage ${STAGE}. ${DOCTRINE}\n` +
       `Issues (JSON): ${JSON.stringify(open)}\n` +
-      `Fix each GENUINELY per ${PRINCIPLES} — no suppression, no weakening gates, tests stay real (assert observable behavior). Re-run \`npm test\` and \`npm run lint\` (both green). Commit (+ trailer \`${TRAILER}\`). Do NOT push. Return evidence.`,
+      `Fix each GENUINELY per ${PRINCIPLES} — no suppression, no weakening gates, tests stay real (assert observable behavior).\n` +
+      `LAND THE PROBE AS A TEST. Where a finding carries a probe the reviewer ran to prove it, that probe is the regression test this suite did not have: add it PERMANENTLY (in the tier that fits — unit, or e2e for glue the mutation/coverage gates cannot see), and PROVE IT BITES by re-breaking the implementation and pasting the failure, then restoring. A fix without that test leaves the same hole for the next stage to fall into.\n` +
+      `Re-run \`npm test\` and \`npm run lint\` (both green). Commit (+ trailer \`${TRAILER}\`). Do NOT push. Return evidence.`,
     { schema: FIX_SCHEMA, phase: 'Fix', label: `fix:r${round}` }
   )
 }
