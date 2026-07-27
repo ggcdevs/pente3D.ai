@@ -101,10 +101,20 @@ class FakeBroker {
     }
   }
 
-  /** Live presence publishes carrying the ack flag, by sender — the handshake's cost on the wire. */
-  ackCount(clientId: string): number {
+  /**
+   * Live presence publishes carrying the ack flag, by SENDER — the handshake's cost on the wire.
+   *
+   * Counted by the sender's PRESENCE id (the `id` in the payload), not by the broker session id it
+   * connected with. Those were the same value until the seat identity was threaded into the
+   * transport; they must not be, because an MQTT clientId has to be unique per connection while a
+   * presence id identifies the player across all of them.
+   */
+  ackCount(peerId: string): number {
     return this.wire.filter(
-      (m) => m.from === clientId && !m.retain && m.payload.includes('"ack":true'),
+      (m) =>
+        !m.retain &&
+        m.payload.includes('"ack":true') &&
+        m.payload.includes(`"id":"${peerId}"`),
     ).length;
   }
 }

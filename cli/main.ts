@@ -130,6 +130,9 @@ async function main(): Promise<void> {
       return output(r.data, args);
     }
 
+    // A scenario tool, not a player verb — see the daemon's `local-undo` case.
+    case 'local-undo':
+    case 'local-redo':
     case 'undo':
     case 'redo': {
       const r = await request(requireCode(args), { cmd: args.verb }, 10_000);

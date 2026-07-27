@@ -1368,6 +1368,38 @@ export class SyncEngine {
    * history in tests and by callers that batch a publish. Still refused once
    * stopped.
    */
+  /**
+   * Step the log back WITHOUT publishing — the sibling of {@link placeLocalOnly}, and the only way to
+   * build a genuine FORK.
+   *
+   * Two honest clients cannot diverge: the turn gate caps legitimate drift at exactly one move, which
+   * is why anything longer is referred to the players instead of adopted (design §5). A fork is by
+   * definition the work of a client that did not follow the protocol — the threat model's "a
+   * publicly-writable relay lets a modified client hand its peer a history it never agreed to". So a
+   * test that needs a divergence must MANUFACTURE one, and it must do so without publishing: a
+   * rewind that went out on the wire would simply be fast-forwarded onto by the peer, leaving the two
+   * in step and the test proving nothing.
+   *
+   * @throws if the game is stopped by a conflict, or if there is nothing to undo (propagated verbatim).
+   */
+  undoLocalOnly(): void {
+    this.assertLive();
+    this._game.undo();
+    this.emitChange();
+  }
+
+  /**
+   * Re-apply the last-undone move WITHOUT publishing — the mirror of {@link undoLocalOnly}, and used
+   * for the same reason: a manufactured local history that the wire never hears about.
+   *
+   * @throws if the game is stopped by a conflict, or if there is nothing to redo (propagated verbatim).
+   */
+  redoLocalOnly(): void {
+    this.assertLive();
+    this._game.redo();
+    this.emitChange();
+  }
+
   placeLocalOnly(coords: Coord): void {
     this.assertLive();
     this._game.place(coords);

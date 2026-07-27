@@ -93,7 +93,7 @@ async function main(): Promise<number> {
   await waitFor(phone, (s) => s.link === 'down', 'the phone link to go down', 15_000);
 
   log('phone undoes its own opening while offline (an undo is an appended EVENT — the log grows)');
-  const afterUndo = await verb(phone, ['undo']);
+  const afterUndo = await verb(phone, ['local-undo']);
   // `ply` counts EFFECTIVE moves, not log entries — an undo appends an entry and takes the move
   // back, so the board is what shows it happened.
   check(

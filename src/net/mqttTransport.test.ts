@@ -129,7 +129,33 @@ describe('MqttTransport.connect', () => {
     expect(t.connectCalls[0]!.url).toBe(RELAY.wssUrl);
     expect(t.connectCalls[0]!.opts.username).toBe(RELAY.username);
     expect(t.connectCalls[0]!.opts.password).toBe(RELAY.password);
-    expect(t.connectCalls[0]!.opts.clientId).toBe('peer-A');
+    // The broker session id is DERIVED from the presence id but is NOT it: `peerId` is the caller's
+    // stable SEAT identity (persisted per browser profile, shared by every tab), while an MQTT
+    // clientId must be unique per CONNECTION — a duplicate makes the broker evict the older session,
+    // so two tabs of one profile would kick each other off forever under `reconnectPeriod`.
+    expect(t.connectCalls[0]!.opts.clientId).not.toBe('peer-A');
+    expect(t.connectCalls[0]!.opts.clientId).toContain('peer-A');
+  });
+
+  it('gives two transports with the SAME seat identity DIFFERENT broker session ids', async () => {
+    // The two-tabs case, stated directly: one profile, one playerId, two connections. Sharing a
+    // clientId here is what turned a second tab into a permanent connection flap.
+    const a = makeTransport('peer-A');
+    const b = makeTransport('peer-A');
+    const pa = a.transport.connect('room1');
+    a.fake.fireConnect();
+    await pa;
+    const pb = b.transport.connect('room1');
+    b.fake.fireConnect();
+    await pb;
+
+    const idA = a.connectCalls[0]!.opts.clientId;
+    const idB = b.connectCalls[0]!.opts.clientId;
+    expect(idA).not.toBe(idB);
+    // …while PRESENCE — who owns the seat — is the same identity on both, which is the whole reason
+    // the seat id was threaded into the transport in the first place.
+    expect(a.transport.peerId).toBe('peer-A');
+    expect(b.transport.peerId).toBe('peer-A');
   });
 
   it('registers a retained empty-payload Last-Will on our presence topic', async () => {

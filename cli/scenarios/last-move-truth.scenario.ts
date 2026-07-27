@@ -65,7 +65,7 @@ async function main(): Promise<number> {
 
   // ── The undo: the exact step that used to leave a phantom ───────────────────────────
   log('taking it back (undo)');
-  const undone = await verb(phone, ['undo']);
+  const undone = await verb(phone, ['local-undo']);
   check(
     'the undo really removed the stone (ply back to 0, board empty)',
     undone.ply === 0 && Object.keys(undone.game?.pieces ?? {}).length === 0,
@@ -90,10 +90,10 @@ async function main(): Promise<number> {
 
   // ── Undo, then redo: the readout follows the cursor both ways ────────────────────────
   log('undoing, then redoing');
-  const backAgain = await verb(phone, ['undo']);
+  const backAgain = await verb(phone, ['local-undo']);
   checkLastMoveIsReal('after the second undo, the invariant still holds', backAgain);
   check('an empty board names NO last move', backAgain.lastMove === null, `lastMove=${String(backAgain.lastMove)}`);
-  const redone = await verb(phone, ['redo']);
+  const redone = await verb(phone, ['local-redo']);
   check('after the redo, lastMove is the redone move', redone.lastMove === '0,0,0', `lastMove=${String(redone.lastMove)}`);
   checkLastMoveIsReal('and it is a stone that is ON the board', redone);
 

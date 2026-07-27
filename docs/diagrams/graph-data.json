@@ -3393,6 +3393,7 @@
           "publishState(): void",
           "receive(msg: SyncMessage): void",
           "redo(): void",
+          "redoLocalOnly(): void",
           "refusedGame(): { readonly uuid: string; readonly reason: ReconcileReject } | null",
           "rejectedLog(): {\n    readonly uuid: string;\n    readonly ply: number;\n    readonly reason: LogRejection;\n    readonly detail: string;\n  } | null",
           "reseat(color: Player): void",
@@ -3400,6 +3401,7 @@
           "resolutionCandidates(): ResolutionCandidates | null",
           "status(): SyncStatus",
           "undo(): void",
+          "undoLocalOnly(): void",
           "whenSettled(): Promise<void>"
         ],
         "properties": [],

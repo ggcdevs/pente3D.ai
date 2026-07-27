@@ -154,7 +154,7 @@ async function main(): Promise<number> {
 
   log(`phone plays ${TAKEN_BACK} and then TAKES IT BACK — two entries the laptop never hears`);
   await verb(phone, ['move', TAKEN_BACK]);
-  const phoneUndone = await verb(phone, ['undo']);
+  const phoneUndone = await verb(phone, ['local-undo']);
   check(
     'the resident appended TWO entries while the peer was away (a move and its undo)',
     phoneUndone.ply === 4 && phoneUndone.game?.pieces[TAKEN_BACK] === undefined,

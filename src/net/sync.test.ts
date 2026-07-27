@@ -1043,6 +1043,51 @@ describe('SyncEngine — order/replay-safe full-state sync over a transport', ()
     expect(b.game().ply()).toBe(plyBefore);
   });
 
+  it('undoLocalOnly / redoLocalOnly step the log WITHOUT publishing — the only way to build a fork', async () => {
+    // Two honest clients cannot diverge (the turn gate caps legitimate drift at one move), so a test
+    // that needs a fork must manufacture one — and it must do so WITHOUT publishing. A rewind that
+    // went out on the wire would simply be fast-forwarded onto by the peer, leaving the pair in step
+    // and proving nothing. These are the primitives the CLI's `local-undo`/`local-redo` scenario
+    // verbs call, simulating the modified client the threat model names.
+    const hub = new MockRelayHub();
+    const mine = new MockTransport(hub, 'forker');
+    const theirs = new MockTransport(hub, 'peer');
+    await mine.connect('ROOM01');
+    await theirs.connect('ROOM01');
+    const heard: TransportMessage[] = [];
+    theirs.onMessage((m) => heard.push(m));
+
+    const eng = new SyncEngine(new Game(9, PAIR_UUID), mine, db, () => meta, 'white', ANY_SEED);
+    // Built locally, not adopted: a 2-move jump from an empty log is a DIVERGENCE under the narrow
+    // fast-forward (V.4a), not something the engine takes — which is the policy working, not a
+    // limitation of the fixture.
+    eng.placeLocalOnly([0, 0, 0]);
+    eng.placeLocalOnly([1, 1, 1]);
+    expect(eng.game().ply()).toBe(2);
+    heard.length = 0;
+
+    let changes = 0;
+    eng.onChange(() => (changes += 1));
+
+    eng.undoLocalOnly();
+    expect(eng.game().ply()).toBe(1);
+    // A local rewind must not reach the wire…
+    expect(heard).toHaveLength(0);
+    // …but it must still notify, so the board repaints.
+    expect(changes).toBe(1);
+
+    eng.redoLocalOnly();
+    expect(eng.game().ply()).toBe(2);
+    expect(heard).toHaveLength(0);
+    expect(changes).toBe(2);
+
+    // Nothing left to redo — the core's refusal propagates verbatim rather than being masked.
+    expect(() => eng.redoLocalOnly()).toThrow();
+    // …and with nothing to undo either, from an empty log.
+    const empty = new SyncEngine(new Game(9, PAIR_UUID), mine, db, () => meta, 'white', ANY_SEED);
+    expect(() => empty.undoLocalOnly()).toThrow();
+  });
+
   it('ANSWERS a peer that is ONE behind with our log, and stays silent on an equal one', async () => {
     // Design §5: "I am ahead → republish, do not adopt". Convergence must not rest on the single
     // unacknowledged QoS-0 publish a returning peer makes: if that one message is lost, nothing

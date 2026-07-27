@@ -22,6 +22,7 @@ import { deriveEndState, HIDDEN_END_STATE, REMATCH_ACTION } from '../src/net/end
 import type { Coord } from '../src/core/coords';
 import type { Proposal } from '../src/net/admission';
 import type { NetSession } from '../src/net/session';
+import { UNDO_ACTION, REDO_ACTION } from '../src/net/undoRedo';
 
 /** Runtime state dir (sockets + playerid). Overridable so two CLIs can co-exist. */
 const STATE_DIR = path.resolve(process.env.PENTE_STATE_DIR ?? path.join(process.cwd(), '.pente-cli'));
@@ -177,6 +178,10 @@ export async function runDaemon(opts: PlayOptions): Promise<void> {
   // must run the same protocol, not a simplified one, or it would stop being a faithful second client.
   session.onHandshakeChange(() => {
     session.applyAcceptedResolution();
+    // An accepted undo/redo is applied HERE on BOTH sides (the browser does the same from its own
+    // handshake subscription) — this is what makes the CLI's ask a real mutual-confirm rather than a
+    // request that only the asker honours.
+    session.applyAcceptedUndoRedo();
     maybeRematchReset();
     console.log('\n' + render(snapshot(), opts.view) + '\n' + '─'.repeat(48));
   });
@@ -313,10 +318,47 @@ export async function runDaemon(opts: PlayOptions): Promise<void> {
         // side takes when the peer's answer arrives, so both sides run identical code.
         return reply(conn, true, snapshot());
       }
+      // UNDO/REDO PROPOSE — they never apply locally. The browser's networked Undo raises the N.1
+      // ask (`scene.ts` `undoRedoNet` → `propose`) and applies only on mutual accept (#18), and a
+      // CLI that applied immediately was not a faithful second client: the peer's narrow
+      // fast-forward treats a lone undo of the opponent's own last move as legitimately theirs to
+      // add, so it SILENTLY ADOPTED the rewind — a CLI player could roll back a browser player's
+      // board with no prompt and no way to refuse. The apply happens in `onHandshakeChange`, the
+      // same single path the answer takes on both sides.
+      // A LOCAL-ONLY rewind: no handshake, no publish — a deliberately MODIFIED client.
+      //
+      // This is a SCENARIO TOOL, not a player verb, and it is named so nobody mistakes it for one.
+      // A genuine fork cannot be produced by two honest clients: the turn gate caps legitimate drift
+      // at exactly one move (design §5), which is precisely why anything longer goes to the players
+      // instead of being adopted. So the divergence scenarios have to MANUFACTURE the anomaly, and
+      // the threat model already names how it arises in the wild — a publicly-writable relay lets a
+      // modified client hand its peer a history it never agreed to. That is what this simulates. The
+      // browser's own divergence spec manufactures it the same way (its mock transport `deliver`s a
+      // log the page never saw published).
+      case 'local-undo':
+      case 'local-redo': {
+        const engine = session.syncEngine();
+        if (engine === null) return reply(conn, false, 'not connected');
+        try {
+          // NOT published: a rewind that went out on the wire would be fast-forwarded onto by the
+          // peer, leaving the pair in step. The fork appears when this client then plays a different
+          // move from the rewound position.
+          if (req.cmd === 'local-undo') engine.undoLocalOnly();
+          else engine.redoLocalOnly();
+          return reply(conn, true, snapshot());
+        } catch (e) {
+          return reply(conn, false, e instanceof Error ? e.message : String(e));
+        }
+      }
       case 'undo':
-        return reply(conn, doSafe(() => session.undo()), snapshot());
-      case 'redo':
-        return reply(conn, doSafe(() => session.redo()), snapshot());
+      case 'redo': {
+        const action = req.cmd === 'undo' ? UNDO_ACTION : REDO_ACTION;
+        const avail = session.undoRedoAvail();
+        if (action === UNDO_ACTION && !avail.canUndo) return reply(conn, false, 'cannot undo now');
+        if (action === REDO_ACTION && !avail.canRedo) return reply(conn, false, 'cannot redo now');
+        if (!session.propose(action)) return reply(conn, false, `${action}: not connected`);
+        return reply(conn, true, snapshot());
+      }
       case 'wait': {
         const snap = snapshot();
         if (snap.canPlace || snap.game?.winner) return reply(conn, true, { ...snap, timedOut: false });
@@ -385,14 +427,6 @@ function tryMove(session: NetSession, coord: Coord): string | null {
   }
 }
 
-function doSafe(fn: () => void): boolean {
-  try {
-    fn();
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 /** Remove a stale socket, or refuse if a live daemon already owns this code. */
 async function ensureFreeSocket(sockPath: string, code: string): Promise<void> {

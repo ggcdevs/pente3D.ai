@@ -1889,6 +1889,7 @@ classDiagram
         +publishState(): void
         +receive(msg: SyncMessage): void
         +redo(): void
+        +redoLocalOnly(): void
         +refusedGame(): Object | null
         +rejectedLog(): Object | null
         +reseat(color: Player): void
@@ -1896,6 +1897,7 @@ classDiagram
         +resolutionCandidates(): ResolutionCandidates | null
         +status(): SyncStatus
         +undo(): void
+        +undoLocalOnly(): void
         +whenSettled(): Promise~void~
     }
     note for SyncEngine "src/net/sync.ts"

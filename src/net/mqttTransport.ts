@@ -113,6 +113,12 @@ export class MqttTransport implements Transport {
   /** This client's stable presence id. */
   readonly peerId: string;
 
+  /**
+   * This CONNECTION's broker session id — unique per transport instance, never the seat identity.
+   * See the constructor for why the two must not be the same value.
+   */
+  private readonly clientId: string;
+
   private readonly cfg: RelayConfig;
   private readonly connectFn: MqttConnectFn;
 
@@ -138,6 +144,14 @@ export class MqttTransport implements Transport {
     this.cfg = cfg;
     this.connectFn = deps.connect;
     this.peerId = deps.peerId ?? randomPeerId();
+    // The BROKER SESSION id is deliberately NOT the presence id. `peerId` became the caller's
+    // stable seat identity (so `claimSeat` can compare seat owners against the present-set), and
+    // that identity is persisted per BROWSER PROFILE and shared by every tab. An MQTT `clientId`
+    // must be unique per CONNECTION: the broker evicts the older session on a duplicate, so two
+    // tabs of one profile would each kick the other off, and `reconnectPeriod` turns that into a
+    // permanent flap. One id answers "who owns this seat"; the other answers "which socket is
+    // this" — they are different questions and only one of them may repeat.
+    this.clientId = `${this.peerId}-${randomPeerId()}`;
   }
 
   /** The full topic for a `suffix` under the current room (e.g. `/events`). */
@@ -159,7 +173,7 @@ export class MqttTransport implements Transport {
       const client = this.connectFn(this.cfg.wssUrl, {
         username: this.cfg.username,
         password: this.cfg.password,
-        clientId: this.peerId,
+        clientId: this.clientId,
         reconnectPeriod: RECONNECT_PERIOD_MS,
         connectTimeout: CONNECT_TIMEOUT_MS,
         // Last-Will: on an ungraceful drop the broker clears our presence.
