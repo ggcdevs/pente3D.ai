@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { DEFAULT_MENU_ENTRIES } from '../src/ui/widgets/menuModel.ts';
+import { RESUME_REFUSAL_TEXT } from '../src/ui/widgets/archiveModel.ts';
 
 /**
  * Task V.6 review follow-ups (epic **#47**, ticket **#37**) — the two NETWORKED facts the games-list
@@ -12,6 +13,11 @@ import { DEFAULT_MENU_ENTRIES } from '../src/ui/widgets/menuModel.ts';
  *      asserts the inspect seam reports the session's game, the one the pieces on screen belong to.
  *      (A seam reporting the local board would name a game nobody is looking at, and would disagree
  *      with the head hash reported for the same moment.)
+ *   1b. **A REFUSED resume SAYS SO.** Both refusals a live room causes are asserted on what the player
+ *      can SEE — the list stays open with the model's reason on it — not merely on the board failing to
+ *      change. `canResume` comes from the stored result alone, so every row in the list is clickable
+ *      while a room runs: the game the room is playing (`session-live`) and, because the scene renders
+ *      the SESSION's game, every OTHER game too (`session-active`). Both used to be silent no-ops.
  *   2. **RESUMING a game a session ran keeps saving it.** A game played in a room belongs to that
  *      session's record while the session lives (`sessionOwnedGames`, design §2/§7). After leaving, the
  *      games list is the only route back to it (§10) — and if resuming it left the record owned, every
@@ -186,7 +192,20 @@ test('RESUMING the game the ROOM is running is REFUSED — the session stays its
   );
   await expect(row).toHaveAttribute('data-status', 'unfinished');
   await row.locator('.pente-archive-resume').click();
-  await page.waitForTimeout(300); // let the refusal (or an erroneous load + its autosave) settle
+
+  // THE PLAYER IS TOLD. The list stays OPEN and states the refusal in the model's own words — the
+  // whole point: `canResume` is derived from the stored result, so this row is offered and clicked
+  // like any other, and a refusal that only reached `log.error` behind an already-closed modal was
+  // indistinguishable from a dead button.
+  const refusal = page.locator('[data-testid="archive-refusal"]');
+  await expect(refusal).toBeVisible();
+  await expect(refusal).toHaveText(RESUME_REFUSAL_TEXT['session-live']);
+  await expect(modal).toBeVisible();
+  // The board behind the modal never moved: the room's game is still the one on screen.
+  expect(await pente(page, (p) => p.getGameUuid())).toBe(netUuid);
+
+  await page.locator('[data-testid="archive-close"]').click();
+  await expect(modal).toBeHidden();
 
   // PROOF THE GATE REJECTED, by observable behaviour rather than the refusal log: the scene-LOCAL board
   // was never replaced by the snapshot. Leaving the room makes the scene-local game the rendered one
@@ -204,6 +223,65 @@ test('RESUMING the game the ROOM is running is REFUSED — the session stays its
   expect(after.events).toBe(1);
   expect(after.meta.headHash).toBe(before.meta.headHash);
   expect(after.meta.seats).toEqual({ white: PLAYER_ID, black: null });
+});
+
+test('RESUMING SOME OTHER game while a room runs is REFUSED — not a silent load nobody can see', async ({
+  page,
+}) => {
+  await boot(page);
+
+  // An ordinary local game, left unfinished and archived, then abandoned for a fresh board. This is
+  // the row a player clicks by mistake mid-room: it is not the room's game, so the uuid-equality guard
+  // never looked at it, and `canResume` says yes because its stored result is in-progress.
+  await pente(page, (p) => p.place([0, 0, 0]));
+  await pente(page, (p) => p.place([4, 4, 4]));
+  const otherUuid = (await pente(page, (p) => p.getGameUuid()))!;
+  const otherHead = (await pente(page, (p) => p.getHeadHash()))!;
+  await expect
+    .poll(async () => (await archive(page)).find((g) => g.meta.uuid === otherUuid)?.meta.headHash)
+    .toBe(otherHead);
+  await pente(page, (p) => p.dispatch('reset'));
+
+  await enterOnNewGame(page);
+  const netUuid = (await pente(page, (p) => p.getNetGameUuid()))!;
+  await pente(page, (p) => p.place([2, 2, 2]));
+  expect(await pente(page, (p) => p.getGameUuid())).toBe(netUuid);
+
+  await page.evaluate((commandId: string) => {
+    (window as unknown as { __pente: Pente }).__pente.dispatch(commandId);
+  }, LOAD_COMMAND);
+  const modal = page.locator('[data-testid="archive-modal"]');
+  await expect(modal).toBeVisible();
+  const row = page.locator(
+    `[data-widget-id="archiveBrowser"] .pente-archive-row[data-game-uuid="${otherUuid}"]`,
+  );
+  // It really is a DIFFERENT game from the room's, and the list really does offer Resume on it.
+  expect(otherUuid).not.toBe(netUuid);
+  await expect(row).toHaveAttribute('data-can-resume', 'true');
+  await row.locator('.pente-archive-resume').click();
+
+  // REFUSED, VISIBLY. While the session is authoritative the scene renders the SESSION's game
+  // (`netRouting.shouldRenderSessionGame`), so a game swapped into the scene-local slot lands off
+  // screen: the click used to do nothing at all, and the resumed game later surfaced by surprise when
+  // the room was left.
+  const refusal = page.locator('[data-testid="archive-refusal"]');
+  await expect(refusal).toBeVisible();
+  await expect(refusal).toHaveText(RESUME_REFUSAL_TEXT['session-active']);
+  await expect(modal).toBeVisible();
+
+  // The board on screen is untouched: still the room's game, still its one piece.
+  expect(await pente(page, (p) => p.getGameUuid())).toBe(netUuid);
+  expect(Object.keys((await pente(page, (p) => p.getState()!)).pieces)).toEqual(['2,2,2']);
+
+  // …and LEAVING the room brings back the board the page was on, NOT the game that was refused —
+  // proof nothing was loaded into the hidden scene-local slot behind the modal.
+  await page.locator('[data-testid="archive-close"]').click();
+  await pente(page, (p) => p.leaveNet());
+  await page.waitForFunction(
+    () => (window as unknown as { __pente: Pente }).__pente.getNet()?.phase === 'offline',
+  );
+  expect(await pente(page, (p) => p.getGameUuid())).not.toBe(otherUuid);
+  expect((await pente(page, (p) => p.getState()!)).pieces).toEqual({});
 });
 
 test('RESUMING a game a session ran keeps saving it — moves land, seats and start date survive', async ({

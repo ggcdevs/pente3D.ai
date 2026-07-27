@@ -200,12 +200,71 @@ export interface ArchiveModel {
   readonly isEmpty: boolean;
 }
 
-/** Why {@link selectResumeTarget} refused a uuid — a typed reason, surfaced, never masked. */
+/** Why a RESUME was refused — a typed reason, surfaced to the player, never masked. */
 export type ResumeRefusal =
-  /** No listed game carries that uuid (e.g. the row went stale, or another tab collected it). */
+  /**
+   * No record holds that game any more: no listed game carries the uuid (the row went stale, or
+   * another tab collected it), or the record the listing named vanished before the load reached it.
+   * One reason for both because they are one fact — the game is not there.
+   */
   | 'not-found'
   /** The game is listed, but it is over or forked — review-only, so there is nothing to continue. */
-  | 'not-resumable';
+  | 'not-resumable'
+  /**
+   * That game is the one a LIVE session holds. Its record is the session's to write (design §2/§7),
+   * so the app must not become a second writer of it.
+   */
+  | 'session-live'
+  /**
+   * A room is running, so the session's game is what the scene renders
+   * (`netRouting.shouldRenderSessionGame`). Loading ANY archived game into the scene-local slot now
+   * would put it somewhere nobody can see — the silent no-op this reason replaces.
+   */
+  | 'session-active'
+  /**
+   * The record was found but could not be turned back into a game — a corrupt/illegal stored log
+   * (an `ArchiveError`), or an IndexedDB failure. Reported as damage, never as "no such game".
+   */
+  | 'unreadable';
+
+/**
+ * What to TELL THE PLAYER for each refusal — the single source of the copy, beside the reasons it
+ * explains. A `Record` keyed by the union makes an unlabeled reason a compile error, so a refusal can
+ * never reach the modal with nothing to say (the failure this replaced: every refusal was a silent
+ * `log.error` and a closed modal, so clicking Resume did nothing at all).
+ */
+export const RESUME_REFUSAL_TEXT: Record<ResumeRefusal, string> = {
+  'not-found': 'That game is no longer saved on this device.',
+  'not-resumable': 'That game can’t be continued — it is finished or forked. Review it instead.',
+  'session-live': 'That game is the one this room is playing — it is already on screen.',
+  'session-active': 'You are in a room. Leave it first to get back into another game.',
+  unreadable: 'That saved game could not be read — it may be damaged.',
+};
+
+/** Every {@link ResumeRefusal} that exists, DERIVED from the label record (never a second list). */
+export const RESUME_REFUSAL_REASONS: readonly ResumeRefusal[] = Object.keys(
+  RESUME_REFUSAL_TEXT,
+) as ResumeRefusal[];
+
+/**
+ * What the LIVE net session means for a resume (Task V.6 review follow-up, ticket #37). Both facts
+ * are needed and neither implies the other: a session can HOLD a game while no longer being
+ * authoritative (after a conflict stop the scene renders its local board again), and it is
+ * authoritative for exactly one game while every OTHER row in the list is still clickable.
+ */
+export interface ResumeSession {
+  /** The game uuid the session HOLDS, or `null` when it holds none (offline / never entered). */
+  readonly heldGameUuid: string | null;
+  /**
+   * True while the session is AUTHORITATIVE — the scene renders ITS game rather than the
+   * scene-local one (`net/netRouting.ts` `shouldRenderSessionGame`, the same predicate the place
+   * path routes on).
+   */
+  readonly authoritative: boolean;
+}
+
+/** The session state of a browser with no room running — what an offline app passes. */
+export const OFFLINE_SESSION: ResumeSession = { heldGameUuid: null, authoritative: false };
 
 /** The outcome of resolving a game uuid to something the glue can load (Task V.6). */
 export type ResumeSelection =
@@ -216,6 +275,15 @@ export type ResumeSelection =
       /** The RECORD id holding it — the row the decision was taken on. */
       readonly id: string;
     }
+  | { readonly ok: false; readonly reason: ResumeRefusal };
+
+/**
+ * What a RESUME attempt did, as the widget sees it: it landed, or it was refused with a reason the
+ * modal states. The glue returns this instead of resolving `void`, because a refusal that only
+ * reaches a log is invisible — the modal closed and the app did nothing (agent-principles #1/#3).
+ */
+export type ResumeOutcome =
+  | { readonly ok: true }
   | { readonly ok: false; readonly reason: ResumeRefusal };
 
 /** The two actions an archive row can offer (Task 6.6): review (read-only) and/or resume (continue). */
@@ -282,9 +350,16 @@ export function playersLabel(players: Readonly<Record<string, string>>): string 
  * {@link ArchiveItem} (record id / game uuid / players label / result + status / conflicted flag /
  * headHash / startedAt), and group the rows by status (Task V.6).
  *
- * EVERY listing yields EXACTLY ONE row: nothing is filtered here and nothing is merged (V.1 deleted
- * the internal `net-room:{code}` records the old marker filter existed for, and V.5's one record per
- * game uuid leaves nothing to de-duplicate). What the archive lists is what the player sees.
+ * EVERY listing yields EXACTLY ONE ROW — one row per RECORD, not per game uuid. Nothing is filtered
+ * here and nothing is merged (V.1 deleted the internal `net-room:{code}` records the old marker
+ * filter existed for): what the archive lists is what the player sees.
+ *
+ * V.5 keys a record by its game's uuid, so ONE row per game is the normal shape — but it is not an
+ * invariant this model may assume. Two records can genuinely claim one uuid: the V.5 migration
+ * (`persist/archive.ts` `rekeyArchiveRecordsByGameUuid`) deliberately leaves a divergent record where
+ * it is rather than delete a history it cannot prove is contained. Merging or hiding one of them here
+ * would hide exactly the history that migration refused to destroy, so both are shown and
+ * {@link selectResumeTarget} decides which one a resume continues.
  *
  * @param listings The archive's `{ id, meta }` listings (no event logs). May be empty.
  * @returns The serializable archive model: the rows newest-first, their sections, and `isEmpty`.
@@ -352,10 +427,27 @@ export function deriveArchive(listings: readonly ArchiveListing[]): ArchiveModel
  * uuid — a conflicted record carries the same game's uuid, so picking the first match by order would
  * refuse a game that genuinely can be continued.
  *
- * Refusals are TYPED and distinct (`not-found` vs `not-resumable`) so the caller can say which one
- * happened instead of silently doing nothing.
+ * THE LIVE SESSION IS PART OF THE DECISION, not a separate guard bolted onto the caller, so BOTH of
+ * its refusals are stated in one place and neither can be forgotten:
+ *
+ *   - the game the session HOLDS is refused (`session-live`): that record is the SESSION's to write
+ *     (design §2/§7 — it is the writer of the identity-owned seat map), so the app loading the
+ *     archived snapshot as a local board would put a second writer on one record;
+ *   - while the session is AUTHORITATIVE, EVERY OTHER row is refused too (`session-active`): the
+ *     scene renders the session's game (`shouldRenderSessionGame`), so a game loaded into the
+ *     scene-local slot would land off screen. Guarding only the session's own uuid left every other
+ *     Resume button a silent no-op — the player clicked, the list closed, and the board never changed.
+ *
+ * Refusals are TYPED and distinct so the caller can SAY which one happened
+ * ({@link RESUME_REFUSAL_TEXT}) instead of silently doing nothing.
  */
-export function selectResumeTarget(model: ArchiveModel, uuid: string): ResumeSelection {
+export function selectResumeTarget(
+  model: ArchiveModel,
+  uuid: string,
+  session: ResumeSession,
+): ResumeSelection {
+  if (session.heldGameUuid === uuid) return { ok: false, reason: 'session-live' };
+  if (session.authoritative) return { ok: false, reason: 'session-active' };
   const claimants = model.items.filter((item) => item.uuid === uuid);
   if (claimants.length === 0) return { ok: false, reason: 'not-found' };
   const resumable = claimants.find((item) => item.canResume);

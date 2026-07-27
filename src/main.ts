@@ -37,6 +37,7 @@ import {
   deriveSeedGames,
   selectResumeTarget,
   type ArchiveListing,
+  type ResumeOutcome,
 } from './ui/widgets/archiveModel.ts';
 import type { SeedGame, SeedSources } from './ui/widgets/netPanelModel.ts';
 import type { Proposal } from './net/admission.ts';
@@ -185,6 +186,19 @@ let getNetLastReject: () => AdmissionReject | null = () => null;
  */
 let getRenderedNetGameUuid: () => string | null = () => null;
 
+/**
+ * Whether the SESSION is authoritative right now — i.e. the scene is rendering the session's game
+ * rather than its own local board (`netRouting.shouldRenderSessionGame`, the same predicate the place
+ * path routes on). `false` until the session wires up (offline / pre-wiring), the honest-until-wired
+ * pattern the readouts above use.
+ *
+ * Distinct from `{@link getRenderedNetGameUuid} !== null`: that also goes null in the brief
+ * `connecting` window before the session holds a game, when the scene is ALREADY not rendering its
+ * local board. The resume gate needs the predicate itself, because a game swapped into the scene-local
+ * slot during that window is just as invisible as one swapped in mid-game.
+ */
+let isNetAuthoritative: () => boolean = () => false;
+
 // The unified-entry action the Network-Game panel's Enter button drives (Task S.6, design §3): enter a
 // room with a canonical code + the chosen seed proposal. Set once the net session wires up (below);
 // until then (offline / pre-wiring) it is an honest no-op — the panel is present but entering does
@@ -211,7 +225,38 @@ function getNotifyReadout(): NotifyReadout {
 }
 
 /**
- * The record this autosave writes for `game`: the app's LOCAL board, keyed by the game's own uuid.
+ * The RECORD a loaded game must be written back to, when that is NOT its own uuid (Task V.6 review
+ * follow-up, epic #47, ticket #37).
+ *
+ * V.5 keys a record by its game's uuid, so for every game the app itself minted the record id IS the
+ * uuid and this map is empty. But the games list can resume a record stored under a DIFFERENT key —
+ * that is the whole point of resuming by uuid (a pre-V.5 record under a retired autosave id; the
+ * losing claimant of a uuid the V.5 migration deliberately left where it was, `archive.ts`
+ * `rekeyArchiveRecordsByGameUuid`). Writing continued play under `game.uuid` instead would be a
+ * SILENT OVERWRITE of whatever record occupies that key — the divergent history the migration refused
+ * to delete because it could not prove containment — and, where the key is free, a SECOND record for
+ * one game: the duplication the migration exists to abolish, manufactured by the resume itself.
+ *
+ * So the resume remembers the record it loaded and the autosave writes THERE. Keyed by the game's
+ * uuid (the handle `autosaveTick` has), holding the record id (the key `saveGame` needs).
+ */
+const loadedRecordIds = new Map<string, string>();
+
+/**
+ * The record id the game `uuid` is stored under: the one a resume loaded it from, else the uuid
+ * itself (V.5's canonical key, and the only possibility for a game this app minted).
+ *
+ * Every app-side read/write of "the record of the board on screen" goes through this — the autosave
+ * write, the identity read that feeds it, and the husk purge's keep-set — so the app can never write
+ * one key while reading another.
+ */
+function recordIdFor(uuid: string): string {
+  return loadedRecordIds.get(uuid) ?? uuid;
+}
+
+/**
+ * The record this autosave writes for `game`: the app's LOCAL board, keyed by the record it was
+ * loaded from ({@link recordIdFor} — its own uuid unless a resume says otherwise).
  *
  * `players` is the local placeholder because this is a board one person is playing on both sides —
  * UNLESS the stored record already carries an identity-owned seat map (`stored`, read from the archive
@@ -230,7 +275,7 @@ function autosaveTarget(
   const seats = stored?.seats ?? null;
   const identity = seats === null ? null : { players: stored!.players, seats };
   return {
-    recordId: game.uuid,
+    recordId: recordIdFor(game.uuid),
     meta: {
       players: identity === null ? { white: 'You', black: 'You' } : identity.players,
       result: winner === null ? 'in-progress' : `${winner}-wins`,
@@ -324,7 +369,10 @@ async function autosaveTick(): Promise<void> {
   // ({@link handOverSessionOwnedBoard}) — the explicit Leave AND an involuntary stop.
   noteSessionOwnedGame();
   if (sessionOwnedGames.has(game.uuid)) return;
-  const target = autosaveTarget(game, await archivedIdentity(archiveDb, game.uuid));
+  // The identity is read from the record we are about to WRITE, not from the uuid key: a resumed
+  // record may live elsewhere, and reading `game.uuid` there would carry forward the seats/players of
+  // whatever OTHER record happens to sit on that key (or none at all, silently dropping this game's).
+  const target = autosaveTarget(game, await archivedIdentity(archiveDb, recordIdFor(game.uuid)));
   await saveGame(archiveDb, target.recordId, game, target.meta);
   // The archive just changed — refresh the seed-games cache so the Network-Game panel's Resume list
   // reflects it on the next open. Best-effort: a refresh failure only leaves a stale list, never a
@@ -659,22 +707,32 @@ async function reviewArchived(id: string): Promise<void> {
 
 /**
  * RESUME an archived game BY ITS GAME UUID (Task 6.6; re-keyed to the uuid by Task V.6, ticket #37):
- * load it and make it the live CONTINUABLE game. Same swap as review, but autosave stays ACTIVE — so
- * continued play is written back to THE SAME record the game was loaded from (V.5: records are keyed
- * by the game's uuid, so a game has one record whether it is being played for the first time or picked
- * up again, and its `startedAt` is preserved by the ledger). The board just abandoned keeps its own
- * record, as every past game does. A networked game is resumed the same way — the user then enters a
- * room from the resumed board (the "Current local board" seed) — with one difference the ONE-WRITER rule
- * forces: the record of a game a session ran belongs to that session ({@link sessionOwnedGames}), so
- * resuming it RE-ADOPTS the record for the app (otherwise every move on the resumed board would be
- * dropped by {@link autosaveTick}), while the game a live session still holds is refused outright.
+ * load it and make it the live CONTINUABLE game, or report a TYPED REFUSAL the modal states out loud.
+ *
+ * Same swap as review, but autosave stays ACTIVE — so continued play is written back to THE VERY
+ * RECORD THIS LOADED, `selection.id` ({@link loadedRecordIds}), whatever key that record lives under.
+ * V.5 keys a record by its game's uuid and that is the normal case, but it is not something this may
+ * ASSUME: resuming by uuid exists precisely to reach a record stored elsewhere, and writing the
+ * continued board back under `game.uuid` would either overwrite whatever record occupies that key —
+ * the divergent history `rekeyArchiveRecordsByGameUuid` deliberately refuses to delete — or mint a
+ * SECOND record for one game. The board just abandoned keeps its own record, as every past game does.
+ *
+ * A networked game is resumed the same way — the user then enters a room from the resumed board (the
+ * "Current local board" seed) — with one difference the ONE-WRITER rule forces: the record of a game a
+ * session ran belongs to that session ({@link sessionOwnedGames}), so resuming it RE-ADOPTS the record
+ * for the app (otherwise every move on the resumed board would be dropped by {@link autosaveTick}).
  *
  * The `uuid` — not the record key — is the handle the ROW hands over, because that is the identity a
  * game keeps across records (a pre-V.5 record under a retired autosave id, a conflicted record under
  * its conflict id). The PURE `selectResumeTarget` turns it into the RECORD to load, against the CURRENT
- * listing: a row that went stale while the modal was open (the game finished in another tab, or its
- * record was collected) is refused with its typed reason instead of quietly loading something the
- * player can no longer continue.
+ * listing AND the live session: a row that went stale while the modal was open (the game finished in
+ * another tab, or its record was collected), the game a live room is running, and — while a room is
+ * running at all — every other row, because the scene renders the SESSION's game then
+ * (`shouldRenderSessionGame`) and a game swapped into the scene-local slot would land off screen.
+ *
+ * EVERY refusal comes back to the caller as a reason, never as a log line and a shrug: the widget
+ * keeps the modal open and paints it (`archiveModel.RESUME_REFUSAL_TEXT`). A resume that resolved
+ * `void` for all of these was a dead button — the list closed and the app did nothing.
  *
  * THE RECORD THE GATE CHOSE IS THE RECORD LOADED (`selection.id`, via `loadNetGame`). Resolving the
  * uuid a second time — `loadNetGameByUuid` — would apply a DIFFERENT rule (the record keyed by the uuid
@@ -684,26 +742,24 @@ async function reviewArchived(id: string): Promise<void> {
  * One decision, taken once, in the gated pure model — which is also what makes the `id` in the success
  * line below an observed fact about the game on screen.
  */
-async function resumeArchived(uuid: string): Promise<void> {
-  if (archiveDb === null) return;
+async function resumeArchived(uuid: string): Promise<ResumeOutcome> {
+  // No archive open yet (boot has not resolved, or opening it failed): there is nothing to load from,
+  // and saying so is the honest answer — the same reason the store gives when a record is missing.
+  if (archiveDb === null) return { ok: false, reason: 'not-found' };
   try {
     const selection = selectResumeTarget(
       deriveArchive(userFacingGames(await listArchivedGames(archiveDb))),
       uuid,
+      // THE LIVE SESSION, as the pure gate needs to see it. `heldGameUuid` is what the session HOLDS
+      // (ownership of the record, which outlives being authoritative — after a conflict stop the
+      // session still owns it), and `authoritative` is whether the scene is rendering the session's
+      // game rather than its own local board. Both are read here, at click time, so a room entered
+      // while the modal sat open is still seen.
+      { heldGameUuid: getNetGameUuid(), authoritative: isNetAuthoritative() },
     );
     if (!selection.ok) {
       log.error('archive resume refused', { uuid, reason: selection.reason });
-      return;
-    }
-    // THE GAME THE LIVE SESSION STILL HOLDS IS NOT RESUMABLE FROM HERE: that record is the SESSION's to
-    // write (design §2/§7 — it is the writer of the identity-owned seat map), and while it is authoritative
-    // its game is also the board already on screen. Loading the archived snapshot as a local board would
-    // put a second writer on one record, so this is refused — with a typed reason, like a stale row, rather
-    // than half-happening. Keyed on `getNetGameUuid` (the session HOLDS the game) and not on what is being
-    // rendered, because ownership is what the refusal is about, and it outlives being authoritative.
-    if (getNetGameUuid() === uuid) {
-      log.error('archive resume refused: that game is the live networked game', { uuid });
-      return;
+      return { ok: false, reason: selection.reason };
     }
     // Learn when the archived games BEGAN before continuing one (idempotent: `adopt` never overwrites a
     // stamp this ledger established). The boot pass cannot know a game the SESSION started later in
@@ -715,8 +771,15 @@ async function resumeArchived(uuid: string): Promise<void> {
     const resumed = await loadNetGame(archiveDb, selection.id);
     if (resumed === undefined) {
       log.error('archive resume: no record under the chosen id', { uuid, id: selection.id });
-      return;
+      return { ok: false, reason: 'not-found' };
     }
+    // WRITE BACK WHERE WE READ. The record the gate chose may not be keyed by the game's uuid (a
+    // pre-V.5 record, or the claimant that lost the migration's containment test), and the autosave's
+    // default key is the uuid — so without this the next tick would write the continued board over a
+    // DIFFERENT record, destroying a history nothing proved anything about, or fork this game into a
+    // second record. Recorded even when the two are equal: `Map.set` of the identity is harmless and
+    // leaves one rule, not a conditional the next reader has to re-derive.
+    loadedRecordIds.set(resumed.game.uuid, selection.id);
     // RE-ADOPT a record a session of OURS ran earlier in this page load. Ownership
     // ({@link sessionOwnedGames}) exists to stop a STALE local board overwriting a networked record —
     // but this load IS that record's own history, and `autosaveTarget` carries its stored
@@ -732,13 +795,18 @@ async function resumeArchived(uuid: string): Promise<void> {
       });
     }
     swapGameIntoScene(resumed.game);
-    log.info('archived game resumed (continues under its own record)', {
+    log.info('archived game resumed (continues under the record it was loaded from)', {
       uuid,
       id: selection.id,
       ply: resumed.game.ply(),
     });
+    return { ok: true };
   } catch (err: unknown) {
+    // A corrupt/illegal stored log (`ArchiveError`) or an IndexedDB failure. Reported as DAMAGE with
+    // its own reason — never as "no such game", which would send the player looking for a row that is
+    // right there in the list.
     log.error('archive resume failed', { uuid, err });
+    return { ok: false, reason: 'unreadable' };
   }
 }
 
@@ -911,6 +979,7 @@ void createAppNetSession(scene.getState().size)
     // describe two different games at one moment (see {@link getRenderedNetGameUuid}).
     getRenderedNetGameUuid = () =>
       shouldRenderSessionGame(session.state()) ? session.gameUuid() : null;
+    isNetAuthoritative = () => shouldRenderSessionGame(session.state());
 
     // Unified entry (Task S.6, design §3): the Network-Game panel's single Enter button routes HERE with
     // the canonical code + the chosen seed proposal. It goes through the SAME `startNetGame` boundary

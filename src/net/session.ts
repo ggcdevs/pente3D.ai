@@ -720,23 +720,42 @@ export class NetSession {
    * it is REPLACED by the resident's/initiator's authoritative game if we are admitted, and kept (as
    * the established game) only if we turn out to be alone.
    *
-   * A `resume`/`current` seed comes back REFUSED for either of two honest reasons: we hold that exact
+   * A `resume`/`current` seed comes back REFUSED for one of three honest reasons: we hold that exact
    * game but its persisted seat map owns both seats for OTHER playerIds, so there is no seat to enter it
-   * on (see {@link seedFromUuid}); or this browser does not hold the named game at all
-   * (`seed-unavailable`). Both are returned, not thrown — {@link enter} turns them into an honest
-   * `joinError` and stays offline.
+   * on (see {@link seedFromUuid}); this browser does not hold the named game at all
+   * (`seed-unavailable`); or — for a `resume`, which names a history picked off the games list — we hold
+   * the game but no record here still holds THAT history (`seed-stale`). All are returned, not thrown —
+   * {@link enter} turns them into an honest `joinError` and stays offline.
    */
   private async buildProvisionalSeat(
     code: string,
     proposal: Proposal,
   ): Promise<
     | { kind: 'seeded'; game: Game; color: SeatColor; seatMap: SeatMap }
-    | { kind: 'refused'; reason: ClaimRejection | 'seed-unavailable' }
+    | { kind: 'refused'; reason: ClaimRejection | 'seed-unavailable' | 'seed-stale' }
   > {
-    // 1. A concrete resume/current: seed the actual game named by the proposal's uuid.
+    // 1. A concrete resume/current: seed the actual game named by the proposal's uuid — AT THE HISTORY
+    //    the proposal named. The `headHash` a `resume` carries is the games-list row's own fingerprint,
+    //    and handing it to the load is what makes the two routes out of that list agree about which
+    //    record a uuid means when more than one claims it (see `seedFromUuid`). The row's record `id`
+    //    is deliberately NOT used: it is a local store key, meaningless to the peer this proposal is
+    //    reconciled against, whereas the head is the portable name of the same fact.
     if (proposal.kind === 'resume' || proposal.kind === 'current') {
-      const seeded = await this.seedFromUuid(proposal.uuid);
-      if (seeded.kind === 'seeded') return seeded;
+      const seeded = await this.seedFromUuid(proposal.uuid, proposal.headHash);
+      if (seeded.kind === 'seeded') {
+        // A `resume` NAMED a history the player picked off the games list. If no record here holds it
+        // any more (another tab played on, or the row was already stale when it was drawn), entering on
+        // the same game at a DIFFERENT head would announce a history we were not asked for and make the
+        // divergence that follows look like the peer's fault. Refused with its own typed reason.
+        if (proposal.kind === 'resume' && !seeded.headMatched) {
+          return { kind: 'refused', reason: 'seed-stale' };
+        }
+        // A `current` is the board on screen, whose archived copy legitimately lags its own autosave by
+        // a tick — the game is the same game and the newest stored history is the honest answer, so a
+        // head that has moved on is accepted rather than turned into a refusal the player caused by
+        // moving.
+        return seeded;
+      }
       // We hold the game but own no seat in it → refuse the entry with the seat manager's own reason
       // rather than silently establishing some OTHER game under a `resume` proposal (which the
       // arbiter would then have to refuse as `game-mismatch` — a mislabeled version of this fact).
@@ -801,19 +820,35 @@ export class NetSession {
    */
   private async seedFromUuid(
     uuid: string,
+    wantHead?: string,
   ): Promise<
-    | { kind: 'seeded'; game: Game; color: SeatColor; seatMap: SeatMap }
+    | { kind: 'seeded'; game: Game; color: SeatColor; seatMap: SeatMap; headMatched: boolean }
     | { kind: 'absent' }
     | { kind: 'unclaimable'; reason: ClaimRejection }
   > {
-    const loaded = await loadNetGameByUuid(this.deps.db, uuid);
+    // The head the caller asked for SELECTS among the records claiming this uuid (see
+    // `loadNetGameByUuid`): with two claimants — the shape the V.5 migration deliberately leaves — the
+    // by-key rule alone is blind to which line of play a record holds, so it can hand back the
+    // finished/divergent claimant for a row the games list showed as unfinished. Passing the head
+    // makes the seed route resolve the SAME record the list did.
+    const loaded = await loadNetGameByUuid(this.deps.db, uuid, wantHead);
     if (loaded === undefined) return { kind: 'absent' };
     const seatMap: SeatMap = loaded.seats ?? emptySeatMap();
     // Reclaim our owned seat, or take first-available on a map with a free seat. Presence is
     // immaterial to WHICH seat we get; it only colors the refusal reason, so pass our own snapshot.
     const claim = claimSeat(seatMap, this.deps.playerId, this.presentPeers);
     if (!claim.ok) return { kind: 'unclaimable', reason: claim.reason };
-    return { kind: 'seeded', game: loaded.game, color: claim.color, seatMap: claim.seatMap };
+    // Whether the game we got IS the history that was asked for — reported rather than assumed, so a
+    // mismatch is a fact the caller decides about instead of an announcement nobody can check. With no
+    // head asked for (the breadcrumb path) there is nothing to disagree with, so it is vacuously true.
+    const headMatched = wantHead === undefined || headHash(loaded.game.log) === wantHead;
+    return {
+      kind: 'seeded',
+      game: loaded.game,
+      color: claim.color,
+      seatMap: claim.seatMap,
+      headMatched,
+    };
   }
 
   /**

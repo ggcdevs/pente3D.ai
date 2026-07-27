@@ -127,7 +127,14 @@ export type JoinErrorReason =
    * downstream refusal a lie (a peer proposing the SAME game was told the two of you "brought different
    * games").
    */
-  | 'seed-unavailable';
+  | 'seed-unavailable'
+  /**
+   * The seed named a game this browser holds, but no record here still holds the HISTORY the games-list
+   * row showed (`resume` carries the row's `headHash`). A LOCAL failure, not a peer's refusal: nothing
+   * was published. Its own label because entering on the same game at a different head would announce a
+   * history nobody asked for, and the divergence that followed would be blamed on the other player.
+   */
+  | 'seed-stale';
 
 /** Why a typed join code was rejected before dispatch (pure, pre-dispatch validation). */
 export type CodeError =
@@ -184,6 +191,8 @@ const JOIN_ERROR_TEXT: Record<JoinErrorReason, string> = {
   'connect-failed': 'Could not connect. Check the code and try again.',
   'seed-unreadable': 'That saved game could not be read — it may be damaged. Try another game.',
   'seed-unavailable': 'That game is not saved on this device. Pick another, or choose Dealer’s choice.',
+  'seed-stale':
+    'That game has moved on since the list was drawn. Re-open the games list and pick it again.',
 };
 
 /**

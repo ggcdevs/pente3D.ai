@@ -8,6 +8,9 @@ import {
   resolveArchiveStatus,
   selectResumeTarget,
   shortHeadHash,
+  OFFLINE_SESSION,
+  RESUME_REFUSAL_REASONS,
+  RESUME_REFUSAL_TEXT,
   CONFLICTED_RESULT,
   IN_PROGRESS_RESULT,
   PLAYER_SEAT_ORDER,
@@ -20,6 +23,7 @@ import {
   STATUS_ORDER,
   type ArchiveListing,
   type ArchiveStatus,
+  type ResumeRefusal,
 } from './archiveModel.ts';
 
 /**
@@ -470,7 +474,7 @@ describe('selectResumeTarget — resume by GAME UUID (#37)', () => {
     ]);
 
   it('resolves an unfinished game to the RECORD id to load, alongside its uuid', () => {
-    expect(selectResumeTarget(model(), 'u-live')).toEqual({
+    expect(selectResumeTarget(model(), 'u-live', OFFLINE_SESSION)).toEqual({
       ok: true,
       uuid: 'u-live',
       id: 'rec-live',
@@ -478,22 +482,22 @@ describe('selectResumeTarget — resume by GAME UUID (#37)', () => {
   });
 
   it('refuses an unknown uuid with a typed not-found (negative)', () => {
-    expect(selectResumeTarget(model(), 'u-nope')).toEqual({ ok: false, reason: 'not-found' });
+    expect(selectResumeTarget(model(), 'u-nope', OFFLINE_SESSION)).toEqual({ ok: false, reason: 'not-found' });
   });
 
   it('refuses a FINISHED game with a typed not-resumable (negative)', () => {
-    expect(selectResumeTarget(model(), 'u-won')).toEqual({ ok: false, reason: 'not-resumable' });
+    expect(selectResumeTarget(model(), 'u-won', OFFLINE_SESSION)).toEqual({ ok: false, reason: 'not-resumable' });
   });
 
   it('refuses a CONFLICTED game with a typed not-resumable (negative)', () => {
-    expect(selectResumeTarget(model(), 'u-forked')).toEqual({
+    expect(selectResumeTarget(model(), 'u-forked', OFFLINE_SESSION)).toEqual({
       ok: false,
       reason: 'not-resumable',
     });
   });
 
   it('refuses the empty archive with not-found (negative)', () => {
-    expect(selectResumeTarget(deriveArchive([]), 'u-live')).toEqual({
+    expect(selectResumeTarget(deriveArchive([]), 'u-live', OFFLINE_SESSION)).toEqual({
       ok: false,
       reason: 'not-found',
     });
@@ -507,7 +511,7 @@ describe('selectResumeTarget — resume by GAME UUID (#37)', () => {
       listing('rec-conflict', { result: CONFLICTED_RESULT, uuid: 'u-x', startedAt: 500 }),
       listing('rec-game', { result: IN_PROGRESS_RESULT, uuid: 'u-x', startedAt: 100 }),
     ]);
-    expect(selectResumeTarget(twoClaims, 'u-x')).toEqual({ ok: true, uuid: 'u-x', id: 'rec-game' });
+    expect(selectResumeTarget(twoClaims, 'u-x', OFFLINE_SESSION)).toEqual({ ok: true, uuid: 'u-x', id: 'rec-game' });
   });
 
   it('still refuses when EVERY claimant of the uuid is unresumable (negative)', () => {
@@ -515,7 +519,7 @@ describe('selectResumeTarget — resume by GAME UUID (#37)', () => {
       listing('rec-conflict', { result: CONFLICTED_RESULT, uuid: 'u-x', startedAt: 500 }),
       listing('rec-won', { result: 'black-wins', uuid: 'u-x', startedAt: 100 }),
     ]);
-    expect(selectResumeTarget(twoDeadClaims, 'u-x')).toEqual({
+    expect(selectResumeTarget(twoDeadClaims, 'u-x', OFFLINE_SESSION)).toEqual({
       ok: false,
       reason: 'not-resumable',
     });
@@ -537,7 +541,7 @@ describe('selectResumeTarget — resume by GAME UUID (#37)', () => {
           const listings = raw.map((r, i) =>
             listing(`${r.id}-${i}`, { uuid: r.uuid, result: r.result }),
           );
-          const sel = selectResumeTarget(deriveArchive(listings), wanted);
+          const sel = selectResumeTarget(deriveArchive(listings), wanted, OFFLINE_SESSION);
           const claimants = listings.filter((l) => l.meta.uuid === wanted);
           const resumable = claimants.filter((l) => l.meta.result === IN_PROGRESS_RESULT);
           if (resumable.length > 0) {
@@ -555,6 +559,80 @@ describe('selectResumeTarget — resume by GAME UUID (#37)', () => {
         },
       ),
     );
+  });
+});
+
+describe('selectResumeTarget — the LIVE SESSION refuses, and says which refusal it is (#37)', () => {
+  const model = () =>
+    deriveArchive([
+      listing('rec-net', { result: IN_PROGRESS_RESULT, uuid: 'u-net', startedAt: 300 }),
+      listing('rec-other', { result: IN_PROGRESS_RESULT, uuid: 'u-other', startedAt: 200 }),
+    ]);
+
+  it('refuses the game the session HOLDS with session-live — even when it is listed resumable', () => {
+    // Its record is the SESSION's to write (design §2/§7); the app loading the snapshot as a local
+    // board would be a second writer of one history.
+    expect(
+      selectResumeTarget(model(), 'u-net', { heldGameUuid: 'u-net', authoritative: true }),
+    ).toEqual({ ok: false, reason: 'session-live' });
+  });
+
+  it('refuses the held game even after the session STOPPED being authoritative (ownership outlives it)', () => {
+    // After a conflict stop the scene renders its local board again, but the session still holds the
+    // record — so the one-writer refusal must survive `authoritative` going false.
+    expect(
+      selectResumeTarget(model(), 'u-net', { heldGameUuid: 'u-net', authoritative: false }),
+    ).toEqual({ ok: false, reason: 'session-live' });
+  });
+
+  it('refuses EVERY OTHER row with session-active while the session is authoritative', () => {
+    // The sibling case the uuid-equality guard alone left open: the scene renders the SESSION's game,
+    // so a game swapped into the scene-local slot lands off screen — a silent no-op if not refused.
+    expect(
+      selectResumeTarget(model(), 'u-other', { heldGameUuid: 'u-net', authoritative: true }),
+    ).toEqual({ ok: false, reason: 'session-active' });
+  });
+
+  it('refuses an UNLISTED uuid with session-active too while a room runs (the room outranks the row)', () => {
+    expect(
+      selectResumeTarget(model(), 'u-nope', { heldGameUuid: 'u-net', authoritative: true }),
+    ).toEqual({ ok: false, reason: 'session-active' });
+  });
+
+  it('resolves that same other row the moment the session stops being authoritative (positive)', () => {
+    expect(
+      selectResumeTarget(model(), 'u-other', { heldGameUuid: 'u-net', authoritative: false }),
+    ).toEqual({ ok: true, uuid: 'u-other', id: 'rec-other' });
+  });
+
+  it('a held uuid of null never matches a row (offline holds nothing, not a game called null)', () => {
+    expect(selectResumeTarget(model(), 'u-other', OFFLINE_SESSION)).toEqual({
+      ok: true,
+      uuid: 'u-other',
+      id: 'rec-other',
+    });
+    expect(OFFLINE_SESSION).toEqual({ heldGameUuid: null, authoritative: false });
+  });
+});
+
+describe('RESUME_REFUSAL_TEXT — every refusal has something to SAY to the player (#37)', () => {
+  it('labels every reason the union can produce, with distinct, non-empty copy', () => {
+    // The Record type makes an unlabeled reason a compile error; this proves the copy is real rather
+    // than a placeholder, and that two refusals never read identically to the player.
+    const texts = RESUME_REFUSAL_REASONS.map((reason) => RESUME_REFUSAL_TEXT[reason]);
+    expect(texts.every((t) => t.trim().length > 0)).toBe(true);
+    expect(new Set(texts).size).toBe(texts.length);
+  });
+
+  it('enumerates exactly the reasons selectResumeTarget can return, plus the glue-only ones', () => {
+    const expected: ResumeRefusal[] = [
+      'not-found',
+      'not-resumable',
+      'session-live',
+      'session-active',
+      'unreadable',
+    ];
+    expect(RESUME_REFUSAL_REASONS.slice().sort()).toEqual(expected.sort());
   });
 });
 

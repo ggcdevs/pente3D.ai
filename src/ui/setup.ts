@@ -32,7 +32,7 @@ import type { HistoryFacts } from './widgets/sliderModel.ts';
 import { helpWidget, type HelpScope } from './widgets/help.ts';
 import type { HelpSources } from './widgets/helpModel.ts';
 import { archiveWidget, type ArchiveScope } from './widgets/archive.ts';
-import type { ArchiveListing } from './widgets/archiveModel.ts';
+import type { ArchiveListing, ResumeOutcome } from './widgets/archiveModel.ts';
 import { endStateOverlayWidget } from './widgets/endStateOverlay.ts';
 import type { EndState } from '../net/endState.ts';
 import { divergencePanelWidget } from './widgets/divergencePanel.ts';
@@ -95,11 +95,15 @@ export interface UiDeps {
    */
   reviewArchived(id: string): Promise<void>;
   /**
-   * RESUME an archived game (Task 6.6): reconstruct game `id`, swap it into the scene, and make it the
-   * live CONTINUABLE game — the app mints a fresh autosave record so continued play accumulates and the
-   * original archived record stays intact. Only invoked for a resumable (in-progress) row.
+   * RESUME an archived game (Task 6.6; keyed by the GAME's uuid since Task V.6): reconstruct the game,
+   * swap it into the scene, and make it the live CONTINUABLE game — continued play is written back to
+   * the record it was loaded from. Only invoked for a resumable (in-progress) row.
+   *
+   * Resolves a typed {@link ResumeOutcome}, not `void`: a row the model marks resumable can still be
+   * refused by the app (it went stale, a live room is running, the record is damaged), and the widget
+   * has to be able to tell the player which. A `void` result made every refusal invisible.
    */
-  resumeArchived(id: string): Promise<void>;
+  resumeArchived(id: string): Promise<ResumeOutcome>;
   /**
    * The LIVE sources the help overlay generates its shortcut list from (Task 5.7) — the scene's
    * `getHelpSources` (registered command ids + current bindings). Supplied by the app so the UI

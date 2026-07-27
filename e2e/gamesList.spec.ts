@@ -15,9 +15,12 @@ import { STATUS_EMPTY_TEXT, shortHeadHash } from '../src/ui/widgets/archiveModel
  *
  *   - BROWSE finished AND unfinished: two real games — one played to a white win, one left mid-game —
  *     are both listed, each under its own status section, with the finished one offering no Resume;
- *   - NOTHING HIDDEN OR DUPLICATED: the rendered rows are exactly the archived games, one per game
- *     uuid (V.1 deleted the internal `net-room:{code}` records, so the listing has no marker filter
- *     left, and V.5's one-record-per-uuid leaves nothing to de-duplicate);
+ *   - NOTHING HIDDEN OR MERGED: the rendered rows are exactly the archived RECORDS (V.1 deleted the
+ *     internal `net-room:{code}` records, so the listing has no marker filter left) — one row per game
+ *     in an ordinary store, and both rows when a store really does hold two claimants for one uuid;
+ *   - RESUMING DOES NOT MANUFACTURE A SECOND CLAIMANT: continued play is written back to the record
+ *     the list chose, so a game resumed from a foreign key stays ONE record, and the divergent history
+ *     sitting on that game's uuid key survives untouched;
  *   - RESUME BY UUID lands on THAT game: the row's `data-game-uuid` becomes `getGameUuid()`, with the
  *     game's pieces and `headHash` — identity, not a board that merely looks right;
  *   - RESUME IS KEYED BY THE GAME, NOT THE RECORD: a game moved to a record key that is NOT its uuid
@@ -385,6 +388,26 @@ test('RESUME follows the GAME uuid, not the record key — a game stored under a
   expect(await get(page, (p) => p.getHeadHash())).toBe(gameA.head);
   expect((await get(page, (p) => p.getState()!)).pieces).toEqual(boardA.pieces);
   expect(gameB.uuid).not.toBe(gameA.uuid); // the board we came from really was a different game
+
+  // KEEP PLAYING, THEN RE-READ THE ARCHIVE — the half the board assertion cannot see. Continued play
+  // advances THE RECORD THIS LOADED, wherever it is keyed; it must not mint a second record under the
+  // game's uuid. Two records claiming one uuid is precisely the duplication
+  // `rekeyArchiveRecordsByGameUuid` "exists to abolish", and the games list would render this one game
+  // twice under Unfinished.
+  await placeAt(page, [2, 0, 2]);
+  await waitForAutosaved(page);
+  const liveHead = (await get(page, (p) => p.getHeadHash()))!;
+  const listed = await getAsync(page, (p) => p.getArchive());
+  const claimants = listed.filter((g) => g.meta.uuid === gameA.uuid);
+  expect(claimants).toHaveLength(1);
+  expect(claimants[0]!.id).toBe(FOREIGN_KEY);
+  expect(claimants[0]!.meta.headHash).toBe(liveHead);
+  // Nothing was created on the uuid key — the record stayed exactly where the older build left it.
+  expect(await rawGet(page, dbName, gameA.uuid)).toBeNull();
+  // …and the rendered list agrees: still ONE row for this game, not the same game twice.
+  await openBrowser(page);
+  await expect(rowByUuid(page, gameA.uuid)).toHaveCount(1);
+  await expect(rowByUuid(page, gameA.uuid)).toHaveAttribute('data-id', FOREIGN_KEY);
 });
 
 /** Write `record` under its own `id` (overwriting whatever is there) — grafts a second claimant in. */
@@ -480,6 +503,22 @@ test('RESUME loads the record the LIST chose — a NON-RESUMABLE claimant of the
   const continued = await get(page, (p) => p.getState()!);
   expect(Object.keys(continued.pieces)).toHaveLength(4);
   expect(continued.pieces['2,0,2']).toBe('black');
+
+  // THE OTHER CLAIMANT'S HISTORY IS STILL THERE. Continued play is written back to the record the
+  // list CHOSE (`LEGACY_KEY`), never under `game.uuid` — which here is occupied by the divergent
+  // finished record the V.5 migration deliberately refused to delete because it could not prove
+  // containment. Writing there would have destroyed that line of play with no log, no refusal and no
+  // way back: the test that stopped at the board on screen shipped exactly that.
+  await waitForAutosaved(page);
+  const survivor = await rawGet(page, dbName, gameA.uuid);
+  expect(survivor).not.toBeNull();
+  expect(survivor!.meta.headHash).toBe(gameB.head);
+  expect(survivor!.meta.result).toBe('white-wins');
+  expect(survivor!.log).toHaveLength(recordB!.log.length);
+  // …and the record that DID grow is the one the resume loaded, still under its retired key.
+  const written = await rawGet(page, dbName, LEGACY_KEY);
+  expect(written!.meta.headHash).toBe(await get(page, (p) => p.getHeadHash()));
+  expect(written!.log).toHaveLength(4);
 });
 
 test('with every game over, the UNFINISHED section still shows — and SAYS there is nothing to resume', async ({

@@ -30,7 +30,12 @@
  *   - RESUME is keyed by the GAME's portable `uuid` (design §2.2), not the record id — a record key is
  *     not always its game's identity (a conflicted record, a pre-V.5 record awaiting the boot re-key).
  *     Each row publishes its `data-game-uuid` so a test can prove the row and the loaded game are the
- *     same GAME.
+ *     same GAME;
+ *   - a REFUSED resume SAYS SO: `resumeArchived` resolves a typed outcome, the modal closes only when
+ *     the game actually landed, and a refusal paints the model's reason
+ *     (`archiveModel.RESUME_REFUSAL_TEXT`) into `[data-testid="archive-refusal"]`. Before that the
+ *     modal closed first and every refusal was a `log.error` nobody could see — clicking Resume on a
+ *     stale row, or while a room was running, did nothing at all.
  *
  * The open modal is a MODE change in the input layer: opening PUSHES a `blocking` scope
  * (GLOSSARY "Blocking scope") and closing POPS it — every close path (Escape, outside-click, the ✕
@@ -41,7 +46,13 @@
  */
 
 import type { Widget, WidgetFactory } from '../registry.ts';
-import { deriveArchive, type ArchiveItem, type ArchiveListing } from './archiveModel.ts';
+import {
+  deriveArchive,
+  RESUME_REFUSAL_TEXT,
+  type ArchiveItem,
+  type ArchiveListing,
+  type ResumeOutcome,
+} from './archiveModel.ts';
 
 /** The stable widget id — matches the `archiveBrowser` entry in the tracked `layout` default. */
 export const ARCHIVE_WIDGET_ID = 'archiveBrowser';
@@ -86,11 +97,16 @@ export interface ArchiveDeps {
   /**
    * RESUME (Task 6.6; keyed by GAME UUID since Task V.6): reconstruct the game whose portable
    * `uuid` this is (design §2.2 — NOT the record id, which a conflicted or pre-V.5 record does not
-   * share with its game), swap it into the scene, and make it the live continuable game. Since V.5 a
-   * game has ONE record keyed by its uuid, so continued play advances that same record. Only offered
-   * for a resumable (unfinished) row.
+   * share with its game), swap it into the scene, and make it the live continuable game. Continued
+   * play is written back to the RECORD the game was loaded from. Only offered for a resumable
+   * (unfinished) row.
+   *
+   * Resolves an {@link ResumeOutcome}, NOT `void`: a resume can be refused (a stale row, a game a
+   * live room is running, a damaged record), and the widget has to be able to SAY so. When this
+   * resolved `void`, every refusal was a log line behind a modal that had already closed — the
+   * player clicked Resume and nothing happened at all.
    */
-  resumeArchived(uuid: string): Promise<void>;
+  resumeArchived(uuid: string): Promise<ResumeOutcome>;
 }
 
 /** Build the blocking `archive` scope the open modal pushes (id `archive`, no bindings). */
@@ -148,9 +164,26 @@ export function archiveWidget(): WidgetFactory {
       empty.hidden = true;
       panel.appendChild(empty);
 
+      // WHY A RESUME DID NOT HAPPEN, said out loud. A refusal keeps the modal OPEN and paints the
+      // model's reason text here, so the player sees an answer where they clicked instead of a list
+      // that closes onto an unchanged board (agent-principles #1/#3 — observable behavior, not a log).
+      const refusal = doc.createElement('div');
+      refusal.className = 'pente-archive-refusal';
+      refusal.setAttribute('data-testid', 'archive-refusal');
+      refusal.setAttribute('role', 'alert');
+      refusal.hidden = true;
+      panel.appendChild(refusal);
+
       element.appendChild(panel);
 
       let open = false;
+
+      /** Paint (or clear) the refusal notice — the ONE place the modal says why nothing loaded. */
+      function showRefusal(text: string | null): void {
+        refusal.textContent = text ?? '';
+        refusal.hidden = text === null;
+        element.setAttribute('data-refusal', text ?? '');
+      }
 
       /** Build one game row (Task 5.8 / 6.6 / V.6) from a resolved model item. */
       function buildRow(item: ArchiveItem): HTMLElement {
@@ -212,14 +245,24 @@ export function archiveWidget(): WidgetFactory {
         // proves review-vs-resume from the pure `canResume` flag (never a hardcoded per-result rule).
         // Keyed by the GAME UUID (Task V.6): the game is what is being continued, and its record key
         // is not always its identity (a pre-V.5 record, a conflicted record).
+        //
+        // UNLIKE REVIEW, THE MODAL CLOSES ONLY ON SUCCESS. `canResume` is derived from the stored
+        // result alone, so a row can be offered and still be refused by the glue (the row went stale,
+        // a live room is running the game, the record is damaged). Closing first — as review does,
+        // and as this did — made every one of those refusals invisible: the list vanished and the
+        // board never changed. So the outcome is awaited, and a refusal keeps the list open with the
+        // model's reason on it, next to the row that was clicked.
         if (item.canResume) {
           const resumeButton = doc.createElement('button');
           resumeButton.className = 'pente-archive-resume';
           resumeButton.setAttribute('data-testid', `archive-resume-${item.id}`);
           resumeButton.textContent = 'Resume';
           resumeButton.addEventListener('click', () => {
-            close();
-            void deps.resumeArchived(item.uuid);
+            showRefusal(null);
+            void deps.resumeArchived(item.uuid).then((outcome) => {
+              if (outcome.ok) close();
+              else showRefusal(RESUME_REFUSAL_TEXT[outcome.reason]);
+            });
           });
           actions.appendChild(resumeButton);
         }
@@ -282,6 +325,9 @@ export function archiveWidget(): WidgetFactory {
       function openModal(): void {
         if (open) return; // idempotent — a second open must not push a second scope
         open = true;
+        // A fresh open starts with nothing to apologise for — the previous visit's refusal was about
+        // a click that is over, and re-showing it would blame the list for something it did not do.
+        showRefusal(null);
         element.hidden = false;
         element.setAttribute('data-open', 'true');
         deps.pushScope(archiveScope());
@@ -305,6 +351,7 @@ export function archiveWidget(): WidgetFactory {
 
       closeButton.addEventListener('click', () => close());
       element.setAttribute('data-open', 'false');
+      showRefusal(null);
 
       // Hand our opener to the shell so the `loadGame` command opens this modal.
       deps.registerOpenArchive(openModal);

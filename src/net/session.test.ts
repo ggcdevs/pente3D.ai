@@ -1980,6 +1980,105 @@ describe('NetSession — a resume seed for a game this browser does NOT hold ref
   });
 });
 
+describe('NetSession — a resume seed names a HISTORY, not just a uuid (V.6 follow-up, #37)', () => {
+  /**
+   * The two-claimant store the V.5 migration deliberately leaves behind (`persist/archive.ts`
+   * `rekeyArchiveRecordsByGameUuid`: a record it cannot prove is CONTAINED in the survivor is never
+   * deleted): the game the games list offers, under a retired autosave key, and a DIVERGENT history
+   * carrying the same uuid sitting on the uuid key itself.
+   *
+   * Returns the game the LIST would show (the row the player clicks) — the one the seed must bring.
+   */
+  async function twoClaimantStore(db: IDBDatabase): Promise<{ listed: Game; divergent: Game }> {
+    const listed = new Game(SIZE);
+    listed.place(coordsOf('0,0,0'));
+    listed.place(coordsOf('1,1,1'));
+    const divergent = new Game(SIZE, listed.uuid);
+    divergent.place(coordsOf('4,4,4'));
+    await saveGame(db, listed.uuid, divergent, { players: {}, result: 'in-progress', startedAt: 3 });
+    await saveGame(db, 'autosave-from-an-older-build', listed, {
+      players: {},
+      result: 'in-progress',
+      startedAt: 3,
+    });
+    return { listed, divergent };
+  }
+
+  it('seeds the record bearing the ROW’s head — not the divergent claimant on the uuid key', async () => {
+    const hub = new MockRelayHub();
+    const db = await openDatabase(`net-seedhead-${Math.random().toString(36).slice(2)}`);
+    const { listed, divergent } = await twoClaimantStore(db);
+    expect(headHash(divergent.log)).not.toBe(headHash(listed.log));
+
+    const a = makeSession(hub, 'player-a', { db });
+    await a.enter(ROOM, { kind: 'resume', uuid: listed.uuid, headHash: headHash(listed.log) });
+    await flush();
+
+    // The engine holds the history the row showed — proven by the head + the board, not by the uuid
+    // (both claimants answer to the same uuid, which is exactly why the uuid alone cannot decide).
+    expect(a.state().phase).toBe('connected');
+    expect(a.gameUuid()).toBe(listed.uuid);
+    expect(a.ply()).toBe(2);
+    expect(a.gameState()!.pieces['1,1,1']).toBe('black');
+    expect(a.gameState()!.pieces['4,4,4']).toBeUndefined();
+    // …and the history it re-persisted is that same one, by fingerprint — the divergent claimant's
+    // head never became this session's.
+    await a.whenPersisted();
+    const stored = (await listArchivedGames(db)).find((l) => l.id === listed.uuid)!;
+    expect(stored.meta.headHash).toBe(headHash(listed.log));
+    expect(stored.meta.headHash).not.toBe(headHash(divergent.log));
+  });
+
+  it('refuses `seed-stale` when NO record still holds the history the row named (negative)', async () => {
+    const hub = new MockRelayHub();
+    const db = await openDatabase(`net-seedstale-${Math.random().toString(36).slice(2)}`);
+    const held = new Game(SIZE);
+    held.place(coordsOf('0,0,0'));
+    await saveGame(db, held.uuid, held, { players: {}, result: 'in-progress', startedAt: 3 });
+
+    const a = makeSession(hub, 'player-a', { db });
+    // The row's head, as it would be if another tab had played on since the list was drawn.
+    const movedOn = new Game(SIZE, held.uuid);
+    movedOn.place(coordsOf('0,0,0'));
+    movedOn.place(coordsOf('2,2,2'));
+    await a.enter(ROOM, { kind: 'resume', uuid: held.uuid, headHash: headHash(movedOn.log) });
+    await flush();
+
+    // Refused with its OWN reason rather than entering on a history nobody asked for — which would
+    // announce that head to the peer and make the divergence that follows look like the peer's fault.
+    expect(a.state().phase).toBe('offline');
+    expect(a.state().joinError).toBe('seed-stale');
+    expect(a.gameUuid()).toBeNull();
+  });
+
+  it('a `current` seed ACCEPTS a head that moved on — the live board runs ahead of its autosave', async () => {
+    const hub = new MockRelayHub();
+    const db = await openDatabase(`net-seedcurrent-${Math.random().toString(36).slice(2)}`);
+    const board = new Game(SIZE);
+    board.place(coordsOf('0,0,0'));
+    await saveGame(db, board.uuid, board, { players: {}, result: 'in-progress', startedAt: 3 });
+    // The scene's board with one more move on it, whose autosave has not landed yet — the ordinary
+    // race on the "Current local board" seed. Refusing here would fail an entry the player caused by
+    // moving, so the same game at the newest STORED history is the honest answer.
+    const ahead = new Game(SIZE, board.uuid);
+    ahead.place(coordsOf('0,0,0'));
+    ahead.place(coordsOf('2,2,2'));
+
+    const a = makeSession(hub, 'player-a', { db });
+    await a.enter(ROOM, { kind: 'current', uuid: board.uuid, headHash: headHash(ahead.log) });
+    await flush();
+
+    expect(a.state().phase).toBe('connected');
+    expect(a.gameUuid()).toBe(board.uuid);
+    expect(a.state().joinError).toBeNull();
+    // It entered on the newest STORED history — one ply, not the two the live board had.
+    expect(a.ply()).toBe(1);
+    expect(a.gameState()!.pieces['0,0,0']).toBe('white');
+    expect(a.gameState()!.pieces['2,2,2']).toBeUndefined();
+    expect(headHash(ahead.log)).not.toBe(headHash(board.log));
+  });
+});
+
 describe('NetSession — the MOVE-SYNC channel gates which GAME may cross (#46, design §3)', () => {
   /**
    * A second peer publishing an ordinary `kind:'sync'` payload for an unrelated game. No crafted

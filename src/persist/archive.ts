@@ -277,7 +277,25 @@ export async function loadNetGame(
  * with the SAME identity it published in its hello; and a returning peer re-seeding the game its
  * `activeNetworkedGame` breadcrumb names (`src/net/activeGame.ts`).
  *
- * Resolution is DETERMINISTIC, in two steps:
+ * ## `headHash` — WHICH history, when several records claim one uuid
+ *
+ * A caller that knows the exact history it wants passes its `headHash`, and a record BEARING that head
+ * wins over every other claimant. This matters because a uuid can genuinely have more than one
+ * claimant — the shape {@link rekeyArchiveRecordsByGameUuid} deliberately leaves behind when it cannot
+ * prove one record contains the other — and the by-key-first rule below is blind to WHICH line of play
+ * a record holds: it would serve a finished/divergent claimant sitting on the uuid key for a seed the
+ * player picked off the games list as unfinished. The head is the portable way to say which one: the
+ * list row's own `id` is a LOCAL store key with no meaning on the wire (a `resume` proposal is compared
+ * against a PEER's proposal), whereas `headHash` is the whole-history fingerprint both peers already
+ * exchange.
+ *
+ * It is a PREFERENCE, not a filter: with no bearer the ordinary resolution below still answers, and the
+ * caller compares the loaded game's head against what it asked for and decides
+ * (`net/session.ts` `seedFromUuid` — a `resume` refuses a stale pick, a `current` accepts the same game
+ * at a newer head, since the live board legitimately runs ahead of its own autosave).
+ *
+ * ## Ordinary resolution (no head given, or nothing bears it) — DETERMINISTIC, in two steps
+ *
  *  1. the record stored UNDER the uuid — the canonical form a live net session writes (its record id
  *     IS the game uuid), which is also the one carrying the identity-owned seat map the empty-room
  *     reclaim needs. Its stored game must actually BEAR that uuid: a record id that merely collides
@@ -293,7 +311,19 @@ export async function loadNetGame(
 export async function loadNetGameByUuid(
   db: IDBDatabase,
   uuid: string,
+  headHash?: string,
 ): Promise<{ game: Game; seats: PersistedSeats | null } | undefined> {
+  if (headHash !== undefined) {
+    // The BEARER of the asked-for history wins, wherever it is keyed. Ordered by record id so a store
+    // holding two records at the same head resolves the same way every time (never store order); the
+    // record keyed BY the uuid is preferred when it is one of the bearers, because it is the canonical
+    // one and carries the identity-owned seat map.
+    const bearers = (await listGames(db))
+      .filter((l) => l.meta.uuid === uuid && l.meta.headHash === headHash)
+      .sort((a, b) => a.id.localeCompare(b.id));
+    const bearer = bearers.find((l) => l.id === uuid) ?? bearers[0];
+    if (bearer !== undefined) return loadNetGame(db, bearer.id);
+  }
   // Step 1 is a PROBE, so a corrupt record sitting under this key must not sink the lookup: the game
   // may well be archived intact under a DIFFERENT record id (step 2), which is what the pre-V.1
   // scan-only implementation would have found. A failure here is therefore REMEMBERED rather than

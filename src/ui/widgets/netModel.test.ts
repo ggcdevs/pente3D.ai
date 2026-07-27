@@ -154,6 +154,18 @@ describe('deriveNet — code + join error passthrough', () => {
     expect(text).not.toBe(deriveNet(state({ joinError: 'seed-unreadable' })).joinErrorText);
   });
 
+  it('maps a seed-stale join error to its OWN label (the game is here, that history is not)', () => {
+    // V.6 review follow-up (#37): a `resume` names the games-list row's HISTORY, not just its uuid. If
+    // no record here still holds that head, entering on the same game at a different one would announce
+    // a history nobody asked for — and the divergence that followed would be blamed on the peer.
+    const text = deriveNet(state({ joinError: 'seed-stale' })).joinErrorText;
+    expect(text).toBe(
+      'That game has moved on since the list was drawn. Re-open the games list and pick it again.',
+    );
+    expect(text).not.toBe(deriveNet(state({ joinError: 'seed-unavailable' })).joinErrorText);
+    expect(text).not.toBe(deriveNet(state({ joinError: 'game-divergent' })).joinErrorText);
+  });
+
   it('gives EVERY join-error reason a distinct, non-empty human message', () => {
     // design §7: no reason may reach the panel with no message (the Record type makes that a compile
     // error) — and none may silently share another's copy, which would mislabel the failure.

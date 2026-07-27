@@ -595,6 +595,105 @@ describe('game archive', () => {
         new RegExp(`archived game "${SAMPLE_UUID}"`),
       );
     });
+
+    // The `headHash` selector (Task V.6 review follow-up, #37): a uuid can have MORE THAN ONE
+    // claimant — the shape `rekeyArchiveRecordsByGameUuid` deliberately leaves when it cannot prove
+    // containment — and the by-key-first rule is blind to WHICH line of play a record holds. A caller
+    // that knows the history it wants (a `resume` proposal carries the games-list row's head) says so.
+    describe('loadNetGameByUuid(…, headHash) — WHICH claimant, when several claim one uuid', () => {
+      /** A DIFFERENT line of play under the SAME game uuid — the divergent claimant. */
+      function divergentSampleGame(): Game {
+        const g = new Game(9, SAMPLE_UUID);
+        g.place([0, 0, 0]);
+        g.place([8, 8, 8]);
+        return g;
+      }
+
+      it('serves the record BEARING the asked-for head, not the one sitting on the uuid key', async () => {
+        const { db } = await open();
+        // Exactly the two-claimant store the migration leaves: the divergent history on the canonical
+        // key, the game the list showed under a retired autosave key. Without the head, step 1 serves
+        // the divergent one — a silent mis-resolution for a row the player picked as unfinished.
+        await saveGame(db, SAMPLE_UUID, divergentSampleGame(), sampleMeta);
+        await saveGame(db, 'autosave-from-an-older-build', sampleGame(), {
+          ...sampleMeta,
+          seats: { white: 'player-a', black: null },
+        });
+
+        const blind = await loadNetGameByUuid(db, SAMPLE_UUID);
+        expect(headHash(blind!.game.log)).toBe(headHash(divergentSampleGame().log));
+
+        const asked = await loadNetGameByUuid(db, SAMPLE_UUID, headHash(sampleGame().log));
+        expect(asked).not.toBeUndefined();
+        expect(asked!.game.uuid).toBe(SAMPLE_UUID);
+        expect(headHash(asked!.game.log)).toBe(headHash(sampleGame().log));
+        expect(asked!.game.ply()).toBe(3);
+        expect(asked!.seats).toEqual({ white: 'player-a', black: null });
+      });
+
+      it('prefers the CANONICAL record when it is one of the bearers (it carries the seat map)', async () => {
+        const { db } = await open();
+        // Same history stored twice; only the uuid-keyed record carries the identity-owned seats the
+        // empty-room reclaim needs, so among equal bearers it must win.
+        await saveGame(db, 'a-copy-sorting-first', sampleGame(), sampleMeta);
+        await saveGame(db, SAMPLE_UUID, sampleGame(), {
+          ...sampleMeta,
+          seats: { white: 'player-a', black: 'player-b' },
+        });
+
+        const loaded = await loadNetGameByUuid(db, SAMPLE_UUID, headHash(sampleGame().log));
+        expect(loaded!.seats).toEqual({ white: 'player-a', black: 'player-b' });
+      });
+
+      it('breaks a tie between non-canonical bearers by record id, never by store order', async () => {
+        const { db } = await open();
+        // Two bearers, neither on the uuid key. The answer must not depend on which the cursor yields
+        // first, so it is the lowest id — asserted from BOTH insertion orders.
+        await saveGame(db, 'z-second', sampleGame(), {
+          ...sampleMeta,
+          seats: { white: 'from-z', black: null },
+        });
+        await saveGame(db, 'a-first', sampleGame(), {
+          ...sampleMeta,
+          seats: { white: 'from-a', black: null },
+        });
+        expect((await loadNetGameByUuid(db, SAMPLE_UUID, headHash(sampleGame().log)))!.seats).toEqual(
+          { white: 'from-a', black: null },
+        );
+
+        const other = await open();
+        await saveGame(other.db, 'a-first', sampleGame(), {
+          ...sampleMeta,
+          seats: { white: 'from-a', black: null },
+        });
+        await saveGame(other.db, 'z-second', sampleGame(), {
+          ...sampleMeta,
+          seats: { white: 'from-z', black: null },
+        });
+        expect(
+          (await loadNetGameByUuid(other.db, SAMPLE_UUID, headHash(sampleGame().log)))!.seats,
+        ).toEqual({ white: 'from-a', black: null });
+      });
+
+      it('falls back to the ordinary resolution when NOTHING bears the asked-for head (negative)', async () => {
+        const { db } = await open();
+        // The head is a PREFERENCE, not a filter: the game is still found, and the caller compares the
+        // head it got against the head it wanted (`session.ts` seedFromUuid) to decide what that means.
+        await saveGame(db, SAMPLE_UUID, sampleGame(), sampleMeta);
+
+        const loaded = await loadNetGameByUuid(db, SAMPLE_UUID, 'a-head-no-record-here-has');
+        expect(loaded).not.toBeUndefined();
+        expect(headHash(loaded!.game.log)).toBe(headHash(sampleGame().log));
+      });
+
+      it('still resolves nothing for an unknown uuid, head or no head (negative)', async () => {
+        const { db } = await open();
+        await saveGame(db, SAMPLE_UUID, sampleGame(), sampleMeta);
+        expect(
+          await loadNetGameByUuid(db, 'a-uuid-nobody-has', headHash(sampleGame().log)),
+        ).toBeUndefined();
+      });
+    });
   });
 
   describe('listArchivedGames', () => {

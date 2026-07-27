@@ -288,6 +288,11 @@ const UI_STYLESHEET = `
 .pente-archive-body { display: flex; flex-direction: column; gap: 6px; }
 .pente-archive-empty[hidden] { display: none; }
 .pente-archive-empty { opacity: 0.7; font-size: 14px; padding: 8px 0; }
+/* Task V.6 review follow-up (#37): why a RESUME did not happen, said where the player clicked. The
+   modal stays open on a refusal and paints the model's reason here — it used to close first and log,
+   so a refused Resume was indistinguishable from a broken button. Warning-toned, never destructive. */
+.pente-archive-refusal[hidden] { display: none; }
+.pente-archive-refusal { margin-top: 10px; padding: 8px 12px; border-radius: 6px; background: rgba(255,180,60,0.16); color: #ffd79a; font-size: 13px; line-height: 1.4; }
 /* Task V.6 / #37: the browser is SECTIONED by status (Unfinished first — the games list is the only
    route back to a game, so "what can I get back into" leads). The Unfinished section is rendered even
    when empty, with an explicit note, so an empty answer is stated rather than implied. */
