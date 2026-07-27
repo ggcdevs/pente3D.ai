@@ -44,17 +44,56 @@ const TSX = path.join(REPO_ROOT, 'node_modules', '.bin', 'tsx');
 const CLI = path.join(REPO_ROOT, 'cli', 'main.ts');
 
 /**
- * Files in this directory that are NOT scenarios: the `scenario:all` runner itself, this harness,
- * and any vitest suite (`*.test.ts`) that tests the harness. Discovery is by directory (see
- * `all.ts`), so this predicate — not a hand-maintained registry — is what keeps a non-scenario out
- * of the matrix. Exported so it can be asserted directly, without importing `all.ts` (which runs
- * the whole matrix on import).
+ * The suffix that MAKES a file a scenario. Discovery is by directory (see `all.ts`), so this
+ * predicate is what decides which files the matrix executes.
+ *
+ * It identifies a scenario POSITIVELY. The previous version was an allow-everything predicate with a
+ * two-name denylist (`all.ts`, `harness.ts`, `*.test.ts`), which meant any other file in this
+ * directory was spawned as a scenario — and `all.ts` classifies a child exiting 0 as `passed`. A
+ * shared helper module, the natural refactor the moment two scenarios want the same setup, therefore
+ * did nothing, exited 0, and was counted as a PASS. Observed, with the relay pointed at a dead port:
+ *
+ *     ⤼ both-absent-return.ts   skipped exit 2 · 0.6s      (× all 8 real scenarios)
+ *     ✓ zz-shared-helper.ts     passed  exit 0 · 0.3s
+ *     1 passed · 0 FAILED · 8 skipped (relay unreachable)
+ *     all run scenarios passed.                             EXIT=0
+ *
+ * A run in which nothing was proven reported green. `report()`'s zero-check refusal does not close
+ * that hole, because it only protects files that CALL `report()`.
  */
-const NOT_A_SCENARIO = new Set(['all.ts', 'harness.ts']);
+export const SCENARIO_SUFFIX = '.scenario.ts';
 
-/** True for a file `scenario:all` should execute as a scenario. */
+/**
+ * True for a file `scenario:all` should execute as a scenario — i.e. one that NAMES itself one.
+ * Exported so it can be asserted directly, without importing `all.ts` (which runs the whole matrix
+ * on import).
+ */
 export function isScenario(file: string): boolean {
-  return file.endsWith('.ts') && !file.endsWith('.test.ts') && !NOT_A_SCENARIO.has(file);
+  return file.endsWith(SCENARIO_SUFFIX);
+}
+
+/**
+ * The line {@link report} prints so the runner can tell "asserted nothing" from "asserted and
+ * passed" ACROSS a process boundary. Naming yourself a scenario gets you spawned; only reporting a
+ * tally gets you counted as a pass.
+ */
+export const CHECK_TALLY_PREFIX = '##PENTE-SCENARIO-CHECKS';
+
+/**
+ * Classify a finished scenario child from its exit code and whether it reported a check tally.
+ *
+ * The second argument is the half `report()` alone could never supply: a file that never calls
+ * `report()` cannot be refused by it. Exiting 0 without a tally means the process ran to completion
+ * having asserted nothing, which is a failure to prove, not a pass.
+ */
+export function classifyOutcome(
+  exitCode: number | null,
+  reportedChecks: boolean,
+): 'passed' | 'FAILED' | 'skipped' {
+  if (exitCode === EXIT_UNREACHABLE) return 'skipped';
+  // A killed process reports `code: null` (+ a signal); it is a failure, not a skip.
+  if (exitCode !== 0) return 'FAILED';
+  return reportedChecks ? 'passed' : 'FAILED';
 }
 
 /** Print scenario progress with a marker that stands out in a wall of daemon output. */
@@ -280,6 +319,9 @@ export function showBoard(peer: Peer, snap: Snapshot, viewName = 'list'): void {
  */
 export function report(title: string): number {
   const failed = checks.filter((c) => !c.ok);
+  // The machine-readable half, for `scenario:all` across the process boundary (see
+  // {@link CHECK_TALLY_PREFIX}). Printed FIRST so it survives a truncated tail.
+  console.log(`${CHECK_TALLY_PREFIX} passed=${checks.length - failed.length} failed=${failed.length}`);
   console.log(`\n${'═'.repeat(70)}\n${title}: ${checks.length - failed.length}/${checks.length} checks passed`);
   if (checks.length === 0) {
     console.log(

@@ -1,8 +1,7 @@
 import { test, expect, type Browser, type BrowserContext, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import mqtt from 'mqtt';
-import relay from '../src/config/defaults/relay.json' with { type: 'json' };
+import { RELAY, injectRelay, probeRelay, relaySkipReason } from './relayFixture';
 
 /**
  * Task N.2.2 e2e (issue #12 win/rematch flow) — the GLUE the unit tests cannot prove: the NON-BLOCKING,
@@ -37,9 +36,9 @@ import relay from '../src/config/defaults/relay.json' with { type: 'json' };
  *
  *   1. HERMETIC (always runs): two pages in one context share a BroadcastChannel-backed mock relay —
  *      REAL cross-client message exchange without the external broker. This tier runs in CI.
- *   2. LIVE-RELAY, TWO ISOLATED CONTEXTS (self-skips without creds): two INDEPENDENT contexts over the
- *      real MQTT broker (`relay.json`). A genuine Playwright SKIP when the broker is unreachable — never
- *      a false green. The committed `relay.json` has EMPTY creds, so absent a CI-provided relay this
+ *   2. LIVE-RELAY, TWO ISOLATED CONTEXTS: two INDEPENDENT contexts over the real MQTT broker
+ *      (resolved + injected by `e2e/relayFixture.ts`). A genuine Playwright SKIP when the broker is
+ *      unreachable — never a false green. Reading the committed-blank `relay.json` here instead is what
  *      tier SKIPs while tier 1 still proves the flow.
  */
 
@@ -230,7 +229,8 @@ async function hostJoinAndWin(host: Page, joiner: Page): Promise<string> {
 /**
  * The shared full-flow proof over the two connected clients (host = white, joiner = black, already
  * won). On the LIVE relay the incoming proposal may land in the non-retained pre-subscription window,
- * so B's `incoming` is polled with a re-propose nudge (a receiver-side dedup no-op).
+ * so B's `incoming` is polled WITHOUT a nudge: a re-propose supersedes the proposer's own pending
+ * ask (`src/net/handshake.ts` mints a fresh id), which corrupts the very handshake it would 'help'.
  */
 async function proveRematchFlow(host: Page, joiner: Page, artifact: string) {
   // (1) BOTH clients surface the view-only end-state overlay, and the board STAYS VISIBLE.
@@ -285,9 +285,6 @@ async function proveRematchFlow(host: Page, joiner: Page, artifact: string) {
   const seenIncoming = await waitObserved(
     joiner,
     () => (window as unknown as { __pente: Pente }).__pente.getEndState()?.rematchUi === 'incoming',
-    async () => {
-      await host.evaluate(() => (window as unknown as { __pente: Pente }).__pente.propose('rematch'));
-    },
   );
   expect(seenIncoming, "joiner must receive the host's rematch ask over the relay").toBe(true);
   await expect(joiner.locator('[data-testid="endstate-accept"]')).toBeVisible();
@@ -368,14 +365,14 @@ async function proveRematchFlow(host: Page, joiner: Page, artifact: string) {
 async function waitObserved(
   page: Page,
   predicate: () => boolean,
-  nudge: () => Promise<void>,
+  nudge?: () => Promise<void>,
   timeoutMs = 12_000,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     if (await page.evaluate(predicate)) return true;
     if (Date.now() >= deadline) return false;
-    await nudge();
+    await nudge?.();
     await page.waitForTimeout(250);
   }
 }
@@ -404,48 +401,32 @@ test.describe('rematch flow over a hermetic mock relay (N.2.2 overlay + seat-swa
 
 // ── Tier 2: LIVE RELAY, two ISOLATED contexts — self-skips without broker creds ──────────────────
 
-const RELAY = relay as { wssUrl: string; username: string; password: string; topicRoot: string };
-const CONNECT_PROBE_MS = 10_000;
-let relayReachable = false;
-
-function probeRelay(): Promise<boolean> {
-  return new Promise<boolean>((res) => {
-    if (RELAY.wssUrl.length === 0) {
-      res(false);
-      return;
-    }
-    const client = mqtt.connect(RELAY.wssUrl, {
-      username: RELAY.username,
-      password: RELAY.password,
-      clientId: `rm-probe-${Math.random().toString(36).slice(2, 10)}`,
-      connectTimeout: CONNECT_PROBE_MS,
-      reconnectPeriod: 0,
-    });
-    const done = (ok: boolean): void => {
-      client.end(true);
-      res(ok);
-    };
-    client.on('connect', () => done(true));
-    client.on('error', () => done(false));
-    setTimeout(() => done(false), CONNECT_PROBE_MS);
-  });
-}
+/**
+ * The DIFFERENTIATED reason the live tier did not run, or `null` when it did
+ * (`relaySkipReason`): "nothing was configured to dial" and "the broker refused us" are
+ * different diagnoses and must not share one message.
+ */
+let skipReason: string | null = null;
 
 async function bootIsolated(browser: Browser): Promise<{ context: BrowserContext; page: Page }> {
   const context = await browser.newContext();
   const page = await context.newPage();
   await page.addInitScript(() => window.localStorage.clear());
+  // Point THIS page at the SAME broker the node-side probe used. Registered AFTER the clear
+  // above (init scripts run in order), so the override survives it. Without this the page
+  // reads the committed-blank relay.json and dials nothing while the probe reports reachable.
+  await injectRelay(page);
   await ready(page);
   return { context, page };
 }
 
 test.describe('rematch flow over the LIVE relay, two isolated contexts (integration; self-skips w/o creds)', () => {
   test.beforeAll(async () => {
-    relayReachable = await probeRelay();
-    if (!relayReachable) {
+    skipReason = relaySkipReason(RELAY, await probeRelay());
+    if (skipReason !== null) {
       console.warn(
-        `[rematchFlow.spec] SKIPPING live tier: relay ${RELAY.wssUrl || '(empty relay.json — no creds)'} ` +
-          `unreachable — the hermetic tier still proves the N.2.2 overlay + seat-swap flow.`,
+        `[rematchFlow.spec] SKIPPING live tier: ${skipReason}\n` +
+          '  The hermetic tier still proves the N.2.2 overlay + seat-swap flow.',
       );
     }
   });
@@ -453,7 +434,7 @@ test.describe('rematch flow over the LIVE relay, two isolated contexts (integrat
   test('win → overlay → Rematch → Accept → fresh game with swapped seats, two isolated contexts', async ({
     browser,
   }) => {
-    test.skip(!relayReachable, 'live relay unreachable (no creds / offline)');
+    test.skip(skipReason !== null, skipReason ?? '');
     const a = await bootIsolated(browser);
     const b = await bootIsolated(browser);
     try {

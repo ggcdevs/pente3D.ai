@@ -1,8 +1,7 @@
 import { test, expect, type Browser, type BrowserContext, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import mqtt from 'mqtt';
-import relay from '../src/config/defaults/relay.json' with { type: 'json' };
+import { RELAY, injectRelay, probeRelay, relaySkipReason } from './relayFixture';
 
 /**
  * N.1.3 e2e — the OUT-OF-BAND ask/accept HANDSHAKE wired into the live net path (issues #12/#18).
@@ -31,12 +30,12 @@ import relay from '../src/config/defaults/relay.json' with { type: 'json' };
  *   1. HERMETIC (always runs): two pages in one context share a BroadcastChannel-backed mock
  *      transport (a faithful relay: opaque JSON, no self-echo) — REAL cross-client message exchange
  *      without the external broker, so the UI e2e is hermetic. This is the tier that runs in CI.
- *   2. LIVE-RELAY, TWO ISOLATED CONTEXTS (self-skips without creds): two INDEPENDENT contexts
- *      (distinct localStorage → distinct playerId → distinct seats) over the REAL MQTT broker
- *      (`relay.json`), NO test transport injected. This is the full-stack integration proof; it is a
- *      genuine Playwright SKIP when the broker is unreachable (offline / no creds) — never a false
- *      green (agent-principles #2/#3). The default committed `relay.json` has EMPTY creds, so absent
- *      a CI-provided relay this tier SKIPs while tier 1 still proves the routing.
+ *   2. LIVE-RELAY, TWO ISOLATED CONTEXTS: two INDEPENDENT contexts (distinct localStorage →
+ *      distinct playerId → distinct seats) over the REAL MQTT broker, NO test transport injected.
+ *      This is the full-stack integration proof; it is a genuine Playwright SKIP when the broker is
+ *      unreachable — never a false green (agent-principles #2/#3). The broker is resolved (and
+ *      injected into each page) by `e2e/relayFixture.ts`; reading the committed-blank `relay.json`
+ *      here instead is what kept this tier dark in every checkout.
  */
 
 type Handshake = {
@@ -177,12 +176,13 @@ async function waitConnected(page: Page, timeout = 15_000) {
 
 /**
  * The shared round-trip assertions, parameterised over the two clients (A hosts white, B joins black,
- * already connected on both tiers). `resyncOnPoll` re-broadcasts nothing for the handshake (proposals
- * are one-shot, no re-publish loop in the app), but on the LIVE relay a proposal published in the
- * pre-subscription window can be dropped — so the caller passes a poll that nudges the proposer to
- * re-`propose` is NOT valid (a second propose supersedes). Instead the live tier simply retries the
- * initial propose until B observes it, which is safe (dedup on the receiver + supersede is idempotent
- * when nothing changed). Hermetic tier delivers synchronously, so its retry never fires.
+ * already connected on both tiers).
+ *
+ * The ask is published EXACTLY ONCE and then waited for, with no re-propose retry: a second
+ * `propose` mints a fresh id and SUPERSEDES the pending slot (`src/net/handshake.ts`), so a retry
+ * would leave B answering an id A no longer holds and A's own proposal never resolving. Both peers
+ * have been exchanging messages since admission, so the non-retained pre-subscription gap does not
+ * apply here — and if the ask really is dropped, this fails honestly and says so.
  */
 async function proveAcceptRoundTrip(a: Page, b: Page, artifact: string) {
   // Idle before any ask: neither side has a pending proposal or a resolution.
@@ -207,16 +207,12 @@ async function proveAcceptRoundTrip(a: Page, b: Page, artifact: string) {
 
   // PROOF-BY-BEHAVIOR (#3): the proposal actually crossed the relay — B's session now shows an
   // INCOMING pending proposal. If the routing (pump → onMessage → receiveProposal) were broken this
-  // never appears. On the LIVE relay, retry the propose until observed (defeats the non-retained
-  // pre-subscription gap); a re-propose that changes nothing is a receiver-side dedup no-op.
+  // never appears. Waited for, never re-proposed (see this function's note on supersede).
   const seenIncoming = await waitObserved(
     b,
     () => {
       const h = (window as unknown as { __pente: Pente }).__pente.getHandshake();
       return h?.pending?.direction === 'incoming';
-    },
-    async () => {
-      await a.evaluate(() => (window as unknown as { __pente: Pente }).__pente.propose('test'));
     },
   );
   expect(seenIncoming, "B must receive A's proposal over the relay").toBe(true);
@@ -245,9 +241,6 @@ async function proveAcceptRoundTrip(a: Page, b: Page, artifact: string) {
       const h = (window as unknown as { __pente: Pente }).__pente.getHandshake();
       return h?.pending === null && h.resolution?.outcome === 'accepted';
     },
-    async () => {
-      await b.evaluate(() => (window as unknown as { __pente: Pente }).__pente.respond(true));
-    },
   );
   expect(seenResolved, "A must observe B's acceptance over the relay").toBe(true);
   const resA = (await hs(a))!.resolution!;
@@ -260,23 +253,33 @@ async function proveAcceptRoundTrip(a: Page, b: Page, artifact: string) {
 }
 
 /**
- * Poll `predicate` on the target page until true (or a deadline), invoking `nudge` between polls to
- * defeat the live relay's non-retained pre-subscription gap (a re-`propose`/`respond` that changes
- * nothing is a dedup / no-double-resolve no-op, so the proof stays genuine — the peer must still
- * actually receive it). The hermetic tier satisfies the predicate on the first poll, so `nudge`
- * never fires there.
+ * Poll `predicate` on the target page until true (or a deadline), optionally invoking `nudge`
+ * between polls to defeat the live relay's non-retained pre-subscription gap.
+ *
+ * A nudge is only admissible when RE-SENDING IS GENUINELY IDEMPOTENT for the receiver — a `resync`
+ * re-broadcast of an already-delivered log is (a prefix is IGNOREd). Re-`propose` is NOT, and the
+ * comment that used to claim it was "a receiver-side dedup no-op" was simply wrong: `hsPropose`
+ * (`src/net/handshake.ts`) mints a FRESH id and SUPERSEDES the pending slot, and `receiveProposal`
+ * dedups only against the SAME id. So a re-propose nudge replaces the proposer's pending ask, the
+ * responder answers the id it happens to hold, and the proposer's own proposal never resolves.
+ *
+ * That is not theoretical — it is what these live tiers did the first time they were ever run
+ * against a reachable broker, and in `sessionModelRelay.spec.ts` it left the two peers with
+ * DISAGREEING seat maps, both reporting seat `white`. Handshake steps therefore wait WITHOUT a
+ * nudge: a dropped ask fails honestly instead of being papered over by a retry that corrupts the
+ * handshake it is trying to help.
  */
 async function waitObserved(
   page: Page,
   predicate: () => boolean,
-  nudge: () => Promise<void>,
+  nudge?: () => Promise<void>,
   timeoutMs = 12_000,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     if (await page.evaluate(predicate)) return true;
     if (Date.now() >= deadline) return false;
-    await nudge();
+    await nudge?.();
     await page.waitForTimeout(250);
   }
 }
@@ -457,50 +460,33 @@ test.describe('handshake over a hermetic mock relay (N.1.3 routing, always runs)
 
 // ── Tier 2: LIVE RELAY, two ISOLATED contexts — self-skips without broker creds ──────────────────
 
-const RELAY = relay as { wssUrl: string; username: string; password: string; topicRoot: string };
-const CONNECT_PROBE_MS = 10_000;
-let relayReachable = false;
-
-/** Probe the live relay once; resolves true iff an outbound wss connection is accepted. */
-function probeRelay(): Promise<boolean> {
-  return new Promise<boolean>((res) => {
-    if (RELAY.wssUrl.length === 0) {
-      res(false); // no creds committed (default relay.json is empty) → genuine skip
-      return;
-    }
-    const client = mqtt.connect(RELAY.wssUrl, {
-      username: RELAY.username,
-      password: RELAY.password,
-      clientId: `hs-probe-${Math.random().toString(36).slice(2, 10)}`,
-      connectTimeout: CONNECT_PROBE_MS,
-      reconnectPeriod: 0,
-    });
-    const done = (ok: boolean): void => {
-      client.end(true);
-      res(ok);
-    };
-    client.on('connect', () => done(true));
-    client.on('error', () => done(false));
-    setTimeout(() => done(false), CONNECT_PROBE_MS);
-  });
-}
+/**
+ * The DIFFERENTIATED reason the live tier did not run, or `null` when it did
+ * (`relaySkipReason`): "nothing was configured to dial" and "the broker refused us" are
+ * different diagnoses and must not share one message.
+ */
+let skipReason: string | null = null;
 
 /** Boot a FRESH, ISOLATED context+page against the real app — no test transport (real MqttTransport). */
 async function bootIsolated(browser: Browser): Promise<{ context: BrowserContext; page: Page }> {
   const context = await browser.newContext();
   const page = await context.newPage();
   await page.addInitScript(() => window.localStorage.clear());
+  // Point THIS page at the SAME broker the node-side probe used. Registered AFTER the clear
+  // above (init scripts run in order), so the override survives it. Without this the page
+  // reads the committed-blank relay.json and dials nothing while the probe reports reachable.
+  await injectRelay(page);
   await ready(page);
   return { context, page };
 }
 
 test.describe('handshake over the LIVE relay, two isolated contexts (integration; self-skips w/o creds)', () => {
   test.beforeAll(async () => {
-    relayReachable = await probeRelay();
-    if (!relayReachable) {
+    skipReason = relaySkipReason(RELAY, await probeRelay());
+    if (skipReason !== null) {
       console.warn(
-        `[handshake.spec] SKIPPING live tier: relay ${RELAY.wssUrl || '(empty relay.json — no creds)'} ` +
-          `unreachable — the hermetic tier still proves the N.1.3 routing.`,
+        `[handshake.spec] SKIPPING live tier: ${skipReason}\n` +
+          '  The hermetic tier still proves the N.1.3 routing.',
       );
     }
   });
@@ -508,7 +494,7 @@ test.describe('handshake over the LIVE relay, two isolated contexts (integration
   test('A proposes → B accepts across two isolated contexts on the real broker', async ({
     browser,
   }) => {
-    test.skip(!relayReachable, 'live relay unreachable (no creds / offline)');
+    test.skip(skipReason !== null, skipReason ?? '');
     const a = await bootIsolated(browser);
     const b = await bootIsolated(browser);
     try {

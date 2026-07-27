@@ -1,8 +1,7 @@
 import { test, expect, type Browser, type BrowserContext, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import mqtt from 'mqtt';
-import relay from '../src/config/defaults/relay.json' with { type: 'json' };
+import { RELAY, injectRelay, probeRelay, relaySkipReason } from './relayFixture';
 
 /**
  * N.3.2 e2e — NETWORKED MUTUAL-CONFIRM UNDO/REDO wired through the shared N.1 handshake (issue #18).
@@ -33,8 +32,8 @@ import relay from '../src/config/defaults/relay.json' with { type: 'json' };
  *   1. HERMETIC (always runs): two pages in one context share a BroadcastChannel-backed mock transport
  *      (a faithful relay: opaque JSON, no self-echo) — REAL cross-client exchange without the broker.
  *      This is the tier that runs in CI.
- *   2. LIVE-RELAY, TWO ISOLATED CONTEXTS (self-skips without creds): two INDEPENDENT contexts over the
- *      REAL MQTT broker (`relay.json`), no test transport. The full-stack integration proof; a genuine
+ *   2. LIVE-RELAY, TWO ISOLATED CONTEXTS: two INDEPENDENT contexts over the REAL MQTT broker
+ *      (resolved + injected by `e2e/relayFixture.ts`), no test transport. The full-stack proof; a genuine
  *      Playwright SKIP when the broker is unreachable (offline / empty creds) — never a false green.
  */
 
@@ -198,22 +197,27 @@ async function waitConnected(page: Page, timeout = 15_000) {
 }
 
 /**
- * Poll `predicate` on the target page until true (or a deadline), invoking `nudge` between polls to
- * defeat the live relay's non-retained pre-subscription gap (a re-published proposal/response is a
- * receiver-side dedup / no-double-resolve no-op, so the proof stays genuine). The hermetic tier
- * satisfies the predicate on the first poll, so `nudge` never fires there.
+ * Poll `predicate` on the target page until true (or a deadline), optionally invoking `nudge`
+ * between polls to defeat the live relay's non-retained pre-subscription gap.
+ *
+ * A nudge is only admissible where RE-SENDING IS GENUINELY IDEMPOTENT for the receiver. Re-`propose`
+ * is NOT — `hsPropose` (`src/net/handshake.ts`) mints a FRESH id and SUPERSEDES the pending slot, so
+ * a re-propose nudge replaces the proposer's own ask, the responder answers an id the proposer no
+ * longer holds, and the proposal never resolves. The handshake steps below therefore wait WITHOUT a
+ * nudge; the docstring that used to call a re-propose "a receiver-side dedup no-op" was wrong, and
+ * the live tiers it described were dark, so nothing ever contradicted it.
  */
 async function waitObserved(
   page: Page,
   predicate: () => boolean,
-  nudge: () => Promise<void>,
+  nudge?: () => Promise<void>,
   timeoutMs = 12_000,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     if (await page.evaluate(predicate)) return true;
     if (Date.now() >= deadline) return false;
-    await nudge();
+    await nudge?.();
     await page.waitForTimeout(250);
   }
 }
@@ -294,9 +298,6 @@ test.describe('networked undo/redo mutual-confirm over a hermetic mock relay (N.
           const pr = (window as unknown as { __pente: Pente }).__pente.getUndoRedoPrompt();
           return pr?.show === true && pr.action === 'undo';
         },
-        async () => {
-          await a.evaluate(() => (window as unknown as { __pente: Pente }).__pente.propose('undo'));
-        },
       );
       expect(seenPrompt, "B must see A's undo proposal as a banner prompt").toBe(true);
       expect((await prompt(b))!.promptText).toBe('White wants to undo');
@@ -314,9 +315,6 @@ test.describe('networked undo/redo mutual-confirm over a hermetic mock relay (N.
         b,
         () =>
           (window as unknown as { __pente: Pente }).__pente.getState()?.pieces['2,2,2'] === undefined,
-        async () => {
-          await b.evaluate(() => (window as unknown as { __pente: Pente }).__pente.respond(true));
-        },
       );
       expect(bRolled, "B must roll back the undo on mutual accept").toBe(true);
 
@@ -354,9 +352,6 @@ test.describe('networked undo/redo mutual-confirm over a hermetic mock relay (N.
       const seenPrompt = await waitObserved(
         b,
         () => (window as unknown as { __pente: Pente }).__pente.getUndoRedoPrompt()?.show === true,
-        async () => {
-          await a.evaluate(() => (window as unknown as { __pente: Pente }).__pente.propose('undo'));
-        },
       );
       expect(seenPrompt).toBe(true);
 
@@ -367,9 +362,6 @@ test.describe('networked undo/redo mutual-confirm over a hermetic mock relay (N.
         () => {
           const h = (window as unknown as { __pente: Pente }).__pente.getHandshake();
           return h?.resolution?.outcome === 'declined';
-        },
-        async () => {
-          await b.evaluate(() => (window as unknown as { __pente: Pente }).__pente.respond(false));
         },
       );
       expect(seenDeclined, "A must observe B's decline").toBe(true);
@@ -398,18 +390,12 @@ test.describe('networked undo/redo mutual-confirm over a hermetic mock relay (N.
       await waitObserved(
         b,
         () => (window as unknown as { __pente: Pente }).__pente.getUndoRedoPrompt()?.action === 'undo',
-        async () => {
-          await a.evaluate(() => (window as unknown as { __pente: Pente }).__pente.propose('undo'));
-        },
       );
       await b.evaluate(() => (window as unknown as { __pente: Pente }).__pente.respond(true));
       const undone = await waitObserved(
         a,
         () =>
           (window as unknown as { __pente: Pente }).__pente.getState()?.pieces['2,2,2'] === undefined,
-        async () => {
-          await b.evaluate(() => (window as unknown as { __pente: Pente }).__pente.respond(true));
-        },
       );
       expect(undone, 'the mutual undo must land on A before proposing a redo').toBe(true);
       const headUndone = await head(a);
@@ -425,9 +411,6 @@ test.describe('networked undo/redo mutual-confirm over a hermetic mock relay (N.
           const pr = (window as unknown as { __pente: Pente }).__pente.getUndoRedoPrompt();
           return pr?.show === true && pr.action === 'redo';
         },
-        async () => {
-          await a.evaluate(() => (window as unknown as { __pente: Pente }).__pente.propose('redo'));
-        },
       );
       expect(seenRedoPrompt, "B must see A's redo proposal").toBe(true);
       expect((await prompt(b))!.promptText).toBe('White wants to redo');
@@ -439,9 +422,6 @@ test.describe('networked undo/redo mutual-confirm over a hermetic mock relay (N.
         a,
         () =>
           (window as unknown as { __pente: Pente }).__pente.getState()?.pieces['2,2,2'] === 'white',
-        async () => {
-          await b.evaluate(() => (window as unknown as { __pente: Pente }).__pente.respond(true));
-        },
       );
       expect(redone, 'A must re-apply the redo on mutual accept').toBe(true);
       await b.waitForFunction(`${P}.getState()?.pieces['2,2,2'] === 'white'`);
@@ -594,50 +574,33 @@ test.describe('local single-player undo/redo still applies directly (N.3.2 regre
 
 // ── Tier 2: LIVE RELAY, two ISOLATED contexts — self-skips without broker creds ──────────────────
 
-const RELAY = relay as { wssUrl: string; username: string; password: string; topicRoot: string };
-const CONNECT_PROBE_MS = 10_000;
-let relayReachable = false;
-
-/** Probe the live relay once; resolves true iff an outbound wss connection is accepted. */
-function probeRelay(): Promise<boolean> {
-  return new Promise<boolean>((res) => {
-    if (RELAY.wssUrl.length === 0) {
-      res(false); // no creds committed (default relay.json is empty) → genuine skip
-      return;
-    }
-    const client = mqtt.connect(RELAY.wssUrl, {
-      username: RELAY.username,
-      password: RELAY.password,
-      clientId: `ur-probe-${Math.random().toString(36).slice(2, 10)}`,
-      connectTimeout: CONNECT_PROBE_MS,
-      reconnectPeriod: 0,
-    });
-    const done = (ok: boolean): void => {
-      client.end(true);
-      res(ok);
-    };
-    client.on('connect', () => done(true));
-    client.on('error', () => done(false));
-    setTimeout(() => done(false), CONNECT_PROBE_MS);
-  });
-}
+/**
+ * The DIFFERENTIATED reason the live tier did not run, or `null` when it did
+ * (`relaySkipReason`): "nothing was configured to dial" and "the broker refused us" are
+ * different diagnoses and must not share one message.
+ */
+let skipReason: string | null = null;
 
 /** Boot a FRESH, ISOLATED context+page against the real app — no test transport (real MqttTransport). */
 async function bootIsolated(browser: Browser): Promise<{ context: BrowserContext; page: Page }> {
   const context = await browser.newContext();
   const page = await context.newPage();
   await page.addInitScript(() => window.localStorage.clear());
+  // Point THIS page at the SAME broker the node-side probe used. Registered AFTER the clear
+  // above (init scripts run in order), so the override survives it. Without this the page
+  // reads the committed-blank relay.json and dials nothing while the probe reports reachable.
+  await injectRelay(page);
   await ready(page);
   return { context, page };
 }
 
 test.describe('networked undo over the LIVE relay, two isolated contexts (integration; self-skips w/o creds)', () => {
   test.beforeAll(async () => {
-    relayReachable = await probeRelay();
-    if (!relayReachable) {
+    skipReason = relaySkipReason(RELAY, await probeRelay());
+    if (skipReason !== null) {
       console.warn(
-        `[undoRedo.spec] SKIPPING live tier: relay ${RELAY.wssUrl || '(empty relay.json — no creds)'} ` +
-          `unreachable — the hermetic tier still proves the N.3.2 accept→apply wiring.`,
+        `[undoRedo.spec] SKIPPING live tier: ${skipReason}\n` +
+          '  The hermetic tier still proves the N.3.2 accept→apply wiring.',
       );
     }
   });
@@ -645,7 +608,7 @@ test.describe('networked undo over the LIVE relay, two isolated contexts (integr
   test('A proposes undo → B accepts → BOTH roll back one across two isolated contexts on the real broker', async ({
     browser,
   }) => {
-    test.skip(!relayReachable, 'live relay unreachable (no creds / offline)');
+    test.skip(skipReason !== null, skipReason ?? '');
     const a = await bootIsolated(browser);
     const b = await bootIsolated(browser);
     try {
@@ -658,11 +621,6 @@ test.describe('networked undo over the LIVE relay, two isolated contexts (integr
       const seenPrompt = await waitObserved(
         b.page,
         () => (window as unknown as { __pente: Pente }).__pente.getUndoRedoPrompt()?.show === true,
-        async () => {
-          await a.page.evaluate(() =>
-            (window as unknown as { __pente: Pente }).__pente.propose('undo'),
-          );
-        },
       );
       expect(seenPrompt, "B must see A's undo proposal over the live relay").toBe(true);
       expect((await prompt(b.page))!.promptText).toBe('White wants to undo');
@@ -673,11 +631,6 @@ test.describe('networked undo over the LIVE relay, two isolated contexts (integr
         () =>
           (window as unknown as { __pente: Pente }).__pente.getState()?.pieces['2,2,2'] ===
           undefined,
-        async () => {
-          await b.page.evaluate(() =>
-            (window as unknown as { __pente: Pente }).__pente.respond(true),
-          );
-        },
       );
       expect(rolled, 'BOTH must roll back on mutual accept over the live relay').toBe(true);
       expect((await state(a.page))?.pieces[node]).toBeUndefined();

@@ -49,21 +49,37 @@ const vitestTestIntegrity = {
  *  1. `test.skip(<title>, fn)` / `test.fixme(<title>, fn)` where the title is a string literal
  *     OR a template literal. Both spellings statically disable the spec; matching only
  *     `Literal` let `` test.skip(`${TITLE} skip`, fn) `` walk straight through.
- *  2. `test.skip()` with NO arguments — the body form, the most common way a spec is silently
- *     turned off from the inside. It has no `arguments.0` at all, so selector 1 cannot see it.
- *  3. `test.describe.skip` / `.fixme` — the whole-block disable.
- *  4. `test.describe.only` — the whole-block FOCUS. `vitest/no-focused-tests` only sees
- *     `test.only` (callee object = the identifier `test`), never this member-of-member form.
+ *  2. `test.skip()` / `test.fixme()` with NO arguments — the body form, the most common way a spec is
+ *     silently turned off from the inside. It has no `arguments.0` at all, so selector 1 cannot see
+ *     it. `fixme` is the exact sibling of `skip` here and matching only `skip` left `test.fixme()`
+ *     turning a spec off with nothing anywhere reporting it — neither lint nor the Playwright run.
+ *  3. The whole-block DISABLE, at any depth of the `test.…` member chain: `test.describe.skip`,
+ *     `test.describe.fixme`, `test.describe.serial.skip`, `test.describe.parallel.skip`.
+ *  4. The whole-block FOCUS, likewise at any depth: `test.describe.only`,
+ *     `test.describe.serial.only`, `test.describe.parallel.only`. `vitest/no-focused-tests` only
+ *     sees `test.only` (callee object = the identifier `test`), never these member-of-member forms.
  *
- * Playwright's RUNTIME conditional skip — `test.skip(cond, 'reason')`, used across the live-relay
- * specs to opt out when the broker is unreachable — passes an EXPRESSION first and is deliberately
- * NOT matched by selector 1 (nor by 2, which requires zero arguments): it is an honest,
- * condition-reported skip, not a silent disable.
+ * Selectors 3 and 4 are anchored on the CHAIN ROOT (`test.…`) rather than on the literal word
+ * `describe`, which is what let `test.describe.serial.skip` through the previous version: there
+ * `describe` is no longer the callee's immediate object, `serial` is. Anchoring on the root bans
+ * `test.<anything>.<skip|fixme|only>(…)` in one rule, so a modifier this repo has not met yet
+ * (`test.describe.fixme.serial`, a future Playwright chain) is covered without another patch.
+ *
+ * Playwright's RUNTIME conditional skip — `test.skip(cond, 'reason')` / `test.fixme(cond, 'reason')`,
+ * used across the live-relay specs to opt out when the broker is unreachable — passes an EXPRESSION
+ * first and is deliberately NOT matched by selector 1 (nor by 2, which requires zero arguments, nor
+ * by 3/4, whose callee object is the bare identifier `test`): it is an honest, condition-reported
+ * skip, not a silent disable.
  *
  * Established by probe, never by reading: `e2e/lintFixtures/*.spec.ts` holds one instance of every
  * form above (violating AND allowed) and `tools/lintGate.test.mjs` asserts the exact rule/line set
  * eslint reports on it. Re-break a selector there and that test goes red.
  */
+/** A `test.<…>.<name>(…)` call whose member chain is rooted at the identifier `test`, 2 or 3 deep. */
+const chainedOnTest = (names) =>
+  `CallExpression[callee.property.name=/^(${names})$/]:matches(` +
+  `[callee.object.object.name='test'], [callee.object.object.object.name='test'])`;
+
 const playwrightTestIntegrity = {
   files: ['e2e/**/*.spec.ts'],
   rules: {
@@ -77,21 +93,19 @@ const playwrightTestIntegrity = {
       },
       {
         selector:
-          "CallExpression[callee.object.name='test'][callee.property.name='skip'][arguments.length=0]",
+          "CallExpression[callee.object.name='test'][callee.property.name=/^(skip|fixme)$/][arguments.length=0]",
         message:
-          'Bare `test.skip()` disables this spec from the inside with no condition and no reason — the silent disable this gate exists to stop (planning/agent-principles.md #6). Delete the spec or give the skip a real runtime condition: `test.skip(cond, reason)`.',
+          'Bare `test.skip()` / `test.fixme()` disables this spec from the inside with no condition and no reason — the silent disable this gate exists to stop (planning/agent-principles.md #6). Delete the spec or give the skip a real runtime condition: `test.skip(cond, reason)`.',
       },
       {
-        selector:
-          "CallExpression[callee.object.property.name='describe'][callee.property.name=/^(skip|fixme)$/]",
+        selector: chainedOnTest('skip|fixme'),
         message:
-          'Statically disabled Playwright describe block. Delete it or fix it — a silently skipped e2e spec voids the Playwright-verified IO boundary (planning/agent-principles.md #6).',
+          'Statically disabled Playwright describe block (`test.describe.skip` / `.fixme`, including the `.serial` / `.parallel` spellings). Delete it or fix it — a silently skipped e2e spec voids the Playwright-verified IO boundary (planning/agent-principles.md #6).',
       },
       {
-        selector:
-          "CallExpression[callee.object.property.name='describe'][callee.property.name='only']",
+        selector: chainedOnTest('only'),
         message:
-          'Focused Playwright describe block. Playwright then runs ONLY this block and exits 0 — a green suite that tested almost nothing (planning/agent-principles.md #6/#7). Remove `.only`; run one file with `npx playwright test <file>` instead.',
+          'Focused Playwright describe block (`test.describe.only`, including the `.serial` / `.parallel` spellings). Playwright then runs ONLY this block and exits 0 — a green suite that tested almost nothing (planning/agent-principles.md #6/#7). Remove `.only`; run one file with `npx playwright test <file>` instead.',
       },
     ],
   },

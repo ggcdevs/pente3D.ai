@@ -9,14 +9,21 @@
  *
  * ## What it runs
  *
- * Every `*.ts` in this directory that `harness.isScenario` accepts — i.e. all of them except this
- * runner, the shared {@link harness}, and the vitest suites that test the harness (`*.test.ts`).
- * Discovery is by DIRECTORY, not a list: a scenario that exists cannot be left out of the suite by
- * forgetting to add it here, which is the failure mode a hand-maintained registry has.
+ * Every `*.scenario.ts` in this directory (`harness.isScenario`). Discovery is by DIRECTORY, not a
+ * list: a scenario that exists cannot be left out of the suite by forgetting to add it here, which is
+ * the failure mode a hand-maintained registry has.
  *
- * That cuts both ways, which is why `report()` refuses to exit 0 on zero checks: a scenario that
- * stops asserting is still discovered, and without that refusal it would join the matrix as a green
- * line saying nothing.
+ * That cuts both ways — a discovered file that proves nothing would otherwise join the matrix as a
+ * green line saying nothing — so a run is counted as a PASS only if it clears BOTH bars:
+ *
+ *  1. it names itself a scenario (`*.scenario.ts`), so an ordinary module dropped in this directory
+ *     is never spawned at all; and
+ *  2. it REPORTED A CHECK TALLY (`harness.CHECK_TALLY_PREFIX`, printed by `report()`). Exiting 0
+ *     without one means the process ran to completion having asserted nothing, and is classified
+ *     FAILED — see `harness.classifyOutcome`.
+ *
+ * Bar 2 is why this runner reads the children's output instead of only their exit codes: `report()`
+ * can refuse to exit 0 on an empty tally, but only for a file that calls `report()` at all.
  *
  * ## Exit codes — a missing relay is not a regression
  *
@@ -35,7 +42,14 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { EXIT_UNREACHABLE, REPO_ROOT, isScenario } from './harness';
+import {
+  CHECK_TALLY_PREFIX,
+  EXIT_UNREACHABLE,
+  REPO_ROOT,
+  SCENARIO_SUFFIX,
+  classifyOutcome,
+  isScenario,
+} from './harness';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const TSX = path.join(REPO_ROOT, 'node_modules', '.bin', 'tsx');
@@ -60,17 +74,36 @@ function scenarioFiles(): string[] {
   return fs.readdirSync(HERE).filter(isScenario).sort();
 }
 
-/** Run one scenario as its own process, streaming its output through, and classify its exit code. */
+/**
+ * Run one scenario as its own process, streaming its output through, and classify it from its exit
+ * code AND whether it reported a check tally.
+ *
+ * stdout is PIPED and written through (rather than inherited) purely so the tally can be read; the
+ * bytes reach the terminal unchanged, in order, so a human sees exactly what `stdio: 'inherit'`
+ * showed. stderr stays inherited — nothing is parsed from it.
+ */
 function runScenario(file: string): Promise<Result> {
   const started = Date.now();
   return new Promise((resolve) => {
     console.log(`\n${'━'.repeat(70)}\n▶ ${file}\n${'━'.repeat(70)}`);
-    const proc = spawn(TSX, [path.join(HERE, file)], { stdio: 'inherit' });
+    const proc = spawn(TSX, [path.join(HERE, file)], { stdio: ['ignore', 'pipe', 'inherit'] });
+    let reportedChecks = false;
+    proc.stdout.on('data', (b: Buffer) => {
+      const text = String(b);
+      if (text.includes(CHECK_TALLY_PREFIX)) reportedChecks = true;
+      process.stdout.write(text);
+    });
     const timer = setTimeout(() => proc.kill('SIGKILL'), PER_SCENARIO_TIMEOUT_MS);
     proc.on('close', (code) => {
       clearTimeout(timer);
-      // A killed process reports `code: null` (+ a signal); it is a failure, not a skip.
-      const outcome: Outcome = code === 0 ? 'passed' : code === EXIT_UNREACHABLE ? 'skipped' : 'FAILED';
+      const outcome = classifyOutcome(code, reportedChecks);
+      if (code === 0 && !reportedChecks) {
+        console.log(
+          `\n✗ ${file} exited 0 but never reported a check tally (${CHECK_TALLY_PREFIX}). It ran to\n` +
+            '  completion having asserted NOTHING — counted as FAILED, not passed. Call `report()`\n' +
+            '  from the harness, or this file does not belong in the scenario matrix.',
+        );
+      }
       resolve({ name: file, outcome, exitCode: code, ms: Date.now() - started });
     });
   });
@@ -82,6 +115,13 @@ async function main(): Promise<number> {
   const results: Result[] = [];
   for (const file of files) results.push(await runScenario(file));
 
+  if (files.length === 0) {
+    console.log(
+      `\nNo ${'*'}${SCENARIO_SUFFIX} files were discovered — this run proved NOTHING. Exiting 1.`,
+    );
+    return 1;
+  }
+
   const failed = results.filter((r) => r.outcome === 'FAILED');
   const skipped = results.filter((r) => r.outcome === 'skipped');
   const passed = results.filter((r) => r.outcome === 'passed');
@@ -90,7 +130,7 @@ async function main(): Promise<number> {
   for (const r of results) {
     const mark = r.outcome === 'passed' ? '✓' : r.outcome === 'skipped' ? '⤼' : '✗';
     console.log(
-      `  ${mark} ${r.name.padEnd(34)} ${r.outcome.padEnd(8)} exit ${String(r.exitCode)} · ${(r.ms / 1000).toFixed(1)}s`,
+      `  ${mark} ${r.name.padEnd(40)} ${r.outcome.padEnd(8)} exit ${String(r.exitCode)} · ${(r.ms / 1000).toFixed(1)}s`,
     );
   }
   console.log(

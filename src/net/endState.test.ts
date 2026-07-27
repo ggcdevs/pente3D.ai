@@ -3,6 +3,7 @@ import * as fc from 'fast-check';
 import {
   deriveEndState,
   alternateSeats,
+  HIDDEN_END_STATE,
   REMATCH_ACTION,
   type RematchUi,
 } from './endState';
@@ -78,6 +79,36 @@ describe('REMATCH_ACTION — the opaque N.1 action tag for the rematch handshake
     // correlate on this tag; a mutant blanking it to "" would silently divorce the overlay from a
     // real rematch proposal. Pin the concrete value so that mutant is killed.
     expect(REMATCH_ACTION).toBe('rematch');
+  });
+});
+
+describe('HIDDEN_END_STATE — the "no live game to derive one from" value every consumer renders', () => {
+  /**
+   * The app shell holds this as its end-state until a session wires up (`src/main.ts`), and the CLI
+   * daemon reports it as `endState` on an offline snapshot (`cli/daemon.ts`). Both of those files are
+   * excluded from the unit coverage/mutation gates — the whole reason the constant was hoisted here —
+   * so if this file does not pin its VALUE, nothing does: 100% coverage on a literal only proves the
+   * literal was evaluated. Observed before this case existed: flipping `show` to `true` and
+   * `rematchUi` to `'incoming'` left the entire vitest suite green, i.e. the offline page could boot
+   * straight into a game-over overlay with an empty result and a rematch prompt nobody asked for.
+   */
+  it('is HIDDEN and IDLE on every field — asserted as literals, not by reference', () => {
+    expect(HIDDEN_END_STATE).toEqual({
+      show: false,
+      winner: null,
+      winReason: null,
+      iWon: false,
+      resultText: '',
+      rematchUi: 'idle',
+      rematchPrompt: null,
+    });
+  });
+
+  it('is exactly what deriveEndState produces for a fresh, unfinished, un-asked game', () => {
+    // The behavioural tie: the shared constant is not merely shaped like the type, it is the same
+    // value the real derivation yields — so a consumer holding it before its session wires up shows
+    // precisely what it will show one derivation later, and the two cannot drift apart.
+    expect(deriveEndState(initialState(9), initialHandshake(), null)).toEqual(HIDDEN_END_STATE);
   });
 });
 

@@ -1,0 +1,118 @@
+/**
+ * THE SILENTLY-IGNORED-ARGUMENT REGRESSION TEST.
+ *
+ * `pente enter <CODE> new` used to be ACCEPTED and treated as `--seed defer`. The positional was
+ * collected by the parser and never read by the `enter` case, so the daemon's own
+ * `enter: want a seed of new | defer (got "X")` guard was unreachable from the CLI and a plausible
+ * typo produced the OPPOSITE of the §3 seed the operator asked for: `defer` adopts a peer's
+ * (or a breadcrumb's) existing game, where `new` starts over. That is the #43/#46 behaviour class the
+ * `cli/scenarios/` matrix exists to protect, reachable by dropping two characters.
+ *
+ * Observed at the time, driving a real daemon through the scenario harness:
+ *
+ *     positional `enter bogus` -> ACCEPTED phase=connected (argument SILENTLY IGNORED)
+ *     flag `--seed bogus`      -> REFUSED (parsed)
+ *
+ * The parse now lives in `cli/args.ts` precisely so that probe can be a unit test instead of a
+ * throwaway script: `cli/main.ts` calls `main()` at import time and cannot be loaded to be asserted on.
+ */
+import { describe, expect, it } from 'vitest';
+import { VERB_ARITY, enterSeed, parseArgs, unexpectedPositional } from './args';
+
+/** Parse an argv the way `cli/main.ts` does (`process.argv.slice(2)`). */
+const cli = (...argv: string[]) => parseArgs(argv);
+
+describe('parseArgs — verb, room code, positionals, flags', () => {
+  it('reads the verb and the room code, and keeps the rest positional', () => {
+    expect(cli('move', 'ABCDE', '2,2,2')).toEqual({
+      verb: 'move',
+      code: 'ABCDE',
+      positional: ['ABCDE', '2,2,2'],
+      flags: {},
+    });
+  });
+
+  it('takes the token after a `--flag` as its value', () => {
+    expect(cli('enter', 'ABCDE', '--seed', 'new').flags).toEqual({ seed: 'new' });
+  });
+
+  it('treats a `--flag` followed by another flag as a boolean', () => {
+    expect(cli('play', 'ABCDE', '--host', '--json').flags).toEqual({ host: true, json: true });
+  });
+
+  it('defaults to `help` with no arguments at all, and reports no code', () => {
+    expect(cli()).toEqual({ verb: 'help', code: null, positional: [], flags: {} });
+  });
+});
+
+describe('unexpectedPositional — an argument we do not understand is REFUSED, never ignored', () => {
+  it('THE BUG: `enter <CODE> new` is refused, and says the seed is a flag', () => {
+    const refusal = unexpectedPositional(cli('enter', 'ABCDE', 'new'));
+    expect(refusal).toBe(
+      'enter: unexpected argument "new" — enter takes no argument after the room code. ' +
+        "The seed is a FLAG: 'pente enter <CODE> --seed new|defer'.",
+    );
+  });
+
+  it('refuses a nonsense positional too — it must never reach the room as `defer`', () => {
+    expect(unexpectedPositional(cli('enter', 'ABCDE', 'THIS-IS-NOT-A-SEED'))).toContain(
+      'unexpected argument "THIS-IS-NOT-A-SEED"',
+    );
+  });
+
+  it('allows the correct spelling — the seed as a flag', () => {
+    expect(unexpectedPositional(cli('enter', 'ABCDE', '--seed', 'new'))).toBeNull();
+  });
+
+  it('lets each verb keep the arguments it genuinely takes', () => {
+    expect(unexpectedPositional(cli('move', 'ABCDE', '2,2,2'))).toBeNull();
+    expect(unexpectedPositional(cli('resolve', 'ABCDE', 'take-theirs'))).toBeNull();
+    expect(unexpectedPositional(cli('status', 'ABCDE'))).toBeNull();
+    expect(unexpectedPositional(cli('leave', 'ABCDE'))).toBeNull();
+  });
+
+  it('refuses a SECOND argument to a verb that takes one', () => {
+    expect(unexpectedPositional(cli('move', 'ABCDE', '2,2,2', '3,3,3'))).toBe(
+      'move: unexpected argument "3,3,3" — move takes 1 argument(s) after the room code.',
+    );
+  });
+
+  it('refuses a stray argument on every zero-arity verb (the table is not just about `enter`)', () => {
+    const zeroArity = Object.keys(VERB_ARITY).filter((v) => VERB_ARITY[v] === 0);
+    // Named as a map, so a verb that silently starts ignoring arguments is identified by name in the
+    // diff rather than hidden in a count.
+    const refused = Object.fromEntries(
+      zeroArity.map((v) => [v, unexpectedPositional(cli(v, 'ABCDE', 'stray')) !== null]),
+    );
+    expect(refused).toEqual(Object.fromEntries(zeroArity.map((v) => [v, true])));
+    expect(zeroArity.length).toBeGreaterThan(10);
+  });
+
+  it('says nothing about a verb it does not know (the usage text is the honest answer there)', () => {
+    expect(unexpectedPositional(cli('frobnicate', 'ABCDE', 'whatever'))).toBeNull();
+  });
+});
+
+describe('enterSeed — what `enter` actually asks the daemon for', () => {
+  it("defaults to 'defer' when no seed is named (dealer's choice, design §3)", () => {
+    expect(enterSeed(cli('enter', 'ABCDE'))).toEqual({ seed: 'defer' });
+  });
+
+  it("asks for 'new' when the operator asked for new — it does NOT quietly defer", () => {
+    expect(enterSeed(cli('enter', 'ABCDE', '--seed', 'new'))).toEqual({ seed: 'new' });
+  });
+
+  it('passes an unknown seed THROUGH, so the daemon guard that owns the vocabulary is reachable', () => {
+    // The refusal a user sees for this is `enter: want a seed of new | defer (got "bogus")`, minted
+    // by cli/daemon.ts. Duplicating the list here would shadow that guard and let the two drift.
+    expect(enterSeed(cli('enter', 'ABCDE', '--seed', 'bogus'))).toEqual({ seed: 'bogus' });
+  });
+
+  it('refuses a valueless `--seed` instead of collapsing it to `defer`', () => {
+    // `--seed --json` parses the flag as `true`; the old code's `typeof … === 'string'` test turned
+    // that into a silent `defer` — the same swallow, one layer up.
+    expect(enterSeed(cli('enter', 'ABCDE', '--seed', '--json'))).toEqual({
+      error: "enter: --seed needs a value: 'pente enter <CODE> --seed new|defer'",
+    });
+  });
+});

@@ -51,7 +51,10 @@ function memoryStorage(): Storage {
 export async function createSession(dbName: string, playerId: string): Promise<CliSession> {
   const db = await openDatabase(dbName);
   const session = new NetSession({
-    createTransport: () => new MqttTransport(relayConfig(), { connect }),
+    // The playerId is BOTH the seat identity and the presence id — the arbiter's `room-full` vs
+    // `seat-reserved` answer compares seat owners against the present-set, so the two must be one
+    // namespace (see `src/net/appSession.ts` `resolveTransportFactory`).
+    createTransport: () => new MqttTransport(relayConfig(), { connect, peerId: playerId }),
     db,
     playerId,
     size: BOARD_SIZE,

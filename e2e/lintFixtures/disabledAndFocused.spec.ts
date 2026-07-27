@@ -58,17 +58,65 @@ test('g bare skip inside', async () => {
   expect(1).toBe(1);
 });
 
-// 8. ALLOWED: Playwright's runtime conditional skip. It reports its condition and its reason, and
+// 8. Bare `test.fixme()` in the body — `skip`'s exact sibling, and the WORST of the escapes the
+//    first version of this gate had: nothing else catches it either. Observed end-to-end before the
+//    selector was widened — a spec whose body is `test.fixme(); expect(1).toBe(2);` reports
+//    "1 skipped" and Playwright exits 0, with eslint reporting nothing at all.
+test('h bare fixme inside', async () => {
+  test.fixme(); // LINT-EXPECT: no-restricted-syntax
+  expect(1).toBe(2); // never runs
+});
+
+// 9. Whole-block disable through a `.serial` modifier. `describe` is no longer the callee's
+//    immediate object here (`serial` is), which is exactly how this walked through the selector that
+//    keyed on `callee.object.property.name === 'describe'`.
+test.describe.serial.skip('i skipped serial describe', () => { // LINT-EXPECT: no-restricted-syntax
+  test('inner i', async () => {
+    expect(1).toBe(1);
+  });
+});
+
+// 10. Same escape through `.parallel`.
+test.describe.parallel.skip('j skipped parallel describe', () => { // LINT-EXPECT: no-restricted-syntax
+  test('inner j', async () => {
+    expect(1).toBe(1);
+  });
+});
+
+// 11. Whole-block FOCUS through `.serial`. `forbidOnly` in playwright.config.ts does catch this one
+//     at RUN time (verified), so the damage is bounded — but the lint half must not have a hole in
+//     it, because that is the half a reader consults to know what is banned.
+test.describe.serial.only('k focused serial describe', () => { // LINT-EXPECT: no-restricted-syntax
+  test('inner k', async () => {
+    expect(1).toBe(1);
+  });
+});
+
+// 12. ALLOWED: Playwright's runtime conditional skip. It reports its condition and its reason, and
 //    the live-relay specs depend on it. It must NOT be flagged — banning it would push those specs
 //    into a silent early-return, the exact false-green this gate exists to prevent.
-test('h runtime conditional skip is allowed', async () => {
+test('l runtime conditional skip is allowed', async () => {
   test.skip(conditionIsTrue, 'the broker is unreachable — this proves nothing without it');
   expect(1).toBe(1);
 });
 
-// 9. ALLOWED: an ordinary describe and an ordinary spec.
-test.describe('i plain describe', () => {
-  test('inner i', async () => {
+// 13. ALLOWED: the same runtime form spelled `fixme`. Widening selector 2 to `skip|fixme` must not
+//     have swept up the conditional spelling — it takes arguments, so neither selector sees it.
+test('m runtime conditional fixme is allowed', async () => {
+  test.fixme(conditionIsTrue, 'known-broken only under this condition');
+  expect(1).toBe(1);
+});
+
+// 14. ALLOWED: an ordinary describe, an ordinary `.serial` describe, and an ordinary spec. The
+//     chain-rooted selectors must ban only the `skip`/`fixme`/`only` tips, never the modifiers.
+test.describe('n plain describe', () => {
+  test('inner n', async () => {
+    expect(1).toBe(1);
+  });
+});
+
+test.describe.serial('o plain serial describe', () => {
+  test('inner o', async () => {
     expect(1).toBe(1);
   });
 });

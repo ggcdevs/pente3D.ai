@@ -26,32 +26,8 @@
  */
 import { runDaemon } from './daemon';
 import { request } from './client';
+import { enterSeed, parseArgs, unexpectedPositional, type Args } from './args';
 import { render, VIEWS, DEFAULT_VIEW, type Snapshot } from './views';
-
-interface Args {
-  verb: string;
-  code: string | null;
-  positional: string[];
-  flags: Record<string, string | boolean>;
-}
-
-function parseArgs(argv: string[]): Args {
-  const [verb = 'help', ...rest] = argv;
-  const positional: string[] = [];
-  const flags: Record<string, string | boolean> = {};
-  for (let i = 0; i < rest.length; i++) {
-    const a = rest[i]!;
-    if (a.startsWith('--')) {
-      const key = a.slice(2);
-      const next = rest[i + 1];
-      if (next !== undefined && !next.startsWith('--')) {
-        flags[key] = next;
-        i++;
-      } else flags[key] = true;
-    } else positional.push(a);
-  }
-  return { verb, code: positional[0] ?? null, positional, flags };
-}
 
 function view(flags: Args['flags']): string {
   const v = typeof flags.view === 'string' ? flags.view : DEFAULT_VIEW;
@@ -83,6 +59,16 @@ function output(data: unknown, args: Args): void {
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+
+  // An argument this CLI does not understand is REFUSED, never ignored. Checked here — once, for
+  // every verb — rather than inside each `case`, because the bug this closes was a `case` that
+  // simply never read `positional[1]`: `pente enter ABCDE new` was accepted and silently treated as
+  // `--seed defer`, i.e. it adopted a peer's game instead of starting a fresh one.
+  const badArg = unexpectedPositional(args);
+  if (badArg !== null) {
+    console.error(badArg);
+    process.exit(2);
+  }
 
   switch (args.verb) {
     case 'play':
@@ -189,10 +175,17 @@ async function main(): Promise<void> {
       return output(r.data, args);
     }
     case 'enter': {
-      const seed = typeof args.flags.seed === 'string' ? args.flags.seed : 'defer';
+      const asked = enterSeed(args);
+      if ('error' in asked) {
+        console.error(asked.error);
+        process.exit(2);
+      }
+      // The value goes to the daemon UNCHANGED — it owns the `new | defer` vocabulary and refuses
+      // anything else, which is what keeps that guard reachable from the CLI rather than shadowed
+      // by a second copy of the list here.
       // The entry negotiates over the relay (hello → settle window → admit/establish), so it is given
       // room to complete; a refusal comes back as a `joinError` on the snapshot, not as a timeout.
-      const r = await request(requireCode(args), { cmd: 'enter', arg: seed }, 60_000);
+      const r = await request(requireCode(args), { cmd: 'enter', arg: asked.seed }, 60_000);
       if (!r.ok) return fail(r.data);
       return output(r.data, args);
     }

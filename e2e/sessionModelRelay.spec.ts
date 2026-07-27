@@ -1,8 +1,7 @@
 import { test, expect, type Browser, type BrowserContext, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import mqtt from 'mqtt';
-import relay from '../src/config/defaults/relay.json' with { type: 'json' };
+import { RELAY, injectRelay, probeRelay, relaySkipReason } from './relayFixture';
 
 /**
  * Issue #41 — the REAL-RELAY, TWO-CONTEXT session-model scenario matrix (Relates #35, fixes-proof for
@@ -17,26 +16,31 @@ import relay from '../src/config/defaults/relay.json' with { type: 'json' };
  * exactly a bug that ONLY manifests across the actual relay + rematch + reconnect interaction — the
  * hermetic mock could not surface it. This suite closes that gap: it runs the SAME scenario matrix with
  * NO transport injected, so both isolated contexts drive the app's DEFAULT `MqttTransport` over
- * `relay.json`, end-to-end on the wire.
+ * the broker `e2e/relayFixture.ts` resolves, end-to-end on the wire.
  *
  * ## Reused pattern (NOT a new transport / skip mechanism)
  *
  * This deliberately reuses the EXISTING real-relay Playwright pattern already proven in
  * `networked.spec.ts` / `sessionModel.spec.ts` / `rematchFlow.spec.ts`:
- *   - `relay.json` is the SSOT relay config — the SAME record the app's default transport connects
- *     over. No new transport, no `pente:config:relay` override injected: a human runs this against the
- *     shitchell.com broker or the deployed `/dev/` build (where the deploy workflow has written creds
- *     into `relay.json`), and it exercises the real wire.
+ *   - `e2e/relayFixture.ts` is the ONE answer to "which broker": env → the tracked `relay.json` →
+ *     the live deployed relay (`src/config/relayEnv.ts`, the same resolver the CLI and the
+ *     `*.realrelay.test.ts` suites use). No new transport — the app still drives its DEFAULT
+ *     `MqttTransport`; the resolved record is simply injected as the page's `pente:config:relay`
+ *     override before boot, because the committed `relay.json` ships BLANK and a page reading it
+ *     directly would have nothing to dial. Reading `relay.json` here instead is what kept this whole
+ *     suite dark in every checkout, on machines with working egress.
  *   - `probeRelay()` opens ONE outbound wss connection in `beforeAll`; if the broker does not accept it
- *     (blank creds / no egress / offline), every test SELF-SKIPS via `test.skip(!relayReachable, …)` —
- *     a GENUINE Playwright skip, never a zero-assertion green (agent-principles #2/#3). The committed
- *     `relay.json` ships blank, so with no CI-provided/dev relay this whole suite skips cleanly and CI
- *     stays green with no hang (the probe has a hard 10s cap and `reconnectPeriod: 0`).
- *   - The non-retained subscription gap is handled with the same `waitObservedWithResync` /
- *     re-propose-nudge idea the sibling specs use: re-broadcasting an already-delivered log/ask is a
- *     proven receiver no-op (a prefix is IGNOREd; a duplicate ask dedups), so the observer must still
- *     GENUINELY receive the traffic over the real relay — the proof is unchanged, only a dropped-in-the-
- *     gap first publish is defeated.
+ *     (nothing configured / no egress / offline), every test SELF-SKIPS via `test.skip(skipReason …)` —
+ *     a GENUINE Playwright skip, never a zero-assertion green (agent-principles #2/#3), and
+ *     `relaySkipReason` distinguishes "nothing was configured to dial" from "the broker refused us"
+ *     rather than blaming the network for both. The probe has a hard 10s cap and `reconnectPeriod: 0`,
+ *     so a genuinely-offline run skips cleanly with no hang.
+ *   - The non-retained subscription gap is handled by a `resync` re-broadcast nudge, and ONLY for the
+ *     move log: re-publishing an already-delivered log is a proven receiver no-op (a prefix is
+ *     IGNOREd), so the observer must still GENUINELY receive the traffic — the proof is unchanged,
+ *     only a dropped-in-the-gap first publish is defeated. HANDSHAKE steps take no nudge: a second
+ *     `propose` mints a fresh id and SUPERSEDES the pending slot (`src/net/handshake.ts`), so a
+ *     re-propose corrupts the very ask it would 'help' (see the rematch scenario for what that did).
  *
  * ## Proof-by-state, never a log line (agent-principles #3)
  *
@@ -54,10 +58,6 @@ import relay from '../src/config/defaults/relay.json' with { type: 'json' };
  * always-green CI proof of the same matrix.
  */
 
-/** The SSOT relay config — the SAME record the app's default transport connects over. */
-const RELAY = relay as { wssUrl: string; username: string; password: string; topicRoot: string };
-/** Hard cap on the one-shot reachability probe before declaring the broker down (no hang). */
-const CONNECT_PROBE_MS = 10_000;
 /**
  * The per-wait ceiling for an admission/adopt/reconnect ROUND-TRIP to land an observable state change.
  * Each round-trip is a page→broker→page hop across 2–3 ISOLATED contexts (each a full WebGL app), so
@@ -66,32 +66,12 @@ const CONNECT_PROBE_MS = 10_000;
  * slower, so the proof is unchanged (agent-principles #7). Kept under `test.slow()`'s 180s budget.
  */
 const ROUND_TRIP_MS = 45_000;
-/** Whether the live broker answered the `beforeAll` probe (else EVERY test SKIPs, genuinely). */
-let relayReachable = false;
-
-/** Probe the live relay once; resolves true iff an outbound wss connection is accepted. */
-function probeRelay(): Promise<boolean> {
-  return new Promise<boolean>((res) => {
-    if (RELAY.wssUrl.length === 0) {
-      res(false);
-      return;
-    }
-    const client = mqtt.connect(RELAY.wssUrl, {
-      username: RELAY.username,
-      password: RELAY.password,
-      clientId: `smr-probe-${Math.random().toString(36).slice(2, 10)}`,
-      connectTimeout: CONNECT_PROBE_MS,
-      reconnectPeriod: 0,
-    });
-    const done = (ok: boolean): void => {
-      client.end(true);
-      res(ok);
-    };
-    client.on('connect', () => done(true));
-    client.on('error', () => done(false));
-    setTimeout(() => done(false), CONNECT_PROBE_MS);
-  });
-}
+/**
+ * The DIFFERENTIATED reason this suite did not run, or `null` when it did (`relaySkipReason`) —
+ * "nothing was configured to dial" and "the broker refused us" are different diagnoses and must not
+ * share one message.
+ */
+let skipReason: string | null = null;
 
 /** The subset of `window.__pente` these scenarios read/drive (proof-by-state, never a log line). */
 type Pente = {
@@ -127,7 +107,8 @@ const turnOf = (page: Page) =>
 
 /**
  * Boot a FRESH, ISOLATED context+page against the real app with NO transport injected — the app uses
- * its default `MqttTransport` over `relay.json` (the real-relay pattern of `sessionModel.spec.ts`).
+ * its default `MqttTransport`, pointed at the resolved broker (the real-relay pattern of
+ * `sessionModel.spec.ts`).
  * Clears localStorage BEFORE boot so this context mints its OWN `playerId` (distinct seats), then pins
  * it to a FIXED value so reclaim-by-identity across a drop/reconnect is deterministic and assertable.
  */
@@ -144,6 +125,8 @@ async function bootReal(browser: Browser, playerId: string): Promise<{
     // identity across a drop/reconnect (design §2.3 reclaim-by-identity) — distinct across contexts.
     window.localStorage.setItem('pente:playerId', pid);
   }, playerId);
+  // AFTER the clear above (init scripts run in registration order), so the override survives it.
+  await injectRelay(page);
   await page.goto('/');
   await page.waitForFunction(() => {
     const p = (window as unknown as { __pente?: Record<string, unknown> }).__pente;
@@ -227,9 +210,12 @@ async function leave(page: Page): Promise<void> {
 /**
  * Poll `predicate` on `observer` until true (or the deadline), driving `nudge` on each tick to fill the
  * real relay's non-retained subscription gap. The nudge (a `resync` re-broadcast or a re-`propose`) is a
- * proven receiver no-op — a prefix log is IGNOREd and a duplicate ask dedups — so this only defeats a
- * first publish dropped in the pre-subscription window; the observer must still GENUINELY receive the
- * traffic over the real relay (agent-principles #3). Returns whether the predicate held.
+ * proven receiver no-op — a prefix log is IGNOREd — so this only defeats a first publish dropped in
+ * the pre-subscription window; the observer must still GENUINELY receive the traffic over the real
+ * relay (agent-principles #3). Returns whether the predicate held.
+ *
+ * Every caller here nudges with `resync`, which is idempotent. A re-`propose` is NOT an admissible
+ * nudge (it supersedes the proposer's own pending ask) and no caller uses one.
  */
 async function waitObservedWithNudge(
   observer: Page,
@@ -278,13 +264,12 @@ async function establishPair(a: Page, b: Page): Promise<string> {
 }
 
 test.beforeAll(async () => {
-  relayReachable = await probeRelay();
-  if (!relayReachable) {
+  skipReason = relaySkipReason(RELAY, await probeRelay());
+  if (skipReason !== null) {
     console.warn(
-      `[sessionModelRelay.spec] SKIPPING: live relay ${RELAY.wssUrl || '(empty relay.json — no creds)'} ` +
-        `unreachable — run with network egress to the broker (shitchell.com relay or the /dev/ deploy) ` +
-        `to exercise the full session-model matrix over the real MQTT wire. The hermetic ` +
-        `sessionModel.spec.ts still proves the same matrix in CI.`,
+      `[sessionModelRelay.spec] SKIPPING: ${skipReason}\n` +
+        '  This suite is the browser-side proof of the #31 double-seat and #40 rematch-reconnect ' +
+        'regressions over the real wire; the hermetic sessionModel.spec.ts still proves the matrix.',
     );
   }
 });
@@ -299,7 +284,7 @@ test.describe('session-model matrix over the REAL relay, two isolated contexts (
   test('A enters, B enters → DISTINCT seats (white/black) over the real relay [#31 regression]', async ({
     browser,
   }) => {
-    test.skip(!relayReachable, `live relay ${RELAY.wssUrl} unreachable — run with broker egress`);
+    test.skip(skipReason !== null, skipReason ?? '');
     const a = await bootReal(browser, 'smr-a');
     const b = await bootReal(browser, 'smr-b');
     try {
@@ -340,7 +325,7 @@ test.describe('session-model matrix over the REAL relay, two isolated contexts (
   });
 
   test('A drops, A reconnects → resumes WHITE over the real relay', async ({ browser }) => {
-    test.skip(!relayReachable, `live relay ${RELAY.wssUrl} unreachable — run with broker egress`);
+    test.skip(skipReason !== null, skipReason ?? '');
     const a = await bootReal(browser, 'smr-a');
     const b = await bootReal(browser, 'smr-b');
     try {
@@ -371,7 +356,7 @@ test.describe('session-model matrix over the REAL relay, two isolated contexts (
   });
 
   test('B drops, B reconnects → resumes BLACK over the real relay', async ({ browser }) => {
-    test.skip(!relayReachable, `live relay ${RELAY.wssUrl} unreachable — run with broker egress`);
+    test.skip(skipReason !== null, skipReason ?? '');
     const a = await bootReal(browser, 'smr-a');
     const b = await bootReal(browser, 'smr-b');
     try {
@@ -400,7 +385,7 @@ test.describe('session-model matrix over the REAL relay, two isolated contexts (
   test('Both drop; B rejoins then A rejoins → seats preserved over the real relay', async ({
     browser,
   }) => {
-    test.skip(!relayReachable, `live relay ${RELAY.wssUrl} unreachable — run with broker egress`);
+    test.skip(skipReason !== null, skipReason ?? '');
     const a = await bootReal(browser, 'smr-a');
     const b = await bootReal(browser, 'smr-b');
     try {
@@ -436,7 +421,7 @@ test.describe('session-model matrix over the REAL relay, two isolated contexts (
   test('A drops; C enters claiming A’s spot → rejected (seat reserved) over the real relay', async ({
     browser,
   }) => {
-    test.skip(!relayReachable, `live relay ${RELAY.wssUrl} unreachable — run with broker egress`);
+    test.skip(skipReason !== null, skipReason ?? '');
     const a = await bootReal(browser, 'smr-a');
     const b = await bootReal(browser, 'smr-b');
     const c = await bootReal(browser, 'smr-c');
@@ -481,7 +466,7 @@ test.describe('session-model matrix over the REAL relay, two isolated contexts (
   test('A reject reason surfaces in the net panel over the real relay [proof-by-UI]', async ({
     browser,
   }) => {
-    test.skip(!relayReachable, `live relay ${RELAY.wssUrl} unreachable — run with broker egress`);
+    test.skip(skipReason !== null, skipReason ?? '');
     const a = await bootReal(browser, 'smr-a');
     const b = await bootReal(browser, 'smr-b');
     const c = await bootReal(browser, 'smr-c');
@@ -491,6 +476,25 @@ test.describe('session-model matrix over the REAL relay, two isolated contexts (
       // Both seats owned AND both owners present → C (a stranger) hits `room-full`, the OTHER typed
       // reject reason. This complements scenario-5's `seat-reserved` to prove BOTH reason strings reach
       // the user-facing net panel over the real relay — the reject-UX §7 requirement.
+      //
+      // "Both owners PRESENT" is the PRECONDITION of that reason, and over the real broker presence
+      // arrives on its own schedule, AFTER admission. Establishing it by observation rather than by
+      // assumption is what makes the assertion below deterministic: without this wait the arbiter can
+      // still hold an empty present-set and answer the equally-correct `seat-reserved` (a seat held for
+      // an owner it has not yet SEEN). Observed doing exactly that, on the real relay, the first time
+      // this suite was run with a broker it could reach.
+      await Promise.all(
+        [a.page, b.page].map((page) =>
+          page.waitForFunction(
+            () =>
+              (window as unknown as { __pente: { getNet(): { peerPresent: boolean } | null } }).__pente.getNet()
+                ?.peerPresent === true,
+            undefined,
+            { timeout: ROUND_TRIP_MS },
+          ),
+        ),
+      );
+
       await c.page.evaluate((cd: string) => {
         const pente = (window as unknown as { __pente: Pente }).__pente;
         pente.setPendingJoinCode(cd);
@@ -525,7 +529,7 @@ test.describe('session-model matrix over the REAL relay, two isolated contexts (
   test('Rematch: game ends → mutual rematch → colors swap → drop → reconnect resumes the SWAPPED color [#40 regression]', async ({
     browser,
   }) => {
-    test.skip(!relayReachable, `live relay ${RELAY.wssUrl} unreachable — run with broker egress`);
+    test.skip(skipReason !== null, skipReason ?? '');
     const a = await bootReal(browser, 'smr-a');
     const b = await bootReal(browser, 'smr-b');
     try {
@@ -583,14 +587,29 @@ test.describe('session-model matrix over the REAL relay, two isolated contexts (
 
       const uuidBeforeRematch = await gameUuid(a.page);
 
-      // ── Mutual rematch: A proposes, B accepts (over the relay) → in-place reset, colors SWAP ──
+      // ── Mutual rematch: A proposes ONCE, B accepts (over the relay) → in-place reset, colors SWAP ──
+      //
+      // Proposed exactly once, with NO re-propose nudge, and that is load-bearing rather than
+      // incidental: `hsPropose` mints a FRESH id and SUPERSEDES whatever was pending (`handshake.ts`),
+      // so a nudge that re-proposes does not "re-deliver a duplicate ask that dedups" — it replaces
+      // A's pending id. B then answers the id it happens to hold, A is already holding a newer one,
+      // A's `outgoingPending` never resolves, and A never runs `resetForRematch`.
+      //
+      // That is not hypothetical. It is what this test did the first time it was ever run against a
+      // reachable broker, and it left the two peers DIVERGED — same fresh game uuid on both (A adopted
+      // B's reset by epoch), but disagreeing seat maps and BOTH clients reporting seat `white`:
+      //     A: seat=white owners={white:'smr-a',black:'smr-b'}   ← never swapped
+      //     B: seat=white owners={white:'smr-b',black:'smr-a'}   ← swapped
+      // i.e. the exact same-color turn-gate deadlock class as #40, manufactured by the nudge.
+      //
+      // A dropped ask therefore fails here honestly (the wait times out and says so) instead of being
+      // papered over by a retry that can corrupt the handshake it is trying to help.
       await a.page.evaluate(() => (window as unknown as { __pente: Pente }).__pente.propose('rematch'));
-      const bSawAsk = await waitObservedWithNudge(
-        b.page,
-        `${P}.getEndState()?.rematchUi === 'incoming'`,
-        async () => a.page.evaluate(() => (window as unknown as { __pente: Pente }).__pente.propose('rematch')),
+      await b.page.waitForFunction(
+        () => (window as unknown as { __pente: Pente }).__pente.getEndState()?.rematchUi === 'incoming',
+        undefined,
+        { timeout: ROUND_TRIP_MS },
       );
-      expect(bSawAsk, 'B must receive the rematch ask over the real relay').toBe(true);
       await b.page.evaluate(() => (window as unknown as { __pente: Pente }).__pente.respond(true));
 
       // BOTH reset to a fresh empty game, STILL connected, with SEATS SWAPPED (A white→black, B black→white).
@@ -611,8 +630,25 @@ test.describe('session-model matrix over the REAL relay, two isolated contexts (
         );
       }
       // Colors SWAPPED — proof-by-state on BOTH contexts.
-      expect(await seatOf(a.page), 'A (was white) must now be black after rematch').toBe('black');
-      expect(await seatOf(b.page), 'B (was black) must now be white after rematch').toBe('white');
+      //
+      // POLLED, not read once: over the real relay the swapped seat map arrives as its own publish and
+      // can land a beat AFTER the fresh-game reset the wait above keys on, so a single read races it.
+      // This is a DEADLINE, not a weakening (the file's ROUND_TRIP_MS note): a swap that never happens
+      // never satisfies the poll, it just fails slower. Observed racing on the real broker the first
+      // time this suite ran with a reachable relay — a read taken immediately after the reset saw the
+      // OLD seat, while the same read a few hundred ms later saw the swap.
+      await expect
+        .poll(() => seatOf(a.page), {
+          message: 'A (was white) must now be black after rematch',
+          timeout: ROUND_TRIP_MS,
+        })
+        .toBe('black');
+      await expect
+        .poll(() => seatOf(b.page), {
+          message: 'B (was black) must now be white after rematch',
+          timeout: ROUND_TRIP_MS,
+        })
+        .toBe('white');
       // The rematch minted a FRESH game identity (a different uuid than the finished one).
       const uuidAfterRematch = await gameUuid(a.page);
       expect(uuidAfterRematch).not.toBeNull();

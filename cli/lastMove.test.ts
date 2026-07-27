@@ -9,7 +9,7 @@
  *     undo        → lastMove names a stone that is ON the board    ✗  (lastMove=2,2,2 pieces=[] ply=0)
  *
  * Every case below is that invariant, stated as a rule: **whatever `lastMoveOf` returns is either
- * `null` or a node the game currently holds.** `cli/scenarios/last-move-truth.ts` asserts the same
+ * `null` or a node the game currently holds.** `cli/scenarios/last-move-truth.scenario.ts` asserts the same
  * thing through the real daemon over the relay; this pins the derivation itself.
  */
 import { describe, expect, it } from 'vitest';

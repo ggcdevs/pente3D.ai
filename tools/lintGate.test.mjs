@@ -84,6 +84,15 @@ function expectedFromMarkers() {
   return expected;
 }
 
+/** The main fixture's source lines — findings are anchored back to the code they were reported on. */
+const FIXTURE_LINES = readFileSync(
+  path.join(FIXTURE_DIR, 'disabledAndFocused.spec.ts'),
+  'utf8',
+).split('\n');
+
+/** 1-indexed line of the first fixture line containing `needle`, or 0 when it is absent. */
+const lineOf = (needle) => FIXTURE_LINES.findIndex((l) => l.includes(needle)) + 1;
+
 describe('the e2e test-integrity lint gate rejects what it claims to (agent-principles #7)', () => {
   const findings = lintFixtures();
   const expected = expectedFromMarkers();
@@ -96,32 +105,57 @@ describe('the e2e test-integrity lint gate rejects what it claims to (agent-prin
     );
   });
 
-  it('catches the FOCUSED DESCRIBE — the form that makes Playwright run one block and exit 0', () => {
+  it('catches EVERY focus spelling — plain `describe.only` AND the `.serial` chain', () => {
     const focusedFindings = findings.filter((f) => /focused playwright describe/i.test(f.message));
     // Asserted as a list so a failure prints every message eslint DID produce.
-    expect(focusedFindings.map((f) => f.ruleId)).toEqual(['no-restricted-syntax']);
-    const focused = focusedFindings[0];
-    // It must be reported on the `test.describe.only(` line of the fixture, not somewhere else.
-    const fixture = readFileSync(path.join(FIXTURE_DIR, 'disabledAndFocused.spec.ts'), 'utf8').split('\n');
-    expect(fixture[focused.line - 1]).toContain('test.describe.only(');
+    expect(focusedFindings.map((f) => f.ruleId)).toEqual([
+      'no-restricted-syntax',
+      'no-restricted-syntax',
+    ]);
+    // Each must be reported on its own `test.describe….only(` line of the fixture, not somewhere
+    // else — and BOTH spellings must appear, which is what `describe.serial.only` walked past.
+    const sources = focusedFindings.map((f) => FIXTURE_LINES[f.line - 1].trim());
+    expect(sources.some((s) => s.startsWith('test.describe.only('))).toBe(true);
+    expect(sources.some((s) => s.startsWith('test.describe.serial.only('))).toBe(true);
   });
 
-  it('catches BOTH static-disable spellings that used to escape: template title and bare skip()', () => {
-    const fixture = readFileSync(path.join(FIXTURE_DIR, 'disabledAndFocused.spec.ts'), 'utf8').split('\n');
-    const lineOf = (needle) => fixture.findIndex((l) => l.includes(needle)) + 1;
+  it('catches EVERY static-disable spelling that used to escape', () => {
     const flagged = new Set(
       findings.filter((f) => f.file === 'disabledAndFocused.spec.ts').map((f) => f.line),
     );
-    expect(flagged.has(lineOf('test.skip(`${TITLE} skip`'))).toBe(true);
-    expect(flagged.has(lineOf('test.skip(); //'))).toBe(true);
+    // Each of these was, at some point, a live hole: the template title and the bare `skip()` walked
+    // through the first version; `fixme()` and the `.serial`/`.parallel` chains walked through the
+    // second. Asserted as a NAMED map rather than a count, so a regression's diff says WHICH spelling
+    // reopened instead of "expected 5 to be 4".
+    const needles = [
+      'test.skip(`${TITLE} skip`',
+      'test.skip(); //',
+      'test.fixme(); //',
+      'test.describe.serial.skip(',
+      'test.describe.parallel.skip(',
+    ];
+    expect(Object.fromEntries(needles.map((n) => [n, flagged.has(lineOf(n))]))).toEqual(
+      Object.fromEntries(needles.map((n) => [n, true])),
+    );
   });
 
-  it("leaves Playwright's RUNTIME conditional skip alone (banning it would force silent early-returns)", () => {
-    const fixture = readFileSync(path.join(FIXTURE_DIR, 'disabledAndFocused.spec.ts'), 'utf8').split('\n');
-    const runtimeSkipLine = fixture.findIndex((l) => l.includes('test.skip(conditionIsTrue,')) + 1;
-    expect(runtimeSkipLine).toBeGreaterThan(0);
+  it("leaves Playwright's RUNTIME conditional forms alone (banning them forces silent early-returns)", () => {
+    // Both spellings: widening the bare-body selector to `skip|fixme` must not have swept up the
+    // conditional `fixme(cond, reason)`, which is an honest, reported opt-out. The fixture lines are
+    // located first and asserted present, so a renamed fixture case cannot make this vacuous.
+    const needles = ['test.skip(conditionIsTrue,', 'test.fixme(conditionIsTrue,'];
+    const lines = needles.map(lineOf);
+    expect(lines.filter((l) => l > 0)).toHaveLength(needles.length);
     expect(
-      findings.filter((f) => f.file === 'disabledAndFocused.spec.ts' && f.line === runtimeSkipLine),
+      findings.filter((f) => f.file === 'disabledAndFocused.spec.ts' && lines.includes(f.line)),
+    ).toEqual([]);
+  });
+
+  it('leaves the plain `.serial` MODIFIER alone (only the skip/fixme/only tips are banned)', () => {
+    const line = lineOf("test.describe.serial('o plain serial describe'");
+    expect(line).toBeGreaterThan(0);
+    expect(
+      findings.filter((f) => f.file === 'disabledAndFocused.spec.ts' && f.line === line),
     ).toEqual([]);
   });
 

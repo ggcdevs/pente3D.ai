@@ -1,9 +1,6 @@
 import { test, expect, type Browser, type Page } from '@playwright/test';
-import mqtt from 'mqtt';
-import relayJson from '../src/config/defaults/relay.json' with { type: 'json' };
-import { hostEnv, relaySkipReason, resolveRelay } from '../src/config/relayEnv';
+import { RELAY, injectRelay, probeRelay, relaySkipReason } from './relayFixture';
 import { startPeer, statusOf, stopAll, verb, waitFor, type Peer } from '../cli/scenarios/harness';
-import type { RelayConfig } from '../src/config/config';
 
 /**
  * CLI-vs-BROWSER over the real relay — the configuration the design asks for and nothing else ran.
@@ -12,8 +9,10 @@ import type { RelayConfig } from '../src/config/config';
  *
  * Design §8 (`planning/2026-07-24-net-model-v3.1-design.md`) specifies: *"The `cli/` net client is the
  * lever … Run CLI-vs-CLI **and CLI-vs-browser** over the real relay."* Stage V.7 landed CLI-vs-CLI
- * (the `cli/scenarios/` matrix) and browser-vs-browser (`sessionModelRelay.spec.ts`), and never ran
- * the two implementations against each other. Two CLI peers share ONE copy of `cli/session.ts`, so no
+ * (the `cli/scenarios/` matrix) and browser-vs-browser (`sessionModelRelay.spec.ts` — which, it turned
+ * out, was itself DARK: it resolved its broker from the committed-blank `relay.json` and skipped in
+ * every checkout, so the browser-vs-browser half was claimed rather than observed until
+ * `e2e/relayFixture.ts` landed), and never ran the two implementations against each other. Two CLI peers share ONE copy of `cli/session.ts`, so no
  * amount of CLI-vs-CLI can detect a divergence that exists only between the CLI and the browser app —
  * `src/main.ts`'s archive-before-net-start path, for instance, which the daemon's `enter` skips
  * entirely.
@@ -30,10 +29,11 @@ import type { RelayConfig } from '../src/config/config';
  * the SAME `cli/scenarios/harness` the CLI-vs-CLI matrix uses — not a bespoke second implementation,
  * so a change to the harness cannot leave this spec quietly testing something else.
  *
- * Both sides are pointed at ONE broker by `src/config/relayEnv.ts` (the node-side resolver the CLI and
- * the `*.realrelay.test.ts` suites also use): the daemon inherits it through the environment, the
- * browser gets the same record injected as its `pente:config:relay` override before boot. The
- * committed `relay.json` is blank, so without that injection the page would have no broker to dial.
+ * Both sides are pointed at ONE broker by `e2e/relayFixture.ts` — which asks `src/config/relayEnv.ts`,
+ * the same node-side resolver the CLI, the `*.realrelay.test.ts` suites and every other live-relay
+ * spec now use. The daemon inherits it through the environment; the browser gets the same record
+ * injected as its `pente:config:relay` override before boot. The committed `relay.json` is blank, so
+ * without that injection the page would have no broker to dial.
  *
  * ## Proof-by-state (agent-principles #3)
  *
@@ -51,35 +51,11 @@ import type { RelayConfig } from '../src/config/config';
  * `npm run scenario:rematch`.
  */
 
-/** One broker for both clients: env → tracked `relay.json` → the live deployed relay. */
-const RELAY: RelayConfig = resolveRelay(relayJson as RelayConfig, hostEnv());
-const CONNECT_PROBE_MS = 10_000;
 /** A page↔broker↔daemon round trip on a live network, under parallel workers. A deadline, not a gate. */
 const ROUND_TRIP_MS = 45_000;
 
 /** The differentiated reason this suite did not run, or `null` when it did (`relaySkipReason`). */
 let skipReason: string | null = null;
-
-/** Probe the broker once: `true` if it accepted a connection, else the failure as observed. */
-function probeRelay(): Promise<true | string> {
-  return new Promise<true | string>((res) => {
-    if (RELAY.wssUrl.length === 0) return res('no relay url to dial');
-    const client = mqtt.connect(RELAY.wssUrl, {
-      username: RELAY.username,
-      password: RELAY.password,
-      clientId: `cvb-probe-${Math.random().toString(36).slice(2, 10)}`,
-      connectTimeout: CONNECT_PROBE_MS,
-      reconnectPeriod: 0,
-    });
-    const done = (r: true | string): void => {
-      client.end(true);
-      res(r);
-    };
-    client.on('connect', () => done(true));
-    client.on('error', (e: Error) => done(e.message));
-    setTimeout(() => done(`no CONNACK within ${CONNECT_PROBE_MS}ms`), CONNECT_PROBE_MS);
-  });
-}
 
 /** The subset of `window.__pente` this spec reads/drives. */
 type Pente = {
@@ -146,14 +122,12 @@ async function browserSeesPiece(page: Page, key: string, owner: string): Promise
 async function bootBrowser(browser: Browser, playerId: string): Promise<Page> {
   const context = await browser.newContext();
   const page = await context.newPage();
-  await page.addInitScript(
-    ({ pid, relay }: { pid: string; relay: RelayConfig }) => {
-      window.localStorage.clear();
-      window.localStorage.setItem('pente:playerId', pid);
-      window.localStorage.setItem('pente:config:relay', JSON.stringify(relay));
-    },
-    { pid: playerId, relay: RELAY },
-  );
+  await page.addInitScript((pid: string) => {
+    window.localStorage.clear();
+    window.localStorage.setItem('pente:playerId', pid);
+  }, playerId);
+  // AFTER the clear (init scripts run in registration order), so the override survives it.
+  await injectRelay(page);
   await page.goto('/');
   await page.waitForFunction(() => {
     const p = (window as unknown as { __pente?: Record<string, unknown> }).__pente;
@@ -270,7 +244,11 @@ test.describe('CLI vs BROWSER over the real relay (design §8: two implementatio
     // …and back in on the dealer's-choice seed, the one a returning peer re-seeds from its
     // breadcrumb on. The arbiter answering the hello is the BROWSER app — the half of the admission
     // path no CLI-vs-CLI scenario can exercise.
-    const back = await verb(cli, ['enter', 'defer'], 90_000);
+    // Spelled as the FLAG. The positional form was inert — the CLI collected it and never read it —
+    // so this line matched its own description only by the coincidence that `defer` is also the
+    // default; `['enter', 'new']` would have silently tested `defer` and passed green. The CLI now
+    // refuses an unexpected positional outright (`cli/args.ts`), which is why this spelling changed.
+    const back = await verb(cli, ['enter', '--seed', 'defer'], 90_000);
     expect(back.phase).toBe('connected');
     expect(back.seat, 'a returning peer is re-admitted by IDENTITY onto its own seat').toBe('black');
     expect(back.gameUuid, 'it must come back to the SAME game, not a fresh one').toBe(beforeLeave.gameUuid);

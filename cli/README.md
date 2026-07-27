@@ -44,6 +44,7 @@ flapping presence at the browser peer), so the client is split in two:
 ./cli/pente leave ABCDE                  # a real departure: seat + engine dropped (NOT `drop`)
 ./cli/pente enter ABCDE --seed new       # start over — sends/accepts an EMPTY game only
 ./cli/pente enter ABCDE --seed defer     # dealer's choice — the only seed that adopts theirs
+./cli/pente enter ABCDE new              # REFUSED (exit 2) — the seed is a flag, not a positional
 
 # Rematch after a decided game (colours alternate on both sides):
 ./cli/pente rematch ABCDE                # ask
@@ -112,16 +113,26 @@ the relay was unreachable. The last one is deliberate: without egress a scenario
 and reporting that as a failure would train everyone to ignore a real one. `scenario:all` applies
 the same rule to the suite — `1` if anything failed, `2` if *everything* was skipped.
 
-Writing another: drop a `*.ts` in `cli/scenarios/` (it joins `scenario:all` automatically — the
-runner enumerates the directory) and give it its own `scenario:<name>` script. `harness.ts` gives
-you `requireRelay` / `startPeer` / `verb` / `waitFor` / `check` / `report`; a scenario is a plain
-script (live network, child processes and multi-second waits make it an integration probe, not a
-unit test).
+Writing another: drop a **`*.scenario.ts`** in `cli/scenarios/` (it joins `scenario:all`
+automatically — the runner enumerates the directory) and give it its own `scenario:<name>` script.
+`harness.ts` gives you `requireRelay` / `startPeer` / `verb` / `waitFor` / `check` / `report`; a
+scenario is a plain script (live network, child processes and multi-second waits make it an
+integration probe, not a unit test). Anything else in the directory — a shared helper, fixtures — is
+**not** run: identification is by that suffix, positively, not by a denylist of the files that
+happen not to be scenarios today.
 
-`report()` exits **1 on zero checks**, not 0. Directory discovery means a scenario that quietly
-stops asserting — an early return, a `check` behind a branch that no longer runs — is still
-discovered and would otherwise report `0/0 checks passed` as a green line. Proving nothing is a
-failure to prove. (`cli/scenarios/harness.test.ts` pins that, and runs under `npm test`.)
+**Two bars for a PASS, because exiting 0 is cheap.**
+
+1. `report()` exits **1 on zero checks**, not 0 — a scenario that quietly stops asserting (an early
+   return, a `check` behind a branch that no longer runs) would otherwise report `0/0 checks passed`
+   as a green line.
+2. `scenario:all` counts a child as `passed` only if it also **printed a check tally**
+   (`##PENTE-SCENARIO-CHECKS`, which `report()` emits). Bar 1 cannot protect a file that never calls
+   `report()` at all; exit 0 with no tally is classified **FAILED**, with the reason printed.
+
+Proving nothing is a failure to prove. (`cli/scenarios/harness.test.ts` pins both bars — including
+that a `shared-helper.ts` is not a scenario and that `classifyOutcome(0, false)` is `FAILED` — and
+runs under `npm test`.)
 
 ## Against the BROWSER
 

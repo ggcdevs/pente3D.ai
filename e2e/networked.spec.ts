@@ -1,8 +1,7 @@
 import { test, expect, type Browser, type BrowserContext, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import mqtt from 'mqtt';
-import relay from '../src/config/defaults/relay.json' with { type: 'json' };
+import { RELAY, injectRelay, probeRelay, relaySkipReason } from './relayFixture';
 import { NET_PANEL_SCOPE_ID } from '../src/ui/widgets/netPanel.ts';
 
 /**
@@ -13,7 +12,8 @@ import { NET_PANEL_SCOPE_ID } from '../src/ui/widgets/netPanel.ts';
  * `netWiring.spec.ts` drives two pages in ONE context over a hermetic BroadcastChannel relay. Neither
  * proves the FULL stack — two INDEPENDENT app instances, in ISOLATED browser contexts (distinct
  * localStorage → distinct `playerId` → distinct seats), talking over the *real* MQTT broker
- * (`relay.json`) with NO test transport injected. That is exactly the seam the wiring bug lived in, so
+ * (resolved + injected by `e2e/relayFixture.ts`) with NO test transport injected. That is exactly the
+ * seam the wiring bug lived in, so
  * this spec is the one that bites if the 6.1 render-adoption / session-route wiring regresses.
  *
  * ## Driven through the C.2 drawer Network-Game panel (issue #13, Task C.3)
@@ -52,36 +52,15 @@ import { NET_PANEL_SCOPE_ID } from '../src/ui/widgets/netPanel.ts';
  * real relay. This mirrors the `waitForWithRepublish` handshake in `sync.realrelay.test.ts`.
  */
 
-/** The SSOT relay config — the SAME record the app's default transport connects over. */
-const RELAY = relay as { wssUrl: string; username: string; password: string; topicRoot: string };
-
-/** How long to wait for the broker to accept a probe connection before declaring it down. */
-const CONNECT_PROBE_MS = 10_000;
 /** How long to wait for a move to propagate across the live relay (with resync re-broadcast). */
 const PROPAGATE_MS = 15_000;
 
-/** Whether the live broker answered the `beforeAll` probe (else every test SKIPs, genuinely). */
-let relayReachable = false;
-
-/** Probe the live relay once; resolves true iff an outbound wss connection is accepted. */
-function probeRelay(): Promise<boolean> {
-  return new Promise<boolean>((res) => {
-    const client = mqtt.connect(RELAY.wssUrl, {
-      username: RELAY.username,
-      password: RELAY.password,
-      clientId: `e2e-probe-${Math.random().toString(36).slice(2, 10)}`,
-      connectTimeout: CONNECT_PROBE_MS,
-      reconnectPeriod: 0,
-    });
-    const done = (ok: boolean): void => {
-      client.end(true);
-      res(ok);
-    };
-    client.on('connect', () => done(true));
-    client.on('error', () => done(false));
-    setTimeout(() => done(false), CONNECT_PROBE_MS);
-  });
-}
+/**
+ * The DIFFERENTIATED reason the live tier did not run, or `null` when it did
+ * (`relaySkipReason`): "nothing was configured to dial" and "the broker refused us" are
+ * different diagnoses and must not share one message.
+ */
+let skipReason: string | null = null;
 
 /** The subset of `window.__pente` this spec drives. */
 type Pente = {
@@ -116,6 +95,10 @@ async function bootIsolated(browser: Browser): Promise<{ context: BrowserContext
   const page = await context.newPage();
   // Mint a fresh playerId per context (isolated seats) before any app code reads localStorage.
   await page.addInitScript(() => window.localStorage.clear());
+  // Point THIS page at the SAME broker the node-side probe used. Registered AFTER the clear
+  // above (init scripts run in order), so the override survives it. Without this the page
+  // reads the committed-blank relay.json and dials nothing while the probe reports reachable.
+  await injectRelay(page);
   await page.goto('/');
   await page.waitForFunction(() => {
     const p = (window as unknown as { __pente?: Record<string, unknown> }).__pente;
@@ -245,11 +228,11 @@ async function join(page: Page, code: string): Promise<void> {
 }
 
 test.beforeAll(async () => {
-  relayReachable = await probeRelay();
-  if (!relayReachable) {
+  skipReason = relaySkipReason(RELAY, await probeRelay());
+  if (skipReason !== null) {
     console.warn(
-      `[networked.spec] SKIPPING: live relay ${RELAY.wssUrl} unreachable — ` +
-        `run with network egress to the broker to exercise the two-browser live path.`,
+      `[networked.spec] SKIPPING: ${skipReason}\n` +
+        '  This suite is the two-browser live path; without a broker it proves nothing.',
     );
   }
 });
@@ -258,7 +241,7 @@ test.describe('two isolated browser contexts over the LIVE relay (Task 6.7, issu
   test('host+join assign distinct seats; a host move re-renders on the joiner and headHashes MATCH', async ({
     browser,
   }) => {
-    test.skip(!relayReachable, 'live relay unreachable');
+    test.skip(skipReason !== null, skipReason ?? '');
     const a = await bootIsolated(browser);
     const b = await bootIsolated(browser);
     try {
@@ -322,7 +305,7 @@ test.describe('two isolated browser contexts over the LIVE relay (Task 6.7, issu
   test('the turn-gate REJECTS an off-turn move (board unchanged; offTurnBlocks advances)', async ({
     browser,
   }) => {
-    test.skip(!relayReachable, 'live relay unreachable');
+    test.skip(skipReason !== null, skipReason ?? '');
     const a = await bootIsolated(browser);
     const b = await bootIsolated(browser);
     try {
@@ -362,7 +345,7 @@ test.describe('two isolated browser contexts over the LIVE relay (Task 6.7, issu
   });
 
   test('a LATE joiner inherits the board the host already played', async ({ browser }) => {
-    test.skip(!relayReachable, 'live relay unreachable');
+    test.skip(skipReason !== null, skipReason ?? '');
     const a = await bootIsolated(browser);
     try {
       const code = await host(a.page);

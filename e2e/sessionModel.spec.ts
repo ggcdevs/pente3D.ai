@@ -7,8 +7,7 @@ import {
 } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import mqtt from 'mqtt';
-import relay from '../src/config/defaults/relay.json' with { type: 'json' };
+import { RELAY, injectRelay, probeRelay, relaySkipReason } from './relayFixture';
 
 /**
  * Task S.7 e2e — the GLUE proof for the networked SESSION MODEL (epic #35, closes #31). This is the
@@ -68,16 +67,12 @@ import relay from '../src/config/defaults/relay.json' with { type: 'json' };
  *
  * ## Real relay (self-skips without creds)
  *
- * A final scenario exercises the REAL relay (`relay.json`) with two isolated contexts running the app's
+ * A final scenario exercises the REAL relay (resolved + injected by `e2e/relayFixture.ts`) with two isolated contexts running the app's
  * DEFAULT transport — no mock injected — so the whole model is proven over MQTT too. It self-SKIPs (a
  * genuine Playwright skip, never a zero-assertion green) when the broker is unreachable, exactly like
  * `networked.spec.ts`.
  */
 
-/** The SSOT relay config — the same record the app's default transport connects over. */
-const RELAY = relay as { wssUrl: string; username: string; password: string; topicRoot: string };
-/** How long to wait for the broker to accept a probe connection before declaring it down. */
-const CONNECT_PROBE_MS = 10_000;
 /**
  * The per-wait ceiling for an admission/adopt ROUND-TRIP to land an observable state change (a seat, a
  * convergence, an offline). Each round-trip here is a page→Node-hub→page `evaluate` hop across 2–3
@@ -90,28 +85,12 @@ const CONNECT_PROBE_MS = 10_000;
  * the proof is unchanged (agent-principles #7). Kept well under `test.slow()`'s 180s whole-test budget.
  */
 const ROUND_TRIP_MS = 45_000;
-/** Whether the live broker answered the `beforeAll` probe (else the real-relay test SKIPs, genuinely). */
-let relayReachable = false;
-
-/** Probe the live relay once; resolves true iff an outbound wss connection is accepted. */
-function probeRelay(): Promise<boolean> {
-  return new Promise<boolean>((res) => {
-    const client = mqtt.connect(RELAY.wssUrl, {
-      username: RELAY.username,
-      password: RELAY.password,
-      clientId: `e2e-probe-${Math.random().toString(36).slice(2, 10)}`,
-      connectTimeout: CONNECT_PROBE_MS,
-      reconnectPeriod: 0,
-    });
-    const done = (ok: boolean): void => {
-      client.end(true);
-      res(ok);
-    };
-    client.on('connect', () => done(true));
-    client.on('error', () => done(false));
-    setTimeout(() => done(false), CONNECT_PROBE_MS);
-  });
-}
+/**
+ * The DIFFERENTIATED reason the live tier did not run, or `null` when it did
+ * (`relaySkipReason`): "nothing was configured to dial" and "the broker refused us" are
+ * different diagnoses and must not share one message.
+ */
+let skipReason: string | null = null;
 
 /** The subset of `window.__pente` these scenarios read (proof-by-state, never a log line). */
 type Pente = {
@@ -408,7 +387,7 @@ async function establishPair(a: Page, b: Page): Promise<string> {
 }
 
 test.beforeAll(async () => {
-  relayReachable = await probeRelay();
+  skipReason = relaySkipReason(RELAY, await probeRelay());
 });
 
 test.describe('two-context session model over the injected MockTransport (S.7, epic #35, closes #31)', () => {
@@ -820,12 +799,15 @@ test.describe('two-context session model over the injected MockTransport (S.7, e
   test('REAL RELAY: two isolated contexts negotiate DISTINCT seats over MQTT (self-skips offline)', async ({
     browser,
   }) => {
-    test.skip(!relayReachable, `live relay ${RELAY.wssUrl} unreachable — run with egress to exercise MQTT`);
-    // No mock injected: both isolated contexts run the app's DEFAULT MqttTransport over relay.json.
+    test.skip(skipReason !== null, skipReason ?? '');
+    // No mock injected: both isolated contexts run the app's DEFAULT MqttTransport, pointed at the
+    // broker `e2e/relayFixture.ts` resolved (the committed relay.json is blank — reading it here is
+    // what kept this test dark in every checkout).
     const mkReal = async (): Promise<{ context: BrowserContext; page: Page }> => {
       const context = await browser.newContext();
       const page = await context.newPage();
       await page.addInitScript(() => window.localStorage.clear());
+      await injectRelay(page);
       await page.goto('/');
       await page.waitForFunction(() => {
         const p = (window as unknown as { __pente?: Record<string, unknown> }).__pente;

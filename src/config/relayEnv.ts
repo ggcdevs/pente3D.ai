@@ -59,9 +59,17 @@ export const NODE_RELAY_FALLBACK: RelayConfig = {
 /** A relay config that names no broker at all — the "nothing is configured" value. */
 export const NO_RELAY: RelayConfig = { wssUrl: '', username: '', password: '', topicRoot: '' };
 
-/** Blank counts as ABSENT everywhere here: a committed `""` names no broker and no credential. */
+/**
+ * Blank counts as ABSENT everywhere here: a committed `""` names no broker and no credential.
+ *
+ * An absent value needs no clause of its own — `undefined === ''` is false, so it falls through and
+ * is returned as itself, which is the `undefined` the caller wants. The explicit
+ * `value === undefined ||` this used to carry was therefore unfalsifiable by construction (both arms
+ * yield `undefined` for that input) and showed up as the file's one surviving mutant. Deleted rather
+ * than justified: an equivalent mutant is usually redundant code wearing a disguise.
+ */
 function present(value: string | undefined): string | undefined {
-  return value === undefined || value === '' ? undefined : value;
+  return value === '' ? undefined : value;
 }
 
 /**

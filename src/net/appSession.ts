@@ -62,8 +62,28 @@ export function resolvePlayerId(): string {
  * The transport factory the app uses: the test-injected one if present (deterministic mock relay),
  * else a fresh real {@link MqttTransport} over the config-SSOT relay. Each call builds a NEW
  * transport (one per room), so a re-host/re-join gets a clean connection.
+ *
+ * `playerId` becomes the transport's PRESENCE id, and that is load-bearing rather than cosmetic.
+ * Seats are owned by `playerId` (`seats.ts`), and the arbiter answers a full room by asking whether
+ * every seat OWNER is present (`claimSeat`'s `room-full` vs `seat-reserved`). With the transport
+ * minting its own random `p-…` id per connection, that comparison held two different namespaces:
+ * the present-set could never contain another peer's `playerId`, so a blocking owner ALWAYS looked
+ * absent and `room-full` was unreachable on the real relay. Observed from the arbiter itself, in a
+ * room where both owners were live and each side's `peerPresent` was `true`:
+ *
+ *     DIAGARB me=smr-a reason=seat-reserved
+ *             seatMap={"white":"smr-a","black":"smr-b"}
+ *             present=["smr-a","p-3x9m56","p-c67xmd"]
+ *
+ * The hermetic `MockTransport` is built WITH the playerId, which is why the two namespaces never
+ * diverged there and only the real-relay tier could show it — that tier was dark until now.
+ *
+ * The id is stable per PLAYER rather than per connection. `RepublishLimiter` only ever compares it
+ * for equality and forgets peers observed to leave (`republish.ts`), so a returning peer is still
+ * served; and a stable MQTT `clientId` means a reconnect displaces its own stale ghost session
+ * instead of racing it.
  */
-export function resolveTransportFactory(): () => Transport {
+export function resolveTransportFactory(playerId: string): () => Transport {
   const injected = window.__penteNetTransportFactory;
   if (injected !== undefined) {
     log.info('net transport: using injected test factory');
@@ -72,7 +92,7 @@ export function resolveTransportFactory(): () => Transport {
   const relay = getConfig('relay') as unknown as RelayConfig;
   const connect: MqttConnectFn = (url, opts) =>
     mqtt.connect(url, opts) as unknown as ReturnType<MqttConnectFn>;
-  return () => new MqttTransport(relay, { connect });
+  return () => new MqttTransport(relay, { connect, peerId: playerId });
 }
 
 /**
@@ -84,10 +104,13 @@ export function resolveTransportFactory(): () => Transport {
  */
 export async function createAppNetSession(size: number): Promise<NetSession> {
   const db = await openDatabase(resolveDbName());
+  // ONE identity: the same playerId owns the seat AND names this client in presence, so the arbiter's
+  // "is every seat owner present?" question can actually be answered (see `resolveTransportFactory`).
+  const playerId = resolvePlayerId();
   const session = new NetSession({
-    createTransport: resolveTransportFactory(),
+    createTransport: resolveTransportFactory(playerId),
     db,
-    playerId: resolvePlayerId(),
+    playerId,
     size,
   });
   log.info('net session created', { size });

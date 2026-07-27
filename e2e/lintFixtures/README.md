@@ -20,6 +20,10 @@ Two things keep them out of the normal runs, and neither weakens anything:
 - `playwright.config.ts` sets `testIgnore` for this directory, so `npm run e2e` does not try to
   run them.
 
-**Adding a case:** put it in `disabledAndFocused.spec.ts` with a `// <n>: …` comment, then add the
-expectation to `EXPECTED` in `tools/lintGate.test.mjs`. The test asserts the set exactly, so a new
-case with no expectation fails loudly rather than passing unnoticed.
+**Adding a case:** put it in `disabledAndFocused.spec.ts` with a `// <n>: …` comment naming the
+damage it does, and — if it MUST error — a trailing `// LINT-EXPECT: <ruleId>` marker on the
+offending line. `tools/lintGate.test.mjs` builds its expectation from those markers and asserts
+eslint's output matches exactly, in both directions: a marked line that produces no error means the
+selector has a hole, and an unmarked line that produces one means the selector is over-broad. So a
+new case is never silently unenforced — add the marker before the selector covers it and the suite
+goes red until it does.
