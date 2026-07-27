@@ -7,18 +7,64 @@ import vitest from 'eslint-plugin-vitest';
  * These enforce that tests actually assert (no coverage-padding shells) and that
  * no test is silently disabled or focused — matching planning/agent-principles.md
  * ("Never weaken a gate", "Tests must be genuine"). Applied to every Vitest suite — the
- * `.test.ts` suites under src/, and the pure build-tooling `.test.mjs` suites under
- * tools/ (issue #22). See the `files` globs below for the exact patterns; they are not
+ * `.test.ts` suites under src/ (which is where src/net + src/debug live), the pure
+ * build-tooling `.test.mjs` suites under tools/ (issue #22), and any future `.test.ts`
+ * suite under cli/. See the `files` globs below for the exact patterns; they are not
  * repeated in this comment because a `**` glob would close the block comment early.
+ *
+ * The Playwright specs under e2e/ are ALSO listed, but only `vitest/no-focused-tests`
+ * actually fires there and that is deliberate, not an oversight: this plugin's
+ * expect-expect / valid-expect / no-disabled-tests resolve a call as a test only when
+ * the test fn comes from vitest (import or global), and e2e/ imports `test`/`expect`
+ * from `@playwright/test`, so those three are inert on a Playwright spec. Establish this
+ * by probe, never by reading — drop a spec containing each violation under e2e/ and run
+ * `npm run lint`. The two holes that actually matter for e2e — a focused spec (Playwright
+ * then runs ONLY it and reports the whole suite green) and a statically disabled spec —
+ * are covered by `vitest/no-focused-tests` plus the `playwrightTestIntegrity` block below.
  */
 const vitestTestIntegrity = {
-  files: ['src/**/*.test.ts', 'tools/**/*.test.mjs'],
+  files: ['src/**/*.test.ts', 'tools/**/*.test.mjs', 'cli/**/*.test.ts', 'e2e/**/*.spec.ts'],
   plugins: { vitest },
   rules: {
     'vitest/expect-expect': 'error',
     'vitest/valid-expect': 'error',
     'vitest/no-disabled-tests': 'error',
     'vitest/no-focused-tests': 'error',
+  },
+};
+
+/**
+ * Statically-disabled Playwright specs are banned (the e2e half of "no test is silently
+ * disabled"). e2e/ is the boundary that JUSTIFIES excluding the THREE.js/DOM IO glue from
+ * unit coverage and from the mutation scope — so a spec that quietly stops running turns
+ * that exclusion into an unverified claim.
+ *
+ * The selectors below match the MODIFIER forms only, whose first argument is a string
+ * literal title: `test.skip('title', fn)`, `test.fixme('title', fn)`, and the
+ * `test.describe.skip('title', fn)` / `.fixme` variants. Playwright's RUNTIME conditional
+ * skip — `test.skip(cond, 'reason')`, used across the live-relay specs to opt out when the
+ * broker is unreachable — passes an expression first and is deliberately NOT matched: it is
+ * an honest, condition-reported skip, not a silent disable. `.only` is already covered by
+ * `vitest/no-focused-tests` above.
+ */
+const playwrightTestIntegrity = {
+  files: ['e2e/**/*.spec.ts'],
+  rules: {
+    'no-restricted-syntax': [
+      'error',
+      {
+        selector:
+          "CallExpression[callee.object.name='test'][callee.property.name=/^(skip|fixme)$/][arguments.0.type='Literal']",
+        message:
+          'Statically disabled Playwright spec. Delete it or fix it — a silently skipped e2e spec voids the Playwright-verified IO boundary (planning/agent-principles.md #6). Runtime `test.skip(condition, reason)` is allowed.',
+      },
+      {
+        selector:
+          "CallExpression[callee.object.property.name='describe'][callee.property.name=/^(skip|fixme)$/]",
+        message:
+          'Statically disabled Playwright describe block. Delete it or fix it — a silently skipped e2e spec voids the Playwright-verified IO boundary (planning/agent-principles.md #6).',
+      },
+    ],
   },
 };
 
@@ -98,4 +144,5 @@ export default tseslint.config(
   },
   coreForbiddenImports,
   vitestTestIntegrity,
+  playwrightTestIntegrity,
 );
