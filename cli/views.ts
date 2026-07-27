@@ -218,7 +218,67 @@ export const VIEWS: Record<string, View> = {
 
 export const DEFAULT_VIEW = 'layers';
 
+/** The registered view names, in registration order — the list every refusal and `pente views` quotes. */
+export function viewNames(): readonly string[] {
+  return Object.keys(VIEWS);
+}
+
+/**
+ * Is `name` a REGISTERED view?
+ *
+ * `Object.hasOwn`, never a truthiness test on `VIEWS[name]`: {@link VIEWS} is a plain object, so
+ * `VIEWS['valueOf']` resolves the `Object.prototype` member and `VIEWS[name] ? … : …` answered YES
+ * for every member of the prototype chain. Observed before this guard existed, on the real CLI's
+ * own `--view` test (`VIEWS[v] ? v : DEFAULT_VIEW`):
+ *
+ *     --view toString       passes the guard = true · render -> "[object Undefined]"
+ *     --view valueOf        passes the guard = true · render -> THROWS: Cannot convert undefined…
+ *
+ * i.e. `pente show <CODE> --view valueOf` passed the guard and then crashed out of the render path.
+ * Own-property membership is the question actually being asked, so it is the test actually used.
+ */
+export function isViewName(name: string): boolean {
+  return Object.hasOwn(VIEWS, name);
+}
+
+/**
+ * The view a `--view` flag asks for, or the refusal to print — the ONE place the `--view` vocabulary
+ * is decided, so `cli/main.ts` cannot drift from {@link render}.
+ *
+ * A name nobody registered is REFUSED, never quietly downgraded to the default (`cli/args.ts`: "an
+ * argument this CLI does not understand is REFUSED, never ignored"). Downgrading is the same swallow
+ * class as the `enter <CODE> new` positional: `--view layerz` printed a z-slice board with no
+ * diagnostic, so an operator who asked for one cut of the cube read another and had no way to tell.
+ *
+ * Returned rather than printed so the decision is testable as a value; `cli/main.ts` prints it and
+ * exits non-zero.
+ */
+export function viewFromFlag(
+  raw: string | boolean | undefined,
+): { readonly view: string } | { readonly error: string } {
+  if (raw === undefined) return { view: DEFAULT_VIEW };
+  // `--view` with no value parses as `true`; collapsing that to the default is the `--seed` swallow
+  // one flag over, so it is refused with the same shape of message.
+  if (typeof raw !== 'string') {
+    return { error: `--view needs a value: 'pente <verb> <CODE> --view ${viewNames().join('|')}'` };
+  }
+  if (!isViewName(raw)) {
+    return { error: `--view: unknown view "${raw}" — available views: ${viewNames().join(', ')}` };
+  }
+  return { view: raw };
+}
+
+/**
+ * Render a snapshot through a REGISTERED view, or throw naming the view that does not exist.
+ *
+ * There is no silent fallback here: a second, quieter copy of the `--view` rule is exactly how the
+ * refusal in {@link viewFromFlag} could be bypassed (and how a `Object.prototype` name reached a
+ * `view(s)` call at all). Callers reaching this with an unvalidated name have a bug, and an
+ * exception naming it is the honest report of one.
+ */
 export function render(s: Snapshot, viewName: string = DEFAULT_VIEW): string {
-  const view = VIEWS[viewName] ?? VIEWS[DEFAULT_VIEW]!;
-  return view(s);
+  if (!isViewName(viewName)) {
+    throw new Error(`unknown view: ${viewName} — available views: ${viewNames().join(', ')}`);
+  }
+  return VIEWS[viewName]!(s);
 }

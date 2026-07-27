@@ -27,11 +27,23 @@
 import { runDaemon } from './daemon';
 import { request } from './client';
 import { enterSeed, parseArgs, unexpectedPositional, type Args } from './args';
-import { render, VIEWS, DEFAULT_VIEW, type Snapshot } from './views';
+import { render, viewFromFlag, viewNames, DEFAULT_VIEW, type Snapshot } from './views';
 
+/**
+ * The view named by `--view`, or exit 2 with the list `pente views` prints.
+ *
+ * The rule lives ONCE, in `cli/views.ts` — this only prints the refusal and exits. The previous
+ * `VIEWS[v] ? v : DEFAULT_VIEW` both swallowed a typo (a `--view layerz` printed a z-slice board
+ * with no diagnostic) and answered YES for every `Object.prototype` member, so `--view valueOf`
+ * passed the guard and then crashed inside `render`.
+ */
 function view(flags: Args['flags']): string {
-  const v = typeof flags.view === 'string' ? flags.view : DEFAULT_VIEW;
-  return VIEWS[v] ? v : DEFAULT_VIEW;
+  const asked = viewFromFlag(flags.view);
+  if ('error' in asked) {
+    console.error(asked.error);
+    process.exit(2);
+  }
+  return asked.view;
 }
 
 function requireCode(args: Args): string {
@@ -52,9 +64,9 @@ function jsonMode(flags: Args['flags']): boolean {
 }
 
 /** Emit a state reply either as raw JSON (`--json`, for scripts) or as a rendered board. */
-function output(data: unknown, args: Args): void {
+function output(data: unknown, args: Args, viewName: string): void {
   if (jsonMode(args.flags)) return console.log(JSON.stringify(data));
-  printSnapshot(data, view(args.flags));
+  printSnapshot(data, viewName);
 }
 
 async function main(): Promise<void> {
@@ -70,19 +82,23 @@ async function main(): Promise<void> {
     process.exit(2);
   }
 
+  // Same rule, same place: an unknown `--view` is refused BEFORE any daemon is contacted, so a typo
+  // costs an exit code rather than a board cut along an axis nobody asked for.
+  const viewName = view(args.flags);
+
   switch (args.verb) {
     case 'play':
       await runDaemon({
         code: args.code ?? undefined,
         host: args.flags.host === true,
-        view: view(args.flags),
+        view: viewName,
       });
       return; // daemon blocks
 
     case 'show': {
       const r = await request(requireCode(args), { cmd: 'show' }, 10_000);
       if (!r.ok) return fail(r.data);
-      return output(r.data, args);
+      return output(r.data, args, viewName);
     }
 
     case 'status': {
@@ -127,7 +143,7 @@ async function main(): Promise<void> {
       const r = await request(code, { cmd: 'move', arg: coord }, 15_000);
       if (!r.ok) return fail(r.data);
       if (!jsonMode(args.flags)) console.log(`placed ${coord}.`);
-      return output(r.data, args);
+      return output(r.data, args, viewName);
     }
 
     // A scenario tool, not a player verb — see the daemon's `local-undo` case.
@@ -137,7 +153,7 @@ async function main(): Promise<void> {
     case 'redo': {
       const r = await request(requireCode(args), { cmd: args.verb }, 10_000);
       if (!r.ok) return fail(r.data || `${args.verb} refused`);
-      return output(r.data, args);
+      return output(r.data, args, viewName);
     }
 
     // Divergence resolution (V.4b, #38): suggest a way out, or answer the peer's suggestion.
@@ -149,13 +165,13 @@ async function main(): Promise<void> {
       }
       const r = await request(requireCode(args), { cmd: 'resolve', arg: choice }, 10_000);
       if (!r.ok) return fail(r.data);
-      return output(r.data, args);
+      return output(r.data, args, viewName);
     }
     case 'agree':
     case 'refuse': {
       const r = await request(requireCode(args), { cmd: args.verb }, 10_000);
       if (!r.ok) return fail(r.data);
-      return output(r.data, args);
+      return output(r.data, args, viewName);
     }
 
     // Rematch (N.2, #12): the out-of-band ask and its answer. Distinct from `resolve`/`agree`, which
@@ -166,7 +182,7 @@ async function main(): Promise<void> {
     case 'decline': {
       const r = await request(requireCode(args), { cmd: args.verb }, 15_000);
       if (!r.ok) return fail(r.data);
-      return output(r.data, args);
+      return output(r.data, args, viewName);
     }
 
     // Room lifecycle: a real departure, and a re-entry on an explicit seed (design §3). `leave` is
@@ -175,7 +191,7 @@ async function main(): Promise<void> {
     case 'leave': {
       const r = await request(requireCode(args), { cmd: 'leave' }, 15_000);
       if (!r.ok) return fail(r.data);
-      return output(r.data, args);
+      return output(r.data, args, viewName);
     }
     case 'enter': {
       const asked = enterSeed(args);
@@ -190,7 +206,7 @@ async function main(): Promise<void> {
       // room to complete; a refusal comes back as a `joinError` on the snapshot, not as a timeout.
       const r = await request(requireCode(args), { cmd: 'enter', arg: asked.seed }, 60_000);
       if (!r.ok) return fail(r.data);
-      return output(r.data, args);
+      return output(r.data, args, viewName);
     }
 
     case 'wait': {
@@ -201,7 +217,7 @@ async function main(): Promise<void> {
       const s = r.data as Snapshot & { timedOut: boolean };
       if (jsonMode(args.flags)) return console.log(JSON.stringify(s));
       if (s.timedOut) console.log(`(still ${s.canPlace ? 'your' : "opponent's"} turn after ${timeoutS}s — run wait again)`);
-      return printSnapshot(s, view(args.flags));
+      return printSnapshot(s, viewName);
     }
 
     case 'quit': {
@@ -211,7 +227,7 @@ async function main(): Promise<void> {
     }
 
     case 'views':
-      console.log('available views: ' + Object.keys(VIEWS).join(', ') + ` (default: ${DEFAULT_VIEW})`);
+      console.log('available views: ' + viewNames().join(', ') + ` (default: ${DEFAULT_VIEW})`);
       return;
 
     default:
@@ -238,7 +254,7 @@ async function main(): Promise<void> {
   pente views                                      list board views
 
 any state-returning verb accepts --json (raw snapshot, for scripts)
-views: ${Object.keys(VIEWS).join(', ')}`);
+views: ${viewNames().join(', ')}`);
       return;
   }
 }

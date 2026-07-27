@@ -122,9 +122,9 @@
  *     in `unlabelledTickets`).
  *   - cli/args.ts: the `if (arity === undefined) return null` early return in
  *     `unexpectedPositional` (mutated to `if (false)`). Equivalent by ARITHMETIC: fall through and
- *     the very next line indexes `args.positional[1 + arity]` with `arity` undefined, i.e.
- *     `positional[NaN]`, which no array can hold — so `extra` is `undefined` and the following
- *     `if (extra === undefined) return null` returns the same `null` by the same path. The guard is
+ *     the very next line indexes `args.positional[(codeless ? 0 : 1) + arity]` with `arity`
+ *     undefined, i.e. `positional[NaN]`, which no array can hold — so `extra` is `undefined` and
+ *     the following `if (extra === undefined) return null` returns the same `null` by the same path. The guard is
  *     kept because it states the rule (a verb absent from `VERB_ARITY` is simply not checked)
  *     rather than leaving it to an `NaN` index accident. The behavior IS asserted (an unknown verb
  *     is not policed; every known verb is).

@@ -540,3 +540,118 @@ spectator, #37 games-list/review, #38 merge/diff/rewind. Real-relay MQTT e2e pat
 3-round cap counts REVIEW rounds; consider a final re-review after the last fix, or a higher cap.
 (2) the Gate agent invented a review-log precondition and withheld an approved push — the push
 contract is `passed AND approved`, not "a review-log entry exists"; tighten that prompt.
+
+---
+
+## 2026-07-25 → 07-27 — Net-model v3.1 (epic #47), V.0–V.8a — the whole epic, recorded late
+
+**The first finding is about this file.** The ritual above says "run after every stage". It was run
+**zero times** across nine tasks and 59 commits:
+
+    $ git log --oneline origin/dev..HEAD -- planning/review-log.md | wc -l
+    0
+    $ git log -1 --format='%h %ad %s' --date=short -- planning/review-log.md
+    34ebb7d 2026-07-23 docs(review-log): session-model gate verdict — approved, pushing to /dev/ (#35, #31)
+    $ git merge-base --is-ancestor 34ebb7d origin/dev && echo 'pre-v3.1, already on dev'
+    pre-v3.1, already on dev
+    $ git rev-list --count origin/dev..HEAD
+    59
+
+Caught by the reviewer at V.8a, whose stated deliverable was "an honest record of what was built".
+The data was there and unread — `.claude/workflows/pente-review-gate.mjs:203-204` returns exactly
+`issuesByRound` and `recurringCategoriesForInstructionTuning`.
+
+**Provenance of what follows, stated plainly:** the per-round structured returns were not captured
+at the time, so this entry is reconstructed from the **review-gate fix commits** (`git log`, subjects
+quoted verbatim below) and the build plan's own *Where the build differed from the plan* /
+*Decisions taken mid-build* sections. It is a faithful record of what was FIXED; it is not a
+transcript of what each reviewer said, and it does not pretend to be. Every future stage should log
+from the workflow's return instead — see the proposal at the end.
+
+### Per-task, the review-gate fixes (build commit → its fix commits)
+
+| Task | Build | What review then made it fix |
+|---|---|---|
+| **V.0** repro | `0aada30`, `e425994` | `651f231` scenario preflight: exit **2** for "relay unreachable", never 1 — a broken relay was reporting as the same status as a failed assertion |
+| **V.1** decouple | `6422701` | `ec5ea2a` one game = one listed record, honest seed refusals, v3 shard purge · `0622732` a returned-to game keeps the date it began; **wiring** tests for the purge + breadcrumb · `e08cc47` one predicate per record; a corrupt probe that **masks nothing** · `39ece7a` drop a stale coverage exclusion for a deleted widget |
+| **V.2** seeds | `0995568` | `ead155f` the seed matrix on **all three** channels · `be1efc6` gate the wire on the game a session is ON, not the seed it entered with · `2260cdc` address admission grants/refusals to their newcomer |
+| **V.3** republish | `58f625b` | `278400c` answer EVERY live announce so the returner republishes too · `aac3b0b` prove the absence-reset **WIRING**, not just the rule · `a60db28` a peer that is AHEAD answers one behind — convergence, not one shot |
+| **V.4a** reconcile | `187dcc2` | `9a20d17` identity gates every adopt — an epoch is not a licence to overwrite · `f3bea6c` a divergence dies with its game · `36bf8b5` make the sync **docs** state the policy they run |
+| **V.4b** resolution | `0763ab2` | `0881510` a divergence panel a player can read, and an answer that survives a lost packet · `dff9656` a stale log settles nothing · `fbad84a` a re-announce must not cancel a pending resolution |
+| **V.5** reload | `945e470` | `4c60395` never trade history for tidiness, never rewrite a game we do not own · `f41c632` prove containment before deleting a history · `641dc9c` never overwrite a history the migration cannot vouch for |
+| **V.6** games list | `8d7fcb6` | `d68093f` resume the record the games list CHOSE · `0dec7b7` write the resume back where it was READ — and **say why it refused** · `af8eaf5` hold REVIEW to the same rules as RESUME, and never call a broken archive empty |
+| **V.7** scenarios | `d350533` | `a82ea08` close the e2e half of "no test is silently disabled" · `588e210` make four review-flagged gates **actually bite** · `2da3f42` **light the dark relay tier**, and close the gates that never rejected anything · `dfff4ad` one seat identity is not one socket; the CLI asks before it rewinds |
+| **V.8a** close-out | `5b96a1c`, `c543f71` | the `--view` / verb-arity refusal round (this entry's own stage) — see below |
+
+### V.8a's own round, in full (six majors)
+
+Two defects and four record failures, all in the stage whose deliverable was the record:
+
+1. **`Object.prototype` members resolved as registered views.** `VIEWS` is a plain object and both
+   `render` and `cli/main.ts` asked membership with a truthiness test, so `--view valueOf` passed
+   the guard and crashed inside `render` (`TypeError: Cannot convert undefined or null to object`);
+   `--view toString` rendered `[object Undefined]`. Fixed with `Object.hasOwn`, pinned by a test
+   over the whole prototype chain.
+2. **A mistyped `--view` was silently downgraded to the default** — and the stage's *new* suite had
+   pinned that swallow as intended (`falls back to the default for a view name nobody registered`).
+   `pente show ABCDE --view layerz` printed a z-slice board character-for-character, no diagnostic.
+   Now refused with the list `pente views` prints; the rule lives once, in `cli/views.ts`.
+3. **`VERB_ARITY` was incomplete** — `local-undo`, `local-redo` and `views` were dispatched by
+   `cli/main.ts` with no row, so the silently-ignored-argument regression the table exists to close
+   was still open for three verbs, two of them the scenario tooling's own rewind controls. Its test
+   derived its cases from `Object.keys(VERB_ARITY)`: it asserted the table against itself, so a
+   MISSING row was invisible to it, and neither coverage nor mutation can see a data row nobody
+   wrote. Now checked against the dispatcher, read from source.
+4. **This file had no v3.1 entry** (the finding at the top).
+5. **`HANDOFF.md` and the build plan described a tree `c543f71` had already invalidated** — "last
+   build commit `dfff4ad`", "V.8a is the docs close-out", and a *What landed* table stopping at V.7,
+   while `c543f71` had changed production code (`cli/views.ts` `lastMoveDesc` re-signatured) and
+   widened BOTH gates.
+6. **The plan still said the mutation scope was src-only** and that `cli/` is "NEVER
+   MUTATION-TESTED", three lines away from a HEAD where four `cli/` files are in the mutate list and
+   pinned at 100% — i.e. **a stale doc inviting a future agent to delete a gate entry**
+   (agent-principles #6). Corrected.
+
+### Recurring categories (step 2)
+
+| Category | Count | Where |
+|---|---|---|
+| **A gate that never rejected anything** (#7) | ≥6 | `651f231`, `39ece7a`, `a82ea08`, `588e210`, `2da3f42` (10 live-relay specs skipped in *every* checkout — a whole tier green by absence), V.8a items 1–3 (two swallows *inside* files newly pinned at 100% coverage + mutation) |
+| **An error/argument masked, swallowed or mislabeled** | ≥6 | `e08cc47`, `ec5ea2a`, `0dec7b7`, `af8eaf5`, `dfff4ad`, V.8a items 2–3 |
+| **Integration gap past component gates** (the rule tested, the wiring not) | ≥5 | `aac3b0b`, `0622732`, `be1efc6`, `278400c`+`a60db28`, `d68093f`+`0dec7b7` |
+| **A destructive path with no identity/ownership guard** | ≥5 | `9a20d17`, `f3bea6c`, `4c60395`, `f41c632`, `641dc9c` |
+| **The record contradicts the tree** | ≥4 | `36bf8b5`, V.8a items 4–6 |
+
+### Response (steps 3–5) — proposals, NOT applied
+
+Per this file's own rule, instruction tweaks get **human approval** and are not applied
+automatically; and per agent-principles *Principle-writing discipline*, the answer to a recurrence is
+the most general rule that fixes the root cause — or, better, a structural change that makes the rule
+unnecessary. Three of the five categories are already covered by an existing principle (#7, logging
+discipline, #2/#1), so the recurrence signal is **non-application, not absence** — which argues for
+structure over more words. Proposed:
+
+1. **Structural, review-gate:** have the gate WRITE the `planning/review-log.md` entry from its own
+   `issuesByRound` / `recurringCategoriesForInstructionTuning` return, rather than leaving it to a
+   remembered ritual. Nine stages of evidence say the ritual is not remembered. (This does **not**
+   make a log entry a push precondition — a gate agent already invented that once and wrongly
+   withheld an approved push; the contract stays `passed AND approved`.)
+2. **New general principle, proposed:** *a registry, table or scope list must be checked against the
+   thing that consumes it, never against itself.* Generalizes cleanly beyond this repo, and covers
+   all three of V.8a's code findings at once (`VERB_ARITY` vs the dispatcher; the coverage/mutation
+   file lists vs the set of pure files; the e2e spec list vs the specs that dial a broker, which
+   `tools/e2eRelayFixture.test.mjs` already does). It is the missing half of #7: watching a gate
+   reject something proves the rule, not the SCOPE the rule is applied to.
+3. **New general principle, proposed:** *ask membership with `Object.hasOwn`, never with truthiness
+   or `in`, on any object used as a lookup table* — or build the table with `Object.create(null)`.
+   Narrow-looking, but it is a correctness rule with no judgement in it, and it bit twice in one
+   file here.
+4. **No tweak proposed** for the identity-guard and integration-gap categories: both are already
+   stated (agent-principles #3 "proof = observable behaviour", and the reviewer charter's
+   "proof-by-log instead of proof-by-behavior"), and every instance was caught by review working as
+   intended. Adding words that already exist elsewhere makes the doc skimmable-past, which the
+   *Keep this document lean* rule forbids.
+
+**Gate status:** V.0–V.7 each passed their review gate; V.8a's round is the fixes above. Nothing is
+merged to `dev`/`test`/`main` — the pre-push hook (`59ea06d`) refuses all three by design while v3.1
+is in flight, and promotion is the user's call (build plan, *V.8b*).

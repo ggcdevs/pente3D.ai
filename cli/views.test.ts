@@ -14,7 +14,7 @@
  * table that swapped two axes would still render a plausible-looking cube on a symmetric board.
  */
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_VIEW, VIEWS, render, type Snapshot } from './views';
+import { DEFAULT_VIEW, VIEWS, isViewName, render, viewFromFlag, viewNames, type Snapshot } from './views';
 import type { GameState } from '../src/core/gameState';
 import { HIDDEN_END_STATE, type EndState } from '../src/net/endState';
 import type { DivergenceView } from '../src/ui/widgets/divergenceModel';
@@ -419,8 +419,16 @@ describe('render — the view registry', () => {
     expect(DEFAULT_VIEW).toBe('layers');
   });
 
-  it('falls back to the default for a view name nobody registered', () => {
-    expect(render(snap(), 'no-such-view')).toBe(render(snap(), DEFAULT_VIEW));
+  it('a view name nobody registered is REFUSED, not silently downgraded', () => {
+    // This used to assert the OPPOSITE — that `render` fell back to the default — which pinned a
+    // swallow as intended behaviour: `pente show ABCDE --view layerz` printed a z-slice board
+    // character-for-character identical to `layers`, so an operator who asked for one cut of the
+    // cube read another with no diagnostic. `cli/args.ts` states the rule this now obeys: an
+    // argument this CLI does not understand is REFUSED, never ignored.
+    expect(() => render(snap(), 'layerz')).toThrow(
+      'unknown view: layerz — available views: layers, layers-z, layers-y, layers-x, list',
+    );
+    expect(() => render(snap(), 'no-such-view')).toThrow(/^unknown view: no-such-view/);
   });
 
   it('honours an explicitly named view over the default', () => {
@@ -430,5 +438,70 @@ describe('render — the view registry', () => {
 
   it('registers exactly the documented view names', () => {
     expect(Object.keys(VIEWS).sort()).toEqual(['layers', 'layers-x', 'layers-y', 'layers-z', 'list']);
+  });
+
+  it('`viewNames` is the registry itself, in registration order — the list every refusal quotes', () => {
+    expect(viewNames()).toEqual(['layers', 'layers-z', 'layers-y', 'layers-x', 'list']);
+  });
+});
+
+/**
+ * THE PROTOTYPE-MEMBER REGRESSION TEST.
+ *
+ * `VIEWS` is a plain object, so `VIEWS[name]` resolves every `Object.prototype` member, and both the
+ * registry lookup (`VIEWS[viewName] ?? VIEWS[DEFAULT_VIEW]`) and the real CLI's `--view` guard
+ * (`VIEWS[v] ? v : DEFAULT_VIEW`, cli/main.ts) were truthiness tests — so the fallback could never
+ * fire for these four names and `pente show <CODE> --view valueOf` passed the guard and then crashed
+ * inside `render`. Observed on the implementation this test was written against:
+ *
+ *     --view toString       passes main.ts:34 guard = true · render -> "[object Undefined]"
+ *     --view constructor    passes main.ts:34 guard = true · render -> {"code":"ABCDE",…}
+ *     --view valueOf        passes main.ts:34 guard = true · render -> THROWS: Cannot convert
+ *                                                                     undefined or null to object
+ *     --view hasOwnProperty passes main.ts:34 guard = true · render -> THROWS: (same)
+ *
+ * Two returned garbage where a board belonged and two threw a `TypeError` naming nothing useful.
+ * The measuring instrument the scenario matrix reads its evidence THROUGH must not do either, so
+ * membership is asked with `Object.hasOwn` and the whole prototype chain is pinned here.
+ */
+describe('view names inherited from Object.prototype are NOT registered views', () => {
+  for (const name of ['toString', 'constructor', 'valueOf', 'hasOwnProperty', '__proto__']) {
+    it(`\`${name}\` is refused by name, not resolved off the prototype`, () => {
+      expect(isViewName(name)).toBe(false);
+      expect(() => render(snap(), name)).toThrow(`unknown view: ${name} — available views:`);
+      expect(viewFromFlag(name)).toEqual({
+        error: `--view: unknown view "${name}" — available views: layers, layers-z, layers-y, layers-x, list`,
+      });
+    });
+  }
+
+  it('says YES for every name that really is registered', () => {
+    expect(viewNames().map(isViewName)).toEqual([true, true, true, true, true]);
+  });
+});
+
+describe('viewFromFlag — what `--view` actually selects, decided once', () => {
+  it('defaults to `layers` when no view is named', () => {
+    expect(viewFromFlag(undefined)).toEqual({ view: DEFAULT_VIEW });
+  });
+
+  it('passes a registered name through unchanged', () => {
+    expect(viewFromFlag('layers-x')).toEqual({ view: 'layers-x' });
+    expect(viewFromFlag('list')).toEqual({ view: 'list' });
+  });
+
+  it('REFUSES a typo instead of quietly handing back the default', () => {
+    // `layers-Y` is the realistic typo: capitalised, one keystroke from a real cut of the cube, and
+    // under the old rule it printed the z-slices with no diagnostic at all.
+    expect(viewFromFlag('layers-Y')).toEqual({
+      error: '--view: unknown view "layers-Y" — available views: layers, layers-z, layers-y, layers-x, list',
+    });
+  });
+
+  it('refuses a valueless `--view` instead of collapsing it to the default', () => {
+    // `--view --json` parses the flag as `true` — the same swallow `enterSeed` refuses for `--seed`.
+    expect(viewFromFlag(true)).toEqual({
+      error: "--view needs a value: 'pente <verb> <CODE> --view layers|layers-z|layers-y|layers-x|list'",
+    });
   });
 });

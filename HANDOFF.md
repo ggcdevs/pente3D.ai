@@ -14,7 +14,7 @@ A **3D Pente** game (N×N×N lattice): pure deterministic rules core, IndexedDB 
 networked play over an MQTT relay, instanced Three.js rendering, composable config-driven UI.
 
 **v3 is feature-complete and frozen. v3.1 — the networked-game-model remodel — is BUILT on
-`feat/net-model-v3.1` (V.0–V.7 landed, each through its review gate; V.8a is the docs close-out) and
+`feat/net-model-v3.1` (V.0–V.7 landed, each through its review gate; V.8a is the close-out) and
 is the thing that will ship to `main`. It has NOT been promoted: the closing behavioural re-review
 and every promotion step are the user's calls (V.8b).**
 
@@ -22,7 +22,7 @@ and every promotion step are the user's calls (V.8b).**
 |---|---|
 | `main` | `v3.0.0` (`80e9ead`) — the last release. **Frozen**; v3 never ships standalone. |
 | `dev` / `test` | v3 complete (`5c73104` + CLI work). Playable, but carries the bugs v3.1 fixes. |
-| `feat/net-model-v3.1` | **The remodel, built.** V.0–V.7 landed with their review gates; V.8a is the docs close-out. Last build commit `dfff4ad`. Not merged anywhere. |
+| `feat/net-model-v3.1` | **The remodel, built.** V.0–V.7 landed with their review gates (last of those: `dfff4ad`). **V.8a is not docs-only** — after the record (`5b96a1c`) it widened both quality gates onto `cli/` (`c543f71`, which also edited `cli/views.ts`) and then took its own review-gate round (`--view` / verb-arity refusals). The build plan's *What landed* table is the full commit list; `git log -1` is the current head. Not merged anywhere. |
 | `feat/cli-analyzer` | CLI tactical analyzer (#48), 10 commits ahead of `dev`, unmerged. |
 
 Live: root = `main`, plus `/dev/`, `/test/`, and **every branch at `/<branch>/`** — so the remodel is

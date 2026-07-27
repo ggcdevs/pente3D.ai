@@ -73,6 +73,10 @@ flagged "still their turn" so a blocking call always ends; just run it again.
 `./cli/pente views` lists them. Adding a view is a one-function change in
 [`views.ts`](./views.ts): write `(Snapshot) => string` and register it in `VIEWS`.
 
+A `--view` name nobody registered is **refused** (exit 2, with that same list) rather than
+quietly downgraded to the default — one cut of the cube must never be printed in answer to a
+request for another. `--view layers-Y`, `--view layerz` and a valueless `--view` are all errors.
+
 ## Outages — `drop` / `restore`
 
 `drop` kills the **socket** underneath a live session (`netlink.ts`): mqtt.js stops

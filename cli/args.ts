@@ -56,6 +56,15 @@ export function parseArgs(argv: readonly string[]): Args {
  *
  * Declared as data, once, rather than as a per-verb `if`: the failure this closes was a verb that
  * simply forgot to look at `positional[1]`, and a table cannot forget.
+ *
+ * A table CAN, however, be incomplete — which is the same swallow wearing a different hat, and is
+ * exactly what happened: `local-undo`, `local-redo` and `views` were dispatched by `cli/main.ts` and
+ * missing here, so `unexpectedPositional` took its `arity === undefined` early return and accepted
+ * the stray argument (observed: `["local-undo","ABCDE","stray"] -> null`). The two `local-*` verbs
+ * are the scenario tooling's own rewind controls, so a typo'd argument was swallowed by the very
+ * instrument that exists to refuse swallows. `args.test.ts` now checks this table against
+ * `cli/main.ts`'s dispatcher rather than against itself — a table that cannot forget must be
+ * compared with something outside it.
  */
 export const VERB_ARITY: Readonly<Record<string, number>> = {
   play: 0,
@@ -67,6 +76,8 @@ export const VERB_ARITY: Readonly<Record<string, number>> = {
   move: 1, // the coordinate: `pente move ABCDE 2,2,2`
   undo: 0,
   redo: 0,
+  'local-undo': 0, // scenario tooling: rewind THIS peer only (see the daemon's `local-undo` case)
+  'local-redo': 0,
   resolve: 1, // the choice: `pente resolve ABCDE take-theirs`
   agree: 0,
   refuse: 0,
@@ -76,7 +87,16 @@ export const VERB_ARITY: Readonly<Record<string, number>> = {
   leave: 0,
   enter: 0, // the seed is a FLAG (`--seed new|defer`), never a positional
   quit: 0,
+  views: 0, // takes no room code either — see CODELESS_VERBS
 };
+
+/**
+ * Verbs that address no room at all, so their own arguments start at `positional[0]` rather than at
+ * `positional[1]`. Without this, `views: 0` would still accept `pente views extra` — the arity would
+ * be measured past a room code that verb never takes, which is how `pente views extra` printed the
+ * view list and exited 0.
+ */
+export const CODELESS_VERBS: ReadonlySet<string> = new Set(['views']);
 
 /** Verb-specific advice appended to the refusal — the spelling the operator most likely meant. */
 const ARITY_HINT: Readonly<Record<string, string>> = {
@@ -93,11 +113,16 @@ const ARITY_HINT: Readonly<Record<string, string>> = {
 export function unexpectedPositional(args: Args): string | null {
   const arity = VERB_ARITY[args.verb];
   if (arity === undefined) return null;
-  // positional[0] is the room code; the verb's own arguments start at 1.
-  const extra = args.positional[1 + arity];
+  // positional[0] is the room code, so the verb's own arguments start at 1 — except for a verb that
+  // takes no room code, whose own arguments start at 0.
+  const codeless = CODELESS_VERBS.has(args.verb);
+  const extra = args.positional[(codeless ? 0 : 1) + arity];
   if (extra === undefined) return null;
-  const takes =
-    arity === 0 ? 'takes no argument after the room code' : `takes ${arity} argument(s) after the room code`;
+  const takes = codeless
+    ? 'takes no arguments'
+    : arity === 0
+      ? 'takes no argument after the room code'
+      : `takes ${arity} argument(s) after the room code`;
   const hint = ARITY_HINT[args.verb];
   return `${args.verb}: unexpected argument "${extra}" — ${args.verb} ${takes}.${hint === undefined ? '' : ` ${hint}`}`;
 }
