@@ -15,10 +15,16 @@
  * away. A caller that cannot reach `gh` passes an empty `ticketLabels` map and the
  * commit half still decides — the degradation is a supported input, not an error path.
  *
- * DISAGREEMENT WARNS, NEVER FAILS. A `feat:` commit citing a `bug`-labelled ticket is
- * almost certainly a mislabel — one side or the other is wrong. Rather than guess, the
- * higher signal wins AND the pair is reported in `mismatches` so a human can fix the
- * label. Blocking a release on a label typo would be worse than a slightly generous bump.
+ * DISAGREEMENT WARNS, NEVER FAILS — AND IT IS ASYMMETRIC (#52). The commit prefix
+ * describes the COMMIT; the label describes the TICKET. They legitimately differ, so only
+ * ONE direction is suspicious: a commit claiming MORE than the ticket it cites. A `feat:`
+ * on a `bug` means either the ticket is mislabelled or the work outgrew it — reported. A
+ * `fix:` (or a `docs:`) on an `enhancement` is ordinary work mid-feature — silent.
+ *
+ * The symmetric version of this check fired 143 times over `v3.0.0..HEAD`, nearly all of
+ * them the harmless direction, and a warning nobody can read is the same as no warning at
+ * all. The BUMP is unaffected either way: it always takes the higher of the two signals.
+ * Blocking a release on a label typo would be worse than a slightly generous bump.
  *
  * MAJOR IS UNREACHABLE FROM HERE, BY CONSTRUCTION. `bump` is `'minor' | 'patch' | null`;
  * no code path yields `'major'`. Nothing in a commit message or a label can PROVE a
@@ -101,19 +107,6 @@ function rankOf(signal) {
 }
 
 /**
- * The human-readable name of a positive rank. Only ever called with a rank that came
- * from a positive claim (the mismatch report), so every arm is reachable.
- *
- * @param {number} rank
- * @returns {Exclude<Signal, null>}
- */
-function nameOfRank(rank) {
-  if (rank === RANK.minor) return 'minor';
-  if (rank === RANK.patch) return 'patch';
-  return 'none';
-}
-
-/**
  * Collapse a rank to the public bump. Both "no opinion" and the positive "no release"
  * mean the same thing to a caller: do not tag.
  *
@@ -132,14 +125,18 @@ function publicBump(rank) {
  * @param {string} subject a single commit subject line.
  * @returns {{ type: string | null, breaking: boolean, tickets: string[], signal: Signal }}
  *   `type` is the lower-cased conventional-commit type (`null` when the subject has no
- *   conventional header); `signal` is `null` for a type this project does not classify.
+ *   conventional header); `signal` is `null` for a type this project does not classify;
+ *   `tickets` is DE-DUPLICATED in first-seen order — a commit that names `#45` in its
+ *   subject and again in its body cites ONE ticket, not two. Without this, every downstream
+ *   per-ticket effect fires twice for it, which is invisible in a hundred warnings and
+ *   glaring in two (found while measuring #52's real-range output).
  */
 export function parseSubject(subject) {
   const header = HEADER_RE.exec(subject);
   const type = header === null ? null : header[1].toLowerCase();
   const signal = COMMIT_TYPE_SIGNALS[String(type)] ?? null;
   const breaking = (header !== null && header[3] === '!') || BREAKING_RE.test(subject);
-  const tickets = [...subject.matchAll(TICKET_RE)].map((m) => m[1]);
+  const tickets = [...new Set([...subject.matchAll(TICKET_RE)].map((m) => m[1]))];
   return { type, breaking, tickets, signal };
 }
 
@@ -170,11 +167,17 @@ export function labelBump(labels) {
 }
 
 /**
+ * A commit that claimed MORE than the ticket it cited. Both signals are constants rather
+ * than free values: the asymmetric rule (see the module header) collapses a reportable
+ * mismatch to exactly ONE shape — a `feat:` commit on a `bug`-labelled ticket — because
+ * `minor` is the top signal and `patch` the only positive one below it that a label can
+ * carry. Typed literally so that stays true by construction rather than by convention.
+ *
  * @typedef {object} Mismatch
- * @property {string} subject the commit whose prefix disagreed with its ticket.
+ * @property {string} subject the commit whose prefix claimed more than its ticket.
  * @property {string} ticket the issue number, as a bare string.
- * @property {Exclude<Signal, null>} commitSignal what the prefix claimed.
- * @property {Exclude<Signal, null>} ticketSignal what the ticket's labels claimed.
+ * @property {'minor'} commitSignal what the prefix claimed — always `feat:`.
+ * @property {'patch'} ticketSignal what the ticket's labels claimed — always `bug`.
  */
 
 /**
@@ -227,13 +230,11 @@ export function computeBump({ subjects = [], ticketLabels = {} } = {}) {
         continue;
       }
       ticketRank = Math.max(ticketRank, thisTicketRank);
-      if (subjectRank !== NO_OPINION && subjectRank !== thisTicketRank) {
-        mismatches.push({
-          subject,
-          ticket,
-          commitSignal: nameOfRank(subjectRank),
-          ticketSignal: nameOfRank(thisTicketRank),
-        });
+      // ASYMMETRIC (#52): report ONLY a commit claiming MORE than its ticket. `>` also
+      // excludes NO_OPINION, which is below every positive claim, so an unrecognised prefix
+      // stays silent without a second clause.
+      if (subjectRank > thisTicketRank) {
+        mismatches.push({ subject, ticket, commitSignal: 'minor', ticketSignal: 'patch' });
       }
     }
   }

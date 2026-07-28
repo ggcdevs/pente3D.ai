@@ -53,6 +53,20 @@ describe('parseSubject', () => {
     expect(parsed.tickets).toEqual(['40', '12', '7']);
   });
 
+  it('DE-DUPLICATES a ticket named more than once, keeping first-seen order', () => {
+    // Real case from `v3.0.0..HEAD`: the subject names #45 and the body explains it again,
+    // so every per-ticket effect downstream (mismatch warnings especially) fired twice.
+    const parsed = parseSubject(
+      'feat(cli): controllable network link (#45)\n\nIssue #45 is a TRANSPORT-level outage.\n',
+    );
+    expect(parsed.tickets).toEqual(['45']);
+  });
+
+  it('de-duplication does not collapse DISTINCT tickets that share digits', () => {
+    const parsed = parseSubject('fix: a (#4) and (#45) and (#4)');
+    expect(parsed.tickets).toEqual(['4', '45']);
+  });
+
   it('requires the colon-space header form (a bare word is not a type)', () => {
     expect(parseSubject('feat is a nice word').type).toBeNull();
     expect(parseSubject('feat:no-space').type).toBeNull();
@@ -240,8 +254,18 @@ describe('computeBump — graceful degradation when ticket lookup is unavailable
   });
 });
 
-describe('computeBump — disagreement between the two signals', () => {
-  it('takes the higher AND flags the mismatch when a feat cites a bug ticket', () => {
+describe('computeBump — disagreement between the two signals (#52: ASYMMETRIC)', () => {
+  // THE RULE (CONTRIBUTING "Tickets"): the commit prefix describes the COMMIT; the label
+  // describes the TICKET. They legitimately differ, so only ONE direction is suspicious —
+  // a commit claiming MORE than the ticket it cites (`feat:` on a `bug`), which means either
+  // the ticket is mislabelled or the work outgrew it.
+  //
+  // The other direction is ordinary work and must stay SILENT. Warning on it fired 143 times
+  // over v3.0.0..HEAD — a signal nobody could read, which is the same as no signal at all.
+  //
+  // The BUMP is unaffected either way: it always takes the higher of the two.
+
+  it('flags the one suspicious direction: a feat commit citing a bug ticket', () => {
     const subject = 'feat(net): new seat model (#31)';
     const r = computeBump({ subjects: [subject], ticketLabels: { 31: ['bug'] } });
     expect(r.bump).toBe('minor');
@@ -252,23 +276,32 @@ describe('computeBump — disagreement between the two signals', () => {
     ]);
   });
 
-  it('takes the higher AND flags the mismatch when a fix cites an enhancement ticket', () => {
+  it('does NOT flag a fix commit on an enhancement ticket — fixing mid-feature is normal', () => {
     const subject = 'fix(net): reconnect reclaims the current color (#40)';
     const r = computeBump({ subjects: [subject], ticketLabels: { 40: ['enhancement'] } });
+    expect(r.mismatches).toEqual([]);
+    // …and the bump is still the HIGHER of the two, unchanged by the silence.
     expect(r.bump).toBe('minor');
     expect(r.commitBump).toBe('patch');
-    expect(r.mismatches).toEqual([
-      { subject, ticket: '40', commitSignal: 'patch', ticketSignal: 'minor' },
-    ]);
+    expect(r.ticketBump).toBe('minor');
   });
 
-  it('flags a no-release commit type that cites a release-worthy ticket', () => {
+  it('does NOT flag a no-release commit type on an enhancement ticket', () => {
+    // `docs:`/`test:`/`chore:` citing a feature ticket is the single most common shape in
+    // this repo's history and is entirely ordinary.
     const subject = 'docs(diagrams): regenerate after netModel trim (#44)';
     const r = computeBump({ subjects: [subject], ticketLabels: { 44: ['enhancement'] } });
+    expect(r.mismatches).toEqual([]);
     expect(r.bump).toBe('minor');
-    expect(r.mismatches).toEqual([
-      { subject, ticket: '44', commitSignal: 'none', ticketSignal: 'minor' },
-    ]);
+  });
+
+  it('does NOT flag a no-release commit type on a bug ticket', () => {
+    const r = computeBump({
+      subjects: ['test(net): pin the reconnect path (#45)'],
+      ticketLabels: { 45: ['bug'] },
+    });
+    expect(r.mismatches).toEqual([]);
+    expect(r.bump).toBe('patch');
   });
 
   it('does NOT flag a mismatch when the commit prefix has no opinion', () => {
@@ -291,15 +324,53 @@ describe('computeBump — disagreement between the two signals', () => {
     expect(r.mismatches).toEqual([]);
   });
 
-  it('flags one mismatch per disagreeing (commit, ticket) pair', () => {
-    const subject = 'fix: a (#43) and (#34)';
+  it('flags one mismatch per suspicious (commit, ticket) pair', () => {
+    const subject = 'feat: a (#43) and (#45)';
+    const r = computeBump({
+      subjects: [subject],
+      ticketLabels: { 43: ['bug'], 45: ['bug'] },
+    });
+    expect(r.mismatches).toEqual([
+      { subject, ticket: '43', commitSignal: 'minor', ticketSignal: 'patch' },
+      { subject, ticket: '45', commitSignal: 'minor', ticketSignal: 'patch' },
+    ]);
+  });
+
+  it('flags ONLY the suspicious half when one commit cites tickets of both kinds', () => {
+    const subject = 'feat: a (#43) and (#34)';
     const r = computeBump({
       subjects: [subject],
       ticketLabels: { 43: ['bug'], 34: ['enhancement'] },
     });
     expect(r.mismatches).toEqual([
-      { subject, ticket: '34', commitSignal: 'patch', ticketSignal: 'minor' },
+      { subject, ticket: '43', commitSignal: 'minor', ticketSignal: 'patch' },
     ]);
+  });
+
+  it('reports ONLY the feat-on-bug shape, for any input (property)', () => {
+    // The asymmetry collapses the mismatch to exactly one shape. Asserted as an invariant
+    // rather than case-by-case, so a future signal level cannot quietly reintroduce the
+    // noisy direction.
+    const type = fc.constantFrom('feat', 'fix', 'docs', 'test', 'chore', 'ci', 'wibble');
+    const label = fc.constantFrom('enhancement', 'bug', 'on-dev', 'epic');
+    fc.assert(
+      fc.property(
+        fc.array(
+          fc
+            .tuple(type, fc.stringMatching(/^[0-9]{1,3}$/))
+            .map(([t, n]) => `${t}: subject (#${n})`),
+          { maxLength: 6 },
+        ),
+        fc.dictionary(fc.stringMatching(/^[0-9]{1,3}$/), fc.array(label, { maxLength: 3 })),
+        (subjects, ticketLabels) => {
+          for (const m of computeBump({ subjects, ticketLabels }).mismatches) {
+            expect(m.commitSignal).toBe('minor');
+            expect(m.ticketSignal).toBe('patch');
+          }
+        },
+      ),
+      { numRuns: 500 },
+    );
   });
 });
 
