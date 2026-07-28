@@ -21,10 +21,28 @@
 # decides (see tools/versionBump.mjs).
 #
 # MAJOR IS NEVER AUTOMATIC. `tools/versionBump.mjs` cannot return "major" — no code path
-# produces it. Nothing in a commit message proves a change is backwards-INCOMPATIBLE; only
-# a human can. A `feat!:` / `BREAKING CHANGE` commit raises the `manualMajor` flag, which
-# is echoed loudly in this job's log; cutting `vX+1.0.0` is then a deliberate manual
-# `git tag -a` by a person.
+# produces it. THE MAJOR IS THE WIRE-PROTOCOL VERSION (CONTRIBUTING "Versioning"): it bumps iff
+# the network protocol breaks, so that "if the majors differ, no game" is one integer
+# comparison. Nothing in a commit message proves the protocol broke; only a human can. A
+# `feat!:` / `BREAKING CHANGE` commit raises the `manualMajor` flag, echoed loudly below.
+#
+# Tagging a major is therefore THE ONLY MANUAL STEP in the whole release process:
+#
+#   git tag -a v5.0.0 -m 'why the wire changed' && git push origin v5.0.0   # on `dev`
+#
+# Tag BEFORE pushing the branch, or the bump is computed from the previous tag and the
+# wrong version is cut.
+#
+# ANY VERSION THAT REACHES `main` GETS A RELEASE (#55). Two kinds of tag arrive here: one
+# this workflow computed, or one a human already placed on the commit. Both are published.
+# The second used to fall through the floor — a hand-tagged commit makes the computed range
+# EMPTY, so the job logged "nothing warrants a release", skipped, and no Release was ever
+# created. Right version, missing Release, green check. `tools/version.mjs` now reports a
+# `releaseTarget` (the computed tag if there is one, else the release tag already pointing
+# at HEAD) and the Release step keys on THAT rather than on `.tag`.
+#
+# It refuses to guess: two release tags on one commit FAILS the job rather than picking one,
+# because picking wrong publishes the wrong version under a green check.
 #
 # NO `npm ci` STEP ON PURPOSE: `tools/version.mjs` imports only node builtins and its own
 # pure sibling, so the tag decision never waits on (or breaks because of) a dependency
@@ -90,6 +108,12 @@ jobs:
           cat plan.json
           {
             echo "tag=$(jq -r '.tag // ""' plan.json)"
+            # What this commit is RELEASED as — NOT the same as what to TAG (#55). A major
+            # is tagged by hand (the major is the wire version and cannot be derived), so on
+            # its promotion the computed range is empty and `.tag` is null, while
+            # `.releaseTarget` names the tag a human already put on this commit.
+            echo "release_tag=$(jq -r '.releaseTarget.tag // ""' plan.json)"
+            echo "release_source=$(jq -r '.releaseTarget.source // ""' plan.json)"
             echo "bump=$(jq -r '.bump // "none"' plan.json)"
             echo "last_tag=$(jq -r '.lastTag // ""' plan.json)"
             echo "range=$(jq -r '.range' plan.json)"
@@ -105,16 +129,24 @@ jobs:
           RANGE: ${{ steps.plan.outputs.range }}
         run: |
           echo "::warning::A commit in ${RANGE} carries a breaking marker."
-          echo "::warning::This workflow NEVER cuts a major tag. If the break is real, a human must"
-          echo "::warning::run: git tag -a vX+1.0.0 -m '...' && git push origin vX+1.0.0"
+          echo "::warning::The major version IS the wire-protocol version, so this means the NETWORK"
+          echo "::warning::PROTOCOL broke — not the build, the config shape or an internal API."
+          echo "::warning::This workflow NEVER cuts a major tag. If the break is real, tag \`dev\`:"
+          echo "::warning::  git tag -a vX+1.0.0 -m 'why the wire changed' && git push origin vX+1.0.0"
+          echo "::warning::Tag BEFORE pushing the branch, or the bump is computed from the previous"
+          echo "::warning::tag and the wrong version is cut. The Release is then created for you."
 
+      # Only a genuine no-op: nothing to CUT *and* nothing already sitting here to publish.
+      # Before #55 this fired on the hand-tagged-major promotion too, and the release was
+      # silently never created.
       - name: Skip — nothing in this range warrants a release
-        if: steps.plan.outputs.tag == ''
+        if: steps.plan.outputs.tag == '' && steps.plan.outputs.release_tag == ''
         env:
           RANGE: ${{ steps.plan.outputs.range }}
           LAST_TAG: ${{ steps.plan.outputs.last_tag }}
         run: |
-          echo "No feat/fix commit and no enhancement/bug ticket in ${RANGE}."
+          echo "No feat/fix commit and no enhancement/bug ticket in ${RANGE},"
+          echo "and no release tag points at this commit."
           echo "Leaving the version at ${LAST_TAG:-<untagged>} — no tag created."
 
       - name: Create and push the annotated tag
@@ -141,11 +173,16 @@ jobs:
           git push origin "refs/tags/${TAG}"
           echo "created and pushed annotated tag ${TAG}"
 
+      # ANY VERSION THAT REACHES `main` GETS A RELEASE (#55) — whether this run cut the tag
+      # or a human did. Keyed on `release_tag`, not `tag`, which is the whole fix: `tag` is
+      # empty on a hand-tagged major's promotion, and this step used to be skipped with it.
+      # Idempotent, so a re-run of a partially-failed job never duplicates a Release.
       - name: Create the GitHub Release (main only)
-        if: steps.plan.outputs.tag != '' && github.ref_name == 'main'
+        if: steps.plan.outputs.release_tag != '' && github.ref_name == 'main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.plan.outputs.tag }}
+          TAG: ${{ steps.plan.outputs.release_tag }}
+          SOURCE: ${{ steps.plan.outputs.release_source }}
           RANGE: ${{ steps.plan.outputs.range }}
           BUMP: ${{ steps.plan.outputs.bump }}
         run: |
@@ -154,9 +191,26 @@ jobs:
             echo "release ${TAG} already exists — nothing to do."
             exit 0
           fi
-          {
-            printf 'A **%s** bump over `%s`.\n\n## Commits\n\n' "${BUMP}" "${RANGE}"
-            git log --format='- %s (%h)' "${RANGE}"
-          } > release-notes.md
+
+          if [ "${SOURCE}" = "existing" ]; then
+            # A human tagged this commit. The plan's range is empty BY DEFINITION here (the
+            # tag is its own last-release), so derive one from the tag's ancestry instead —
+            # and lead with the message they wrote, which is the considered part of a
+            # deliberate major. An empty `prev` (a first-ever release) leaves `range` as the
+            # bare tag, which `git log` reads as "everything up to it".
+            prev="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+            range="${prev:+${prev}..}${TAG}"
+            {
+              git tag -l --format='%(contents)' "${TAG}"
+              printf '\n## Commits\n\n'
+              git log --format='- %s (%h)' "${range}"
+            } > release-notes.md
+          else
+            {
+              printf 'A **%s** bump over `%s`.\n\n## Commits\n\n' "${BUMP}" "${RANGE}"
+              git log --format='- %s (%h)' "${RANGE}"
+            } > release-notes.md
+          fi
+
           gh release create "${TAG}" --title "${TAG}" --notes-file release-notes.md
-          echo "created GitHub Release ${TAG}"
+          echo "created GitHub Release ${TAG} (from a ${SOURCE} tag)"

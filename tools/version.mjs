@@ -32,7 +32,14 @@ import { execFileSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { computeBump, nextRcTag, nextVersion, parseSubject, parseVersion } from './versionBump.mjs';
+import {
+  computeBump,
+  nextRcTag,
+  nextVersion,
+  parseSubject,
+  parseVersion,
+  resolveReleaseTarget,
+} from './versionBump.mjs';
 
 export {
   computeBump,
@@ -41,6 +48,7 @@ export {
   nextVersion,
   parseSubject,
   parseVersion,
+  resolveReleaseTarget,
   COMMIT_TYPE_SIGNALS,
   LABEL_SIGNALS,
 } from './versionBump.mjs';
@@ -153,6 +161,26 @@ export function listTags(cwd = HERE) {
 }
 
 /**
+ * Every tag pointing at HEAD itself — the hand-tagged-major case (issue #55).
+ *
+ * Distinct from {@link listTags} (the whole repo) and from {@link lastReleaseTag} (the
+ * newest release REACHABLE from HEAD, which includes ancestors). This is only "what is
+ * stuck to this exact commit", which is what decides whether a Release still has to be
+ * published for a tag somebody else created.
+ *
+ * @param {string} [cwd]
+ * @returns {string[]}
+ */
+export function tagsAtHead(cwd = HERE) {
+  const out = run('git', ['tag', '--points-at', 'HEAD'], cwd);
+  if (out === null) {
+    warn('git tag --points-at HEAD failed; treating HEAD as carrying no tags');
+    return [];
+  }
+  return out.split('\n').filter((line) => line !== '');
+}
+
+/**
  * The most recent RELEASE tag reachable from HEAD — `vX.Y.Z` with no prerelease part.
  * Release candidates are skipped on purpose: an rc is a preview of the NEXT release, so
  * the bump for both channels is always measured from the last real release.
@@ -258,6 +286,7 @@ export function fetchTicketLabels(tickets, cwd = HERE) {
  *   ticketLookup: TicketLookup,
  *   version: string | null,
  *   tag: string | null,
+ *   releaseTarget: import('./versionBump.mjs').ReleaseTarget | null,
  * }} ReleasePlan
  */
 
@@ -304,7 +333,22 @@ export function planRelease({ cwd = HERE, channel = 'release' } = {}) {
     );
   }
 
-  return { channel, lastTag, range, commitCount: subjects.length, ticketLookup, ...result, version, tag };
+  // What this commit is RELEASED as, which is not the same question as what to TAG (#55):
+  // a hand-tagged major is already tagged and still needs its Release published. Computed
+  // for both channels because it is just a reading of the repo; only `main` acts on it.
+  const releaseTarget = resolveReleaseTarget(tag, tagsAtHead(cwd));
+
+  return {
+    channel,
+    lastTag,
+    range,
+    commitCount: subjects.length,
+    ticketLookup,
+    ...result,
+    version,
+    tag,
+    releaseTarget,
+  };
 }
 
 // ---------------------------------------------------------------------------

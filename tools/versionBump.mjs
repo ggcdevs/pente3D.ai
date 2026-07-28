@@ -316,3 +316,61 @@ export function nextRcTag(baseVersion, existingTags) {
   }
   return `v${core}-rc.${highest + 1}`;
 }
+
+/**
+ * The tag a commit is released under, and where that tag came from.
+ *
+ * @typedef {object} ReleaseTarget
+ * @property {string} tag the release tag, e.g. `v4.0.0`.
+ * @property {'computed' | 'existing'} source `computed` — this run derived it from the
+ *   range and is about to create it. `existing` — a human had already tagged this commit
+ *   (the hand-tagged major), and this run only has to publish it.
+ */
+
+/**
+ * Decide which tag a commit is released under — the rule "**any version that reaches
+ * `main` gets a Release**" (issue #55).
+ *
+ * The release workflow used to create a GitHub Release ONLY for a tag it had cut itself.
+ * That made the one manual step in the whole release process a dead end: the major version
+ * is the wire-protocol version and is never derived automatically, so a human tags `dev`
+ * by hand — and when that commit reached `main` the computed range was empty, the workflow
+ * logged "nothing in this range warrants a release", skipped, and **no Release was ever
+ * created**. Right version, missing Release, no error. This closes that.
+ *
+ * Precedence is deliberate: a freshly computed tag WINS over one already at HEAD, because
+ * the computed tag is about to be created on this very commit and is therefore the release;
+ * an older tag that happens to point here does not displace it.
+ *
+ * Two release tags on one commit is a human error, so it THROWS rather than picking one.
+ * Guessing would publish the wrong version under a green check — the failure mode this
+ * whole function exists to prevent.
+ *
+ * @param {string | null} computedTag the tag this run derived, or `null` when the range
+ *   warranted no release.
+ * @param {readonly string[]} tagsAtHead every tag pointing at the commit being released —
+ *   release tags, prereleases and non-version tags alike; this sorts them out.
+ * @returns {ReleaseTarget | null} `null` when there is genuinely nothing to release.
+ * @throws {Error} when more than one RELEASE tag points at the commit.
+ */
+export function resolveReleaseTarget(computedTag, tagsAtHead) {
+  if (computedTag !== null) return { tag: computedTag, source: 'computed' };
+
+  // A prerelease is a staging marker for the NEXT release, not a release — and a `wip/*`
+  // stage marker is not a version at all. `parseVersion` already draws both lines, so the
+  // shape of a release tag is not restated here as a second, driftable regex.
+  const releaseTags = tagsAtHead.filter((tag) => {
+    const parsed = parseVersion(tag);
+    return parsed !== null && parsed.prerelease === null;
+  });
+
+  if (releaseTags.length === 0) return null;
+  if (releaseTags.length > 1) {
+    throw new Error(
+      `ambiguous release: ${releaseTags.length} release tags point at this commit ` +
+        `(${releaseTags.join(', ')}). Delete the wrong one before releasing — this tool ` +
+        'will not guess which version is meant.',
+    );
+  }
+  return { tag: releaseTags[0], source: 'existing' };
+}

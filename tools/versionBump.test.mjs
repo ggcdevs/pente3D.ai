@@ -19,6 +19,7 @@ import {
   nextVersion,
   parseSubject,
   parseVersion,
+  resolveReleaseTarget,
 } from './versionBump.mjs';
 
 describe('parseSubject', () => {
@@ -517,5 +518,89 @@ describe('nextRcTag', () => {
   it('throws rather than invent a base from a non-version string', () => {
     expect(() => nextRcTag('nope', [])).toThrow(TypeError);
     expect(() => nextRcTag('nope', [])).toThrow(/not a semantic version/);
+  });
+});
+
+describe('resolveReleaseTarget (#55)', () => {
+  // "Any version that reaches `main` gets a Release." The workflow used to create one ONLY
+  // when it cut the tag itself, so a hand-tagged major (the ONE manual step in the release
+  // process) reached `main`, found an empty range, skipped — and no Release was ever made.
+
+  it('prefers the tag the plan just computed', () => {
+    expect(resolveReleaseTarget('v4.1.0', [])).toEqual({ tag: 'v4.1.0', source: 'computed' });
+  });
+
+  it('prefers the computed tag even when HEAD already carries one', () => {
+    // The computed tag is about to be created ON this commit, so it is the release; an older
+    // tag that happens to point here does not displace it.
+    expect(resolveReleaseTarget('v4.1.0', ['v4.0.0'])).toEqual({
+      tag: 'v4.1.0',
+      source: 'computed',
+    });
+  });
+
+  it('falls back to a release tag already pointing at HEAD — the hand-tagged major', () => {
+    expect(resolveReleaseTarget(null, ['v4.0.0'])).toEqual({ tag: 'v4.0.0', source: 'existing' });
+  });
+
+  it('returns null when nothing was computed and HEAD carries no tag', () => {
+    expect(resolveReleaseTarget(null, [])).toBeNull();
+  });
+
+  it('ignores a PRERELEASE tag at HEAD — an rc is a staging marker, not a release', () => {
+    expect(resolveReleaseTarget(null, ['v4.0.0-rc.2'])).toBeNull();
+  });
+
+  it('ignores tags that are not versions at all (the wip/* stage markers)', () => {
+    expect(resolveReleaseTarget(null, ['wip/v31-v3', 'latest', 'v3'])).toBeNull();
+  });
+
+  it('finds the release tag among unrelated tags at the same commit', () => {
+    expect(resolveReleaseTarget(null, ['wip/v31-v8a', 'v4.0.0', 'v4.0.0-rc.1'])).toEqual({
+      tag: 'v4.0.0',
+      source: 'existing',
+    });
+  });
+
+  it('THROWS on two release tags at HEAD rather than guessing which is meant', () => {
+    // Guessing would publish the wrong version under a green check. This is a human error
+    // and a human has to resolve it.
+    //
+    // The tags are asserted SEPARATED, not merely both present: `(v4.0.0, v5.0.0)` and
+    // `(v4.0.0v5.0.0)` both "contain both tags", but only the first tells the reader where
+    // one ends and the next begins — and the reader is someone staring at a failed release.
+    expect(() => resolveReleaseTarget(null, ['v4.0.0', 'v5.0.0'])).toThrow(
+      /\(v4\.0\.0, v5\.0\.0\)/,
+    );
+  });
+
+  it('tells the operator what is wrong, what to do, and that it will not decide for them', () => {
+    // The message IS the feature. Throwing rather than guessing is only useful if whoever
+    // reads the failed job knows which tag to delete and why nothing was published.
+    const throws = () => resolveReleaseTarget(null, ['v4.0.0', 'v5.0.0']);
+    expect(throws).toThrow(/2 release tags point at this commit/i); // what is wrong
+    expect(throws).toThrow(/delete the wrong one before releasing/i); // what to do
+    expect(throws).toThrow(/will not guess which version is meant/i); // why it stopped
+  });
+
+  it('never invents a tag that was not offered to it (property)', () => {
+    const tag = fc.constantFrom('v1.0.0', 'v2.3.4', 'v2.3.4-rc.1', 'wip/x', 'nonsense');
+    fc.assert(
+      fc.property(
+        fc.option(fc.constantFrom('v9.9.9'), { nil: null }),
+        fc.array(tag, { maxLength: 4 }),
+        (computed, tagsAtHead) => {
+          let target;
+          try {
+            target = resolveReleaseTarget(computed, tagsAtHead);
+          } catch {
+            return; // ambiguity is a legitimate outcome, asserted above
+          }
+          if (target === null) return;
+          expect(computed === target.tag || tagsAtHead.includes(target.tag)).toBe(true);
+        },
+      ),
+      { numRuns: 500 },
+    );
   });
 });

@@ -21,6 +21,13 @@ name: deploy
 on:
   push:
     branches: ['**']
+  # MANUAL RE-DEPLOY (#55). A build stamps `version.json` and `__APP_VERSION__` from
+  # `git describe` AT BUILD TIME, so tagging a commit that has already been pushed leaves
+  # its deployed artifact reporting the pre-tag describe (`v3.0.0-140-g<sha>`) with no way
+  # to refresh it — the push that would rebuild it already happened. That is exactly the
+  # shape of the hand-tagged major, which is the one release whose version people will
+  # check. Dispatch this workflow on the branch to rebuild it in place.
+  workflow_dispatch:
 
 permissions:
   contents: write
