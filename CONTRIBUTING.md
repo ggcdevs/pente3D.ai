@@ -100,9 +100,21 @@ unlabelled in the 2026-07-27 triage).
 | `tracker` | A running checklist, never "done" (e.g. #32). No milestone, and **no type label** — its commits carry their own prefix, which is the right signal |
 | `verify-in-ci` | Built, but only provable by watching a CI event that cannot be rehearsed locally. `release-tag.yml` **comments on every open issue carrying it** whenever it cuts a tag or publishes a Release, naming what happened — so the event announces itself instead of someone having to remember. Opt-in and self-retiring: remove the label or close the issue and it stops |
 
-**Milestones** are the schedule, not a taxonomy: the next release (`v4.0`), the batch after (`v4.1`),
-and *no milestone* for real work that is not yet scheduled. `parked` + no milestone = an idea;
-no label + no milestone = unscheduled work. A milestone closes when it hits zero open.
+**A milestone is a RELEASE**, not a feature and not a theme. `parked` + no milestone = an idea;
+no label + no milestone = real work that is not yet scheduled. A milestone closes when it hits zero
+open.
+
+The thing that trips people up: **the bump is computed once per push to `main`, over the whole
+range, taking the higher signal.** A release carrying four `enhancement` tickets and two `bug`
+tickets is **one** minor bump, not four —
+
+```
+v4.0.0 + [feat #10, refactor #26, fix #33, feat #48, feat #49, fix #53]  ->  v4.1.0
+```
+
+So the version number tracks **how often you promote**, not how many tickets you closed. Batch
+moderately (3–6 tickets) and give anything genuinely large its own release — a milestone holding one
+big port plus five small fixes tells you nothing useful about either.
 
 **The commit prefix describes the COMMIT; the label describes the TICKET.** They legitimately
 differ — a `fix:` commit while building an `enhancement` ticket is normal and expected, not an

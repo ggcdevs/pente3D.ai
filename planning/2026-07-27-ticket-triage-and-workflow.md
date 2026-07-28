@@ -1,6 +1,6 @@
 # Ticket triage record, and the lifecycle workflow
 
-**Date:** 2026-07-27 · **Outcome: 42 open issues → 25, every one categorised, labelled and milestoned.**
+**Date:** 2026-07-27 · **Outcome: 42 open issues → 24, every one categorised, labelled and milestoned.**
 
 This started as a triage plan; it is now the **record of what was decided**. The reasoning for each
 individual disposition lives in the ticket's own closing or triage comment — that is deliberate, so
@@ -14,7 +14,7 @@ the "is it actually fixed?" half. Superseded: `planning/2026-07-27-ticket-walkth
 
 ## 1. What happened
 
-**Closed: 21.**
+**Closed: 23.**
 
 | Closed | Why |
 |---|---|
@@ -23,6 +23,7 @@ the "is it actually fixed?" half. Superseded: `planning/2026-07-27-ticket-walkth
 | #35 | Closed as **superseded, not delivered** — its central mechanism (`net-room:{code}`) was the cause of #45/#46 and was deleted |
 | #41 | The scenario matrix it asked for is complete; verified test-by-test. Residual split to #57 |
 | #30 | The filed bug (the `TEST12` rejection) is fixed. Its buried residual split to #53 |
+| #52 | Built and pushed to `dev` — the asymmetric mismatch warning, 143 warnings → 1 |
 
 **Filed: 5** — #53 (code length bound), #54 (background notifications), #55 (release automation),
 #56 (board size not in game identity), #57 (CLI-vs-browser gaps).
@@ -59,7 +60,18 @@ Consequences captured in #47, #51, #55, #56:
 `CONTRIBUTING.md` says *"Issues stay open until the work reaches `main`"*, and the `on-dev` label
 marked the gap. That convention is retired: a ticket closes when its work lands on `dev`, because the
 goal is a backlog where **everything open is still relevant to the current codebase**. `on-dev` is now
-vestigial — no open issue carries it. **`CONTRIBUTING.md` needs updating to match.**
+vestigial — no open issue carries it. `CONTRIBUTING.md` was updated to match (`55c8fd7`).
+
+The `on-dev` LABEL is deliberately not deleted: removing a GitHub label strips it from the closed
+issues too, and the sixteen tickets that carried it are a genuine record of how they were managed.
+
+### A milestone is a RELEASE
+
+The bump is computed **once per push to `main`**, over the whole range, taking the higher signal — so
+a release carrying four `enhancement` and two `bug` tickets is **one** minor bump, not four. The
+version therefore tracks how often you PROMOTE, not how many tickets closed. Agreed cadence: batch
+moderately (3–6 tickets), and give anything genuinely large its own release — which is why #48 sits
+alone in v4.2.
 
 ### Labels and milestones now mean something
 
@@ -74,29 +86,33 @@ vestigial — no open issue carries it. **`CONTRIBUTING.md` needs updating to ma
 
 ## 3. Order of work
 
-### v4.0 — ships with the promotion (5)
+### v4.0 — ships with the promotion (4)
 
 | # | Why it is in this milestone |
 |---|---|
 | **#56** | Board size not in game identity — silent cross-board play. The structural fix is a **wire break: now or v5** |
 | **#51** | The version field must be on the wire in v4.0 or the compatibility scheme never activates |
 | **#55** | Release automation — the promotion depends on it, or a hand-tagged `v4.0.0` reaches `main` and **no Release is ever created** |
-| **#52** | The promotion *runs* this workflow; 143 false mismatch warnings would bury anything genuine |
 | **#47** | The epic; closes at promotion |
 
-### v4.1 — the batch after (6)
+### v4.1 — the batch after (4)
 
 **#33** slider (spec decided: stay put, offer "back to live") · **#53** code length bound · **#10**
 mobile diagonal toggle (no way to show diagonals on a phone at all, and the phone is the main play
-surface) · **#26** emitter refactor (~20 lines, precondition met) · **#48** CLI analyzer port ·
-**#49** colour preference.
+surface) · **#26** emitter refactor (~20 lines, precondition met).
 
-### Unscheduled real work (8)
+### v4.2 — the CLI analyzer port (1)
+
+**#48** alone. A port of ~1900 lines *plus* bringing them under the 100% coverage + mutation ≥95 bar
+that `c543f71` widened onto `cli/`. Sharing a milestone with four small tickets described neither
+honestly.
+
+### Unscheduled real work (9)
 
 **#9** arbitrary board size *(blocked on #56)* · **#19** last-piece animation *(spec decided: newest
 stone only)* · **#21** PWA · **#23** relay infra-as-code *(bus-factor)* · **#29** backgrounds *(fog
-first — it is a depth cue, not decoration)* · **#39** AI opponent *(future epic)* · **#54** background
-notifications *(needs #21)* · **#57** CLI-vs-browser gaps.
+first — it is a depth cue, not decoration)* · **#39** AI opponent *(future epic)* · **#49** colour
+preference · **#54** background notifications *(needs #21)* · **#57** CLI-vs-browser gaps.
 
 ### Parked (5) · Tracker (1)
 
@@ -109,7 +125,11 @@ rebuilt: `tools/versionBump.mjs` already parses `#N` from commits and reads tick
 mutation-gated — reuse that parser); commits cross-reference into issue timelines automatically;
 `deploy.yml` maps branch → environment; `release-tag.yml` maps branch → version.
 
-**Missing:** nothing marks a ticket *in progress*; there is no *in review* state for `test`; and
+**Landed since:** #55 — a hand-tagged tag reaching `main` now cuts its Release, and any open issue
+labelled `verify-in-ci` gets a comment when a release happens (the breadcrumb for tickets that only a
+CI event can prove).
+
+**Still missing:** nothing marks a ticket *in progress*; there is no *in review* state for `test`; and
 nothing links a ticket to the **version it shipped in**.
 
 **Proposal:** a `ticket-status.yml` on `push: ['**']` deriving status from *which branch contains the
@@ -122,16 +142,17 @@ already does.
 **Ticket → version** then falls out of extending `release-tag.yml`, which already computes the tag and
 the range: comment *"Shipped in v4.0.0"* on every ticket in it. That is the link nothing produces today.
 
-*(Note: the promotion ritual that `tools/promote.sh` was proposed for mostly evaporates once #55
-lands — promotion becomes tag, push `test`, push `main`.)*
+*(`tools/promote.sh` is no longer wanted: #55 landed, and promotion is now tag, push `test`, push
+`main`, with the Release writing itself.)*
 
 *(Nit: `deploy.yml:12` says subpath cleanup lives in a separate `cleanup-branch-pages.yml`. That file
 does not exist — the prune is at `deploy.yml:110`, in the same file.)*
 
 ## 5. Docs that still need updating
 
-- **`CONTRIBUTING.md`** — the versioning table (major = wire), the close-at-`dev` convention, `feat!`
-  reserved for wire breaks, and the new label meanings.
+- ~~`CONTRIBUTING.md`~~ — **done** (`55c8fd7`, `508c931`): the versioning section (major = wire, the
+  hand-tag procedure and its trap), the close-at-`dev` convention, `feat!` reserved for wire breaks,
+  the label meanings including `verify-in-ci`, and "a milestone is a release".
 - **`HANDOFF.md`** — §1 still says `dev` is v3 and the branch table predates the fast-forward; the
   whole thing wants rewriting at promotion anyway.
 - Header notes on the two `net-model-v3.1-*` planning docs pointing at the v4 rename.
