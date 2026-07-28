@@ -98,6 +98,7 @@ unlabelled in the 2026-07-27 triage).
 | `epic` | Umbrella spanning multiple tickets; closes when its children do |
 | `parked` | A recorded idea, deliberately **not** scheduled. Excluded from milestones so it never distorts a release count |
 | `tracker` | A running checklist, never "done" (e.g. #32). No milestone, and **no type label** — its commits carry their own prefix, which is the right signal |
+| `verify-in-ci` | Built, but only provable by watching a CI event that cannot be rehearsed locally. `release-tag.yml` **comments on every open issue carrying it** whenever it cuts a tag or publishes a Release, naming what happened — so the event announces itself instead of someone having to remember. Opt-in and self-retiring: remove the label or close the issue and it stops |
 
 **Milestones** are the schedule, not a taxonomy: the next release (`v4.0`), the batch after (`v4.1`),
 and *no milestone* for real work that is not yet scheduled. `parked` + no milestone = an idea;
