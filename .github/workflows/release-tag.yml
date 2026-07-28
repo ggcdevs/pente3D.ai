@@ -67,7 +67,10 @@ on:
 
 permissions:
   contents: write # create and push the tag, and create the Release
-  issues: read # read `#N` labels for the ticket half of the bump
+  # READ for the ticket half of the bump (`#N` labels); WRITE for the release-checkpoint
+  # comment on `verify-in-ci` issues (#55). The checkpoint step is `continue-on-error`, so
+  # if this is ever tightened back to `read` a release still succeeds — it just goes quiet.
+  issues: write
 
 concurrency:
   # Two pushes racing would compute their bump from the same last tag and try to cut the
@@ -178,6 +181,7 @@ jobs:
       # empty on a hand-tagged major's promotion, and this step used to be skipped with it.
       # Idempotent, so a re-run of a partially-failed job never duplicates a Release.
       - name: Create the GitHub Release (main only)
+        id: release
         if: steps.plan.outputs.release_tag != '' && github.ref_name == 'main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -214,3 +218,64 @@ jobs:
 
           gh release create "${TAG}" --title "${TAG}" --notes-file release-notes.md
           echo "created GitHub Release ${TAG} (from a ${SOURCE} tag)"
+          echo "created=true" >> "$GITHUB_OUTPUT"
+
+      # RELEASE CHECKPOINT — the breadcrumb that says "come look at this now".
+      #
+      # Some tickets can only be closed by WATCHING a release happen: #55 itself cannot be
+      # verified until a hand-tagged major has actually travelled to `main` and cut its
+      # Release, which is a thing that happens rarely and cannot be rehearsed locally (this
+      # workflow only ever runs on `main`/`test`). Remembering to check by hand, months
+      # apart, is exactly the kind of promise that gets dropped.
+      #
+      # So the event announces itself: any OPEN issue labelled `verify-in-ci` gets a comment
+      # naming what just happened. Opt-in by label, so the noise is bounded by whoever
+      # applies it, and self-retiring — remove the label (or close the issue) and it stops.
+      #
+      # `continue-on-error` IS THE POINT, not laziness: a breadcrumb must never break the
+      # thing it observes. A missing `verify-in-ci` label, a token without issue-write, an
+      # API blip — none of those should turn a successful release into a red run. The step
+      # reports its own failure into the log and the release stands.
+      - name: Notify issues waiting on a release checkpoint
+        if: always() && (steps.plan.outputs.tag != '' || steps.plan.outputs.release_tag != '')
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHANNEL: ${{ steps.plan.outputs.channel }}
+          REF: ${{ github.ref_name }}
+          CUT_TAG: ${{ steps.plan.outputs.tag }}
+          RELEASE_TAG: ${{ steps.plan.outputs.release_tag }}
+          SOURCE: ${{ steps.plan.outputs.release_source }}
+          RELEASED: ${{ steps.release.outputs.created }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          issues="$(gh issue list --label verify-in-ci --state open --json number --jq '.[].number')"
+          if [ -z "${issues}" ]; then
+            echo "no open issues carry \`verify-in-ci\` — nothing to announce."
+            exit 0
+          fi
+
+          {
+            printf '### Release checkpoint\n\n'
+            printf '`release-tag` ran on `%s` (channel `%s`).\n\n' "${REF}" "${CHANNEL}"
+            printf '| fact | value |\n|---|---|\n'
+            printf '| tag cut by CI | %s |\n' "${CUT_TAG:-none — nothing in the range warranted one}"
+            printf '| released as | %s |\n' "${RELEASE_TAG:-none}"
+            printf '| tag origin | %s |\n' "${SOURCE:-n/a}"
+            printf '| GitHub Release created | %s |\n' "${RELEASED:-no}"
+            printf '| run | %s |\n\n' "${RUN_URL}"
+            printf 'A tag origin of **existing** means a human tagged the commit and CI only '
+            printf 'published it — the path that silently produced no Release before #55.\n\n'
+            printf 'You are seeing this because this issue is labelled `verify-in-ci`. '
+            printf 'If this is the event you were waiting on, verify it and close; otherwise '
+            printf 'leave the label and the next release will report again.\n'
+          } > checkpoint.md
+
+          for n in ${issues}; do
+            if gh issue comment "${n}" --body-file checkpoint.md; then
+              echo "announced on #${n}"
+            else
+              echo "::warning::could not comment on #${n} — the release itself is unaffected."
+            fi
+          done
